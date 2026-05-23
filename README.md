@@ -100,3 +100,4 @@ KIDE/
 ## License
 
 TBD — likely MIT.
+# KIDE
