@@ -1,17 +1,40 @@
 :root {
-  --bg:          #0f0f0f;
-  --bg-elevated: #161616;
-  --bg-hover:    #1c1c1c;
-  --fg:          #eaeaea;
-  --fg-muted:    #888;
-  --fg-dim:      #5a5a5a;
-  --border:      #2a2a2a;
-  --accent:      #7c8cff;
+  /* Surfaces */
+  --bg:           #FFFFFF;
+  --bg-elevated:  #FAFAFA;
+  --bg-hover:     #F5F5F5;
+  --bg-selected:  #F5F5F5;
 
-  --font-ui:   Inter, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  /* Text */
+  --fg-strong:    #292929;
+  --fg:           #5D5D5D;
+  --fg-subtle:    #7F7F7F;
 
-  --size-activity-bar: 48px;
+  /* Back-compat aliases (older components still use these) */
+  --fg-muted:     #7F7F7F;
+  --fg-dim:       #A0A0A0;
+
+  /* Lines */
+  --border:        #F2F2F2;
+  --border-strong: #E5E5E5;
+
+  /* Accent — VS Code Light Modern blue */
+  --accent:       #005FB8;
+  --accent-soft:  #E4ECF7;
+
+  /* Typography */
+  --font-ui:   -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --fs-xs:   12px;
+  --fs-base: 13px;
+  --fs-md:   14px;
+  --fs-lg:   16px;
+  --fs-xl:   18px;
+  --fs-xxl:  24px;
+
+  /* Layout sizes */
+  --size-activity-bar: 44px;
   --size-sidebar:      240px;
   --size-ai-panel:     360px;
   --size-tab-strip:    34px;
@@ -26,8 +49,9 @@ html, body, #root {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--fs-base);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
 }
 
@@ -39,4 +63,17 @@ button {
   color: inherit;
   font: inherit;
   cursor: pointer;
+  padding: 0;
 }
+
+/* Subtle scrollbars matching the quiet aesthetic */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+*:hover::-webkit-scrollbar-thumb { background: #D8D8D8; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #C0C0C0; background-clip: padding-box; }

@@ -10,15 +10,19 @@ export function StatusBar({ path, language }: Props) {
         borderTop: "1px solid var(--border)",
         display: "flex",
         alignItems: "center",
-        padding: "0 10px",
-        gap: 14,
+        padding: "0 12px",
+        gap: 16,
         fontSize: 11,
-        color: "var(--fg-muted)",
+        color: "var(--fg-subtle)",
+        fontFamily: "var(--font-ui)",
       }}
     >
-      <span>{filename ?? "KIDE"}</span>
+      <span style={{ color: filename ? "var(--fg)" : "var(--fg-subtle)" }}>
+        {filename ?? "KIDE"}
+      </span>
       {language && <span>{language}</span>}
       <span style={{ marginLeft: "auto" }}>UTF-8</span>
+      <span>LF</span>
     </footer>
   );
 }

@@ -12,8 +12,8 @@ export function TerminalPanel() {
     if (!ref.current) return;
     const term = new Terminal({
       fontSize: 12,
-      fontFamily: "JetBrains Mono, ui-monospace, monospace",
-      theme: { background: "#0a0a0a", foreground: "#eaeaea" },
+      fontFamily: "SF Mono, JetBrains Mono, ui-monospace, monospace",
+      theme: { background: "#161616", foreground: "#E5E5E5", cursor: "#E5E5E5" },
       cursorBlink: true,
       scrollback: 5000,
     });
@@ -40,22 +40,24 @@ export function TerminalPanel() {
     <div
       style={{
         height: "var(--size-terminal)",
-        background: "#0a0a0a",
-        borderTop: "1px solid var(--border)",
+        background: "#161616",
+        borderTop: "1px solid var(--border-strong)",
         display: "flex",
         flexDirection: "column",
       }}
     >
       <div
         style={{
-          padding: "6px 10px",
+          padding: "7px 14px",
           fontSize: 11,
-          color: "var(--fg-muted)",
-          letterSpacing: "0.08em",
-          borderBottom: "1px solid var(--border)",
+          color: "#9B9B9B",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          fontWeight: 500,
+          borderBottom: "1px solid #2A2A2A",
         }}
       >
-        TERMINAL
+        Terminal
       </div>
       <div ref={ref} style={{ flex: 1, padding: 6, minHeight: 0 }} />
     </div>

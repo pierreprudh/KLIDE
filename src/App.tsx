@@ -98,9 +98,11 @@ function App() {
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ActivityBar active={view} onChange={setView} />
-        {view === "explorer" && (
-          <Sidebar onOpen={openFile} onRootChange={setWorkspaceRoot} />
-        )}
+        <Sidebar
+          onOpen={openFile}
+          onRootChange={setWorkspaceRoot}
+          visible={view === "explorer"}
+        />
         <main
           style={{
             flex: 1,

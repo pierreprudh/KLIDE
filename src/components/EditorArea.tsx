@@ -15,31 +15,37 @@ export function EditorArea({ code, onChange, language = "plaintext", hasFile }: 
           flex: 1,
           display: "grid",
           placeItems: "center",
-          color: "var(--fg-dim)",
+          color: "var(--fg-subtle)",
           fontSize: 13,
+          background: "var(--bg)",
         }}
       >
-        Open a folder to begin
+        Open a file to begin
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0 }}>
+    <div style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}>
       <Editor
         height="100%"
         language={language}
-        theme="vs-dark"
+        theme="vs"
         value={code}
         onChange={(v) => onChange(v ?? "")}
         options={{
           minimap: { enabled: false },
           fontSize: 13,
-          fontFamily: "JetBrains Mono, ui-monospace, monospace",
+          fontFamily: "SF Mono, JetBrains Mono, ui-monospace, monospace",
           fontLigatures: true,
           renderLineHighlight: "gutter",
           scrollBeyondLastLine: false,
           padding: { top: 12 },
+          lineNumbersMinChars: 3,
+          glyphMargin: false,
+          overviewRulerLanes: 0,
+          hideCursorInOverviewRuler: true,
+          smoothScrolling: true,
         }}
       />
     </div>

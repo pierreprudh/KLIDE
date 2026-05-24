@@ -217,7 +217,8 @@ async function executeTool(
     }
     return `Error: unknown tool "${call.name}"`;
   } catch (e) {
-    return `Error: ${(e as Error).message}`;
+    const msg = e instanceof Error ? e.message : String(e);
+    return `Error: ${msg}`;
   }
 }
 
@@ -454,14 +455,16 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
                 fontFamily: "var(--font-mono)",
                 fontSize: 11,
                 color: "var(--accent)",
-                background: "var(--bg)",
+                background: "var(--accent-soft)",
                 border: "1px solid var(--border)",
                 borderRadius: 4,
-                padding: "6px 8px",
+                padding: "6px 10px",
                 marginTop: i > 0 ? 4 : 0,
+                wordBreak: "break-word",
               }}
             >
-              🔧 {tc.name}({JSON.stringify(tc.args)})
+              <span style={{ color: "var(--fg-subtle)" }}>↳ </span>
+              {tc.name}({JSON.stringify(tc.args)})
             </div>
           ))}
         </>
@@ -489,10 +492,12 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
     >
       <header
         style={{
-          padding: "10px 12px",
+          padding: "10px 14px",
           fontSize: 11,
-          color: "var(--fg-muted)",
-          letterSpacing: "0.08em",
+          color: "var(--fg-subtle)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          fontWeight: 500,
           borderBottom: "1px solid var(--border)",
           display: "flex",
           justifyContent: "space-between",
@@ -500,16 +505,31 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
         }}
       >
         <span>
-          AI · {MODEL.toUpperCase()}
-          {workspaceRoot && " · AGENT"}
+          AI · {MODEL}
+          {workspaceRoot && " · Agent"}
         </span>
         {msgs.length > 0 && (
           <button
             onClick={() => setMsgs([])}
-            style={{ color: "var(--fg-muted)", fontSize: 11 }}
+            style={{
+              color: "var(--fg-subtle)",
+              fontSize: 11,
+              padding: "2px 6px",
+              borderRadius: 4,
+              textTransform: "none",
+              letterSpacing: 0,
+            }}
             title="Clear conversation"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--fg-strong)";
+              e.currentTarget.style.background = "var(--bg-hover)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--fg-subtle)";
+              e.currentTarget.style.background = "transparent";
+            }}
           >
-            clear
+            Clear
           </button>
         )}
       </header>
@@ -519,13 +539,15 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
         style={{ flex: 1, overflow: "auto", padding: 12, fontSize: 13 }}
       >
         {msgs.length === 0 && (
-          <div style={{ color: "var(--fg-dim)", fontSize: 12, lineHeight: 1.6 }}>
+          <div style={{ color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.6 }}>
             {workspaceRoot
-              ? "Agent mode. Ask about your code — I can read files and list directories."
+              ? "Agent mode. Ask about your code — I can read files, list directories, and propose edits."
               : "Open a folder to enable agent mode."}
             <br />
             <br />
-            Enter to send, Shift+Enter for newline.
+            <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>
+              Enter to send · Shift+Enter for newline
+            </span>
           </div>
         )}
         {msgs.map((m, i) => {
@@ -540,8 +562,10 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
               <div
                 style={{
                   fontSize: 10,
-                  color: "var(--fg-muted)",
-                  letterSpacing: "0.08em",
+                  color: "var(--fg-subtle)",
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  fontWeight: 500,
                   marginBottom: 4,
                 }}
               >
@@ -576,14 +600,18 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
             height: 64,
             resize: "none",
             background: "var(--bg)",
-            border: "1px solid var(--border)",
-            borderRadius: 4,
-            color: "var(--fg)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: 6,
+            color: "var(--fg-strong)",
             font: "inherit",
-            padding: 8,
+            fontSize: 13,
+            padding: 10,
             outline: "none",
             opacity: streaming ? 0.6 : 1,
+            transition: "border-color 120ms ease",
           }}
+          onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+          onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border-strong)")}
         />
       </div>
     </aside>

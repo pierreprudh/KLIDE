@@ -38,7 +38,8 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.6)",
+        background: "rgba(40,40,40,0.35)",
+        backdropFilter: "blur(2px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -50,9 +51,10 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
         style={{
           width: "min(820px, 90vw)",
           maxHeight: "85vh",
-          background: "var(--bg-elevated)",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
+          background: "var(--bg)",
+          border: "1px solid var(--border-strong)",
+          borderRadius: 8,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.12)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -60,24 +62,32 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
       >
         <header
           style={{
-            padding: "12px 16px",
+            padding: "14px 18px",
             borderBottom: "1px solid var(--border)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             <span
               style={{
                 fontSize: 10,
-                color: "var(--fg-muted)",
-                letterSpacing: "0.08em",
+                color: "var(--fg-subtle)",
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                fontWeight: 500,
               }}
             >
-              {edit.isCreate ? "CREATE FILE" : "EDIT FILE"}
+              {edit.isCreate ? "Create file" : "Edit file"}
             </span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 13,
+                color: "var(--fg-strong)",
+              }}
+            >
               {edit.path}
             </span>
           </div>
@@ -86,11 +96,11 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
               fontFamily: "var(--font-mono)",
               fontSize: 11,
               display: "flex",
-              gap: 8,
+              gap: 10,
             }}
           >
-            <span style={{ color: "#7dd87d" }}>+{stats.added}</span>
-            <span style={{ color: "#e07b7b" }}>-{stats.removed}</span>
+            <span style={{ color: "#1f8a3b" }}>+{stats.added}</span>
+            <span style={{ color: "#b8323a" }}>−{stats.removed}</span>
           </div>
         </header>
 
@@ -98,21 +108,21 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
           style={{
             flex: 1,
             overflow: "auto",
-            padding: "8px 0",
-            background: "var(--bg)",
+            padding: "10px 0",
+            background: "var(--bg-elevated)",
             fontFamily: "var(--font-mono)",
             fontSize: 12,
-            lineHeight: 1.5,
+            lineHeight: 1.55,
           }}
         >
           {changes.map((c, ci) => {
-            const sign = c.added ? "+" : c.removed ? "-" : " ";
+            const sign = c.added ? "+" : c.removed ? "−" : " ";
             const bg = c.added
-              ? "rgba(80, 200, 120, 0.10)"
+              ? "rgba(31, 138, 59, 0.10)"
               : c.removed
-              ? "rgba(220, 100, 100, 0.10)"
+              ? "rgba(184, 50, 58, 0.10)"
               : "transparent";
-            const fg = c.added ? "#a8e6b8" : c.removed ? "#f0a8a8" : "var(--fg)";
+            const fg = c.added ? "#1f8a3b" : c.removed ? "#b8323a" : "var(--fg-strong)";
             const lines = c.value.split("\n");
             if (lines[lines.length - 1] === "") lines.pop();
             return lines.map((line, li) => (
@@ -121,12 +131,18 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
                 style={{
                   background: bg,
                   color: fg,
-                  padding: "0 16px",
+                  padding: "0 18px",
                   whiteSpace: "pre",
                 }}
               >
                 <span
-                  style={{ color: "var(--fg-dim)", marginRight: 12, userSelect: "none" }}
+                  style={{
+                    color: "var(--fg-subtle)",
+                    marginRight: 14,
+                    userSelect: "none",
+                    display: "inline-block",
+                    width: 8,
+                  }}
                 >
                   {sign}
                 </span>
@@ -138,8 +154,9 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
 
         <footer
           style={{
-            padding: 12,
+            padding: 14,
             borderTop: "1px solid var(--border)",
+            background: "var(--bg)",
             display: "flex",
             justifyContent: "flex-end",
             gap: 8,
@@ -149,23 +166,32 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
             onClick={onReject}
             style={{
               padding: "6px 14px",
-              border: "1px solid var(--border)",
-              borderRadius: 4,
-              color: "var(--fg-muted)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 6,
+              color: "var(--fg)",
+              background: "var(--bg)",
+              fontSize: 13,
+              transition: "background 120ms ease",
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "var(--bg)")}
           >
             Reject
           </button>
           <button
             onClick={onApply}
             style={{
-              padding: "6px 14px",
+              padding: "6px 16px",
               border: "1px solid var(--accent)",
-              borderRadius: 4,
+              borderRadius: 6,
               background: "var(--accent)",
-              color: "#0f0f0f",
+              color: "#FFFFFF",
               fontWeight: 500,
+              fontSize: 13,
+              transition: "filter 120ms ease",
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.08)")}
+            onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}
           >
             Apply
           </button>

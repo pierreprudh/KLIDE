@@ -1,0 +1,4 @@
+- Font: SF Pro, regular and medium
+- Font size: 12px, 13px (base size), 14px, 16px, 18px, and 24px (the biggest)'
+- Colors: subtle (7F7F7F), default (5D5D5D), strong (292929), bg-selected (F5F5F5), border (F2F2F2)
+- Icon: @nucleoicons with 1px width
