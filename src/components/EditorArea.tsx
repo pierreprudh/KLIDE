@@ -5,38 +5,74 @@ type Props = {
   onChange: (v: string) => void;
   language?: string;
   hasFile: boolean;
+  workspaceOpen: boolean;
+  theme: "light" | "dark";
 };
 
-export function EditorArea({ code, onChange, language = "plaintext", hasFile }: Props) {
+export function EditorArea({
+  code,
+  onChange,
+  language = "plaintext",
+  hasFile,
+  workspaceOpen,
+  theme,
+}: Props) {
   if (!hasFile) {
     return (
       <div
+        className="editor-empty"
         style={{
           flex: 1,
           display: "grid",
           placeItems: "center",
-          color: "var(--fg-subtle)",
-          fontSize: 13,
-          background: "var(--bg)",
+          minHeight: 0,
         }}
       >
-        Open a file to begin
+        <div
+          style={{
+            width: "min(420px, 72vw)",
+            textAlign: "center",
+            color: "var(--fg-subtle)",
+            lineHeight: 1.65,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 24,
+              color: "var(--fg-strong)",
+              fontWeight: 500,
+              marginBottom: 8,
+            }}
+          >
+            KIDE
+          </div>
+          <div style={{ fontSize: 14, color: "var(--fg)" }}>
+            {workspaceOpen
+              ? "Choose a file from the explorer to start editing."
+              : "Open a folder from the Explorer to begin."}
+          </div>
+          <div style={{ marginTop: 14, fontSize: 12, color: "var(--fg-subtle)" }}>
+            Files on the left · AI on the right · Terminal below
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}>
+    <div className="editor-host" style={{ flex: 1, minHeight: 0 }}>
       <Editor
         height="100%"
         language={language}
-        theme="vs"
+        theme={theme === "dark" ? "vs-dark" : "vs"}
         value={code}
         onChange={(v) => onChange(v ?? "")}
         options={{
+          automaticLayout: true,
           minimap: { enabled: false },
           fontSize: 13,
-          fontFamily: "SF Mono, JetBrains Mono, ui-monospace, monospace",
+          fontFamily:
+            "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
           fontLigatures: true,
           renderLineHighlight: "gutter",
           scrollBeyondLastLine: false,

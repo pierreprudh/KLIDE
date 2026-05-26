@@ -19,9 +19,9 @@ Pierre is new to building desktop apps and is learning Rust as he goes. Frame te
 | ✅ Do | ❌ Don't |
 |---|---|
 | Keep VS Code's structural layout (activity bar, sidebar, tabs, editor, status bar, panel) | Strip out structural elements to "simplify" |
-| Quiet dark palette: `#0f0f0f` bg, `#eaeaea` fg, `#2a2a2a` borders | Saturated accent colors, gradients, drop shadows |
+| Quiet light/dark palettes with shared app + terminal tokens | Saturated accent colors, gradients, drop shadows |
 | Generous whitespace, thin 1px borders, no heavy dividers | Boxes, frames, busy chrome |
-| Restrained type — system-ui or Inter for UI, JetBrains Mono for code | Multiple display fonts, decorative weights |
+| Restrained type — Atkinson Hyperlegible for UI, Monaspace for code | Multiple display fonts, decorative weights |
 | Subtle, considered motion (fades, no bounces) | Springy animations |
 | Icons only when they earn their place | Icon-for-every-button maximalism |
 

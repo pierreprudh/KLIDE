@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "kide",
+  "productName": "Kide",
   "version": "0.1.0",
   "identifier": "com.pierre.kide",
   "build": {
@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "kide",
-        "width": 800,
-        "height": 600
+        "title": "Kide",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640
       }
     ],
     "security": {

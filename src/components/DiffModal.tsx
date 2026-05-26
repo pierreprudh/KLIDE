@@ -53,8 +53,8 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
           maxHeight: "85vh",
           background: "var(--bg)",
           border: "1px solid var(--border-strong)",
-          borderRadius: 8,
-          boxShadow: "0 12px 40px rgba(0,0,0,0.12)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "0 18px 60px rgba(0,0,0,0.14)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -167,11 +167,11 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
             style={{
               padding: "6px 14px",
               border: "1px solid var(--border-strong)",
-              borderRadius: 6,
+              borderRadius: "var(--radius-sm)",
               color: "var(--fg)",
               background: "var(--bg)",
               fontSize: 13,
-              transition: "background 120ms ease",
+              transition: "background var(--motion-med) var(--ease-out)",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "var(--bg)")}
@@ -183,12 +183,12 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
             style={{
               padding: "6px 16px",
               border: "1px solid var(--accent)",
-              borderRadius: 6,
+              borderRadius: "var(--radius-sm)",
               background: "var(--accent)",
               color: "#FFFFFF",
               fontWeight: 500,
               fontSize: 13,
-              transition: "filter 120ms ease",
+              transition: "filter var(--motion-med) var(--ease-out)",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.08)")}
             onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}

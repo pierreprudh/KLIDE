@@ -1,5 +1,5 @@
-type View = "explorer" | "ai";
-type Props = { active: View; onChange: (v: View) => void };
+type View = "explorer" | "git" | "ai" | "settings";
+type Props = { active: Record<View, boolean>; onToggle: (v: View) => void };
 
 function FolderIcon() {
   return (
@@ -36,10 +36,57 @@ function SparkIcon() {
   );
 }
 
-export function ActivityBar({ active, onChange }: Props) {
+function GitIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="7" cy="6" r="2.25" />
+      <circle cx="17" cy="18" r="2.25" />
+      <path d="M7 8.25v3.25a4.5 4.5 0 0 0 4.5 4.5H14" />
+      <path d="M14 13l3 3-3 3" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 6h10" />
+      <path d="M18 6h2" />
+      <path d="M16 4v4" />
+      <path d="M4 12h3" />
+      <path d="M11 12h9" />
+      <path d="M9 10v4" />
+      <path d="M4 18h11" />
+      <path d="M19 18h1" />
+      <path d="M17 16v4" />
+    </svg>
+  );
+}
+
+export function ActivityBar({ active, onToggle }: Props) {
   const items = [
     { id: "explorer" as const, label: "Files", Icon: FolderIcon },
+    { id: "git" as const, label: "Git", Icon: GitIcon },
     { id: "ai" as const, label: "AI", Icon: SparkIcon },
+    { id: "settings" as const, label: "Settings", Icon: SettingsIcon },
   ];
 
   return (
@@ -56,23 +103,24 @@ export function ActivityBar({ active, onChange }: Props) {
       }}
     >
       {items.map(({ id, label, Icon }) => {
-        const isActive = active === id;
+        const isActive = active[id];
         return (
           <button
             key={id}
-            onClick={() => onChange(id)}
+            onClick={() => onToggle(id)}
             title={label}
             aria-label={label}
             aria-pressed={isActive}
             style={{
               width: 32,
               height: 32,
-              borderRadius: 6,
+              borderRadius: "var(--radius-md)",
               display: "grid",
               placeItems: "center",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
               background: isActive ? "var(--bg-selected)" : "transparent",
-              transition: "background 120ms ease, color 120ms ease",
+              transition:
+                "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), transform var(--motion-fast) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
               if (!isActive) e.currentTarget.style.color = "var(--fg-strong)";

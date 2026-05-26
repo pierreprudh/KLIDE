@@ -27,14 +27,14 @@ KIDE aims for a third spot: **VS Code's structure, Linear's aesthetic, Cursor's 
 
 | Token | Value | Used for |
 |---|---|---|
-| `--bg` | `#0f0f0f` | Window background |
-| `--bg-elevated` | `#161616` | Panels, sidebars |
-| `--fg` | `#eaeaea` | Primary text |
-| `--fg-muted` | `#888` | Secondary text, icons |
-| `--border` | `#2a2a2a` | All dividers, 1px |
-| `--accent` | `#7c8cff` | Active states only |
-| UI font | `Inter, system-ui` | Sidebar, tabs, status bar |
-| Code font | `JetBrains Mono` | Editor, terminal |
+| Theme | Light + dark | App shell and terminal share theme tokens |
+| `--bg` | `#FBFBFA` / `#11110F` | Window background |
+| `--bg-elevated` | `#F4F4F2` / `#171715` | Panels, sidebars |
+| `--fg` | `#555552` / `#C8C6BE` | Primary text |
+| `--border` | `#E8E7E3` / `#292824` | All dividers, 1px |
+| `--accent` | `#4263EB` / `#8EA2FF` | Active states only |
+| UI font | `Atkinson Hyperlegible` | Sidebar, tabs, status bar |
+| Code font | `Monaspace` | Editor, terminal |
 
 No drop shadows. No gradients. Subtle motion only. Icons only when they earn their place.
 

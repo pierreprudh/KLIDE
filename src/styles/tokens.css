@@ -1,30 +1,47 @@
 :root {
   /* Surfaces */
-  --bg:           #FFFFFF;
-  --bg-elevated:  #FAFAFA;
-  --bg-hover:     #F5F5F5;
-  --bg-selected:  #F5F5F5;
+  --bg:           #FBFBFA;
+  --bg-elevated:  #F4F4F2;
+  --bg-hover:     #ECEBE8;
+  --bg-selected:  #EDEFF7;
 
   /* Text */
-  --fg-strong:    #292929;
-  --fg:           #5D5D5D;
-  --fg-subtle:    #7F7F7F;
+  --fg-strong:    #242424;
+  --fg:           #555552;
+  --fg-subtle:    #7A7A76;
 
   /* Back-compat aliases (older components still use these) */
-  --fg-muted:     #7F7F7F;
-  --fg-dim:       #A0A0A0;
+  --fg-muted:     #7A7A76;
+  --fg-dim:       #A1A19B;
 
   /* Lines */
-  --border:        #F2F2F2;
-  --border-strong: #E5E5E5;
+  --border:        #E8E7E3;
+  --border-strong: #D9D8D2;
 
-  /* Accent — VS Code Light Modern blue */
-  --accent:       #005FB8;
-  --accent-soft:  #E4ECF7;
+  /* Accent */
+  --accent:       #4263EB;
+  --accent-soft:  #E5E9FF;
+
+  /* Terminal */
+  --terminal-bg:      #F7F6F2;
+  --terminal-fg:      #343431;
+  --terminal-muted:   #74746F;
+  --terminal-border:  #DEDDD6;
+  --terminal-hover:   #EAE9E2;
+  --terminal-cursor:  #343431;
+
+  /* Floating panels */
+  --panel-glass:      color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border-strong) 70%, transparent);
+  --panel-highlight:  rgba(255, 255, 255, 0.72);
+  --panel-shadow:
+    0 1px 1px rgba(38, 38, 32, 0.025),
+    0 10px 34px rgba(38, 38, 32, 0.055),
+    0 32px 90px rgba(38, 38, 32, 0.040);
 
   /* Typography */
-  --font-ui:   -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif;
-  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-ui:   "Atkinson Hyperlegible", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif;
+  --font-mono: "Monaspace Neon", "Monaspace Argon", "Monaspace", "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
 
   --fs-xs:   12px;
   --fs-base: 13px;
@@ -40,6 +57,51 @@
   --size-tab-strip:    34px;
   --size-status-bar:   22px;
   --size-terminal:     220px;
+
+  /* Shape + motion */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-soft: cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-fast: 120ms;
+  --motion-med: 180ms;
+  --motion-slow: 240ms;
+}
+
+:root[data-theme="dark"] {
+  --bg:           #11110F;
+  --bg-elevated:  #171715;
+  --bg-hover:     #22221F;
+  --bg-selected:  #202432;
+
+  --fg-strong:    #F0EFE9;
+  --fg:           #C8C6BE;
+  --fg-subtle:    #8D8B84;
+  --fg-muted:     #8D8B84;
+  --fg-dim:       #65635D;
+
+  --border:        #292824;
+  --border-strong: #36342F;
+
+  --accent:       #8EA2FF;
+  --accent-soft:  #242B45;
+
+  --terminal-bg:      #0D0D0C;
+  --terminal-fg:      #ECEAE1;
+  --terminal-muted:   #9A978E;
+  --terminal-border:  #2D2B27;
+  --terminal-hover:   #23211E;
+  --terminal-cursor:  #ECEAE1;
+
+  --panel-glass:      color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border-strong) 70%, transparent);
+  --panel-highlight:  rgba(255, 255, 255, 0.045);
+  --panel-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.14),
+    0 12px 40px rgba(0, 0, 0, 0.18),
+    0 36px 110px rgba(0, 0, 0, 0.16);
 }
 
 html, body, #root {
@@ -64,6 +126,220 @@ button {
   font: inherit;
   cursor: pointer;
   padding: 0;
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out),
+    filter var(--motion-fast) var(--ease-out);
+}
+
+button:active {
+  transform: scale(0.96);
+}
+
+button:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+
+.chrome-enter {
+  animation: chrome-enter var(--motion-slow) var(--ease-soft);
+}
+
+.terminal-enter {
+  animation: terminal-enter var(--motion-slow) var(--ease-soft);
+}
+
+.floating-panel {
+  position: relative;
+  z-index: 4;
+  background: var(--panel-glass);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 var(--panel-highlight),
+    var(--panel-shadow);
+  backdrop-filter: blur(22px) saturate(1.18);
+  -webkit-backdrop-filter: blur(22px) saturate(1.18);
+  transform: translateZ(0);
+}
+
+.floating-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.025);
+}
+
+.loader-bounce {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.loader-bounce span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: loader-bounce-a 1.2s ease-in-out infinite;
+}
+
+.loader-bounce span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.loader-bounce span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.loader-bounce span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.loader-orbit {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  animation: loader-orbit-r 1.5s linear infinite;
+  flex: 0 0 auto;
+}
+
+.loader-orbit span {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.loader-orbit span:nth-child(1) {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 1;
+}
+
+.loader-orbit span:nth-child(2) {
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  opacity: 0.6;
+}
+
+.loader-orbit span:nth-child(3) {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.3;
+}
+
+.loader-orbit span:nth-child(4) {
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  opacity: 0.15;
+}
+
+@keyframes loader-bounce-a {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+@keyframes loader-orbit-r {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.workbench-main {
+  padding: 4px 0;
+  transition:
+    padding var(--motion-slow) var(--ease-soft),
+    opacity var(--motion-med) var(--ease-out);
+}
+
+.editor-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition:
+    border-color var(--motion-slow) var(--ease-out),
+    background var(--motion-slow) var(--ease-out),
+    box-shadow var(--motion-slow) var(--ease-out),
+    transform var(--motion-slow) var(--ease-soft);
+}
+
+.editor-host,
+.editor-empty {
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  animation: editor-surface-in var(--motion-slow) var(--ease-soft);
+}
+
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .margin {
+  transition: background-color var(--motion-slow) var(--ease-out);
+}
+
+@keyframes editor-surface-in {
+  from {
+    opacity: 0;
+    transform: scale(0.997);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes chrome-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes terminal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Subtle scrollbars matching the quiet aesthetic */
@@ -72,8 +348,14 @@ button {
 ::-webkit-scrollbar-thumb {
   background: transparent;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background-clip: padding-box;
 }
-*:hover::-webkit-scrollbar-thumb { background: #D8D8D8; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: #C0C0C0; background-clip: padding-box; }
+*:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-strong) 58%, transparent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg-dim) 42%, transparent);
+  background-clip: padding-box;
+}

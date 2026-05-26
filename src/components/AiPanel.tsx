@@ -19,6 +19,7 @@ type Props = {
   workspaceRoot: string | null;
   onFileWritten?: (path: string, newContent: string) => void;
   visible: boolean;
+  width: number;
 };
 
 type PendingEditRequest = PendingEdit & {
@@ -26,7 +27,7 @@ type PendingEditRequest = PendingEdit & {
   resolve: (result: string) => void;
 };
 
-const MODEL = "llama3.1:8b";
+const DEFAULT_MODEL = "llama3.1:8b";
 const MAX_TOOL_CALLS = 10;
 
 const TOOLS = [
@@ -257,11 +258,37 @@ function parseToolCallsFromChunk(raw: any): ToolCall[] {
     .filter((x): x is ToolCall => x !== null);
 }
 
-export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
+function BouncingDots() {
+  return (
+    <div className="loader-bounce" aria-label="Model is thinking">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+function OrbitLoader() {
+  return (
+    <div className="loader-orbit" aria-label="Waiting for output">
+      <span />
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
   const [pending, setPending] = useState<PendingEditRequest | null>(null);
+  const [model, setModel] = useState(
+    () => localStorage.getItem("kide-ollama-model") || DEFAULT_MODEL
+  );
+  const [ollamaModels, setOllamaModels] = useState<string[]>([DEFAULT_MODEL]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   function requestEdit(
@@ -304,6 +331,36 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [msgs]);
 
+  useEffect(() => {
+    localStorage.setItem("kide-ollama-model", model);
+  }, [model]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOllamaModels() {
+      try {
+        const res = await fetch("http://localhost:11434/api/tags");
+        if (!res.ok) return;
+        const data = await res.json();
+        const names = Array.isArray(data.models)
+          ? data.models
+              .map((m: { name?: string }) => m.name)
+              .filter((name: unknown): name is string => typeof name === "string")
+          : [];
+        if (!cancelled && names.length > 0) {
+          setOllamaModels(names);
+          if (!names.includes(model)) setModel(names[0]);
+        }
+      } catch {
+        /* Ollama may be offline; keep the configured fallback model. */
+      }
+    }
+    loadOllamaModels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function streamOnce(
     history: Msg[]
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
@@ -312,7 +369,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
     const res = await fetch("http://localhost:11434/api/chat", {
       method: "POST",
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [sys, ...history].map(toOllamaMessage),
         tools: TOOLS,
         stream: true,
@@ -370,9 +427,11 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
     setMsgs(history);
     setInput("");
     setStreaming(true);
+    setActivity("thinking");
 
     try {
       for (let iter = 0; iter < MAX_TOOL_CALLS; iter++) {
+        setActivity("thinking");
         const { text, toolCalls } = await streamOnce(history.slice(0, -1));
         history = [
           ...history.slice(0, -1),
@@ -387,10 +446,12 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
 
         const toolMsgs: Msg[] = [];
         for (const call of toolCalls) {
+          setActivity("waiting");
           const result = await executeTool(call, workspaceRoot, requestEdit);
           toolMsgs.push({ role: "tool", content: result, toolName: call.name });
         }
 
+        setActivity("thinking");
         history = [
           ...history,
           ...toolMsgs,
@@ -409,6 +470,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
       });
     }
     setStreaming(false);
+    setActivity(null);
   }
 
   function renderMessageBody(m: Msg) {
@@ -457,7 +519,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
                 color: "var(--accent)",
                 background: "var(--accent-soft)",
                 border: "1px solid var(--border)",
-                borderRadius: 4,
+                borderRadius: "var(--radius-sm)",
                 padding: "6px 10px",
                 marginTop: i > 0 ? 4 : 0,
                 wordBreak: "break-word",
@@ -482,17 +544,19 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
   return (
     <>
     <aside
+      className="floating-panel"
       style={{
-        width: "var(--size-ai-panel)",
-        background: "var(--bg-elevated)",
-        borderLeft: "1px solid var(--border)",
+        width,
+        margin: "4px 4px 4px 0",
         display: visible ? "flex" : "none",
         flexDirection: "column",
+        flexShrink: 0,
+        overflow: "hidden",
       }}
     >
       <header
         style={{
-          padding: "10px 14px",
+          padding: "8px 10px",
           fontSize: 11,
           color: "var(--fg-subtle)",
           letterSpacing: "0.06em",
@@ -502,12 +566,49 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: 8,
         }}
       >
-        <span>
-          AI · {MODEL}
-          {workspaceRoot && " · Agent"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span>AI</span>
+          <span
+            title="Local Ollama models. Cloud providers and vLLM will be added later."
+            style={{
+              color: "var(--fg-dim)",
+              textTransform: "none",
+              letterSpacing: 0,
+              fontSize: 11,
+            }}
+          >
+            Ollama
+          </span>
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={streaming}
+            title="Select an Ollama model"
+            style={{
+              minWidth: 0,
+              maxWidth: 150,
+              height: 22,
+              color: "var(--fg)",
+              background: "transparent",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              font: "inherit",
+              fontSize: 11,
+              outline: "none",
+              padding: "0 6px",
+              opacity: streaming ? 0.6 : 1,
+            }}
+          >
+            {ollamaModels.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
         {msgs.length > 0 && (
           <button
             onClick={() => setMsgs([])}
@@ -515,7 +616,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
               color: "var(--fg-subtle)",
               fontSize: 11,
               padding: "2px 6px",
-              borderRadius: 4,
+              borderRadius: "var(--radius-sm)",
               textTransform: "none",
               letterSpacing: 0,
             }}
@@ -536,18 +637,69 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
 
       <div
         ref={scrollRef}
-        style={{ flex: 1, overflow: "auto", padding: 12, fontSize: 13 }}
+        style={{
+          flex: 1,
+          overflow: "auto",
+          padding: 12,
+          fontSize: 13,
+          display: msgs.length === 0 ? "grid" : "block",
+          placeItems: msgs.length === 0 ? "center" : undefined,
+          minHeight: 0,
+        }}
       >
         {msgs.length === 0 && (
-          <div style={{ color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.6 }}>
-            {workspaceRoot
-              ? "Agent mode. Ask about your code — I can read files, list directories, and propose edits."
-              : "Open a folder to enable agent mode."}
-            <br />
-            <br />
-            <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>
-              Enter to send · Shift+Enter for newline
-            </span>
+          <div
+            style={{
+              width: "min(260px, 80%)",
+              textAlign: "center",
+              color: "var(--fg-subtle)",
+              lineHeight: 1.55,
+              transform: "translateY(-10px)",
+            }}
+          >
+            <div
+              style={{
+                width: 38,
+                height: 38,
+                margin: "0 auto 14px",
+                borderRadius: "var(--radius-lg)",
+                display: "grid",
+                placeItems: "center",
+                color: "var(--accent)",
+                background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)",
+                border: "1px solid var(--panel-border)",
+                boxShadow: "inset 0 1px 0 var(--panel-highlight)",
+              }}
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.35"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 3.5l1.6 4.4L18 9.5l-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5z" />
+                <path d="M18 16l.7 1.8L20.5 18.5l-1.8.7L18 21l-.7-1.8L15.5 18.5l1.8-.7L18 16z" />
+              </svg>
+            </div>
+            <div
+              style={{
+                color: "var(--fg-strong)",
+                fontSize: 14,
+                fontWeight: 500,
+                marginBottom: 6,
+              }}
+            >
+              {workspaceRoot ? "Ask Kide" : "Open a workspace"}
+            </div>
+            <div style={{ fontSize: 12 }}>
+              {workspaceRoot
+                ? "Read, reason, and propose edits with your local Ollama model."
+                : "Open a folder to enable local agent mode."}
+            </div>
           </div>
         )}
         {msgs.map((m, i) => {
@@ -573,7 +725,9 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
               </div>
               <div style={{ color: "var(--fg)" }}>
                 {isStreamingPlaceholder ? (
-                  <span style={{ color: "var(--fg-dim)" }}>…</span>
+                  <span style={{ color: "var(--fg-dim)", display: "inline-flex" }}>
+                    {activity === "waiting" ? <OrbitLoader /> : <BouncingDots />}
+                  </span>
                 ) : (
                   renderMessageBody(m)
                 )}
@@ -584,6 +738,22 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
       </div>
 
       <div style={{ borderTop: "1px solid var(--border)", padding: 10 }}>
+        {(streaming || pending) && (
+          <div
+            style={{
+              height: 18,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              color: "var(--fg-subtle)",
+              fontSize: 11,
+              padding: "0 2px 6px",
+            }}
+          >
+            {activity === "waiting" || pending ? <OrbitLoader /> : <BouncingDots />}
+            <span>{activity === "waiting" || pending ? "Waiting for output" : "Thinking"}</span>
+          </div>
+        )}
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -601,14 +771,15 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible }: Props) {
             resize: "none",
             background: "var(--bg)",
             border: "1px solid var(--border-strong)",
-            borderRadius: 6,
+            borderRadius: "var(--radius-md)",
             color: "var(--fg-strong)",
             font: "inherit",
             fontSize: 13,
             padding: 10,
             outline: "none",
             opacity: streaming ? 0.6 : 1,
-            transition: "border-color 120ms ease",
+            transition:
+              "border-color var(--motion-med) var(--ease-out), background var(--motion-med) var(--ease-out)",
           }}
           onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
           onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border-strong)")}

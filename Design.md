@@ -1,4 +1,6 @@
-- Font: SF Pro, regular and medium
+- App font: Atkinson Hyperlegible, regular and medium
+- Coding font: Monaspace
 - Font size: 12px, 13px (base size), 14px, 16px, 18px, and 24px (the biggest)'
-- Colors: subtle (7F7F7F), default (5D5D5D), strong (292929), bg-selected (F5F5F5), border (F2F2F2)
+- Themes: light and dark, including matching terminal colors
+- Colors: subtle (7A7A76), default (555552), strong (242424), bg-selected (EDEFF7), border (E8E7E3)
 - Icon: @nucleoicons with 1px width
