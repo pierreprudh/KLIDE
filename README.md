@@ -2,7 +2,7 @@
 
 > **Looks like a 2026 design tool. Works like VS Code.** Local models by default, online providers when you want them, real terminal built in.
 
-KIDE is an opinionated IDE inspired by [Sinew](https://sinew-ide.com/). The structure is VS Code — activity bar, file explorer, tabs, editor, terminal, status bar. The surface is quiet, refined, and design-forward. The AI is native, not bolted on, and can edit files with your approval.
+The structure is VS Code — activity bar, file explorer, tabs, editor, terminal, status bar. The surface is quiet, refined, and design-forward. The AI is native, not bolted on, and can edit files with your approval.
 
 ---
 
@@ -14,6 +14,7 @@ Most editors today fall into two camps:
 - **Niche** — Zed, Lapce, Helix. Beautiful and fast, but you give up the VS Code muscle memory.
 
 KIDE aims for a third spot: **VS Code's structure, Linear's aesthetic, Cursor's AI fluency** — with local models as a first-class option, not an afterthought.
+KIDE is an opinionated IDE inspired by [Cline](https://cline.bot), [Cursor](https://cursor.com/en/home) and open-source project [Sinew](https://sinew-ide.com/).
 
 ## Principles
 
