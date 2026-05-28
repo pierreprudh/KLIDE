@@ -1,10 +1,12 @@
+import { getThemeMeta, type ThemeId } from "../theme";
+
 type Props = {
   path: string | null;
   language: string | null;
   workspaceRoot: string | null;
   terminalVisible: boolean;
   onToggleTerminal: () => void;
-  theme: "light" | "dark";
+  theme: ThemeId;
   onToggleTheme: () => void;
 };
 
@@ -45,6 +47,7 @@ export function StatusBar({
 }: Props) {
   const display = relativePath(path, workspaceRoot);
   const filename = path?.split("/").pop() ?? null;
+  const themeMeta = getThemeMeta(theme);
   return (
     <footer
       style={{
@@ -76,9 +79,9 @@ export function StatusBar({
       {workspaceRoot && <span>{workspaceRoot.split("/").pop()}</span>}
       <button
         onClick={onToggleTheme}
-        title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+        title="Cycle theme"
         aria-label="Toggle theme"
-        aria-pressed={theme === "dark"}
+        aria-pressed={themeMeta.isDark}
         style={{
           marginLeft: "auto",
           height: 18,
@@ -95,7 +98,7 @@ export function StatusBar({
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
-        Theme: {theme === "light" ? "Light" : "Dark"}
+        Theme: {themeMeta.name}
       </button>
       <button
         onClick={onToggleTerminal}

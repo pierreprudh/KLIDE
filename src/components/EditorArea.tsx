@@ -1,4 +1,9 @@
 import Editor from "@monaco-editor/react";
+import {
+  defineKlideMonacoThemes,
+  getMonacoThemeId,
+  type ThemeId,
+} from "../theme";
 
 type Props = {
   code: string;
@@ -6,7 +11,10 @@ type Props = {
   language?: string;
   hasFile: boolean;
   workspaceOpen: boolean;
-  theme: "light" | "dark";
+  theme: ThemeId;
+  fontSize: number;
+  lineNumbers: boolean;
+  wordWrap: boolean;
 };
 
 export function EditorArea({
@@ -16,7 +24,12 @@ export function EditorArea({
   hasFile,
   workspaceOpen,
   theme,
+  fontSize,
+  lineNumbers,
+  wordWrap,
 }: Props) {
+  const editorTheme = getMonacoThemeId(theme);
+
   if (!hasFile) {
     return (
       <div
@@ -64,20 +77,23 @@ export function EditorArea({
       <Editor
         height="100%"
         language={language}
-        theme={theme === "dark" ? "vs-dark" : "vs"}
+        theme={editorTheme}
+        beforeMount={defineKlideMonacoThemes}
         value={code}
         onChange={(v) => onChange(v ?? "")}
         options={{
           automaticLayout: true,
           minimap: { enabled: false },
-          fontSize: 13,
+          fontSize,
           fontFamily:
             "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
           fontLigatures: true,
           renderLineHighlight: "gutter",
           scrollBeyondLastLine: false,
           padding: { top: 12 },
-          lineNumbersMinChars: 3,
+          lineNumbers: lineNumbers ? "on" : "off",
+          lineNumbersMinChars: lineNumbers ? 3 : 0,
+          wordWrap: wordWrap ? "on" : "off",
           glyphMargin: false,
           overviewRulerLanes: 0,
           hideCursorInOverviewRuler: true,

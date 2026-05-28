@@ -70,6 +70,7 @@
   --motion-slow: 240ms;
 }
 
+:root[data-theme="cursor-dark"],
 :root[data-theme="dark"] {
   --bg:           #11110F;
   --bg-elevated:  #171715;
@@ -102,6 +103,108 @@
     0 1px 1px rgba(0, 0, 0, 0.14),
     0 12px 40px rgba(0, 0, 0, 0.18),
     0 36px 110px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme="vscode-dark"] {
+  --bg:           #1E1E1E;
+  --bg-elevated:  #252526;
+  --bg-hover:     #2A2D2E;
+  --bg-selected:  #37373D;
+
+  --fg-strong:    #FFFFFF;
+  --fg:           #CCCCCC;
+  --fg-subtle:    #9D9D9D;
+  --fg-muted:     #9D9D9D;
+  --fg-dim:       #6A6A6A;
+
+  --border:        #2D2D30;
+  --border-strong: #3C3C3C;
+
+  --accent:       #007ACC;
+  --accent-soft:  #04395E;
+
+  --terminal-bg:      #181818;
+  --terminal-fg:      #CCCCCC;
+  --terminal-muted:   #858585;
+  --terminal-border:  #333333;
+  --terminal-hover:   #2A2D2E;
+  --terminal-cursor:  #AEAFAD;
+
+  --panel-glass:      color-mix(in srgb, var(--bg-elevated) 74%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border-strong) 72%, transparent);
+  --panel-highlight:  rgba(255, 255, 255, 0.045);
+  --panel-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.16),
+    0 12px 40px rgba(0, 0, 0, 0.20),
+    0 36px 110px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="github-light"] {
+  --bg:           #FFFFFF;
+  --bg-elevated:  #F6F8FA;
+  --bg-hover:     #EAEEF2;
+  --bg-selected:  #DDF4FF;
+
+  --fg-strong:    #1F2328;
+  --fg:           #24292F;
+  --fg-subtle:    #656D76;
+  --fg-muted:     #656D76;
+  --fg-dim:       #8C959F;
+
+  --border:        #D8DEE4;
+  --border-strong: #C9D1D9;
+
+  --accent:       #0969DA;
+  --accent-soft:  #DDF4FF;
+
+  --terminal-bg:      #F6F8FA;
+  --terminal-fg:      #24292F;
+  --terminal-muted:   #6E7781;
+  --terminal-border:  #D8DEE4;
+  --terminal-hover:   #EAEEF2;
+  --terminal-cursor:  #24292F;
+
+  --panel-glass:      color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border-strong) 78%, transparent);
+  --panel-highlight:  rgba(255, 255, 255, 0.78);
+  --panel-shadow:
+    0 1px 1px rgba(31, 35, 40, 0.025),
+    0 10px 30px rgba(31, 35, 40, 0.060),
+    0 28px 80px rgba(31, 35, 40, 0.045);
+}
+
+:root[data-theme="solarized-dark"] {
+  --bg:           #002B36;
+  --bg-elevated:  #073642;
+  --bg-hover:     #0B3F4A;
+  --bg-selected:  #164B55;
+
+  --fg-strong:    #FDF6E3;
+  --fg:           #EEE8D5;
+  --fg-subtle:    #93A1A1;
+  --fg-muted:     #93A1A1;
+  --fg-dim:       #657B83;
+
+  --border:        #174652;
+  --border-strong: #315D66;
+
+  --accent:       #B58900;
+  --accent-soft:  #2E4C3B;
+
+  --terminal-bg:      #00212A;
+  --terminal-fg:      #EEE8D5;
+  --terminal-muted:   #839496;
+  --terminal-border:  #174652;
+  --terminal-hover:   #073642;
+  --terminal-cursor:  #B58900;
+
+  --panel-glass:      color-mix(in srgb, var(--bg-elevated) 76%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border-strong) 72%, transparent);
+  --panel-highlight:  rgba(255, 255, 255, 0.055);
+  --panel-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.14),
+    0 12px 40px rgba(0, 20, 25, 0.24),
+    0 36px 110px rgba(0, 20, 25, 0.20);
 }
 
 html, body, #root {
@@ -144,6 +247,52 @@ button:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--accent-soft);
   outline-offset: 1px;
+}
+
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+.settings-range {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 16px;
+  background: transparent;
+}
+
+.settings-range::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.settings-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--bg-elevated);
+}
+
+.settings-range::-moz-range-track {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.settings-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--bg-elevated);
 }
 
 ::selection {

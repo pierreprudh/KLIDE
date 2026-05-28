@@ -20,6 +20,12 @@ type Props = {
   onFileWritten?: (path: string, newContent: string) => void;
   visible: boolean;
   width: number;
+  model: string;
+  onModelChange: (model: string) => void;
+  availableModels: string[];
+  onAvailableModelsChange: (models: string[]) => void;
+  requireDiffReview: boolean;
+  stopAfterRejection: boolean;
 };
 
 type PendingEditRequest = PendingEdit & {
@@ -27,7 +33,6 @@ type PendingEditRequest = PendingEdit & {
   resolve: (result: string) => void;
 };
 
-const DEFAULT_MODEL = "llama3.1:8b";
 const MAX_TOOL_CALLS = 10;
 
 const TOOLS = [
@@ -119,7 +124,10 @@ const TOOLS = [
   },
 ];
 
-function buildSystemPrompt(workspaceRoot: string | null): string {
+function buildSystemPrompt(
+  workspaceRoot: string | null,
+  stopAfterRejection: boolean
+): string {
   if (!workspaceRoot) {
     return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.`;
   }
@@ -135,7 +143,11 @@ Paths are relative to the workspace root (e.g. "src/App.tsx" or ".").
 
 How to read tool results:
 - "Applied: ..." → the user approved the edit. Confirm briefly and stop, unless more changes are needed.
-- "Rejected by user: ..." → the user declined. STOP. Do NOT retry the same edit. Ask the user what they want differently, or end your turn.
+- "Rejected by user: ..." → the user declined. ${
+    stopAfterRejection
+      ? "STOP. Do NOT retry the same edit. Ask the user what they want differently, or end your turn."
+      : "Do not retry the exact same edit. You may suggest a smaller alternative if it directly addresses the user's request."
+  }
 - "Error: ..." → the tool itself failed (e.g. file not found, ambiguous match). Read the error and fix the call.
 
 Be concise. When you have enough information, answer the user directly.`;
@@ -144,7 +156,9 @@ Be concise. When you have enough information, answer the user directly.`;
 async function executeTool(
   call: ToolCall,
   workspaceRoot: string | null,
-  requestEdit: (req: Omit<PendingEditRequest, "resolve">) => Promise<string>
+  requestEdit: (req: Omit<PendingEditRequest, "resolve">) => Promise<string>,
+  requireDiffReview: boolean,
+  onFileWritten?: (path: string, newContent: string) => void
 ): Promise<string> {
   if (!workspaceRoot) {
     return "Error: no workspace folder is open. Ask the user to open one via the Files panel.";
@@ -191,6 +205,11 @@ async function executeTool(
         return `Error: old_str matches ${occurrences} locations in ${path}. Include more surrounding context so it matches exactly once.`;
       }
       const newContent = current.replace(old_str, new_str);
+      if (!requireDiffReview) {
+        await writeTextFile(full, newContent);
+        onFileWritten?.(path, newContent);
+        return `Applied: edited ${path}.`;
+      }
       return await requestEdit({
         path,
         fullPath: full,
@@ -207,6 +226,11 @@ async function executeTool(
       const full = resolvePath(path);
       if (await exists(full)) {
         return `Error: ${path} already exists. Use write_file to modify an existing file.`;
+      }
+      if (!requireDiffReview) {
+        await writeTextFile(full, contents);
+        onFileWritten?.(path, contents);
+        return `Applied: created ${path} (${contents.length} chars).`;
       }
       return await requestEdit({
         path,
@@ -279,17 +303,45 @@ function OrbitLoader() {
   );
 }
 
-export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props) {
+function SendIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 19V5" />
+      <path d="M6 11l6-6 6 6" />
+    </svg>
+  );
+}
+
+export function AiPanel({
+  workspaceRoot,
+  onFileWritten,
+  visible,
+  width,
+  model,
+  onModelChange,
+  availableModels,
+  onAvailableModelsChange,
+  requireDiffReview,
+  stopAfterRejection,
+}: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
   const [pending, setPending] = useState<PendingEditRequest | null>(null);
-  const [model, setModel] = useState(
-    () => localStorage.getItem("klide-ollama-model") || DEFAULT_MODEL
-  );
-  const [ollamaModels, setOllamaModels] = useState<string[]>([DEFAULT_MODEL]);
+  const [composerFocused, setComposerFocused] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   function requestEdit(
     req: Omit<PendingEditRequest, "resolve">
@@ -332,8 +384,11 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
   }, [msgs]);
 
   useEffect(() => {
-    localStorage.setItem("klide-ollama-model", model);
-  }, [model]);
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+  }, [input]);
 
   useEffect(() => {
     let cancelled = false;
@@ -348,8 +403,8 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
               .filter((name: unknown): name is string => typeof name === "string")
           : [];
         if (!cancelled && names.length > 0) {
-          setOllamaModels(names);
-          if (!names.includes(model)) setModel(names[0]);
+          onAvailableModelsChange(names);
+          if (!names.includes(model)) onModelChange(names[0]);
         }
       } catch {
         /* Ollama may be offline; keep the configured fallback model. */
@@ -359,12 +414,15 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [model, onAvailableModelsChange, onModelChange]);
 
   async function streamOnce(
     history: Msg[]
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
-    const sys: Msg = { role: "system", content: buildSystemPrompt(workspaceRoot) };
+    const sys: Msg = {
+      role: "system",
+      content: buildSystemPrompt(workspaceRoot, stopAfterRejection),
+    };
 
     const res = await fetch("http://localhost:11434/api/chat", {
       method: "POST",
@@ -447,7 +505,13 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
         const toolMsgs: Msg[] = [];
         for (const call of toolCalls) {
           setActivity("waiting");
-          const result = await executeTool(call, workspaceRoot, requestEdit);
+          const result = await executeTool(
+            call,
+            workspaceRoot,
+            requestEdit,
+            requireDiffReview,
+            onFileWritten
+          );
           toolMsgs.push({ role: "tool", content: result, toolName: call.name });
         }
 
@@ -582,32 +646,6 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
           >
             Ollama
           </span>
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={streaming}
-            title="Select an Ollama model"
-            style={{
-              minWidth: 0,
-              maxWidth: 150,
-              height: 22,
-              color: "var(--fg)",
-              background: "transparent",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              font: "inherit",
-              fontSize: 11,
-              outline: "none",
-              padding: "0 6px",
-              opacity: streaming ? 0.6 : 1,
-            }}
-          >
-            {ollamaModels.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
         </div>
         {msgs.length > 0 && (
           <button
@@ -737,7 +775,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
         })}
       </div>
 
-      <div style={{ borderTop: "1px solid var(--border)", padding: 10 }}>
+      <div style={{ padding: 10 }}>
         {(streaming || pending) && (
           <div
             style={{
@@ -754,36 +792,159 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
             <span>{activity === "waiting" || pending ? "Waiting for output" : "Thinking"}</span>
           </div>
         )}
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder={streaming ? "Working…" : "Ask anything…"}
-          disabled={streaming}
+        <div
           style={{
-            width: "100%",
-            height: 64,
-            resize: "none",
-            background: "var(--bg)",
-            border: "1px solid var(--border-strong)",
+            border: `1px solid ${
+              composerFocused ? "var(--accent)" : "var(--border-strong)"
+            }`,
             borderRadius: "var(--radius-md)",
-            color: "var(--fg-strong)",
-            font: "inherit",
-            fontSize: 13,
-            padding: 10,
-            outline: "none",
-            opacity: streaming ? 0.6 : 1,
+            background: "var(--bg)",
+            boxShadow: composerFocused
+              ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent)"
+              : "0 0 0 0 transparent",
             transition:
-              "border-color var(--motion-med) var(--ease-out), background var(--motion-med) var(--ease-out)",
+              "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)",
+            opacity: streaming ? 0.7 : 1,
           }}
-          onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-          onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border-strong)")}
-        />
+        >
+          <textarea
+            ref={taRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
+            placeholder={
+              streaming ? "Working…" : "Ask anything, or describe an edit…"
+            }
+            disabled={streaming}
+            rows={1}
+            style={{
+              width: "100%",
+              minHeight: 38,
+              maxHeight: 160,
+              resize: "none",
+              background: "transparent",
+              border: "none",
+              color: "var(--fg-strong)",
+              font: "inherit",
+              fontSize: 13,
+              lineHeight: 1.5,
+              padding: "10px 10px 2px",
+              outline: "none",
+              display: "block",
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+              padding: "2px 6px 6px",
+            }}
+          >
+            <div
+              style={{
+                position: "relative",
+                display: "flex",
+                alignItems: "center",
+                minWidth: 0,
+              }}
+            >
+              <select
+                value={model}
+                onChange={(e) => onModelChange(e.target.value)}
+                disabled={streaming}
+                title="Select an Ollama model"
+                style={{
+                  appearance: "none",
+                  WebkitAppearance: "none",
+                  MozAppearance: "none",
+                  maxWidth: 180,
+                  height: 24,
+                  color: "var(--fg-subtle)",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: "var(--radius-xs)",
+                  font: "inherit",
+                  fontSize: 11,
+                  outline: "none",
+                  padding: "0 18px 0 6px",
+                  cursor: streaming ? "default" : "pointer",
+                  textOverflow: "ellipsis",
+                  transition: "color var(--motion-fast) var(--ease-out)",
+                }}
+                onMouseEnter={(e) => {
+                  if (!streaming)
+                    e.currentTarget.style.color = "var(--fg-strong)";
+                }}
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.color = "var(--fg-subtle)")
+                }
+              >
+                {availableModels.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  right: 4,
+                  pointerEvents: "none",
+                  color: "var(--fg-dim)",
+                }}
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </div>
+            <button
+              onClick={send}
+              disabled={!input.trim() || streaming}
+              aria-label="Send message"
+              title="Send (Enter)"
+              style={{
+                width: 28,
+                height: 28,
+                flexShrink: 0,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: "50%",
+                color: input.trim() && !streaming ? "#fff" : "var(--fg-dim)",
+                background:
+                  input.trim() && !streaming
+                    ? "var(--accent)"
+                    : "var(--bg-elevated)",
+                cursor: input.trim() && !streaming ? "pointer" : "default",
+                transition:
+                  "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)",
+              }}
+              onMouseEnter={(e) => {
+                if (input.trim() && !streaming)
+                  e.currentTarget.style.filter = "brightness(1.08)";
+              }}
+              onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}
+            >
+              <SendIcon />
+            </button>
+          </div>
+        </div>
       </div>
     </aside>
     {pending && (

@@ -4,11 +4,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
+import type { ThemeId } from "../theme";
 
 type Props = {
   visible: boolean;
   onToggle: () => void;
-  theme: "light" | "dark";
+  theme: ThemeId;
   height: number;
 };
 

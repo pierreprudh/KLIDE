@@ -9,16 +9,24 @@ import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { GitPanel } from "./components/GitPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import "./styles/tokens.css";
 
-type LeftPanel = "explorer" | "git" | "settings";
-type Panel = LeftPanel | "ai";
+type LeftPanel = "explorer" | "git";
+type Panel = LeftPanel | "ai" | "settings";
 type Tab = { path: string; code: string; dirty: boolean };
-type Theme = "light" | "dark";
+const DEFAULT_AI_MODEL = "llama3.1:8b";
 
 function readNumberSetting(key: string, fallback: number, min: number, max: number): number {
-  const raw = Number(localStorage.getItem(key));
+  const stored = localStorage.getItem(key);
+  if (stored === null) return fallback;
+  const raw = Number(stored);
   return Number.isFinite(raw) ? clamp(raw, min, max) : fallback;
+}
+
+function readBoolSetting(key: string, fallback: boolean): boolean {
+  const stored = localStorage.getItem(key);
+  return stored === null ? fallback : stored === "true";
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -85,11 +93,12 @@ function detectLanguage(path: string): string {
 }
 
 function App() {
+  const [view, setView] = useState<"workbench" | "settings">("workbench");
   const [leftPanel, setLeftPanel] = useState<LeftPanel | null>(() => {
     const stored = localStorage.getItem("klide-left-panel");
-    return stored === "explorer" || stored === "git" || stored === "settings"
+    return stored === "explorer" || stored === "git"
       ? stored
-      : stored === "none"
+      : stored === "none" || stored === "settings"
       ? null
       : "explorer";
   });
@@ -111,19 +120,42 @@ function App() {
   const [terminalHeight, setTerminalHeight] = useState(() =>
     readNumberSetting("klide-terminal-height", 240, 140, 460)
   );
-  const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem("klide-theme");
-    return stored === "dark" || stored === "light" ? stored : "light";
-  });
+  const [theme, setTheme] = useState<ThemeId>(() =>
+    normalizeThemeId(localStorage.getItem("klide-theme"))
+  );
+  const [editorFontSize, setEditorFontSize] = useState(() =>
+    readNumberSetting("klide-editor-font-size", 13, 11, 20)
+  );
+  const [editorLineNumbers, setEditorLineNumbers] = useState(() =>
+    readBoolSetting("klide-editor-line-numbers", true)
+  );
+  const [editorWordWrap, setEditorWordWrap] = useState(() =>
+    readBoolSetting("klide-editor-word-wrap", false)
+  );
+  const [aiModel, setAiModel] = useState(
+    () => localStorage.getItem("klide-ollama-model") || DEFAULT_AI_MODEL
+  );
+  const [ollamaModels, setOllamaModels] = useState<string[]>([aiModel]);
+  const [requireDiffReview, setRequireDiffReview] = useState(() =>
+    readBoolSetting("klide-confirm-agent-edits", true)
+  );
+  const [stopAfterRejection, setStopAfterRejection] = useState(() =>
+    readBoolSetting("klide-stop-after-rejection", true)
+  );
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
   const activityState: Record<Panel, boolean> = {
-    explorer: leftPanel === "explorer",
-    git: leftPanel === "git",
-    settings: leftPanel === "settings",
-    ai: aiVisible,
+    explorer: view === "workbench" && leftPanel === "explorer",
+    git: view === "workbench" && leftPanel === "git",
+    settings: view === "settings",
+    ai: view === "workbench" && aiVisible,
   };
 
   function togglePanel(panel: Panel) {
+    if (panel === "settings") {
+      setView("settings");
+      return;
+    }
+    setView("workbench");
     if (panel === "ai") {
       setAiVisible((cur) => !cur);
       return;
@@ -253,6 +285,30 @@ function App() {
   }, [terminalHeight]);
 
   useEffect(() => {
+    localStorage.setItem("klide-editor-font-size", String(editorFontSize));
+  }, [editorFontSize]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-editor-line-numbers", String(editorLineNumbers));
+  }, [editorLineNumbers]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-editor-word-wrap", String(editorWordWrap));
+  }, [editorWordWrap]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-ollama-model", aiModel);
+  }, [aiModel]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-confirm-agent-edits", String(requireDiffReview));
+  }, [requireDiffReview]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-stop-after-rejection", String(stopAfterRejection));
+  }, [stopAfterRejection]);
+
+  useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "s" && active) {
         e.preventDefault();
@@ -272,111 +328,147 @@ function App() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <ActivityBar active={activityState} onToggle={togglePanel} />
-        <Sidebar
-          onOpen={openFile}
-          onRootChange={setWorkspaceRoot}
-          visible={leftPanel === "explorer"}
-          width={explorerWidth}
-        />
-        <GitPanel
-          visible={leftPanel === "git"}
-          width={explorerWidth}
-          workspaceRoot={workspaceRoot}
-        />
-        <SettingsPanel
-          visible={leftPanel === "settings"}
-          width={explorerWidth}
-          theme={theme}
-          onThemeChange={setTheme}
-        />
-        {leftPanel && (
-          <ResizeHandle
-            direction="vertical"
-            label={`Resize ${leftPanel} panel`}
-            onMouseDown={(e) =>
-              beginResize(e, {
-                axis: "x",
-                startValue: explorerWidth,
-                min: 220,
-                max: 520,
-                setValue: setExplorerWidth,
-              })
-            }
+        {view === "settings" ? (
+          <SettingsPanel
+            theme={theme}
+            onThemeChange={setTheme}
+            aiVisible={aiVisible}
+            onAiVisibleChange={setAiVisible}
+            terminalVisible={terminalVisible}
+            onTerminalVisibleChange={setTerminalVisible}
+            leftPanelWidth={explorerWidth}
+            onLeftPanelWidthChange={setExplorerWidth}
+            aiWidth={aiWidth}
+            onAiWidthChange={setAiWidth}
+            terminalHeight={terminalHeight}
+            onTerminalHeightChange={setTerminalHeight}
+            editorFontSize={editorFontSize}
+            onEditorFontSizeChange={setEditorFontSize}
+            editorLineNumbers={editorLineNumbers}
+            onEditorLineNumbersChange={setEditorLineNumbers}
+            editorWordWrap={editorWordWrap}
+            onEditorWordWrapChange={setEditorWordWrap}
+            aiModel={aiModel}
+            onAiModelChange={setAiModel}
+            availableAiModels={ollamaModels}
+            requireDiffReview={requireDiffReview}
+            onRequireDiffReviewChange={setRequireDiffReview}
+            stopAfterRejection={stopAfterRejection}
+            onStopAfterRejectionChange={setStopAfterRejection}
+            onBack={() => setView("workbench")}
           />
-        )}
-        <main
-          className="workbench-main"
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            minWidth: 0,
-            position: "relative",
-          }}
-        >
-          <div className="editor-frame">
-            <TabBar
-              tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
-              activeIdx={activeIdx}
-              onSelect={setActiveIdx}
-              onClose={closeTab}
+        ) : (
+          <>
+            <ActivityBar active={activityState} onToggle={togglePanel} />
+            <Sidebar
+              onOpen={openFile}
+              onRootChange={setWorkspaceRoot}
+              visible={leftPanel === "explorer"}
+              width={explorerWidth}
+            />
+            <GitPanel
+              visible={leftPanel === "git"}
+              width={explorerWidth}
               workspaceRoot={workspaceRoot}
             />
-            <EditorArea
-              code={active?.code ?? ""}
-              onChange={updateActiveCode}
-              language={language ?? "plaintext"}
-              hasFile={active !== null}
-              workspaceOpen={workspaceRoot !== null}
-              theme={theme}
+            {leftPanel && (
+              <ResizeHandle
+                direction="vertical"
+                label={`Resize ${leftPanel} panel`}
+                onMouseDown={(e) =>
+                  beginResize(e, {
+                    axis: "x",
+                    startValue: explorerWidth,
+                    min: 220,
+                    max: 520,
+                    setValue: setExplorerWidth,
+                  })
+                }
+              />
+            )}
+            <main
+              className="workbench-main"
+              style={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                minWidth: 0,
+                position: "relative",
+              }}
+            >
+              <div className="editor-frame">
+                <TabBar
+                  tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+                  activeIdx={activeIdx}
+                  onSelect={setActiveIdx}
+                  onClose={closeTab}
+                  workspaceRoot={workspaceRoot}
+                />
+                <EditorArea
+                  code={active?.code ?? ""}
+                  onChange={updateActiveCode}
+                  language={language ?? "plaintext"}
+                  hasFile={active !== null}
+                  workspaceOpen={workspaceRoot !== null}
+                  theme={theme}
+                  fontSize={editorFontSize}
+                  lineNumbers={editorLineNumbers}
+                  wordWrap={editorWordWrap}
+                />
+              </div>
+              {terminalVisible && (
+                <ResizeHandle
+                  direction="horizontal"
+                  label="Resize terminal"
+                  onMouseDown={(e) =>
+                    beginResize(e, {
+                      axis: "y",
+                      startValue: terminalHeight,
+                      min: 140,
+                      max: 460,
+                      reverse: true,
+                      setValue: setTerminalHeight,
+                    })
+                  }
+                />
+              )}
+              <TerminalPanel
+                visible={terminalVisible}
+                onToggle={() => setTerminalVisible((v) => !v)}
+                theme={theme}
+                height={terminalHeight}
+              />
+            </main>
+            {aiVisible && (
+              <ResizeHandle
+                direction="vertical"
+                label="Resize AI panel"
+                onMouseDown={(e) =>
+                  beginResize(e, {
+                    axis: "x",
+                    startValue: aiWidth,
+                    min: 300,
+                    max: 620,
+                    reverse: true,
+                    setValue: setAiWidth,
+                  })
+                }
+              />
+            )}
+            <AiPanel
+              workspaceRoot={workspaceRoot}
+              onFileWritten={onAgentWrote}
+              visible={aiVisible}
+              width={aiWidth}
+              model={aiModel}
+              onModelChange={setAiModel}
+              availableModels={ollamaModels}
+              onAvailableModelsChange={setOllamaModels}
+              requireDiffReview={requireDiffReview}
+              stopAfterRejection={stopAfterRejection}
             />
-          </div>
-          {terminalVisible && (
-            <ResizeHandle
-              direction="horizontal"
-              label="Resize terminal"
-              onMouseDown={(e) =>
-                beginResize(e, {
-                  axis: "y",
-                  startValue: terminalHeight,
-                  min: 140,
-                  max: 460,
-                  reverse: true,
-                  setValue: setTerminalHeight,
-                })
-              }
-            />
-          )}
-          <TerminalPanel
-            visible={terminalVisible}
-            onToggle={() => setTerminalVisible((v) => !v)}
-            theme={theme}
-            height={terminalHeight}
-          />
-        </main>
-        {aiVisible && (
-          <ResizeHandle
-            direction="vertical"
-            label="Resize AI panel"
-            onMouseDown={(e) =>
-              beginResize(e, {
-                axis: "x",
-                startValue: aiWidth,
-                min: 300,
-                max: 620,
-                reverse: true,
-                setValue: setAiWidth,
-              })
-            }
-          />
+          </>
         )}
-        <AiPanel
-          workspaceRoot={workspaceRoot}
-          onFileWritten={onAgentWrote}
-          visible={aiVisible}
-          width={aiWidth}
-        />
       </div>
       <StatusBar
         path={active?.path ?? null}
@@ -385,7 +477,7 @@ function App() {
         terminalVisible={terminalVisible}
         onToggleTerminal={() => setTerminalVisible((v) => !v)}
         theme={theme}
-        onToggleTheme={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+        onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
       />
     </div>
   );
