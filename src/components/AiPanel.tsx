@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+} from "react";
 import {
   exists,
   readDir,
@@ -26,6 +32,8 @@ type Props = {
   onAvailableModelsChange: (models: string[]) => void;
   requireDiffReview: boolean;
   stopAfterRejection: boolean;
+  onDuplicate?: () => void;
+  onClose?: () => void;
 };
 
 type PendingEditRequest = PendingEdit & {
@@ -282,6 +290,352 @@ function parseToolCallsFromChunk(raw: any): ToolCall[] {
     .filter((x): x is ToolCall => x !== null);
 }
 
+type Conversation = {
+  id: string;
+  title: string;
+  msgs: Msg[];
+  updatedAt: number;
+};
+
+const CONVOS_KEY = "klide-conversations";
+
+function genId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function loadConversations(): Conversation[] {
+  try {
+    const raw = localStorage.getItem(CONVOS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveConversations(list: Conversation[]) {
+  try {
+    localStorage.setItem(CONVOS_KEY, JSON.stringify(list));
+  } catch {
+    /* storage full or unavailable — skip */
+  }
+}
+
+function deriveTitle(msgs: Msg[]): string {
+  const firstUser = msgs.find((m) => m.role === "user");
+  const text = firstUser?.content.trim() ?? "";
+  if (!text) return "New chat";
+  return text.length > 42 ? `${text.slice(0, 42)}…` : text;
+}
+
+function relativeTime(ts: number): string {
+  const min = Math.floor((Date.now() - ts) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+type MdNode = string | ReactElement;
+
+const CODE_KEYWORDS = new Set([
+  "const", "let", "var", "function", "return", "if", "else", "for", "while",
+  "do", "switch", "case", "break", "continue", "new", "class", "extends",
+  "super", "import", "export", "from", "default", "async", "await", "yield",
+  "try", "catch", "finally", "throw", "typeof", "instanceof", "in", "of",
+  "this", "void", "delete", "static", "public", "private", "protected",
+  "readonly", "interface", "type", "enum", "implements", "namespace", "as",
+  "keyof", "get", "set", "fn", "mut", "impl", "trait", "struct", "pub", "use",
+  "mod", "match", "loop", "move", "ref", "where", "dyn", "crate", "self",
+  "unsafe", "def", "lambda", "elif", "with", "pass", "global", "nonlocal",
+  "raise", "except", "and", "or", "not", "true", "false", "null", "undefined",
+  "None", "True", "False",
+]);
+
+const CODE_TOKEN_RE =
+  /(\/\/[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_$][A-Za-z0-9_$]*)/g;
+
+function highlightCode(code: string): MdNode[] {
+  const out: MdNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  CODE_TOKEN_RE.lastIndex = 0;
+  while ((m = CODE_TOKEN_RE.exec(code))) {
+    if (m.index > last) out.push(code.slice(last, m.index));
+    const [full, comment, str, num, word] = m;
+    if (comment) {
+      out.push(
+        <span key={key++} style={{ color: "var(--code-comment)", fontStyle: "italic" }}>
+          {full}
+        </span>
+      );
+    } else if (str) {
+      out.push(<span key={key++} style={{ color: "var(--code-string)" }}>{full}</span>);
+    } else if (num) {
+      out.push(<span key={key++} style={{ color: "var(--code-number)" }}>{full}</span>);
+    } else if (word && CODE_KEYWORDS.has(word)) {
+      out.push(<span key={key++} style={{ color: "var(--code-keyword)" }}>{full}</span>);
+    } else {
+      out.push(full);
+    }
+    last = m.index + full.length;
+  }
+  if (last < code.length) out.push(code.slice(last));
+  return out;
+}
+
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable in this context */
+    }
+  }
+  return (
+    <div
+      style={{
+        margin: "8px 0",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        overflow: "hidden",
+        background: "var(--bg-elevated)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "3px 6px 3px 10px",
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
+        <span
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            color: "var(--fg-subtle)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {lang || "code"}
+        </span>
+        <button
+          onClick={copy}
+          title="Copy code"
+          style={{
+            fontSize: 10,
+            color: copied ? "var(--accent)" : "var(--fg-subtle)",
+            padding: "2px 7px",
+            borderRadius: "var(--radius-xs)",
+          }}
+          onMouseEnter={(e) => {
+            if (!copied) {
+              e.currentTarget.style.color = "var(--fg-strong)";
+              e.currentTarget.style.background = "var(--bg-hover)";
+            }
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = copied ? "var(--accent)" : "var(--fg-subtle)";
+            e.currentTarget.style.background = "transparent";
+          }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre
+        style={{
+          margin: 0,
+          padding: "10px 12px",
+          overflowX: "auto",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+          lineHeight: 1.55,
+          color: "var(--fg-strong)",
+          whiteSpace: "pre",
+        }}
+      >
+        <code>{highlightCode(code)}</code>
+      </pre>
+    </div>
+  );
+}
+
+const INLINE_RE = /\*\*(.+?)\*\*|`([^`]+)`|\*(.+?)\*|\[([^\]]+)\]\(([^)]+)\)/g;
+
+function renderInline(text: string, keyBase: string): MdNode[] {
+  const out: MdNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  INLINE_RE.lastIndex = 0;
+  while ((m = INLINE_RE.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) {
+      out.push(
+        <strong key={`${keyBase}-${key++}`} style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
+          {m[1]}
+        </strong>
+      );
+    } else if (m[2] !== undefined) {
+      out.push(
+        <code
+          key={`${keyBase}-${key++}`}
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-xs)",
+            padding: "1px 5px",
+            color: "var(--fg-strong)",
+          }}
+        >
+          {m[2]}
+        </code>
+      );
+    } else if (m[3] !== undefined) {
+      out.push(<em key={`${keyBase}-${key++}`}>{m[3]}</em>);
+    } else if (m[4] !== undefined) {
+      out.push(
+        <span
+          key={`${keyBase}-${key++}`}
+          title={m[5]}
+          style={{ color: "var(--accent)", textDecoration: "underline", textUnderlineOffset: 2 }}
+        >
+          {m[4]}
+        </span>
+      );
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function renderProse(text: string, keyBase: string): MdNode[] {
+  const lines = text.split("\n");
+  const blocks: MdNode[] = [];
+  let para: string[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  let k = 0;
+
+  const flushPara = () => {
+    if (para.length === 0) return;
+    const content: MdNode[] = [];
+    para.forEach((ln, i) => {
+      if (i > 0) content.push(<br key={`br-${keyBase}-${k}-${i}`} />);
+      content.push(...renderInline(ln, `${keyBase}-p${k}-${i}`));
+    });
+    blocks.push(
+      <div key={`${keyBase}-para-${k++}`} style={{ margin: "2px 0" }}>
+        {content}
+      </div>
+    );
+    para = [];
+  };
+
+  const flushList = () => {
+    if (!list) return;
+    const current = list;
+    const items = current.items.map((it, i) => (
+      <li key={`${keyBase}-li-${k}-${i}`} style={{ margin: "1px 0" }}>
+        {renderInline(it, `${keyBase}-li${k}-${i}`)}
+      </li>
+    ));
+    const style = { margin: "4px 0", paddingLeft: 18 };
+    blocks.push(
+      current.ordered ? (
+        <ol key={`${keyBase}-ol-${k++}`} style={style}>{items}</ol>
+      ) : (
+        <ul key={`${keyBase}-ul-${k++}`} style={style}>{items}</ul>
+      )
+    );
+    list = null;
+  };
+
+  for (const line of lines) {
+    if (line.trim() === "") {
+      flushPara();
+      flushList();
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (heading) {
+      flushPara();
+      flushList();
+      const level = heading[1].length;
+      const size = level === 1 ? 15 : level === 2 ? 14 : 13;
+      blocks.push(
+        <div
+          key={`${keyBase}-h-${k++}`}
+          style={{ fontWeight: 600, fontSize: size, color: "var(--fg-strong)", margin: "8px 0 2px" }}
+        >
+          {renderInline(heading[2], `${keyBase}-hh${k}`)}
+        </div>
+      );
+      continue;
+    }
+    const ul = /^\s*[-*]\s+(.*)$/.exec(line);
+    const ol = /^\s*\d+\.\s+(.*)$/.exec(line);
+    if (ul) {
+      flushPara();
+      if (!list || list.ordered) {
+        flushList();
+        list = { ordered: false, items: [] };
+      }
+      list.items.push(ul[1]);
+      continue;
+    }
+    if (ol) {
+      flushPara();
+      if (!list || !list.ordered) {
+        flushList();
+        list = { ordered: true, items: [] };
+      }
+      list.items.push(ol[1]);
+      continue;
+    }
+    flushList();
+    para.push(line);
+  }
+  flushPara();
+  flushList();
+  return blocks;
+}
+
+function renderMarkdown(text: string): MdNode[] {
+  const segments = text.split("```");
+  const out: MdNode[] = [];
+  segments.forEach((seg, idx) => {
+    if (idx % 2 === 1) {
+      // fenced code (may be unclosed while streaming — still render it)
+      const nl = seg.indexOf("\n");
+      let lang = "";
+      let code = seg;
+      if (nl >= 0) {
+        const first = seg.slice(0, nl).trim();
+        if (/^[\w+#-]*$/.test(first)) {
+          lang = first;
+          code = seg.slice(nl + 1);
+        }
+      }
+      code = code.replace(/\n$/, "");
+      out.push(<CodeBlock key={`code-${idx}`} code={code} lang={lang} />);
+    } else if (seg) {
+      out.push(...renderProse(seg, `seg-${idx}`));
+    }
+  });
+  return out;
+}
+
 function BouncingDots() {
   return (
     <div className="loader-bounce" aria-label="Model is thinking">
@@ -322,6 +676,63 @@ function SendIcon() {
   );
 }
 
+function NewChatIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 1.8" />
+    </svg>
+  );
+}
+
+function DuplicateIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" />
+    </svg>
+  );
+}
+
 export function AiPanel({
   workspaceRoot,
   onFileWritten,
@@ -333,6 +744,8 @@ export function AiPanel({
   onAvailableModelsChange,
   requireDiffReview,
   stopAfterRejection,
+  onDuplicate,
+  onClose,
 }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -340,8 +753,40 @@ export function AiPanel({
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
   const [pending, setPending] = useState<PendingEditRequest | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    loadConversations()
+  );
+  const [currentId, setCurrentId] = useState<string>(() => genId());
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+
+  function newConversation() {
+    setHistoryOpen(false);
+    setMsgs([]);
+    setInput("");
+    setCurrentId(genId());
+  }
+
+  function loadConversation(c: Conversation) {
+    setHistoryOpen(false);
+    setCurrentId(c.id);
+    setMsgs(c.msgs);
+  }
+
+  function deleteConversation(id: string, e: ReactMouseEvent) {
+    e.stopPropagation();
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      saveConversations(next);
+      return next;
+    });
+    if (id === currentId) {
+      setMsgs([]);
+      setCurrentId(genId());
+    }
+  }
 
   function requestEdit(
     req: Omit<PendingEditRequest, "resolve">
@@ -389,6 +834,37 @@ export function AiPanel({
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [input]);
+
+  // Auto-save the current conversation once a turn settles (not mid-stream).
+  useEffect(() => {
+    if (streaming || msgs.length === 0) return;
+    setConversations((prev) => {
+      const conv: Conversation = {
+        id: currentId,
+        title: deriveTitle(msgs),
+        msgs,
+        updatedAt: Date.now(),
+      };
+      const next = [conv, ...prev.filter((c) => c.id !== currentId)];
+      saveConversations(next);
+      return next;
+    });
+  }, [msgs, streaming, currentId]);
+
+  // Close the history menu on an outside click.
+  useEffect(() => {
+    if (!historyOpen) return;
+    function onDown(e: MouseEvent) {
+      if (
+        historyRef.current &&
+        !historyRef.current.contains(e.target as Node)
+      ) {
+        setHistoryOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [historyOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -570,8 +1046,8 @@ export function AiPanel({
       return (
         <>
           {m.content && (
-            <div style={{ whiteSpace: "pre-wrap", marginBottom: m.toolCalls ? 6 : 0 }}>
-              {m.content}
+            <div style={{ marginBottom: m.toolCalls ? 6 : 0 }}>
+              {renderMarkdown(m.content)}
             </div>
           )}
           {m.toolCalls?.map((tc, i) => (
@@ -598,11 +1074,6 @@ export function AiPanel({
     }
 
     return <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>;
-  }
-
-  function displayRole(m: Msg): string {
-    if (m.role === "tool") return "TOOL";
-    return m.role.toUpperCase();
   }
 
   return (
@@ -647,18 +1118,30 @@ export function AiPanel({
             Ollama
           </span>
         </div>
-        {msgs.length > 0 && (
+        <div
+          ref={historyRef}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            position: "relative",
+            textTransform: "none",
+            letterSpacing: 0,
+          }}
+        >
           <button
-            onClick={() => setMsgs([])}
+            onClick={() => onDuplicate?.()}
+            title="Duplicate panel"
+            aria-label="Duplicate panel"
             style={{
-              color: "var(--fg-subtle)",
-              fontSize: 11,
-              padding: "2px 6px",
+              width: 26,
+              height: 22,
+              display: "grid",
+              placeItems: "center",
               borderRadius: "var(--radius-sm)",
-              textTransform: "none",
-              letterSpacing: 0,
+              color: "var(--fg-subtle)",
+              background: "transparent",
             }}
-            title="Clear conversation"
             onMouseEnter={(e) => {
               e.currentTarget.style.color = "var(--fg-strong)";
               e.currentTarget.style.background = "var(--bg-hover)";
@@ -668,9 +1151,216 @@ export function AiPanel({
               e.currentTarget.style.background = "transparent";
             }}
           >
-            Clear
+            <DuplicateIcon />
           </button>
-        )}
+          <button
+            onClick={() => setHistoryOpen((o) => !o)}
+            title="Conversation history"
+            aria-label="Conversation history"
+            aria-expanded={historyOpen}
+            style={{
+              width: 26,
+              height: 22,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "var(--radius-sm)",
+              color: historyOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
+              background: historyOpen ? "var(--bg-hover)" : "transparent",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--fg-strong)";
+              e.currentTarget.style.background = "var(--bg-hover)";
+            }}
+            onMouseLeave={(e) => {
+              if (!historyOpen) {
+                e.currentTarget.style.color = "var(--fg-subtle)";
+                e.currentTarget.style.background = "transparent";
+              }
+            }}
+          >
+            <HistoryIcon />
+          </button>
+          <button
+            onClick={newConversation}
+            title="New conversation"
+            aria-label="New conversation"
+            style={{
+              width: 26,
+              height: 22,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--fg-subtle)",
+              background: "transparent",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--fg-strong)";
+              e.currentTarget.style.background = "var(--bg-hover)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--fg-subtle)";
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <NewChatIcon />
+          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Close panel"
+              aria-label="Close panel"
+              style={{
+                width: 26,
+                height: 22,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--fg-subtle)",
+                background: "transparent",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--fg-strong)";
+                e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--fg-subtle)";
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          )}
+
+          {historyOpen && (
+            <div
+              className="floating-panel"
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                right: 0,
+                width: 264,
+                maxHeight: 340,
+                overflow: "auto",
+                padding: 6,
+                zIndex: 20,
+              }}
+            >
+              {conversations.length === 0 ? (
+                <div
+                  style={{
+                    padding: "12px 8px",
+                    color: "var(--fg-subtle)",
+                    fontSize: 12,
+                    textAlign: "center",
+                  }}
+                >
+                  No past conversations yet.
+                </div>
+              ) : (
+                conversations.map((c) => (
+                  <div
+                    key={c.id}
+                    onClick={() => loadConversation(c)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7px 8px",
+                      borderRadius: "var(--radius-sm)",
+                      cursor: "pointer",
+                      background:
+                        c.id === currentId
+                          ? "var(--bg-selected)"
+                          : "transparent",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (c.id !== currentId)
+                        e.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background =
+                        c.id === currentId
+                          ? "var(--bg-selected)"
+                          : "transparent";
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 500,
+                          color: "var(--fg-strong)",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {c.title}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--fg-subtle)",
+                          marginTop: 1,
+                        }}
+                      >
+                        {relativeTime(c.updatedAt)}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => deleteConversation(c.id, e)}
+                      title="Delete conversation"
+                      aria-label="Delete conversation"
+                      style={{
+                        flexShrink: 0,
+                        width: 22,
+                        height: 22,
+                        display: "grid",
+                        placeItems: "center",
+                        borderRadius: "var(--radius-xs)",
+                        color: "var(--fg-dim)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "var(--fg-strong)";
+                        e.currentTarget.style.background = "var(--bg-hover)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = "var(--fg-dim)";
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </header>
 
       <div
@@ -709,19 +1399,17 @@ export function AiPanel({
                 boxShadow: "inset 0 1px 0 var(--panel-highlight)",
               }}
             >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.35"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+              <span
+                style={{
+                  fontFamily: "var(--font-ui)",
+                  fontSize: 19,
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  letterSpacing: "-0.02em",
+                }}
               >
-                <path d="M12 3.5l1.6 4.4L18 9.5l-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5z" />
-                <path d="M18 16l.7 1.8L20.5 18.5l-1.8.7L18 21l-.7-1.8L15.5 18.5l1.8-.7L18 16z" />
-              </svg>
+                K
+              </span>
             </div>
             <div
               style={{
@@ -741,33 +1429,115 @@ export function AiPanel({
           </div>
         )}
         {msgs.map((m, i) => {
+          const isLast = i === msgs.length - 1;
           const isStreamingPlaceholder =
             streaming &&
-            i === msgs.length - 1 &&
+            isLast &&
             m.role === "assistant" &&
             m.content === "" &&
             !m.toolCalls;
-          return (
-            <div key={i} style={{ margin: "12px 0" }}>
+          const isStreamingActive =
+            streaming && isLast && m.role === "assistant" && m.content !== "";
+
+          if (m.role === "user") {
+            return (
               <div
+                key={i}
+                className="ai-msg-in"
                 style={{
-                  fontSize: 10,
-                  color: "var(--fg-subtle)",
-                  letterSpacing: "0.06em",
-                  textTransform: "uppercase",
-                  fontWeight: 500,
-                  marginBottom: 4,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  margin: "16px 0",
                 }}
               >
-                {displayRole(m)}
+                <div
+                  style={{
+                    maxWidth: "88%",
+                    background: "var(--accent-soft)",
+                    color: "var(--fg-strong)",
+                    borderRadius: "13px 13px 4px 13px",
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    lineHeight: 1.55,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {m.content}
+                </div>
               </div>
-              <div style={{ color: "var(--fg)" }}>
+            );
+          }
+
+          if (m.role === "tool") {
+            return (
+              <div
+                key={i}
+                className="ai-msg-in"
+                style={{ margin: "8px 0 8px 32px" }}
+              >
+                {renderMessageBody(m)}
+              </div>
+            );
+          }
+
+          return (
+            <div
+              key={i}
+              className="ai-msg-in"
+              style={{ display: "flex", gap: 10, margin: "16px 0" }}
+            >
+              <div
+                aria-hidden="true"
+                style={{
+                  flexShrink: 0,
+                  width: 22,
+                  height: 22,
+                  marginTop: 1,
+                  borderRadius: "50%",
+                  display: "grid",
+                  placeItems: "center",
+                  color: "var(--accent)",
+                  background:
+                    "color-mix(in srgb, var(--accent-soft) 80%, transparent)",
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "var(--font-ui)",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  K
+                </span>
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  color: "var(--fg-strong)",
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
                 {isStreamingPlaceholder ? (
-                  <span style={{ color: "var(--fg-dim)", display: "inline-flex" }}>
+                  <span
+                    style={{
+                      color: "var(--fg-dim)",
+                      display: "inline-flex",
+                      marginTop: 2,
+                    }}
+                  >
                     {activity === "waiting" ? <OrbitLoader /> : <BouncingDots />}
                   </span>
                 ) : (
-                  renderMessageBody(m)
+                  <>
+                    {renderMessageBody(m)}
+                    {isStreamingActive && <span className="ai-caret" />}
+                  </>
                 )}
               </div>
             </div>
@@ -800,8 +1570,8 @@ export function AiPanel({
             borderRadius: "var(--radius-md)",
             background: "var(--bg)",
             boxShadow: composerFocused
-              ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent)"
-              : "0 0 0 0 transparent",
+              ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 1px 2px rgba(38, 38, 32, 0.05)"
+              : "0 1px 2px rgba(38, 38, 32, 0.04)",
             transition:
               "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)",
             opacity: streaming ? 0.7 : 1,

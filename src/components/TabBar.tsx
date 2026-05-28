@@ -25,14 +25,13 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
       style={{
         height: "var(--size-tab-strip)",
         background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
-        borderBottom: "1px solid var(--border)",
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-end",
         overflowX: "auto",
         backdropFilter: "blur(12px)",
         flexShrink: 0,
-        padding: "4px 6px",
-        gap: 4,
+        padding: "0 10px",
+        gap: 2,
       }}
     >
       {tabs.map((t, i) => {
@@ -50,49 +49,49 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
             style={{
               display: "flex",
               alignItems: "center",
-              height: 25,
-              padding: "0 10px",
+              height: isActive ? 32 : 26,
+              marginBottom: isActive ? 0 : 4,
+              padding: "0 14px",
               gap: 8,
               position: "relative",
-              background: isActive
-                ? "color-mix(in srgb, var(--bg) 88%, transparent)"
-                : "transparent",
-              border: isActive
-                ? "1px solid color-mix(in srgb, var(--border-strong) 70%, transparent)"
+              background: isActive ? "var(--bg)" : "transparent",
+              borderTop: isActive
+                ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
                 : "1px solid transparent",
-              borderRadius: "999px",
+              borderLeft: isActive
+                ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
+                : "1px solid transparent",
+              borderRight: isActive
+                ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
+                : "1px solid transparent",
+              borderRadius: isActive ? "10px 10px 0 0" : "8px",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
               fontSize: 13,
               fontWeight: isActive ? 500 : 400,
               cursor: "pointer",
               minWidth: 0,
-              maxWidth: 220,
+              maxWidth: 240,
               flexShrink: 0,
               transition:
-                "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out)",
+                "background var(--motion-slow) var(--ease-soft), color var(--motion-slow) var(--ease-soft)",
             }}
             onMouseEnter={(e) => {
-              if (!isActive) e.currentTarget.style.color = "var(--fg-strong)";
+              if (!isActive) {
+                e.currentTarget.style.color = "var(--fg-strong)";
+                e.currentTarget.style.background =
+                  "color-mix(in srgb, var(--bg-hover) 45%, transparent)";
+              }
             }}
             onMouseLeave={(e) => {
-              if (!isActive) e.currentTarget.style.color = "var(--fg-subtle)";
+              if (!isActive) {
+                e.currentTarget.style.color = "var(--fg-subtle)";
+                e.currentTarget.style.background = "transparent";
+              }
             }}
           >
-            {isActive && (
-              <span
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 12,
-                  right: 12,
-                  height: 2,
-                  borderRadius: 99,
-                  background: "var(--accent)",
-                }}
-              />
-            )}
             <span
               style={{
+                flex: "0 1 auto",
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -100,18 +99,24 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               }}
             >
               {filename}
-              {t.dirty && (
-                <span style={{ color: "var(--accent)", marginLeft: 6 }}>•</span>
-              )}
             </span>
+            {t.dirty && (
+              <span
+                style={{ color: "var(--accent)", flexShrink: 0, marginLeft: -2 }}
+              >
+                •
+              </span>
+            )}
             {folder && (
               <span
                 style={{
+                  flex: "0 1 auto",
                   color: "var(--fg-dim)",
                   fontSize: 11,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
+                  minWidth: 0,
                   maxWidth: 86,
                 }}
               >
@@ -129,6 +134,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
                 color: "var(--fg-subtle)",
                 width: 18,
                 height: 18,
+                flexShrink: 0,
                 display: "grid",
                 placeItems: "center",
                 borderRadius: "var(--radius-xs)",

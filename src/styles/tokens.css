@@ -22,6 +22,12 @@
   --accent:       #4263EB;
   --accent-soft:  #E5E9FF;
 
+  /* Code syntax (theme-agnostic mid-tones; block surface uses --bg-elevated) */
+  --code-keyword: #7A5AF5;
+  --code-string:  #2F9E64;
+  --code-number:  #C2772E;
+  --code-comment: #9B9B95;
+
   /* Terminal */
   --terminal-bg:      #F7F6F2;
   --terminal-fg:      #343431;
@@ -417,6 +423,44 @@ input:focus-visible {
 @keyframes loader-orbit-r {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* AI message entrance + live streaming caret */
+.ai-msg-in {
+  animation: ai-msg-in var(--motion-slow) var(--ease-soft);
+}
+
+@keyframes ai-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ai-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 1px;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: ai-caret-blink 1.05s steps(2, jump-none) infinite;
+}
+
+@keyframes ai-caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
   }
 }
 

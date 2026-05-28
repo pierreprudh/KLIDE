@@ -1,4 +1,4 @@
-type View = "explorer" | "git" | "ai" | "settings";
+type View = "explorer" | "git" | "graph" | "ai" | "settings";
 type Props = { active: Record<View, boolean>; onToggle: (v: View) => void };
 
 function FolderIcon() {
@@ -48,10 +48,35 @@ function GitIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <circle cx="7" cy="6" r="2.25" />
-      <circle cx="17" cy="18" r="2.25" />
-      <path d="M7 8.25v3.25a4.5 4.5 0 0 0 4.5 4.5H14" />
-      <path d="M14 13l3 3-3 3" />
+      <circle cx="6" cy="5" r="2.4" />
+      <circle cx="6" cy="19" r="2.4" />
+      <circle cx="18" cy="12" r="2.4" />
+      <path d="M6 7.4v9.2" />
+      <path d="M8.1 6.2A8.2 8.2 0 0 1 15.7 10" />
+    </svg>
+  );
+}
+
+function GraphIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="6" cy="7" r="2.3" />
+      <circle cx="18" cy="6" r="2.3" />
+      <circle cx="8" cy="18" r="2.3" />
+      <circle cx="18" cy="17" r="2.3" />
+      <path d="M8.2 7h7.6" />
+      <path d="M7 9.1l1 6.6" />
+      <path d="M10.2 17.8h5.6" />
+      <path d="M17.8 8.3v6.4" />
     </svg>
   );
 }
@@ -85,6 +110,7 @@ export function ActivityBar({ active, onToggle }: Props) {
   const items = [
     { id: "explorer" as const, label: "Files", Icon: FolderIcon },
     { id: "git" as const, label: "Git", Icon: GitIcon },
+    { id: "graph" as const, label: "Project Graph", Icon: GraphIcon },
     { id: "ai" as const, label: "AI", Icon: SparkIcon },
     { id: "settings" as const, label: "Settings", Icon: SettingsIcon },
   ];

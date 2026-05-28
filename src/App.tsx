@@ -8,12 +8,12 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { GitPanel } from "./components/GitPanel";
+import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import "./styles/tokens.css";
 
-type LeftPanel = "explorer" | "git";
-type Panel = LeftPanel | "ai" | "settings";
+type Panel = "explorer" | "git" | "graph" | "ai" | "settings";
 type Tab = { path: string; code: string; dirty: boolean };
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
@@ -94,17 +94,19 @@ function detectLanguage(path: string): string {
 
 function App() {
   const [view, setView] = useState<"workbench" | "settings">("workbench");
-  const [leftPanel, setLeftPanel] = useState<LeftPanel | null>(() => {
-    const stored = localStorage.getItem("klide-left-panel");
-    return stored === "explorer" || stored === "git"
-      ? stored
-      : stored === "none" || stored === "settings"
-      ? null
-      : "explorer";
-  });
+  const [explorerVisible, setExplorerVisible] = useState(
+    () => localStorage.getItem("klide-explorer-visible") !== "false"
+  );
+  const [gitVisible, setGitVisible] = useState(
+    () => localStorage.getItem("klide-git-visible") === "true"
+  );
+  const [graphVisible, setGraphVisible] = useState(
+    () => localStorage.getItem("klide-graph-visible") === "true"
+  );
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
   );
+  const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
@@ -113,6 +115,12 @@ function App() {
   );
   const [explorerWidth, setExplorerWidth] = useState(() =>
     readNumberSetting("klide-left-width", 280, 220, 520)
+  );
+  const [gitWidth, setGitWidth] = useState(() =>
+    readNumberSetting("klide-git-width", 280, 220, 520)
+  );
+  const [graphWidth, setGraphWidth] = useState(() =>
+    readNumberSetting("klide-graph-width", 320, 260, 560)
   );
   const [aiWidth, setAiWidth] = useState(() =>
     readNumberSetting("klide-ai-width", 380, 300, 620)
@@ -144,8 +152,9 @@ function App() {
   );
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
   const activityState: Record<Panel, boolean> = {
-    explorer: view === "workbench" && leftPanel === "explorer",
-    git: view === "workbench" && leftPanel === "git",
+    explorer: view === "workbench" && explorerVisible,
+    git: view === "workbench" && gitVisible,
+    graph: view === "workbench" && graphVisible,
     settings: view === "settings",
     ai: view === "workbench" && aiVisible,
   };
@@ -160,7 +169,17 @@ function App() {
       setAiVisible((cur) => !cur);
       return;
     }
-    setLeftPanel((cur) => (cur === panel ? null : panel));
+    if (panel === "explorer") {
+      setExplorerVisible((cur) => !cur);
+      return;
+    }
+    if (panel === "git") {
+      setGitVisible((cur) => !cur);
+      return;
+    }
+    if (panel === "graph") {
+      setGraphVisible((cur) => !cur);
+    }
   }
 
   function beginResize(
@@ -254,15 +273,33 @@ function App() {
     );
   }
 
+  function duplicateAiPanel() {
+    setAiPanelIds((ids) => [
+      ...ids,
+      `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    ]);
+  }
+
+  function closeAiPanel(id: string) {
+    setAiPanelIds((ids) => (ids.length > 1 ? ids.filter((x) => x !== id) : ids));
+  }
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("klide-theme", theme);
   }, [theme]);
 
   useEffect(() => {
-    if (leftPanel) localStorage.setItem("klide-left-panel", leftPanel);
-    else localStorage.setItem("klide-left-panel", "none");
-  }, [leftPanel]);
+    localStorage.setItem("klide-explorer-visible", String(explorerVisible));
+  }, [explorerVisible]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-git-visible", String(gitVisible));
+  }, [gitVisible]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-graph-visible", String(graphVisible));
+  }, [graphVisible]);
 
   useEffect(() => {
     localStorage.setItem("klide-ai-visible", String(aiVisible));
@@ -275,6 +312,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-left-width", String(explorerWidth));
   }, [explorerWidth]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-git-width", String(gitWidth));
+  }, [gitWidth]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-graph-width", String(graphWidth));
+  }, [graphWidth]);
 
   useEffect(() => {
     localStorage.setItem("klide-ai-width", String(aiWidth));
@@ -326,7 +371,14 @@ function App() {
   const language = active ? detectLanguage(active.path) : null;
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        borderTop: "1px solid var(--border-strong)",
+      }}
+    >
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         {view === "settings" ? (
           <SettingsPanel
@@ -363,18 +415,13 @@ function App() {
             <Sidebar
               onOpen={openFile}
               onRootChange={setWorkspaceRoot}
-              visible={leftPanel === "explorer"}
+              visible={explorerVisible}
               width={explorerWidth}
             />
-            <GitPanel
-              visible={leftPanel === "git"}
-              width={explorerWidth}
-              workspaceRoot={workspaceRoot}
-            />
-            {leftPanel && (
+            {explorerVisible && (
               <ResizeHandle
                 direction="vertical"
-                label={`Resize ${leftPanel} panel`}
+                label="Resize explorer panel"
                 onMouseDown={(e) =>
                   beginResize(e, {
                     axis: "x",
@@ -382,6 +429,46 @@ function App() {
                     min: 220,
                     max: 520,
                     setValue: setExplorerWidth,
+                  })
+                }
+              />
+            )}
+            <GitPanel
+              visible={gitVisible}
+              width={gitWidth}
+              workspaceRoot={workspaceRoot}
+            />
+            {gitVisible && (
+              <ResizeHandle
+                direction="vertical"
+                label="Resize git panel"
+                onMouseDown={(e) =>
+                  beginResize(e, {
+                    axis: "x",
+                    startValue: gitWidth,
+                    min: 220,
+                    max: 520,
+                    setValue: setGitWidth,
+                  })
+                }
+              />
+            )}
+            <ProjectGraphPanel
+              visible={graphVisible}
+              width={graphWidth}
+              workspaceRoot={workspaceRoot}
+            />
+            {graphVisible && (
+              <ResizeHandle
+                direction="vertical"
+                label="Resize project graph panel"
+                onMouseDown={(e) =>
+                  beginResize(e, {
+                    axis: "x",
+                    startValue: graphWidth,
+                    min: 260,
+                    max: 560,
+                    setValue: setGraphWidth,
                   })
                 }
               />
@@ -455,18 +542,25 @@ function App() {
                 }
               />
             )}
-            <AiPanel
-              workspaceRoot={workspaceRoot}
-              onFileWritten={onAgentWrote}
-              visible={aiVisible}
-              width={aiWidth}
-              model={aiModel}
-              onModelChange={setAiModel}
-              availableModels={ollamaModels}
-              onAvailableModelsChange={setOllamaModels}
-              requireDiffReview={requireDiffReview}
-              stopAfterRejection={stopAfterRejection}
-            />
+            {aiPanelIds.map((id) => (
+              <AiPanel
+                key={id}
+                workspaceRoot={workspaceRoot}
+                onFileWritten={onAgentWrote}
+                visible={aiVisible}
+                width={aiWidth}
+                model={aiModel}
+                onModelChange={setAiModel}
+                availableModels={ollamaModels}
+                onAvailableModelsChange={setOllamaModels}
+                requireDiffReview={requireDiffReview}
+                stopAfterRejection={stopAfterRejection}
+                onDuplicate={duplicateAiPanel}
+                onClose={
+                  aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
+                }
+              />
+            ))}
           </>
         )}
       </div>

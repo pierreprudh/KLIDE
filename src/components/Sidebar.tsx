@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { readTextFile, watch } from "@tauri-apps/plugin-fs";
+import { watch } from "@tauri-apps/plugin-fs";
 import { useEffect, useState } from "react";
 
 type Props = {
@@ -190,7 +190,12 @@ export function Sidebar({ onOpen, onRootChange, visible, width }: Props) {
   }, [root, expanded]);
 
   async function pick(path: string) {
-    onOpen(path, await readTextFile(path));
+    try {
+      const content = await invoke<string>("read_text_file", { path });
+      onOpen(path, content);
+    } catch (e) {
+      console.error("Failed to open file:", e);
+    }
   }
 
   async function toggleFolder(path: string) {
