@@ -1,10 +1,10 @@
-# CLAUDE.md — KIDE project context
+# CLAUDE.md — Klide project context
 
 This file is loaded automatically when Claude Code works in this directory. Read it first.
 
-## What KIDE is
+## What Klide is
 
-KIDE is a code editor Pierre is building from scratch. Inspired by [Sinew](https://sinew-ide.com/). The goal is a small, fast, AI-first IDE that **looks like a 2026 design tool** but **works like VS Code**.
+Klide is a code editor Pierre is building from scratch. Inspired by [Sinew](https://sinew-ide.com/). The goal is a small, fast, AI-first IDE that **looks like a 2026 design tool** but **works like VS Code**.
 
 Pierre is new to building desktop apps and is learning Rust as he goes. Frame technical explanations for a smart beginner — explain what each piece does, cite docs, and prefer fewer-moving-parts solutions.
 
@@ -41,7 +41,7 @@ If a UI element doesn't serve clarity, it doesn't ship.
 ## Repo layout
 
 ```
-KIDE/
+Klide/
 ├── README.md            Project pitch + status
 ├── GETTING_STARTED.md   Step-by-step build guide (M1.5 → M7)
 ├── CLAUDE.md            This file

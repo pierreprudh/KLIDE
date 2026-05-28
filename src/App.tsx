@@ -86,7 +86,7 @@ function detectLanguage(path: string): string {
 
 function App() {
   const [leftPanel, setLeftPanel] = useState<LeftPanel | null>(() => {
-    const stored = localStorage.getItem("kide-left-panel");
+    const stored = localStorage.getItem("klide-left-panel");
     return stored === "explorer" || stored === "git" || stored === "settings"
       ? stored
       : stored === "none"
@@ -94,25 +94,25 @@ function App() {
       : "explorer";
   });
   const [aiVisible, setAiVisible] = useState(
-    () => localStorage.getItem("kide-ai-visible") !== "false"
+    () => localStorage.getItem("klide-ai-visible") !== "false"
   );
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [terminalVisible, setTerminalVisible] = useState(
-    () => localStorage.getItem("kide-terminal-visible") === "true"
+    () => localStorage.getItem("klide-terminal-visible") === "true"
   );
   const [explorerWidth, setExplorerWidth] = useState(() =>
-    readNumberSetting("kide-left-width", 280, 220, 520)
+    readNumberSetting("klide-left-width", 280, 220, 520)
   );
   const [aiWidth, setAiWidth] = useState(() =>
-    readNumberSetting("kide-ai-width", 380, 300, 620)
+    readNumberSetting("klide-ai-width", 380, 300, 620)
   );
   const [terminalHeight, setTerminalHeight] = useState(() =>
-    readNumberSetting("kide-terminal-height", 240, 140, 460)
+    readNumberSetting("klide-terminal-height", 240, 140, 460)
   );
   const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem("kide-theme");
+    const stored = localStorage.getItem("klide-theme");
     return stored === "dark" || stored === "light" ? stored : "light";
   });
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
@@ -224,32 +224,32 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("kide-theme", theme);
+    localStorage.setItem("klide-theme", theme);
   }, [theme]);
 
   useEffect(() => {
-    if (leftPanel) localStorage.setItem("kide-left-panel", leftPanel);
-    else localStorage.setItem("kide-left-panel", "none");
+    if (leftPanel) localStorage.setItem("klide-left-panel", leftPanel);
+    else localStorage.setItem("klide-left-panel", "none");
   }, [leftPanel]);
 
   useEffect(() => {
-    localStorage.setItem("kide-ai-visible", String(aiVisible));
+    localStorage.setItem("klide-ai-visible", String(aiVisible));
   }, [aiVisible]);
 
   useEffect(() => {
-    localStorage.setItem("kide-terminal-visible", String(terminalVisible));
+    localStorage.setItem("klide-terminal-visible", String(terminalVisible));
   }, [terminalVisible]);
 
   useEffect(() => {
-    localStorage.setItem("kide-left-width", String(explorerWidth));
+    localStorage.setItem("klide-left-width", String(explorerWidth));
   }, [explorerWidth]);
 
   useEffect(() => {
-    localStorage.setItem("kide-ai-width", String(aiWidth));
+    localStorage.setItem("klide-ai-width", String(aiWidth));
   }, [aiWidth]);
 
   useEffect(() => {
-    localStorage.setItem("kide-terminal-height", String(terminalHeight));
+    localStorage.setItem("klide-terminal-height", String(terminalHeight));
   }, [terminalHeight]);
 
   useEffect(() => {

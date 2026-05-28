@@ -44,7 +44,7 @@ export function EditorArea({
               marginBottom: 8,
             }}
           >
-            KIDE
+            Klide
           </div>
           <div style={{ fontSize: 14, color: "var(--fg)" }}>
             {workspaceOpen

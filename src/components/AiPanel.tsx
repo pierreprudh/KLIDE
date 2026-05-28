@@ -121,9 +121,9 @@ const TOOLS = [
 
 function buildSystemPrompt(workspaceRoot: string | null): string {
   if (!workspaceRoot) {
-    return `You are KIDE's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.`;
+    return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.`;
   }
-  return `You are KIDE's coding assistant, embedded in a code editor.
+  return `You are Klide's coding assistant, embedded in a code editor.
 
 Workspace root: ${workspaceRoot}
 
@@ -286,7 +286,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
   const [pending, setPending] = useState<PendingEditRequest | null>(null);
   const [model, setModel] = useState(
-    () => localStorage.getItem("kide-ollama-model") || DEFAULT_MODEL
+    () => localStorage.getItem("klide-ollama-model") || DEFAULT_MODEL
   );
   const [ollamaModels, setOllamaModels] = useState<string[]>([DEFAULT_MODEL]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -332,7 +332,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
   }, [msgs]);
 
   useEffect(() => {
-    localStorage.setItem("kide-ollama-model", model);
+    localStorage.setItem("klide-ollama-model", model);
   }, [model]);
 
   useEffect(() => {
@@ -693,7 +693,7 @@ export function AiPanel({ workspaceRoot, onFileWritten, visible, width }: Props)
                 marginBottom: 6,
               }}
             >
-              {workspaceRoot ? "Ask Kide" : "Open a workspace"}
+              {workspaceRoot ? "Ask Klide" : "Open a workspace"}
             </div>
             <div style={{ fontSize: 12 }}>
               {workspaceRoot

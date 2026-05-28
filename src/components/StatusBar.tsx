@@ -70,7 +70,7 @@ export function StatusBar({
           maxWidth: "42vw",
         }}
       >
-        {display ?? "KIDE"}
+        {display ?? "Klide"}
       </span>
       {language && <span>{language}</span>}
       {workspaceRoot && <span>{workspaceRoot.split("/").pop()}</span>}

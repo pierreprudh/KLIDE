@@ -1,4 +1,4 @@
-# KIDE
+# Klide
 
 > **Looks like a 2026 design tool. Works like VS Code.** Local models by default, online providers when you want them, real terminal built in.
 
@@ -6,15 +6,15 @@ The structure is VS Code — activity bar, file explorer, tabs, editor, terminal
 
 ---
 
-## Why KIDE
+## Why Klide
 
 Most editors today fall into two camps:
 
 - **Heavy** — VS Code, JetBrains. Powerful but busy chrome, slow cold start, AI bolted on as an afterthought.
 - **Niche** — Zed, Lapce, Helix. Beautiful and fast, but you give up the VS Code muscle memory.
 
-KIDE aims for a third spot: **VS Code's structure, Linear's aesthetic, Cursor's AI fluency** — with local models as a first-class option, not an afterthought.
-KIDE is an opinionated IDE inspired by [Cline](https://cline.bot), [Cursor](https://cursor.com/en/home) and open-source project [Sinew](https://sinew-ide.com/).
+Klide aims for a third spot: **VS Code's structure, Linear's aesthetic, Cursor's AI fluency** — with local models as a first-class option, not an afterthought.
+Klide is an opinionated IDE inspired by [Cline](https://cline.bot), [Cursor](https://cursor.com/en/home) and open-source project git co[Sinew](https://sinew-ide.com/).
 
 ## Principles
 
@@ -90,7 +90,7 @@ First Rust build takes 3–5 minutes; subsequent builds are seconds.
 ## Project layout
 
 ```
-KIDE/
+Klide/
 ├── src/             React + TypeScript frontend (the UI)
 ├── src-tauri/       Rust backend (filesystem, terminal, AI bridges)
 ├── index.html       Webview entry
