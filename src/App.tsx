@@ -1,4 +1,9 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { ActivityBar } from "./components/ActivityBar";
 import { Sidebar } from "./components/Sidebar";
@@ -9,11 +14,20 @@ import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { GitPanel } from "./components/GitPanel";
 import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
+import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
+import { loadSkills, saveSkills, type Skill } from "./skills";
+import {
+  loadCustomPresets,
+  saveCustomPresets,
+  type LayoutPreset,
+} from "./layouts";
+import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts";
+import { GridWorkbench } from "./components/GridWorkbench";
 import "./styles/tokens.css";
 
-type Panel = "explorer" | "git" | "graph" | "ai" | "settings";
+type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "settings";
 type Tab = { path: string; code: string; dirty: boolean };
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
@@ -103,6 +117,9 @@ function App() {
   const [graphVisible, setGraphVisible] = useState(
     () => localStorage.getItem("klide-graph-visible") === "true"
   );
+  const [skillsVisible, setSkillsVisible] = useState(
+    () => localStorage.getItem("klide-skills-visible") === "true"
+  );
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
   );
@@ -121,6 +138,17 @@ function App() {
   );
   const [graphWidth, setGraphWidth] = useState(() =>
     readNumberSetting("klide-graph-width", 320, 260, 560)
+  );
+  const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
+  const [customLayouts, setCustomLayouts] = useState<LayoutPreset[]>(() =>
+    loadCustomPresets()
+  );
+  const [gridLayouts, setGridLayouts] = useState<GridLayout[]>(() =>
+    loadGridLayouts()
+  );
+  const [settingsInitial, setSettingsInitial] = useState<string | null>(null);
+  const [activeGridId, setActiveGridId] = useState<string | null>(
+    () => localStorage.getItem("klide-active-grid") || null
   );
   const [aiWidth, setAiWidth] = useState(() =>
     readNumberSetting("klide-ai-width", 380, 300, 620)
@@ -151,16 +179,22 @@ function App() {
     readBoolSetting("klide-stop-after-rejection", true)
   );
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
+  const activeGrid =
+    activeGridId != null
+      ? gridLayouts.find((g) => g.id === activeGridId) ?? null
+      : null;
   const activityState: Record<Panel, boolean> = {
     explorer: view === "workbench" && explorerVisible,
     git: view === "workbench" && gitVisible,
     graph: view === "workbench" && graphVisible,
+    skills: view === "workbench" && skillsVisible,
     settings: view === "settings",
     ai: view === "workbench" && aiVisible,
   };
 
   function togglePanel(panel: Panel) {
     if (panel === "settings") {
+      setSettingsInitial(null);
       setView("settings");
       return;
     }
@@ -179,6 +213,148 @@ function App() {
     }
     if (panel === "graph") {
       setGraphVisible((cur) => !cur);
+      return;
+    }
+    if (panel === "skills") {
+      setSkillsVisible((cur) => !cur);
+    }
+  }
+
+  function applyLayout(layout: {
+    explorer: boolean;
+    terminal: boolean;
+    ai: boolean;
+    explorerWidth?: number;
+    aiWidth?: number;
+    terminalHeight?: number;
+  }) {
+    setView("workbench");
+    setExplorerVisible(layout.explorer);
+    setTerminalVisible(layout.terminal);
+    setAiVisible(layout.ai);
+    if (layout.explorerWidth !== undefined) setExplorerWidth(layout.explorerWidth);
+    if (layout.aiWidth !== undefined) setAiWidth(layout.aiWidth);
+    if (layout.terminalHeight !== undefined) setTerminalHeight(layout.terminalHeight);
+  }
+
+  function updateCustomLayouts(next: LayoutPreset[]) {
+    setCustomLayouts(next);
+    saveCustomPresets(next);
+  }
+
+  function openGridSettings() {
+    setSettingsInitial("layout");
+    setView("settings");
+  }
+
+  function applyGrid(id: string) {
+    setView("workbench");
+    setActiveGridId(id);
+  }
+
+  function exitGrid() {
+    setActiveGridId(null);
+  }
+
+  // Build the real panel for a grid cell. Reuses the same state/handlers as the
+  // fixed frame, but with `fill` so each panel sizes to its cell.
+  function renderPanel(kind: PanelKind, key: string): ReactNode {
+    switch (kind) {
+      case "editor":
+        return (
+          <div key={key} className="editor-frame" style={{ flex: 1, minHeight: 0 }}>
+            <TabBar
+              tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+              activeIdx={activeIdx}
+              onSelect={setActiveIdx}
+              onClose={closeTab}
+              workspaceRoot={workspaceRoot}
+            />
+            <EditorArea
+              code={active?.code ?? ""}
+              onChange={updateActiveCode}
+              language={language ?? "plaintext"}
+              hasFile={active !== null}
+              workspaceOpen={workspaceRoot !== null}
+              theme={theme}
+              fontSize={editorFontSize}
+              lineNumbers={editorLineNumbers}
+              wordWrap={editorWordWrap}
+            />
+          </div>
+        );
+      case "files":
+        return (
+          <Sidebar
+            key={key}
+            fill
+            visible
+            width={explorerWidth}
+            onOpen={openFile}
+            onRootChange={setWorkspaceRoot}
+          />
+        );
+      case "git":
+        return (
+          <GitPanel key={key} fill visible width={gitWidth} workspaceRoot={workspaceRoot} />
+        );
+      case "graph":
+        return (
+          <ProjectGraphPanel
+            key={key}
+            fill
+            visible
+            width={graphWidth}
+            workspaceRoot={workspaceRoot}
+          />
+        );
+      case "terminal":
+        return (
+          <TerminalPanel
+            key={key}
+            fill
+            visible
+            theme={theme}
+            height={terminalHeight}
+            onToggle={() => {}}
+          />
+        );
+      case "ai":
+        return (
+          <AiPanel
+            key={key}
+            fill
+            visible
+            width={aiWidth}
+            workspaceRoot={workspaceRoot}
+            onFileWritten={onAgentWrote}
+            model={aiModel}
+            onModelChange={setAiModel}
+            availableModels={ollamaModels}
+            onAvailableModelsChange={setOllamaModels}
+            requireDiffReview={requireDiffReview}
+            stopAfterRejection={stopAfterRejection}
+            skills={skills}
+          />
+        );
+      default:
+        return (
+          <div
+            style={{
+              flex: 1,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "var(--radius-md)",
+              border: "1px dashed var(--border-strong)",
+              color: "var(--fg-subtle)",
+              fontSize: 12,
+              textAlign: "center",
+              padding: 12,
+            }}
+          >
+            Skills open as a modal (⌘ palette) — not placeable in the grid yet
+          </div>
+        );
     }
   }
 
@@ -289,6 +465,17 @@ function App() {
     localStorage.setItem("klide-theme", theme);
   }, [theme]);
 
+  // Grids are edited in Settings; refresh App's copy when returning to the
+  // workbench so the status-bar Layout picker shows the latest.
+  useEffect(() => {
+    if (view === "workbench") setGridLayouts(loadGridLayouts());
+  }, [view]);
+
+  useEffect(() => {
+    if (activeGridId) localStorage.setItem("klide-active-grid", activeGridId);
+    else localStorage.removeItem("klide-active-grid");
+  }, [activeGridId]);
+
   useEffect(() => {
     localStorage.setItem("klide-explorer-visible", String(explorerVisible));
   }, [explorerVisible]);
@@ -300,6 +487,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-graph-visible", String(graphVisible));
   }, [graphVisible]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-skills-visible", String(skillsVisible));
+  }, [skillsVisible]);
 
   useEffect(() => {
     localStorage.setItem("klide-ai-visible", String(aiVisible));
@@ -320,6 +511,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-graph-width", String(graphWidth));
   }, [graphWidth]);
+
+  function updateSkills(next: Skill[]) {
+    setSkills(next);
+    saveSkills(next);
+  }
 
   useEffect(() => {
     localStorage.setItem("klide-ai-width", String(aiWidth));
@@ -382,6 +578,8 @@ function App() {
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         {view === "settings" ? (
           <SettingsPanel
+            key={settingsInitial ?? "default"}
+            initialSection={settingsInitial}
             theme={theme}
             onThemeChange={setTheme}
             aiVisible={aiVisible}
@@ -407,11 +605,19 @@ function App() {
             onRequireDiffReviewChange={setRequireDiffReview}
             stopAfterRejection={stopAfterRejection}
             onStopAfterRejectionChange={setStopAfterRejection}
+            explorerVisible={explorerVisible}
+            customLayouts={customLayouts}
+            onCustomLayoutsChange={updateCustomLayouts}
+            onApplyLayout={applyLayout}
             onBack={() => setView("workbench")}
           />
         ) : (
           <>
             <ActivityBar active={activityState} onToggle={togglePanel} />
+            {activeGrid ? (
+              <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
+            ) : (
+              <>
             <Sidebar
               onOpen={openFile}
               onRootChange={setWorkspaceRoot}
@@ -555,12 +761,15 @@ function App() {
                 onAvailableModelsChange={setOllamaModels}
                 requireDiffReview={requireDiffReview}
                 stopAfterRejection={stopAfterRejection}
+                skills={skills}
                 onDuplicate={duplicateAiPanel}
                 onClose={
                   aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
                 }
               />
             ))}
+              </>
+            )}
           </>
         )}
       </div>
@@ -570,8 +779,19 @@ function App() {
         workspaceRoot={workspaceRoot}
         terminalVisible={terminalVisible}
         onToggleTerminal={() => setTerminalVisible((v) => !v)}
+        gridLayouts={gridLayouts}
+        activeGridId={activeGridId}
+        onApplyGrid={applyGrid}
+        onExitGrid={exitGrid}
+        onOpenGrid={openGridSettings}
         theme={theme}
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
+      />
+      <SkillsModal
+        open={skillsVisible}
+        skills={skills}
+        onChange={updateSkills}
+        onClose={() => setSkillsVisible(false)}
       />
     </div>
   );

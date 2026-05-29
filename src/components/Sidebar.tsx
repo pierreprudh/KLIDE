@@ -8,6 +8,7 @@ type Props = {
   onRootChange: (root: string | null) => void;
   visible: boolean;
   width: number;
+  fill?: boolean;
 };
 
 type TreeEntry = {
@@ -122,7 +123,7 @@ function shortPath(path: string): string {
   return `.../${parts.slice(-2).join("/")}`;
 }
 
-export function Sidebar({ onOpen, onRootChange, visible, width }: Props) {
+export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
   const [root, setRoot] = useState<string | null>(null);
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [children, setChildren] = useState<Record<string, TreeEntry[]>>({});
@@ -380,10 +381,11 @@ export function Sidebar({ onOpen, onRootChange, visible, width }: Props) {
     <aside
       className="floating-panel"
       style={{
-        width,
-        margin: "4px 0 4px 4px",
+        width: fill ? "100%" : width,
+        height: fill ? "100%" : undefined,
+        margin: fill ? 0 : "4px 0 4px 4px",
         overflow: "auto",
-        display: visible ? "flex" : "none",
+        display: fill || visible ? "flex" : "none",
         flexDirection: "column",
         flexShrink: 0,
       }}

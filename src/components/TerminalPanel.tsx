@@ -11,6 +11,7 @@ type Props = {
   onToggle: () => void;
   theme: ThemeId;
   height: number;
+  fill?: boolean;
 };
 
 function ChevronDownIcon() {
@@ -34,7 +35,7 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-export function TerminalPanel({ visible, onToggle, theme, height }: Props) {
+export function TerminalPanel({ visible, onToggle, theme, height, fill }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -75,10 +76,11 @@ export function TerminalPanel({ visible, onToggle, theme, height }: Props) {
       className={visible ? "terminal-enter" : undefined}
       aria-hidden={!visible}
       style={{
-        height: visible ? height : 0,
+        height: fill ? "100%" : visible ? height : 0,
+        flex: fill ? 1 : undefined,
         flexShrink: 0,
         overflow: "hidden",
-        opacity: visible ? 1 : 0,
+        opacity: fill || visible ? 1 : 0,
         background: "color-mix(in srgb, var(--terminal-bg) 96%, var(--bg))",
         borderTop: visible ? "1px solid var(--terminal-border)" : "1px solid transparent",
         transition:

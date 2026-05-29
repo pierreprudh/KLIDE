@@ -12,6 +12,7 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { DiffModal, PendingEdit } from "./DiffModal";
+import { enabledSkillsPrompt, type Skill } from "../skills";
 
 type ToolCall = { name: string; args: any };
 
@@ -26,12 +27,14 @@ type Props = {
   onFileWritten?: (path: string, newContent: string) => void;
   visible: boolean;
   width: number;
+  fill?: boolean;
   model: string;
   onModelChange: (model: string) => void;
   availableModels: string[];
   onAvailableModelsChange: (models: string[]) => void;
   requireDiffReview: boolean;
   stopAfterRejection: boolean;
+  skills: Skill[];
   onDuplicate?: () => void;
   onClose?: () => void;
 };
@@ -134,10 +137,12 @@ const TOOLS = [
 
 function buildSystemPrompt(
   workspaceRoot: string | null,
-  stopAfterRejection: boolean
+  stopAfterRejection: boolean,
+  skills: Skill[]
 ): string {
+  const skillsBlock = enabledSkillsPrompt(skills);
   if (!workspaceRoot) {
-    return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.`;
+    return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.${skillsBlock}`;
   }
   return `You are Klide's coding assistant, embedded in a code editor.
 
@@ -158,7 +163,7 @@ How to read tool results:
   }
 - "Error: ..." → the tool itself failed (e.g. file not found, ambiguous match). Read the error and fix the call.
 
-Be concise. When you have enough information, answer the user directly.`;
+Be concise. When you have enough information, answer the user directly.${skillsBlock}`;
 }
 
 async function executeTool(
@@ -738,12 +743,14 @@ export function AiPanel({
   onFileWritten,
   visible,
   width,
+  fill,
   model,
   onModelChange,
   availableModels,
   onAvailableModelsChange,
   requireDiffReview,
   stopAfterRejection,
+  skills,
   onDuplicate,
   onClose,
 }: Props) {
@@ -897,7 +904,7 @@ export function AiPanel({
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
     const sys: Msg = {
       role: "system",
-      content: buildSystemPrompt(workspaceRoot, stopAfterRejection),
+      content: buildSystemPrompt(workspaceRoot, stopAfterRejection, skills),
     };
 
     const res = await fetch("http://localhost:11434/api/chat", {
@@ -1081,9 +1088,10 @@ export function AiPanel({
     <aside
       className="floating-panel"
       style={{
-        width,
-        margin: "4px 4px 4px 0",
-        display: visible ? "flex" : "none",
+        width: fill ? "100%" : width,
+        height: fill ? "100%" : undefined,
+        margin: fill ? 0 : "4px 4px 4px 0",
+        display: fill || visible ? "flex" : "none",
         flexDirection: "column",
         flexShrink: 0,
         overflow: "hidden",

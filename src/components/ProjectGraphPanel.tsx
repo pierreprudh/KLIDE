@@ -5,6 +5,7 @@ type Props = {
   visible: boolean;
   width: number;
   workspaceRoot: string | null;
+  fill?: boolean;
 };
 
 type ProjectGraphFile = {
@@ -284,7 +285,7 @@ function FolderRow({ folder, depth }: { folder: TreeFolder; depth: number }) {
   );
 }
 
-export function ProjectGraphPanel({ visible, width, workspaceRoot }: Props) {
+export function ProjectGraphPanel({ visible, width, workspaceRoot, fill }: Props) {
   const [graph, setGraph] = useState<ProjectGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -315,9 +316,10 @@ export function ProjectGraphPanel({ visible, width, workspaceRoot }: Props) {
     <aside
       className="floating-panel"
       style={{
-        width,
-        margin: "4px 0 4px 4px",
-        display: visible ? "flex" : "none",
+        width: fill ? "100%" : width,
+        height: fill ? "100%" : undefined,
+        margin: fill ? 0 : "4px 0 4px 4px",
+        display: fill || visible ? "flex" : "none",
         flexDirection: "column",
         flexShrink: 0,
         overflow: "hidden",

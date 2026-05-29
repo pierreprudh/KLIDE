@@ -1,4 +1,4 @@
-type View = "explorer" | "git" | "graph" | "ai" | "settings";
+type View = "explorer" | "git" | "graph" | "skills" | "ai" | "settings";
 type Props = { active: Record<View, boolean>; onToggle: (v: View) => void };
 
 function FolderIcon() {
@@ -81,6 +81,24 @@ function GraphIcon() {
   );
 }
 
+function SkillsIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M15 4l1.1 3L19 8l-2.9 1L15 12l-1.1-3L11 8l2.9-1L15 4z" />
+      <path d="M6.5 12l.8 2.2L9.5 15l-2.2.8L6.5 18l-.8-2.2L3.5 15l2.2-.8L6.5 12z" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg
@@ -111,6 +129,7 @@ export function ActivityBar({ active, onToggle }: Props) {
     { id: "explorer" as const, label: "Files", Icon: FolderIcon },
     { id: "git" as const, label: "Git", Icon: GitIcon },
     { id: "graph" as const, label: "Project Graph", Icon: GraphIcon },
+    { id: "skills" as const, label: "Skills", Icon: SkillsIcon },
     { id: "ai" as const, label: "AI", Icon: SparkIcon },
     { id: "settings" as const, label: "Settings", Icon: SettingsIcon },
   ];

@@ -5,6 +5,7 @@ type Props = {
   visible: boolean;
   width: number;
   workspaceRoot: string | null;
+  fill?: boolean;
 };
 
 type GitFile = {
@@ -486,7 +487,7 @@ function GitDiffWindow({
   );
 }
 
-export function GitPanel({ visible, width, workspaceRoot }: Props) {
+export function GitPanel({ visible, width, workspaceRoot, fill }: Props) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -560,9 +561,10 @@ export function GitPanel({ visible, width, workspaceRoot }: Props) {
       <aside
         className="floating-panel"
         style={{
-          width,
-          margin: "4px 0 4px 4px",
-          display: visible ? "flex" : "none",
+          width: fill ? "100%" : width,
+          height: fill ? "100%" : undefined,
+          margin: fill ? 0 : "4px 0 4px 4px",
+          display: fill || visible ? "flex" : "none",
           flexDirection: "column",
           flexShrink: 0,
           overflow: "hidden",

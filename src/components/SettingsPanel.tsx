@@ -1,9 +1,25 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { THEMES, type ThemeId } from "../theme";
+import { LayoutCanvas } from "./LayoutCanvas";
+import { GridLayoutBuilder } from "./GridLayoutBuilder";
+import {
+  BUILTIN_PRESETS,
+  SIZE_OPTIONS,
+  emptyDraft,
+  makePresetId,
+  presetMatchesVisibility,
+  resolvePreset,
+  summarizePreset,
+  type LayoutPreset,
+  type RegionConfig,
+  type RegionSize,
+  type ResolvedLayout,
+} from "../layouts";
 
 type SectionId =
   | "general"
   | "appearance"
+  | "layout"
   | "ai"
   | "editor"
   | "terminal";
@@ -34,12 +50,18 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
+  explorerVisible: boolean;
+  customLayouts: LayoutPreset[];
+  onCustomLayoutsChange: (next: LayoutPreset[]) => void;
+  onApplyLayout: (layout: ResolvedLayout) => void;
+  initialSection?: string | null;
   onBack: () => void;
 };
 
 const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "general", label: "General", icon: <GearIcon /> },
   { id: "appearance", label: "Appearance", icon: <SunIcon /> },
+  { id: "layout", label: "Layout", icon: <GridIcon /> },
   { id: "ai", label: "AI Assistant", icon: <SparkIcon /> },
   { id: "editor", label: "Editor", icon: <CodeIcon /> },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon /> },
@@ -346,6 +368,103 @@ function Range({
   );
 }
 
+function SizePicker({
+  value,
+  onChange,
+  label,
+}: {
+  value: RegionSize;
+  onChange: (size: RegionSize) => void;
+  label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} style={{ display: "flex", gap: 4 }}>
+      {SIZE_OPTIONS.map((option) => {
+        const active = option.id === value;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(option.id)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "var(--radius-sm)",
+              border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+              background: active ? "var(--accent-soft)" : "transparent",
+              color: active ? "var(--accent)" : "var(--fg)",
+              fontSize: 13,
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function GhostButton({
+  children,
+  onClick,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        height: 32,
+        padding: "0 12px",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        background: "transparent",
+        color: "var(--fg)",
+        fontSize: 13,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function RegionEditor({
+  title,
+  axisHint,
+  config,
+  onChange,
+}: {
+  title: string;
+  axisHint: string;
+  config: RegionConfig;
+  onChange: (config: RegionConfig) => void;
+}) {
+  return (
+    <Row
+      title={title}
+      description={config.on ? axisHint : "Hidden in this layout."}
+      control={
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {config.on && (
+            <SizePicker
+              label={`${title} size`}
+              value={config.size}
+              onChange={(size) => onChange({ ...config, size })}
+            />
+          )}
+          <Toggle
+            checked={config.on}
+            onChange={(on) => onChange({ ...config, on })}
+            label={`Show ${title}`}
+          />
+        </div>
+      }
+    />
+  );
+}
+
 export function SettingsPanel({
   theme,
   onThemeChange,
@@ -372,14 +491,74 @@ export function SettingsPanel({
   onRequireDiffReviewChange,
   stopAfterRejection,
   onStopAfterRejectionChange,
+  explorerVisible,
+  customLayouts,
+  onCustomLayoutsChange,
+  onApplyLayout,
+  initialSection,
   onBack,
 }: Props) {
-  const [activeSection, setActiveSection] = useState<SectionId>("general");
+  const isSectionId = (value: string | null | undefined): value is SectionId =>
+    sections.some((section) => section.id === value);
+  const [activeSection, setActiveSection] = useState<SectionId>(
+    isSectionId(initialSection) ? initialSection : "general"
+  );
+  const [draft, setDraft] = useState(() => emptyDraft());
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const sectionTitle = useMemo(
     () => sections.find((section) => section.id === activeSection)?.label ?? "Settings",
     [activeSection]
   );
+
+  const visibility = {
+    explorer: explorerVisible,
+    terminal: terminalVisible,
+    ai: aiVisible,
+  };
+
+  function applyPreset(preset: LayoutPreset) {
+    onApplyLayout(
+      resolvePreset(preset, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      })
+    );
+  }
+
+  function loadIntoBuilder(preset: LayoutPreset) {
+    setEditingId(preset.id);
+    setDraft({
+      name: preset.name,
+      files: { ...preset.files },
+      ai: { ...preset.ai },
+      terminal: { ...preset.terminal },
+    });
+  }
+
+  function resetBuilder() {
+    setEditingId(null);
+    setDraft(emptyDraft());
+  }
+
+  function saveDraft() {
+    const name = draft.name.trim() || "Untitled layout";
+    if (editingId && customLayouts.some((preset) => preset.id === editingId)) {
+      onCustomLayoutsChange(
+        customLayouts.map((preset) =>
+          preset.id === editingId ? { ...draft, name, id: editingId } : preset
+        )
+      );
+    } else {
+      onCustomLayoutsChange([...customLayouts, { ...draft, name, id: makePresetId() }]);
+    }
+    resetBuilder();
+  }
+
+  function deletePreset(id: string) {
+    onCustomLayoutsChange(customLayouts.filter((preset) => preset.id !== id));
+    if (editingId === id) resetBuilder();
+  }
 
   return (
     <main
@@ -546,6 +725,198 @@ export function SettingsPanel({
                       />
                     }
                   />
+                </Panel>
+              </SettingBlock>
+            </>
+          )}
+
+          {activeSection === "layout" && (
+            <>
+              <SettingBlock title="Presets">
+                <Panel>
+                  {[...BUILTIN_PRESETS, ...customLayouts].map((preset) => {
+                    const active = presetMatchesVisibility(preset, visibility);
+                    return (
+                      <div
+                        key={preset.id}
+                        style={{
+                          minHeight: 64,
+                          padding: "14px 18px",
+                          borderBottom: "1px solid var(--border)",
+                          display: "grid",
+                          gridTemplateColumns: "minmax(0, 1fr) auto",
+                          alignItems: "center",
+                          gap: 16,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              color: "var(--fg-strong)",
+                              fontSize: 14,
+                              marginBottom: 4,
+                            }}
+                          >
+                            {preset.name}
+                            {preset.builtin ? (
+                              <span style={{ color: "var(--fg-subtle)", fontSize: 11 }}>
+                                Built-in
+                              </span>
+                            ) : null}
+                            {active ? (
+                              <span style={{ color: "var(--accent)", fontSize: 11 }}>
+                                · Active
+                              </span>
+                            ) : null}
+                          </div>
+                          <div
+                            style={{
+                              color: "var(--fg-subtle)",
+                              fontSize: 13,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {summarizePreset(preset)}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {!preset.builtin && (
+                            <>
+                              <GhostButton onClick={() => loadIntoBuilder(preset)}>
+                                Edit
+                              </GhostButton>
+                              <GhostButton onClick={() => deletePreset(preset.id)}>
+                                Delete
+                              </GhostButton>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => applyPreset(preset)}
+                            style={{
+                              height: 32,
+                              padding: "0 14px",
+                              borderRadius: "var(--radius-sm)",
+                              border: "1px solid var(--border-strong)",
+                              background: "var(--bg-hover)",
+                              color: "var(--fg-strong)",
+                              fontSize: 13,
+                            }}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </Panel>
+              </SettingBlock>
+
+              <SettingBlock title={editingId ? "Edit layout" : "Build a layout"}>
+                <Panel>
+                  <Row
+                    title="Name"
+                    description="What you'll call this layout in the picker."
+                    control={
+                      <input
+                        aria-label="Layout name"
+                        value={draft.name}
+                        placeholder="e.g. Review"
+                        onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                        style={{
+                          minWidth: 220,
+                          height: 34,
+                          borderRadius: "var(--radius-sm)",
+                          border: "1px solid var(--border)",
+                          background: "var(--bg-hover)",
+                          color: "var(--fg-strong)",
+                          font: "inherit",
+                          padding: "0 12px",
+                        }}
+                      />
+                    }
+                  />
+                  <div style={{ borderBottom: "1px solid var(--border)" }}>
+                    <LayoutCanvas
+                      files={draft.files}
+                      ai={draft.ai}
+                      terminal={draft.terminal}
+                      onFilesChange={(files) => setDraft((d) => ({ ...d, files }))}
+                      onAiChange={(ai) => setDraft((d) => ({ ...d, ai }))}
+                      onTerminalChange={(terminal) =>
+                        setDraft((d) => ({ ...d, terminal }))
+                      }
+                    />
+                  </div>
+                  <RegionEditor
+                    title="Files"
+                    axisHint="Left strip, full height — choose its width."
+                    config={draft.files}
+                    onChange={(files) => setDraft({ ...draft, files })}
+                  />
+                  <RegionEditor
+                    title="AI"
+                    axisHint="Right strip, full height — choose its width."
+                    config={draft.ai}
+                    onChange={(ai) => setDraft({ ...draft, ai })}
+                  />
+                  <RegionEditor
+                    title="Terminal"
+                    axisHint="Bottom strip, full width — choose its height."
+                    config={draft.terminal}
+                    onChange={(terminal) => setDraft({ ...draft, terminal })}
+                  />
+                  <div
+                    style={{
+                      padding: "16px 18px",
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 10,
+                    }}
+                  >
+                    {editingId && (
+                      <GhostButton onClick={resetBuilder}>Cancel</GhostButton>
+                    )}
+                    <button
+                      type="button"
+                      onClick={saveDraft}
+                      style={{
+                        height: 34,
+                        padding: "0 16px",
+                        borderRadius: "var(--radius-sm)",
+                        border: "1px solid var(--accent)",
+                        background: "var(--accent)",
+                        color: "#FFFFFF",
+                        fontSize: 13,
+                      }}
+                    >
+                      {editingId ? "Save changes" : "Save layout"}
+                    </button>
+                  </div>
+                </Panel>
+              </SettingBlock>
+
+              <SettingBlock title="Workspace grid">
+                <div
+                  style={{
+                    marginBottom: 12,
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                    color: "var(--fg-subtle)",
+                  }}
+                >
+                  Drag predefined shapes onto a blank grid to build a freeform
+                  layout — place several AI panels, Git, the terminal, anything,
+                  and control height with the rows. Designer + preview for now;
+                  driving the live workbench is the next step.
+                </div>
+                <Panel>
+                  <GridLayoutBuilder />
                 </Panel>
               </SettingBlock>
             </>
@@ -749,6 +1120,17 @@ function SparkIcon() {
     <IconBase>
       <path d="M12 3.5l1.6 4.4L18 9.5l-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5z" />
       <path d="M18 16l.7 1.8 1.8.7-1.8.7L18 21l-.7-1.8-1.8-.7 1.8-.7L18 16z" />
+    </IconBase>
+  );
+}
+
+function GridIcon() {
+  return (
+    <IconBase>
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.2" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.2" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" />
     </IconBase>
   );
 }

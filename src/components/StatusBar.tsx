@@ -1,4 +1,6 @@
 import { getThemeMeta, type ThemeId } from "../theme";
+import { LayoutBento } from "./LayoutBento";
+import type { GridLayout } from "../gridLayouts";
 
 type Props = {
   path: string | null;
@@ -6,6 +8,11 @@ type Props = {
   workspaceRoot: string | null;
   terminalVisible: boolean;
   onToggleTerminal: () => void;
+  gridLayouts: GridLayout[];
+  activeGridId: string | null;
+  onApplyGrid: (id: string) => void;
+  onExitGrid: () => void;
+  onOpenGrid: () => void;
   theme: ThemeId;
   onToggleTheme: () => void;
 };
@@ -42,6 +49,11 @@ export function StatusBar({
   workspaceRoot,
   terminalVisible,
   onToggleTerminal,
+  gridLayouts,
+  activeGridId,
+  onApplyGrid,
+  onExitGrid,
+  onOpenGrid,
   theme,
   onToggleTheme,
 }: Props) {
@@ -128,6 +140,13 @@ export function StatusBar({
         <TerminalIcon />
         Terminal
       </button>
+      <LayoutBento
+        gridLayouts={gridLayouts}
+        activeGridId={activeGridId}
+        onApplyGrid={onApplyGrid}
+        onExitGrid={onExitGrid}
+        onOpenGrid={onOpenGrid}
+      />
       <span>UTF-8</span>
       <span>LF</span>
     </footer>
