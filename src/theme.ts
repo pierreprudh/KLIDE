@@ -55,6 +55,136 @@ export function getThemeMeta(id: ThemeId): ThemeMeta {
   return THEMES.find((theme) => theme.id === id) ?? THEMES[0];
 }
 
+// The 16 ANSI colors xterm.js uses to render program output (ls, git, prompts,
+// etc.) plus the text-selection highlight. background/foreground/cursor stay in
+// tokens.css so the panel chrome and the terminal surface never drift; this map
+// only covers the ANSI palette, which nothing else in the app needs.
+export type TerminalAnsi = {
+  selectionBackground: string;
+  black: string;
+  red: string;
+  green: string;
+  yellow: string;
+  blue: string;
+  magenta: string;
+  cyan: string;
+  white: string;
+  brightBlack: string;
+  brightRed: string;
+  brightGreen: string;
+  brightYellow: string;
+  brightBlue: string;
+  brightMagenta: string;
+  brightCyan: string;
+  brightWhite: string;
+};
+
+const TERMINAL_ANSI: Record<ThemeId, TerminalAnsi> = {
+  // Muted + warm to match Klide Light's "quiet, low-contrast" brief — earthy
+  // brick/olive/denim rather than primary red/green/blue, so program output
+  // sits calmly on the cream surface instead of fighting it.
+  "klide-light": {
+    selectionBackground: "#E2E0D8",
+    black: "#403E3A",
+    red: "#A8514A",
+    green: "#6A7B45",
+    yellow: "#9A7A33",
+    blue: "#4E6CA8",
+    magenta: "#8A5F9E",
+    cyan: "#3F8389",
+    white: "#6E6C66",
+    brightBlack: "#94918A",
+    brightRed: "#BC6258",
+    brightGreen: "#7E9158",
+    brightYellow: "#AE8B41",
+    brightBlue: "#6280BC",
+    brightMagenta: "#9C75AE",
+    brightCyan: "#52969C",
+    brightWhite: "#3A3833",
+  },
+  "cursor-dark": {
+    selectionBackground: "#303A64",
+    black: "#2A2824",
+    red: "#E67C73",
+    green: "#8EC07C",
+    yellow: "#DFA56B",
+    blue: "#8EA2FF",
+    magenta: "#C6A0F6",
+    cyan: "#88C0D0",
+    white: "#C8C6BE",
+    brightBlack: "#65635D",
+    brightRed: "#F09487",
+    brightGreen: "#A3D295",
+    brightYellow: "#EAB987",
+    brightBlue: "#A6B6FF",
+    brightMagenta: "#D4B8F9",
+    brightCyan: "#9FD0DE",
+    brightWhite: "#ECEAE1",
+  },
+  "vscode-dark": {
+    selectionBackground: "#264F78",
+    black: "#2A2A2A",
+    red: "#CD3131",
+    green: "#0DBC79",
+    yellow: "#E5E510",
+    blue: "#2472C8",
+    magenta: "#BC3FBC",
+    cyan: "#11A8CD",
+    white: "#E5E5E5",
+    brightBlack: "#666666",
+    brightRed: "#F14C4C",
+    brightGreen: "#23D18B",
+    brightYellow: "#F5F543",
+    brightBlue: "#3B8EEA",
+    brightMagenta: "#D670D6",
+    brightCyan: "#29B8DB",
+    brightWhite: "#F5F5F5",
+  },
+  "github-light": {
+    selectionBackground: "#B6E3FF",
+    black: "#24292E",
+    red: "#D73A49",
+    green: "#1A7F37",
+    yellow: "#9A6700",
+    blue: "#0969DA",
+    magenta: "#8250DF",
+    cyan: "#0598BC",
+    white: "#6A737D",
+    brightBlack: "#959DA5",
+    brightRed: "#CB2431",
+    brightGreen: "#22863A",
+    brightYellow: "#B08800",
+    brightBlue: "#005CC5",
+    brightMagenta: "#5A32A3",
+    brightCyan: "#3192AA",
+    brightWhite: "#24292F",
+  },
+  // Canonical Solarized palette.
+  "solarized-dark": {
+    selectionBackground: "#164B55",
+    black: "#073642",
+    red: "#DC322F",
+    green: "#859900",
+    yellow: "#B58900",
+    blue: "#268BD2",
+    magenta: "#D33682",
+    cyan: "#2AA198",
+    white: "#EEE8D5",
+    brightBlack: "#002B36",
+    brightRed: "#CB4B16",
+    brightGreen: "#586E75",
+    brightYellow: "#657B83",
+    brightBlue: "#839496",
+    brightMagenta: "#6C71C4",
+    brightCyan: "#93A1A1",
+    brightWhite: "#FDF6E3",
+  },
+};
+
+export function getTerminalAnsi(id: ThemeId): TerminalAnsi {
+  return TERMINAL_ANSI[id] ?? TERMINAL_ANSI["klide-light"];
+}
+
 export function normalizeThemeId(value: string | null): ThemeId {
   if (value === "light") return "klide-light";
   if (value === "dark") return "cursor-dark";

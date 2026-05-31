@@ -193,6 +193,15 @@ fn git_unstage(workspace_root: String, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return Err("Commit message cannot be empty".to_string());
+    }
+    run_git(&workspace_root, &["commit", "-m", trimmed])
+}
+
+#[tauri::command]
 fn git_diff(workspace_root: String, path: String, staged: bool) -> Result<GitDiff, String> {
     let diff = if staged {
         git_output(&workspace_root, &["diff", "--cached", "--", &path])?
@@ -407,7 +416,10 @@ fn project_graph(workspace_root: String) -> Result<ProjectGraph, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(PtyState { writer: Mutex::new(None) })
+        .manage(PtyState {
+            writer: Mutex::new(None),
+            cwd: Mutex::new(None),
+        })
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -418,6 +430,7 @@ pub fn run() {
             git_status,
             git_stage,
             git_unstage,
+            git_commit,
             git_diff,
             project_graph
         ])

@@ -5,21 +5,23 @@ type Props = {
   visible: boolean;
   width: number;
   workspaceRoot: string | null;
+  gitStatus: GitStatus | null;
+  onRefreshGitStatus: () => Promise<void> | void;
   fill?: boolean;
 };
 
-type GitFile = {
+export type GitFile = {
   path: string;
   status: string;
   staged: boolean;
 };
 
-type GitStatus = {
+export type GitStatus = {
   branch: string;
   files: GitFile[];
 };
 
-type GitDiff = {
+export type GitDiff = {
   path: string;
   diff: string;
   additions: number;
@@ -363,7 +365,7 @@ function DiffLine({ line, index }: { line: string; index: number }) {
   );
 }
 
-function GitDiffWindow({
+export function GitDiffWindow({
   diff,
   onClose,
 }: {
@@ -487,32 +489,36 @@ function GitDiffWindow({
   );
 }
 
-export function GitPanel({ visible, width, workspaceRoot, fill }: Props) {
-  const [status, setStatus] = useState<GitStatus | null>(null);
+export function GitPanel({
+  visible,
+  width,
+  workspaceRoot,
+  gitStatus,
+  onRefreshGitStatus,
+  fill,
+}: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [commitLoading, setCommitLoading] = useState(false);
   const [diffLoadingPath, setDiffLoadingPath] = useState<string | null>(null);
   const [activeDiff, setActiveDiff] = useState<GitDiff | null>(null);
 
   const { stagedFiles, changedFiles } = useMemo(() => {
-    const files = status?.files ?? [];
+    const files = gitStatus?.files ?? [];
     return {
       stagedFiles: files.filter((file) => file.staged),
       changedFiles: files.filter((file) => !file.staged),
     };
-  }, [status]);
+  }, [gitStatus]);
 
   async function refresh() {
     if (!workspaceRoot) return;
     setLoading(true);
     setError(null);
     try {
-      const next = await invoke<GitStatus>("git_status", {
-        workspaceRoot,
-      });
-      setStatus(next);
+      await onRefreshGitStatus();
     } catch (e) {
-      setStatus(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -530,6 +536,24 @@ export function GitPanel({ visible, width, workspaceRoot, fill }: Props) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function commit() {
+    if (!workspaceRoot || !commitMessage.trim() || stagedFiles.length === 0) return;
+    setCommitLoading(true);
+    setError(null);
+    try {
+      await invoke("git_commit", {
+        workspaceRoot,
+        message: commitMessage,
+      });
+      setCommitMessage("");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCommitLoading(false);
     }
   }
 
@@ -628,7 +652,7 @@ export function GitPanel({ visible, width, workspaceRoot, fill }: Props) {
         </div>
       )}
 
-      {workspaceRoot && !error && status && (
+      {workspaceRoot && !error && gitStatus && (
         <>
           <div
             style={{
@@ -645,7 +669,7 @@ export function GitPanel({ visible, width, workspaceRoot, fill }: Props) {
               <BranchIcon />
             </span>
             <span
-              title={status.branch}
+              title={gitStatus.branch}
               style={{
                 color: "var(--fg-strong)",
                 overflow: "hidden",
@@ -654,14 +678,80 @@ export function GitPanel({ visible, width, workspaceRoot, fill }: Props) {
                 minWidth: 0,
               }}
             >
-              {status.branch}
+              {gitStatus.branch}
             </span>
             <span style={{ marginLeft: "auto", color: "var(--fg-dim)", fontSize: 11 }}>
-              {status.files.length} {status.files.length === 1 ? "change" : "changes"}
+              {gitStatus.files.length} {gitStatus.files.length === 1 ? "change" : "changes"}
             </span>
           </div>
 
-          {status.files.length === 0 ? (
+          <div
+            style={{
+              padding: "10px 10px 12px",
+              borderBottom: "1px solid var(--border)",
+              display: "grid",
+              gap: 8,
+            }}
+          >
+            <input
+              value={commitMessage}
+              onChange={(event) => setCommitMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  commit();
+                }
+              }}
+              placeholder="Message"
+              aria-label="Commit message"
+              style={{
+                height: 30,
+                minWidth: 0,
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                background: "var(--bg)",
+                color: "var(--fg-strong)",
+                font: "inherit",
+                padding: "0 9px",
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={commit}
+              disabled={!commitMessage.trim() || stagedFiles.length === 0 || commitLoading}
+              title={
+                stagedFiles.length === 0
+                  ? "Stage changes before committing"
+                  : "Commit staged changes"
+              }
+              style={{
+                height: 30,
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--accent)",
+                background:
+                  commitMessage.trim() && stagedFiles.length > 0 && !commitLoading
+                    ? "var(--accent)"
+                    : "var(--bg-hover)",
+                color:
+                  commitMessage.trim() && stagedFiles.length > 0 && !commitLoading
+                    ? "#fff"
+                    : "var(--fg-subtle)",
+                fontWeight: 600,
+                cursor:
+                  commitMessage.trim() && stagedFiles.length > 0 && !commitLoading
+                    ? "pointer"
+                    : "default",
+              }}
+            >
+              {commitLoading
+                ? "Committing..."
+                : stagedFiles.length === 0
+                ? "Commit Staged"
+                : `Commit ${stagedFiles.length} staged`}
+            </button>
+          </div>
+
+          {gitStatus.files.length === 0 ? (
             <div
               style={{
                 flex: 1,

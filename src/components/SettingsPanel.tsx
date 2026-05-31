@@ -43,6 +43,8 @@ type Props = {
   onEditorLineNumbersChange: (enabled: boolean) => void;
   editorWordWrap: boolean;
   onEditorWordWrapChange: (enabled: boolean) => void;
+  editorMinimap: boolean;
+  onEditorMinimapChange: (enabled: boolean) => void;
   aiModel: string;
   onAiModelChange: (model: string) => void;
   availableAiModels: string[];
@@ -484,6 +486,8 @@ export function SettingsPanel({
   onEditorLineNumbersChange,
   editorWordWrap,
   onEditorWordWrapChange,
+  editorMinimap,
+  onEditorMinimapChange,
   aiModel,
   onAiModelChange,
   availableAiModels,
@@ -1020,6 +1024,17 @@ export function SettingsPanel({
                       checked={editorWordWrap}
                       onChange={onEditorWordWrapChange}
                       label="Word wrap"
+                    />
+                  }
+                />
+                <Row
+                  title="Minimap"
+                  description="Show a compact file preview on the right side of the editor."
+                  control={
+                    <Toggle
+                      checked={editorMinimap}
+                      onChange={onEditorMinimapChange}
+                      label="Minimap"
                     />
                   }
                 />

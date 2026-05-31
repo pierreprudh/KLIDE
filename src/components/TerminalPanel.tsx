@@ -11,6 +11,7 @@ type Props = {
   onToggle: () => void;
   theme: ThemeId;
   height: number;
+  workspaceRoot: string | null;
   fill?: boolean;
 };
 
@@ -35,8 +36,16 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-export function TerminalPanel({ visible, onToggle, theme, height, fill }: Props) {
+export function TerminalPanel({
+  visible,
+  onToggle,
+  theme,
+  height,
+  workspaceRoot,
+  fill,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const cwdLabel = workspaceRoot?.split("/").filter(Boolean).pop() ?? "home";
 
   useEffect(() => {
     if (!ref.current || !visible) return;
@@ -57,7 +66,7 @@ export function TerminalPanel({ visible, onToggle, theme, height, fill }: Props)
     term.open(ref.current);
     fit.fit();
 
-    invoke("pty_spawn");
+    invoke("pty_spawn", { workspaceRoot });
     const unlisten = listen<string>("pty:data", (e) => term.write(e.payload));
     term.onData((data) => invoke("pty_write", { data }));
 
@@ -69,7 +78,7 @@ export function TerminalPanel({ visible, onToggle, theme, height, fill }: Props)
       resize.disconnect();
       term.dispose();
     };
-  }, [visible, theme]);
+  }, [visible, theme, workspaceRoot]);
 
   return (
     <div
@@ -110,7 +119,7 @@ export function TerminalPanel({ visible, onToggle, theme, height, fill }: Props)
             fontWeight: 500,
           }}
         >
-          Terminal
+          Terminal · {cwdLabel}
         </span>
         <button
           onClick={onToggle}

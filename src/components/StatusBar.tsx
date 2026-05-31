@@ -1,11 +1,14 @@
 import { getThemeMeta, type ThemeId } from "../theme";
 import { LayoutBento } from "./LayoutBento";
 import type { GridLayout } from "../gridLayouts";
+import type { GitStatus } from "./GitPanel";
 
 type Props = {
   path: string | null;
   language: string | null;
   workspaceRoot: string | null;
+  fileNotice: string | null;
+  gitStatus: GitStatus | null;
   terminalVisible: boolean;
   onToggleTerminal: () => void;
   gridLayouts: GridLayout[];
@@ -35,6 +38,27 @@ function TerminalIcon() {
   );
 }
 
+function BranchIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="6" cy="5" r="2.3" />
+      <circle cx="6" cy="19" r="2.3" />
+      <circle cx="18" cy="12" r="2.3" />
+      <path d="M6 7.3v9.4" />
+      <path d="M8.1 6.2A8.3 8.3 0 0 1 15.8 10" />
+    </svg>
+  );
+}
+
 function relativePath(path: string | null, workspaceRoot: string | null): string | null {
   if (!path) return null;
   if (workspaceRoot && path.startsWith(`${workspaceRoot}/`)) {
@@ -47,6 +71,8 @@ export function StatusBar({
   path,
   language,
   workspaceRoot,
+  fileNotice,
+  gitStatus,
   terminalVisible,
   onToggleTerminal,
   gridLayouts,
@@ -89,6 +115,51 @@ export function StatusBar({
       </span>
       {language && <span>{language}</span>}
       {workspaceRoot && <span>{workspaceRoot.split("/").pop()}</span>}
+      {gitStatus && (
+        <span
+          title={`${gitStatus.branch} · ${gitStatus.files.length} ${
+            gitStatus.files.length === 1 ? "change" : "changes"
+          }`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            color: gitStatus.files.length > 0 ? "var(--accent)" : "var(--fg-subtle)",
+            minWidth: 0,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <BranchIcon />
+          <span
+            style={{
+              maxWidth: 140,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {gitStatus.branch}
+          </span>
+          <span>
+            {gitStatus.files.length}
+          </span>
+        </span>
+      )}
+      {fileNotice && (
+        <span
+          title={fileNotice}
+          style={{
+            color: fileNotice.includes("changed") || fileNotice.includes("unavailable")
+              ? "var(--code-number)"
+              : "var(--fg-subtle)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "22vw",
+          }}
+        >
+          {fileNotice}
+        </span>
+      )}
       <button
         onClick={onToggleTheme}
         title="Cycle theme"

@@ -5,26 +5,54 @@ use tauri::{Emitter, State};
 
 pub struct PtyState {
     pub writer: Mutex<Option<Box<dyn Write + Send>>>,
+    pub cwd: Mutex<Option<String>>,
 }
 
 #[tauri::command]
-pub fn pty_spawn(app: tauri::AppHandle, state: State<PtyState>) -> Result<(), String> {
-    if state.writer.lock().unwrap().is_some() {
+pub fn pty_spawn(
+    app: tauri::AppHandle,
+    state: State<PtyState>,
+    workspace_root: Option<String>,
+) -> Result<(), String> {
+    let cwd = workspace_root
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| {
+            let dir = std::path::Path::new(&path);
+            if dir.is_dir() {
+                Ok(path)
+            } else {
+                Err(format!("Terminal cwd is not a directory: {path}"))
+            }
+        })
+        .transpose()?;
+
+    if let Some(w) = state.writer.lock().unwrap().as_mut() {
+        let mut current = state.cwd.lock().unwrap();
+        if cwd.is_some() && *current != cwd {
+            let command = format!("cd {}\n", shell_quote(cwd.as_deref().unwrap()));
+            w.write_all(command.as_bytes()).map_err(|e| e.to_string())?;
+            *current = cwd;
+        }
         return Ok(());
     }
+
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())?;
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let cmd = CommandBuilder::new(shell);
+    let mut cmd = CommandBuilder::new(shell);
+    if let Some(path) = cwd.as_deref() {
+        cmd.cwd(path);
+    }
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     *state.writer.lock().unwrap() = Some(writer);
+    *state.cwd.lock().unwrap() = cwd;
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -37,6 +65,10 @@ pub fn pty_spawn(app: tauri::AppHandle, state: State<PtyState>) -> Result<(), St
     });
 
     Ok(())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[tauri::command]

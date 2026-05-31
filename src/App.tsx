@@ -4,7 +4,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
+import { readTextFile, watch, writeTextFile } from "@tauri-apps/plugin-fs";
 import { ActivityBar } from "./components/ActivityBar";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
@@ -12,7 +13,12 @@ import { EditorArea } from "./components/EditorArea";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
-import { GitPanel } from "./components/GitPanel";
+import {
+  GitDiffWindow,
+  GitPanel,
+  type GitDiff,
+  type GitStatus,
+} from "./components/GitPanel";
 import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -28,7 +34,7 @@ import { GridWorkbench } from "./components/GridWorkbench";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "settings";
-type Tab = { path: string; code: string; dirty: boolean };
+type Tab = { path: string; code: string; dirty: boolean; externalChanged?: boolean };
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
 function readNumberSetting(key: string, fallback: number, min: number, max: number): number {
@@ -106,6 +112,10 @@ function detectLanguage(path: string): string {
   )[ext] ?? "plaintext";
 }
 
+function filename(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
 function App() {
   const [view, setView] = useState<"workbench" | "settings">("workbench");
   const [explorerVisible, setExplorerVisible] = useState(
@@ -126,6 +136,9 @@ function App() {
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  const [activeGitDiff, setActiveGitDiff] = useState<GitDiff | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [terminalVisible, setTerminalVisible] = useState(
     () => localStorage.getItem("klide-terminal-visible") === "true"
@@ -167,6 +180,9 @@ function App() {
   );
   const [editorWordWrap, setEditorWordWrap] = useState(() =>
     readBoolSetting("klide-editor-word-wrap", false)
+  );
+  const [editorMinimap, setEditorMinimap] = useState(() =>
+    readBoolSetting("klide-editor-minimap", true)
   );
   const [aiModel, setAiModel] = useState(
     () => localStorage.getItem("klide-ollama-model") || DEFAULT_AI_MODEL
@@ -280,6 +296,7 @@ function App() {
               fontSize={editorFontSize}
               lineNumbers={editorLineNumbers}
               wordWrap={editorWordWrap}
+              minimap={editorMinimap}
             />
           </div>
         );
@@ -290,13 +307,25 @@ function App() {
             fill
             visible
             width={explorerWidth}
+            workspaceRoot={workspaceRoot}
             onOpen={openFile}
             onRootChange={setWorkspaceRoot}
+            onOpenGitDiff={openGitDiff}
           />
         );
       case "git":
         return (
-          <GitPanel key={key} fill visible width={gitWidth} workspaceRoot={workspaceRoot} />
+          <GitPanel
+            key={key}
+            fill
+            visible
+            width={gitWidth}
+            workspaceRoot={workspaceRoot}
+            gitStatus={gitStatus}
+            onRefreshGitStatus={() =>
+              workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+            }
+          />
         );
       case "graph":
         return (
@@ -316,6 +345,7 @@ function App() {
             visible
             theme={theme}
             height={terminalHeight}
+            workspaceRoot={workspaceRoot}
             onToggle={() => {}}
           />
         );
@@ -408,7 +438,7 @@ function App() {
       setActiveIdx(existing);
       return;
     }
-    setTabs([...tabs, { path: p, code: content, dirty: false }]);
+    setTabs([...tabs, { path: p, code: content, dirty: false, externalChanged: false }]);
     setActiveIdx(tabs.length);
   }
 
@@ -422,8 +452,7 @@ function App() {
   function closeTab(i: number) {
     const closing = tabs[i];
     if (closing?.dirty) {
-      const filename = closing.path.split("/").pop() ?? closing.path;
-      const ok = window.confirm(`Close ${filename} with unsaved changes?`);
+      const ok = window.confirm(`Close ${filename(closing.path)} with unsaved changes?`);
       if (!ok) return;
     }
     const next = tabs.filter((_, idx) => idx !== i);
@@ -435,18 +464,52 @@ function App() {
 
   async function saveActive() {
     if (!active) return;
+    if (active.externalChanged) {
+      const ok = window.confirm(
+        `${filename(active.path)} changed on disk while you were editing. Save anyway and overwrite the disk version?`
+      );
+      if (!ok) return;
+    }
     await writeTextFile(active.path, active.code);
     setTabs((cur) =>
-      cur.map((t, i) => (i === activeIdx ? { ...t, dirty: false } : t))
+      cur.map((t, i) =>
+        i === activeIdx ? { ...t, dirty: false, externalChanged: false } : t
+      )
     );
+    setFileNotice(`Saved ${filename(active.path)}`);
   }
 
   function onAgentWrote(path: string, newContent: string) {
     setTabs((cur) =>
       cur.map((t) =>
-        t.path === path ? { ...t, code: newContent, dirty: false } : t
+        t.path === path
+          ? { ...t, code: newContent, dirty: false, externalChanged: false }
+          : t
       )
     );
+  }
+
+  async function refreshGitStatus(root: string) {
+    try {
+      const next = await invoke<GitStatus>("git_status", { workspaceRoot: root });
+      setGitStatus(next);
+    } catch {
+      setGitStatus(null);
+    }
+  }
+
+  async function openGitDiff(path: string, staged: boolean) {
+    if (!workspaceRoot) return;
+    try {
+      const diff = await invoke<GitDiff>("git_diff", {
+        workspaceRoot,
+        path,
+        staged,
+      });
+      setActiveGitDiff(diff);
+    } catch (e) {
+      setFileNotice(e instanceof Error ? e.message : String(e));
+    }
   }
 
   function duplicateAiPanel() {
@@ -538,6 +601,10 @@ function App() {
   }, [editorWordWrap]);
 
   useEffect(() => {
+    localStorage.setItem("klide-editor-minimap", String(editorMinimap));
+  }, [editorMinimap]);
+
+  useEffect(() => {
     localStorage.setItem("klide-ollama-model", aiModel);
   }, [aiModel]);
 
@@ -548,6 +615,90 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-stop-after-rejection", String(stopAfterRejection));
   }, [stopAfterRejection]);
+
+  useEffect(() => {
+    if (!workspaceRoot) {
+      setGitStatus(null);
+      return;
+    }
+
+    let unwatch: (() => void) | undefined;
+    let cancelled = false;
+    const refresh = () => {
+      if (!cancelled) refreshGitStatus(workspaceRoot);
+    };
+
+    refresh();
+    watch(workspaceRoot, refresh, { recursive: true, delayMs: 250 })
+      .then((un) => {
+        if (cancelled) un();
+        else unwatch = un;
+      })
+      .catch(() => {
+        if (!cancelled) refreshGitStatus(workspaceRoot);
+      });
+
+    return () => {
+      cancelled = true;
+      unwatch?.();
+    };
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    const openPaths = Array.from(new Set(tabs.map((t) => t.path)));
+    if (openPaths.length === 0) return;
+
+    let unwatch: (() => void) | undefined;
+    let cancelled = false;
+
+    watch(
+      openPaths,
+      (event) => {
+        const changedPaths = openPaths.filter((path) => event.paths.includes(path));
+        for (const path of changedPaths) {
+          readTextFile(path)
+            .then((diskCode) => {
+              if (cancelled) return;
+              setTabs((cur) =>
+                cur.map((tab) => {
+                  if (tab.path !== path || tab.code === diskCode) {
+                    return tab.path === path
+                      ? { ...tab, externalChanged: false }
+                      : tab;
+                  }
+                  if (tab.dirty) {
+                    setFileNotice(`${filename(path)} changed on disk`);
+                    return { ...tab, externalChanged: true };
+                  }
+                  setFileNotice(`Reloaded ${filename(path)}`);
+                  return { ...tab, code: diskCode, externalChanged: false };
+                })
+              );
+            })
+            .catch(() => {
+              if (cancelled) return;
+              setTabs((cur) =>
+                cur.map((tab) =>
+                  tab.path === path ? { ...tab, externalChanged: true } : tab
+                )
+              );
+              setFileNotice(`${filename(path)} is unavailable on disk`);
+            });
+        }
+      },
+      { delayMs: 150 }
+    )
+      .then((un) => {
+        if (cancelled) un();
+        else unwatch = un;
+      })
+      .catch((e) => console.error("open tab watch failed:", e));
+
+    return () => {
+      cancelled = true;
+      unwatch?.();
+    };
+  }, [tabs.map((t) => t.path).join("\n")]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -598,6 +749,8 @@ function App() {
             onEditorLineNumbersChange={setEditorLineNumbers}
             editorWordWrap={editorWordWrap}
             onEditorWordWrapChange={setEditorWordWrap}
+            editorMinimap={editorMinimap}
+            onEditorMinimapChange={setEditorMinimap}
             aiModel={aiModel}
             onAiModelChange={setAiModel}
             availableAiModels={ollamaModels}
@@ -621,8 +774,10 @@ function App() {
             <Sidebar
               onOpen={openFile}
               onRootChange={setWorkspaceRoot}
+              onOpenGitDiff={openGitDiff}
               visible={explorerVisible}
               width={explorerWidth}
+              workspaceRoot={workspaceRoot}
             />
             {explorerVisible && (
               <ResizeHandle
@@ -643,6 +798,10 @@ function App() {
               visible={gitVisible}
               width={gitWidth}
               workspaceRoot={workspaceRoot}
+              gitStatus={gitStatus}
+              onRefreshGitStatus={() =>
+                workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+              }
             />
             {gitVisible && (
               <ResizeHandle
@@ -707,6 +866,7 @@ function App() {
                   fontSize={editorFontSize}
                   lineNumbers={editorLineNumbers}
                   wordWrap={editorWordWrap}
+                  minimap={editorMinimap}
                 />
               </div>
               {terminalVisible && (
@@ -730,6 +890,7 @@ function App() {
                 onToggle={() => setTerminalVisible((v) => !v)}
                 theme={theme}
                 height={terminalHeight}
+                workspaceRoot={workspaceRoot}
               />
             </main>
             {aiVisible && (
@@ -777,6 +938,8 @@ function App() {
         path={active?.path ?? null}
         language={language}
         workspaceRoot={workspaceRoot}
+        fileNotice={active?.externalChanged ? "File changed on disk" : fileNotice}
+        gitStatus={gitStatus}
         terminalVisible={terminalVisible}
         onToggleTerminal={() => setTerminalVisible((v) => !v)}
         gridLayouts={gridLayouts}
@@ -787,6 +950,9 @@ function App() {
         theme={theme}
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
       />
+      {activeGitDiff && (
+        <GitDiffWindow diff={activeGitDiff} onClose={() => setActiveGitDiff(null)} />
+      )}
       <SkillsModal
         open={skillsVisible}
         skills={skills}

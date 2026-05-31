@@ -6,14 +6,34 @@ import { useEffect, useState } from "react";
 type Props = {
   onOpen: (path: string, content: string) => void;
   onRootChange: (root: string | null) => void;
+  onOpenGitDiff?: (path: string, staged: boolean) => void;
   visible: boolean;
   width: number;
+  workspaceRoot: string | null;
   fill?: boolean;
 };
 
 type TreeEntry = {
   name: string;
   isDirectory: boolean;
+  virtual?: boolean;
+};
+
+type GitFile = {
+  path: string;
+  status: string;
+  staged: boolean;
+};
+
+type GitStatus = {
+  branch: string;
+  files: GitFile[];
+};
+
+type GitDecoration = {
+  label: string;
+  color: string;
+  title: string;
 };
 
 function ChevronRight() {
@@ -123,25 +143,230 @@ function shortPath(path: string): string {
   return `.../${parts.slice(-2).join("/")}`;
 }
 
-export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
-  const [root, setRoot] = useState<string | null>(null);
+function relativePath(root: string, path: string): string {
+  return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+}
+
+function parentPath(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+
+function gitLabel(status: string): string {
+  if (status === "??") return "U";
+  if (status.includes("M")) return "M";
+  if (status.includes("A")) return "A";
+  if (status.includes("D")) return "D";
+  if (status.includes("R")) return "R";
+  return status.trim() || "-";
+}
+
+function gitDecorationForLabel(label: string): GitDecoration | null {
+  if (label === "M") {
+    return { label, color: "#D99A2B", title: "Modified" };
+  }
+  if (label === "A" || label === "U") {
+    return {
+      label,
+      color: "#2F9E44",
+      title: label === "U" ? "Untracked" : "Added",
+    };
+  }
+  if (label === "D") {
+    return { label, color: "#D64545", title: "Deleted" };
+  }
+  if (label === "R") {
+    return { label, color: "#9B7DFF", title: "Renamed" };
+  }
+  return null;
+}
+
+function gitDecoration(
+  root: string,
+  path: string,
+  isDirectory: boolean,
+  gitFiles: GitFile[]
+): GitDecoration | null {
+  const rel = relativePath(root, path);
+  const exact = gitFiles.find((file) => file.path.replace(/\/$/, "") === rel);
+  if (exact) return gitDecorationForLabel(gitLabel(exact.status));
+
+  if (!isDirectory) {
+    const untrackedParent = gitFiles.find(
+      (file) => file.status === "??" && file.path.endsWith("/") && rel.startsWith(file.path)
+    );
+    return untrackedParent ? gitDecorationForLabel("U") : null;
+  }
+
+  const child = gitFiles.find((file) => file.path.startsWith(`${rel}/`));
+  return child ? gitDecorationForLabel(gitLabel(child.status)) : null;
+}
+
+function gitFileForPath(
+  root: string,
+  path: string,
+  isDirectory: boolean,
+  gitFiles: GitFile[]
+): GitFile | null {
+  const rel = relativePath(root, path);
+  const exact = gitFiles.find((file) => file.path.replace(/\/$/, "") === rel);
+  if (exact) return exact;
+  if (isDirectory) return null;
+  return (
+    gitFiles.find(
+      (file) => file.status === "??" && file.path.endsWith("/") && rel.startsWith(file.path)
+    ) ?? null
+  );
+}
+
+function gitVirtualEntries(
+  root: string,
+  basePath: string,
+  existingNames: Set<string>,
+  gitFiles: GitFile[]
+): TreeEntry[] {
+  const baseRel = relativePath(root, basePath);
+  const virtual = new Map<string, TreeEntry>();
+
+  for (const file of gitFiles) {
+    if (gitLabel(file.status) !== "D" || file.path.includes(" -> ")) continue;
+
+    const parent = parentPath(file.path);
+    if (parent === baseRel) {
+      const name = file.path.split("/").pop();
+      if (name && !existingNames.has(name)) {
+        virtual.set(name, { name, isDirectory: false, virtual: true });
+      }
+      continue;
+    }
+
+    if (baseRel === "" || parent.startsWith(`${baseRel}/`)) {
+      const remainder = baseRel === "" ? parent : parent.slice(baseRel.length + 1);
+      const nextDir = remainder.split("/").filter(Boolean)[0];
+      if (nextDir && !existingNames.has(nextDir)) {
+        virtual.set(nextDir, { name: nextDir, isDirectory: true, virtual: true });
+      }
+    }
+  }
+
+  return Array.from(virtual.values());
+}
+
+function expandedStoreKey(root: string): string {
+  return `klide-expanded-folders:${root}`;
+}
+
+function loadExpanded(root: string | null): Set<string> {
+  if (!root) return new Set();
+  try {
+    const raw = localStorage.getItem(expandedStoreKey(root));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function Sidebar({
+  onOpen,
+  onRootChange,
+  onOpenGitDiff,
+  visible,
+  width,
+  workspaceRoot,
+  fill,
+}: Props) {
+  const root = workspaceRoot;
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [children, setChildren] = useState<Record<string, TreeEntry[]>>({});
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => loadExpanded(root));
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [dirErrors, setDirErrors] = useState<Record<string, string>>({});
+  const [gitFiles, setGitFiles] = useState<GitFile[]>([]);
+
+  async function refreshGitStatus(workspaceRoot: string) {
+    try {
+      const status = await invoke<GitStatus>("git_status", { workspaceRoot });
+      setGitFiles(status.files);
+    } catch {
+      setGitFiles([]);
+    }
+  }
 
   async function pickFolder() {
     const picked = await open({ directory: true });
     if (typeof picked !== "string") return;
-    setRoot(picked);
     setEntries(await invoke<TreeEntry[]>("list_dir", { path: picked }));
     setChildren({});
-    setExpanded(new Set());
+    setExpanded(loadExpanded(picked));
     setLoadingDirs(new Set());
     setDirErrors({});
+    refreshGitStatus(picked);
     onRootChange(picked);
   }
+
+  useEffect(() => {
+    if (!root) {
+      setEntries([]);
+      setChildren({});
+      setExpanded(new Set());
+      setGitFiles([]);
+      return;
+    }
+
+    let cancelled = false;
+    const nextExpanded = loadExpanded(root);
+    setExpanded(nextExpanded);
+    setChildren({});
+    setLoadingDirs(new Set());
+    setDirErrors({});
+
+    const expandedPaths = Array.from(nextExpanded);
+    Promise.all([
+      invoke<TreeEntry[]>("list_dir", { path: root }),
+      refreshGitStatus(root),
+      Promise.all(
+        expandedPaths.map(async (path) => {
+          try {
+            return [path, await invoke<TreeEntry[]>("list_dir", { path })] as const;
+          } catch {
+            return null;
+          }
+        })
+      ),
+    ])
+      .then(([next, _git, refreshedChildren]) => {
+        if (!cancelled) {
+          setEntries(next);
+          setChildren(
+            Object.fromEntries(
+              refreshedChildren.filter(
+                (entry): entry is readonly [string, TreeEntry[]] => entry !== null
+              )
+            )
+          );
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setEntries([]);
+          console.error("Unable to load workspace root:", e);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [root]);
+
+  useEffect(() => {
+    if (!root) return;
+    localStorage.setItem(
+      expandedStoreKey(root),
+      JSON.stringify(Array.from(expanded))
+    );
+  }, [root, expanded]);
 
   useEffect(() => {
     if (!root) return;
@@ -150,7 +375,10 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
 
     const refresh = async () => {
       try {
-        const next = await invoke<TreeEntry[]>("list_dir", { path: root });
+        const [next] = await Promise.all([
+          invoke<TreeEntry[]>("list_dir", { path: root }),
+          refreshGitStatus(root),
+        ]);
         const expandedPaths = Array.from(expanded);
         const refreshedChildren = await Promise.all(
           expandedPaths.map(async (path) => {
@@ -199,7 +427,7 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
     }
   }
 
-  async function toggleFolder(path: string) {
+  async function toggleFolder(path: string, isVirtualFolder = false) {
     const next = new Set(expanded);
     if (next.has(path)) {
       next.delete(path);
@@ -209,6 +437,10 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
 
     next.add(path);
     setExpanded(next);
+    if (isVirtualFolder) {
+      setChildren((cur) => ({ ...cur, [path]: cur[path] ?? [] }));
+      return;
+    }
     if (!(path in children) || dirErrors[path]) {
       setLoadingDirs((cur) => new Set(cur).add(path));
       setDirErrors((cur) => {
@@ -239,7 +471,16 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
   }
 
   function renderEntries(list: TreeEntry[], basePath: string, depth = 0) {
-    return list
+    const existingNames = new Set(list.map((entry) => entry.name));
+    const mergedEntries =
+      root == null
+        ? list
+        : [
+            ...list,
+            ...gitVirtualEntries(root, basePath, existingNames, gitFiles),
+          ];
+
+    return mergedEntries
       .slice()
       .sort(
         (a, b) =>
@@ -248,16 +489,30 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
       )
       .map((e) => {
         const isDir = e.isDirectory;
+        const isVirtual = e.virtual === true;
         const path = joinPath(basePath, e.name);
         const isExpanded = expanded.has(path);
         const nested = children[path];
         const isLoading = loadingDirs.has(path);
         const error = dirErrors[path];
+        const decoration = root
+          ? gitDecoration(root, path, isDir, gitFiles)
+          : null;
+        const gitFile = root ? gitFileForPath(root, path, isDir, gitFiles) : null;
+        const rowColor = decoration
+          ? decoration.color
+          : isDir
+          ? "var(--fg)"
+          : "var(--fg-strong)";
         return (
           <li key={path}>
             <div
-              onClick={() => (isDir ? toggleFolder(path) : pick(path))}
-              title={path}
+              onClick={() => {
+                if (isDir) toggleFolder(path, isVirtual);
+                else if (isVirtual && gitFile) onOpenGitDiff?.(gitFile.path, gitFile.staged);
+                else if (!isVirtual) pick(path);
+              }}
+              title={decoration ? `${path} · ${decoration.title}` : path}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -265,8 +520,9 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
                 padding: "3px 8px",
                 paddingLeft: 8 + depth * 14,
                 borderRadius: "var(--radius-sm)",
-                color: isDir ? "var(--fg)" : "var(--fg-strong)",
-                cursor: "pointer",
+                color: rowColor,
+                cursor: isVirtual && !isDir ? "default" : "pointer",
+                opacity: isVirtual ? 0.86 : 1,
                 fontSize: 13,
                 userSelect: "none",
                 transition:
@@ -311,6 +567,31 @@ export function Sidebar({ onOpen, onRootChange, visible, width, fill }: Props) {
               >
                 {e.name}
               </span>
+              {decoration && (
+                <span
+                  title={decoration.title}
+                  onClick={(event) => {
+                    if (!gitFile || isDir) return;
+                    event.stopPropagation();
+                    onOpenGitDiff?.(gitFile.path, gitFile.staged);
+                  }}
+                  style={{
+                    marginLeft: "auto",
+                    flexShrink: 0,
+                    minWidth: 14,
+                    height: 16,
+                    display: "grid",
+                    placeItems: "center",
+                    color: decoration.color,
+                    cursor: gitFile && !isDir ? "pointer" : "default",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                  }}
+                >
+                  {decoration.label}
+                </span>
+              )}
             </div>
             {isDir && isExpanded && (
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>

@@ -15,6 +15,7 @@ type Props = {
   fontSize: number;
   lineNumbers: boolean;
   wordWrap: boolean;
+  minimap: boolean;
 };
 
 export function EditorArea({
@@ -27,6 +28,7 @@ export function EditorArea({
   fontSize,
   lineNumbers,
   wordWrap,
+  minimap,
 }: Props) {
   const editorTheme = getMonacoThemeId(theme);
 
@@ -83,7 +85,13 @@ export function EditorArea({
         onChange={(v) => onChange(v ?? "")}
         options={{
           automaticLayout: true,
-          minimap: { enabled: false },
+          minimap: {
+            enabled: minimap,
+            side: "right",
+            renderCharacters: false,
+            showSlider: "always",
+            maxColumn: 90,
+          },
           fontSize,
           fontFamily:
             "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
@@ -95,8 +103,8 @@ export function EditorArea({
           lineNumbersMinChars: lineNumbers ? 3 : 0,
           wordWrap: wordWrap ? "on" : "off",
           glyphMargin: false,
-          overviewRulerLanes: 0,
-          hideCursorInOverviewRuler: true,
+          overviewRulerLanes: minimap ? 3 : 0,
+          hideCursorInOverviewRuler: !minimap,
           smoothScrolling: true,
         }}
       />
