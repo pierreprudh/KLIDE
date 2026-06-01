@@ -23,7 +23,12 @@ type Attachment = { path: string; content: string };
 
 type Msg =
   | { role: "user"; content: string; attachments?: Attachment[] }
-  | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
+  | {
+      role: "assistant";
+      content: string;
+      toolCalls?: ToolCall[];
+      thinking?: string;
+    }
   | { role: "system"; content: string }
   | { role: "tool"; content: string; toolName: string };
 
@@ -850,6 +855,35 @@ function renderProse(text: string, keyBase: string): MdNode[] {
   return blocks;
 }
 
+// Reasoning models stream their chain-of-thought wrapped in <think>…</think>
+// inside the normal content. This pulls that out so we can show it separately.
+// Handles the streaming case where <think> has arrived but </think> hasn't yet:
+// everything after an unclosed <think> is treated as in-progress thinking.
+function splitThinking(raw: string): { thinking: string; content: string } {
+  const OPEN = "<think>";
+  const CLOSE = "</think>";
+  let thinking = "";
+  let content = "";
+  let rest = raw;
+  while (true) {
+    const open = rest.indexOf(OPEN);
+    if (open === -1) {
+      content += rest;
+      break;
+    }
+    content += rest.slice(0, open);
+    const after = rest.slice(open + OPEN.length);
+    const close = after.indexOf(CLOSE);
+    if (close === -1) {
+      thinking += after; // still streaming inside the think block
+      break;
+    }
+    thinking += after.slice(0, close);
+    rest = after.slice(close + CLOSE.length);
+  }
+  return { thinking, content: content.replace(/^\s+/, "") };
+}
+
 function renderMarkdown(text: string): MdNode[] {
   const segments = text.split("```");
   const out: MdNode[] = [];
@@ -998,7 +1032,13 @@ export function AiPanel({
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => (localStorage.getItem("klide.agentMode") as AgentMode) || "build"
   );
+  // Whether the selected Ollama model declares the "tools" capability. Models
+  // without it (e.g. many community GGUFs like Liquid's LFM2) 400 on any chat
+  // request that includes a `tools` field, so we detect support up front and
+  // fall back to plain chat — Build mode (which edits via tools) is locked off.
+  const [modelSupportsTools, setModelSupportsTools] = useState(true);
   const toggleMode = () => {
+    if (!modelSupportsTools) return; // locked to chat — no tools, no Build
     setNextSendMode(null); // an explicit toggle overrides any one-shot override
     setAgentMode((m) => {
       const next = m === "build" ? "plan" : "build";
@@ -1362,6 +1402,32 @@ export function AiPanel({
     };
   }, [model, onAvailableModelsChange, onModelChange]);
 
+  // Ask Ollama whether the selected model can call tools. /api/show returns a
+  // `capabilities` array — tool-capable models list "tools". We default to
+  // "supported" so a transient/offline check never wrongly locks the UI.
+  useEffect(() => {
+    let cancelled = false;
+    async function checkToolSupport() {
+      try {
+        const res = await fetch("http://localhost:11434/api/show", {
+          method: "POST",
+          body: JSON.stringify({ model }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const caps = data.capabilities;
+        const supports = Array.isArray(caps) && caps.includes("tools");
+        if (!cancelled) setModelSupportsTools(supports);
+      } catch {
+        /* Ollama offline — assume supported; the request path handles errors. */
+      }
+    }
+    checkToolSupport();
+    return () => {
+      cancelled = true;
+    };
+  }, [model]);
+
   async function streamOnce(
     history: Msg[],
     mode: AgentMode
@@ -1382,7 +1448,9 @@ export function AiPanel({
       body: JSON.stringify({
         model,
         messages: [sys, ...history].map(toOllamaMessage),
-        tools: toolsForMode(mode),
+        // Models without tool support 400 if `tools` is present at all, so we
+        // omit the field entirely for them (JSON.stringify drops undefined).
+        tools: modelSupportsTools ? toolsForMode(mode) : undefined,
         stream: true,
       }),
     });
@@ -1391,21 +1459,29 @@ export function AiPanel({
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let text = "";
+    let raw = ""; // all streamed content, may contain inline <think> blocks
+    let nativeThinking = ""; // Ollama's separate `thinking` field, if any
     const toolCalls: ToolCall[] = [];
 
     const handleLine = (line: string) => {
       if (!line.trim()) return;
       try {
         const j = JSON.parse(line);
-        text += j.message?.content ?? "";
+        raw += j.message?.content ?? "";
+        nativeThinking += j.message?.thinking ?? "";
         const newCalls = parseToolCallsFromChunk(j.message?.tool_calls);
         if (newCalls.length) toolCalls.push(...newCalls);
+        const { thinking: inline, content } = splitThinking(raw);
+        const thinking = [nativeThinking, inline]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
         setMsgs((cur) => {
           const next = [...cur];
           next[next.length - 1] = {
             role: "assistant",
-            content: text,
+            content,
+            thinking: thinking || undefined,
             toolCalls: toolCalls.length ? [...toolCalls] : undefined,
           };
           return next;
@@ -1424,13 +1500,17 @@ export function AiPanel({
       for (const line of lines) handleLine(line);
     }
     if (buf.trim()) handleLine(buf);
-    return { text, toolCalls };
+    // History keeps only the visible answer — reasoning isn't fed back to the model.
+    return { text: splitThinking(raw).content, toolCalls };
   }
 
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
     if (!text.trim() || streaming) return;
-    const mode = opts?.mode ?? nextSendMode ?? agentMode;
+    // A model with no tool support can only chat; never run Build for it.
+    const mode = !modelSupportsTools
+      ? "plan"
+      : opts?.mode ?? nextSendMode ?? agentMode;
 
     setInput("");
     setMention(null);
@@ -1533,6 +1613,38 @@ export function AiPanel({
     if (m.role === "assistant") {
       return (
         <>
+          {m.thinking && (
+            <details
+              open={!m.content}
+              style={{
+                marginBottom: 8,
+                borderLeft: "2px solid var(--border-strong)",
+                paddingLeft: 10,
+              }}
+            >
+              <summary
+                style={{
+                  color: "var(--fg-muted)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  userSelect: "none",
+                }}
+              >
+                {m.content ? "Thought process" : "Thinking…"}
+              </summary>
+              <div
+                style={{
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                  color: "var(--fg-muted)",
+                  whiteSpace: "pre-wrap",
+                  margin: "6px 0 0",
+                }}
+              >
+                {m.thinking}
+              </div>
+            </details>
+          )}
           {m.content && (
             <div style={{ marginBottom: m.toolCalls ? 6 : 0 }}>
               {renderMarkdown(m.content)}
@@ -2108,6 +2220,7 @@ export function AiPanel({
             isLast &&
             m.role === "assistant" &&
             m.content === "" &&
+            !m.thinking &&
             !m.toolCalls;
           const isStreamingActive =
             streaming && isLast && m.role === "assistant" && m.content !== "";
@@ -2479,9 +2592,17 @@ export function AiPanel({
             <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <button
               onClick={toggleMode}
-              disabled={streaming}
-              title="Plan investigates and proposes; Build edits files. Press Tab to switch."
-              aria-label={`Agent mode: ${nextSendMode ?? agentMode}. Click or press Tab to switch.`}
+              disabled={streaming || !modelSupportsTools}
+              title={
+                !modelSupportsTools
+                  ? `${model} can't use tools — chat only. Pick a tool-capable model (e.g. qwen2.5, llama3.1) to enable Plan/Build.`
+                  : "Plan investigates and proposes; Build edits files. Press Tab to switch."
+              }
+              aria-label={
+                !modelSupportsTools
+                  ? `Chat mode: ${model} does not support tools.`
+                  : `Agent mode: ${nextSendMode ?? agentMode}. Click or press Tab to switch.`
+              }
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -2514,13 +2635,17 @@ export function AiPanel({
                   borderRadius: "50%",
                   flexShrink: 0,
                   background:
-                    (nextSendMode ?? agentMode) === "build"
+                    modelSupportsTools && (nextSendMode ?? agentMode) === "build"
                       ? "var(--accent)"
                       : "var(--fg-dim)",
                   transition: "background var(--motion-med) var(--ease-out)",
                 }}
               />
-              {(nextSendMode ?? agentMode) === "build" ? "Build" : "Plan"}
+              {!modelSupportsTools
+                ? "Chat"
+                : (nextSendMode ?? agentMode) === "build"
+                ? "Build"
+                : "Plan"}
             </button>
             <div
               style={{
