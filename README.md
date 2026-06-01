@@ -80,11 +80,12 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - Light + dark themes shared across app, editor, and terminal — including a full per-theme terminal ANSI palette
 
 **AI panel**
-- Streaming chat against local Ollama via the native `tools` API
+- **Streaming chat** — all providers stream token-by-token through a single Rust `ai_chat` command, so keys never enter the webview
+- **Multi-provider** — local Ollama, OpenAI-compatible APIs (OpenAI · Mistral · xAI), and read-only subscription CLIs (Claude Code · Codex), all behind one switcher
 - **Plan / Build modes** — Plan is read-only and proposes; Build edits files behind a diff you approve (`Tab` to switch)
 - **`@`-mentions** — fuzzy-pick workspace files to attach as context
 - **Slash commands** — `/plan`, `/build`, `/clear`, `/explain`, `/init`
-- **Provider switcher** — Local / Subscription / API, grouped with brand logos
+- **Keychain-stored keys** — API keys live in the OS keychain (env vars as fallback); managed from Settings → API
 - Auto-loads project rules from `AGENTS.md` / `CLAUDE.md`
 
 ## Roadmap
@@ -103,8 +104,10 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 **v0.2 — in progress**
 
 - [x] Plan / Build modes, `@`-mentions, slash commands, project-rules loading
-- [x] Provider switcher (Ollama live; others staged)
-- [ ] Wire subscription + API providers behind the switcher
+- [x] Provider switcher — Ollama, OpenAI-compatible APIs, and subscription CLIs all live
+- [x] Streaming through Rust for every provider
+- [x] API keys stored in the OS keychain, managed from Settings
+- [ ] Anthropic + Google Gemini direct APIs (need their own adapters)
 - [ ] Command palette · find-in-files · settings depth
 
 ## Build & run
