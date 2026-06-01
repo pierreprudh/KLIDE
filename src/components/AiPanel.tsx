@@ -11,10 +11,11 @@ import {
   readTextFile,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { DiffModal, PendingEdit } from "./DiffModal";
 import { enabledSkillsPrompt, type Skill } from "../skills";
 
-type ToolCall = { name: string; args: any };
+type ToolCall = { id?: string; name: string; args: any };
 
 // Files the user pulled in with @-mentions. Stored on the user message but only
 // rendered as inline "@path" text — the contents ride along to the model via
@@ -23,9 +24,14 @@ type Attachment = { path: string; content: string };
 
 type Msg =
   | { role: "user"; content: string; attachments?: Attachment[] }
-  | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
+  | {
+      role: "assistant";
+      content: string;
+      toolCalls?: ToolCall[];
+      thinking?: string;
+    }
   | { role: "system"; content: string }
-  | { role: "tool"; content: string; toolName: string };
+  | { role: "tool"; content: string; toolName: string; toolCallId?: string };
 
 type Props = {
   workspaceRoot: string | null;
@@ -140,10 +146,9 @@ const TOOLS = [
   },
 ];
 
-// Plan mode borrows OpenCode's safest idea: investigate read-only, then propose
-// a plan — the model is never handed the edit tools, so it physically cannot
-// write. Build mode is the full agentic loop with diff-reviewed edits.
-export type AgentMode = "build" | "plan";
+// Chat mode never receives tools. Plan mode is read-only. Goal mode is the full
+// agentic loop with diff-reviewed edits.
+export type AgentMode = "chat" | "plan" | "goal";
 
 // The two read-only tools, by name, so Plan mode can offer only these.
 const READ_ONLY_TOOLS = TOOLS.filter(
@@ -151,7 +156,20 @@ const READ_ONLY_TOOLS = TOOLS.filter(
 );
 
 function toolsForMode(mode: AgentMode) {
+  if (mode === "chat") return undefined;
   return mode === "plan" ? READ_ONLY_TOOLS : TOOLS;
+}
+
+const MODE_OPTIONS: { id: AgentMode; label: string; title: string }[] = [
+  { id: "chat", label: "Chat", title: "Answer without tools." },
+  { id: "plan", label: "Plan", title: "Read files and propose a plan." },
+  { id: "goal", label: "Goal", title: "Use tools and propose diff-reviewed edits." },
+];
+
+function normalizeAgentMode(value: string | null): AgentMode {
+  if (value === "build" || value === "goal") return "goal";
+  if (value === "plan") return "plan";
+  return "chat";
 }
 
 // Provider catalogue for the header switcher. Only Ollama is wired today; the
@@ -190,8 +208,8 @@ const PROVIDER_GROUPS: ProviderGroup[] = [
   {
     label: "Subscription",
     items: [
-      { id: "claude-code", name: "Claude Code", available: false },
-      { id: "codex", name: "Codex", available: false },
+      { id: "claude-code", name: "Claude Code", available: true },
+      { id: "codex", name: "Codex", available: true },
       { id: "gemini-cli", name: "Gemini CLI", available: false },
     ],
   },
@@ -199,10 +217,10 @@ const PROVIDER_GROUPS: ProviderGroup[] = [
     label: "API",
     items: [
       { id: "anthropic", name: "Anthropic", available: false },
-      { id: "openai", name: "OpenAI", available: false },
+      { id: "openai", name: "OpenAI", available: true },
       { id: "gemini", name: "Google Gemini", available: false },
-      { id: "mistral", name: "Mistral", available: false },
-      { id: "xai", name: "xAI Grok", available: false },
+      { id: "mistral", name: "Mistral", available: true },
+      { id: "xai", name: "xAI Grok", available: true },
     ],
   },
 ];
@@ -212,6 +230,21 @@ const ALL_PROVIDERS = PROVIDER_GROUPS.flatMap((g) => g.items);
 function providerName(id: ProviderId): string {
   return ALL_PROVIDERS.find((p) => p.id === id)?.name ?? "Ollama";
 }
+
+const DEFAULT_MODELS: Record<ProviderId, string> = {
+  ollama: "llama3.1:8b",
+  lmstudio: "local-model",
+  llamacpp: "local-model",
+  vllm: "local-model",
+  "claude-code": "claude-sonnet-4-6",
+  codex: "gpt-5",
+  "gemini-cli": "gemini-cli",
+  anthropic: "claude-sonnet-4-5",
+  openai: "gpt-4.1",
+  gemini: "gemini-2.5-pro",
+  mistral: "mistral-large-latest",
+  xai: "grok-4",
+};
 
 // Official brand marks (Simple Icons, single-path, currentColor → theme- and
 // hover-aware). Subscription/CLI variants alias to their vendor's mark below.
@@ -303,19 +336,25 @@ function buildSystemPrompt(
   if (!workspaceRoot) {
     return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.${skillsBlock}`;
   }
-  const planBlock =
-    mode === "plan"
+  const modeBlock =
+    mode === "chat"
       ? `
 
-PLAN MODE is active. You have ONLY read-only tools (read_file, list_dir) and CANNOT edit files. Investigate as needed and answer the user's question directly. If — and only if — the user asked you to make code changes, do NOT edit: present a clear, numbered implementation plan (the files you'd touch and what each needs) and tell them to switch to Build mode to apply it.`
-      : "";
+CHAT MODE is active. You have no tools. Answer conversationally from the context already visible in the chat. If the user asks you to inspect or change files, tell them to switch to Plan or Goal.`
+      : mode === "plan"
+      ? `
+
+PLAN MODE is active. You have ONLY read-only tools (read_file, list_dir) and CANNOT edit files. Investigate as needed and answer the user's question directly. If — and only if — the user asked you to make code changes, do NOT edit: present a clear, numbered implementation plan (the files you'd touch and what each needs) and tell them to switch to Goal mode to apply it.`
+      : `
+
+GOAL MODE is active. Work toward the user's requested outcome. Use read tools to understand the code and edit tools only when a concrete change is needed. Every edit is diff-reviewed by the user before it is written.`;
   return `You are Klide's coding assistant, embedded in a code editor.
 
 Workspace root: ${workspaceRoot}
 
 Tool usage:
 - read_file / list_dir: read-only. Use whenever you need to know contents or structure.
-- write_file / create_file: edit tools. Every edit opens a diff modal for the user to APPLY or REJECT — you never write directly.${planBlock}
+- write_file / create_file: edit tools. Every edit opens a diff modal for the user to APPLY or REJECT — you never write directly.${modeBlock}
 
 Paths are relative to the workspace root (e.g. "src/App.tsx" or ".").
 
@@ -430,13 +469,20 @@ function toOllamaMessage(m: Msg): any {
     const out: any = { role: "assistant", content: m.content };
     if (m.toolCalls && m.toolCalls.length > 0) {
       out.tool_calls = m.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function",
         function: { name: tc.name, arguments: tc.args },
       }));
     }
     return out;
   }
   if (m.role === "tool") {
-    return { role: "tool", content: m.content, name: m.toolName };
+    return {
+      role: "tool",
+      content: m.content,
+      name: m.toolName,
+      tool_call_id: m.toolCallId ?? m.toolName,
+    };
   }
   if (m.role === "user" && m.attachments && m.attachments.length > 0) {
     const ctx = m.attachments
@@ -513,9 +559,10 @@ function isSubsequence(needle: string, hay: string): boolean {
 function parseToolCallsFromChunk(raw: any): ToolCall[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((tc) => {
+    .map((tc): ToolCall | null => {
       const fn = tc.function ?? tc;
       const name = fn?.name;
+      const id = typeof tc.id === "string" ? tc.id : undefined;
       let args = fn?.arguments;
       if (typeof args === "string") {
         try {
@@ -524,7 +571,7 @@ function parseToolCallsFromChunk(raw: any): ToolCall[] {
           args = { _raw: args };
         }
       }
-      return name ? { name, args: args ?? {} } : null;
+      return name ? { id, name, args: args ?? {} } : null;
     })
     .filter((x): x is ToolCall => x !== null);
 }
@@ -565,6 +612,29 @@ function deriveTitle(msgs: Msg[]): string {
   const text = firstUser?.content.trim() ?? "";
   if (!text) return "New chat";
   return text.length > 42 ? `${text.slice(0, 42)}…` : text;
+}
+
+function estimateTokens(text: string): number {
+  if (!text.trim()) return 0;
+  // Cheap tokenizer approximation: code and prose average roughly 3-4 chars/token.
+  return Math.ceil(text.length / 3.7);
+}
+
+function messageTokenEstimate(m: Msg): number {
+  let total = estimateTokens(m.content);
+  if (m.role === "user" && m.attachments) {
+    total += m.attachments.reduce(
+      (sum, attachment) =>
+        sum + estimateTokens(attachment.path) + estimateTokens(attachment.content),
+      0
+    );
+  }
+  if (m.role === "assistant") {
+    total += estimateTokens(m.thinking ?? "");
+    total += estimateTokens(JSON.stringify(m.toolCalls ?? []));
+  }
+  if (m.role === "tool") total += estimateTokens(m.toolName);
+  return total;
 }
 
 function relativeTime(ts: number): string {
@@ -850,6 +920,35 @@ function renderProse(text: string, keyBase: string): MdNode[] {
   return blocks;
 }
 
+// Reasoning models stream their chain-of-thought wrapped in <think>…</think>
+// inside the normal content. This pulls that out so we can show it separately.
+// Handles the streaming case where <think> has arrived but </think> hasn't yet:
+// everything after an unclosed <think> is treated as in-progress thinking.
+function splitThinking(raw: string): { thinking: string; content: string } {
+  const OPEN = "<think>";
+  const CLOSE = "</think>";
+  let thinking = "";
+  let content = "";
+  let rest = raw;
+  while (true) {
+    const open = rest.indexOf(OPEN);
+    if (open === -1) {
+      content += rest;
+      break;
+    }
+    content += rest.slice(0, open);
+    const after = rest.slice(open + OPEN.length);
+    const close = after.indexOf(CLOSE);
+    if (close === -1) {
+      thinking += after; // still streaming inside the think block
+      break;
+    }
+    thinking += after.slice(0, close);
+    rest = after.slice(close + CLOSE.length);
+  }
+  return { thinking, content: content.replace(/^\s+/, "") };
+}
+
 function renderMarkdown(text: string): MdNode[] {
   const segments = text.split("```");
   const out: MdNode[] = [];
@@ -994,18 +1093,48 @@ export function AiPanel({
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
   const [pending, setPending] = useState<PendingEditRequest | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [contextHover, setContextHover] = useState(false);
+  const [contextLimit, setContextLimit] = useState(128_000);
   const [connected, setConnected] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>(
-    () => (localStorage.getItem("klide.agentMode") as AgentMode) || "build"
+    () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
   );
+  // Whether the selected Ollama model declares the "tools" capability. Models
+  // without it (e.g. many community GGUFs like Liquid's LFM2) 400 on any chat
+  // request that includes a `tools` field, so we detect support up front and
+  // fall back to plain chat — Goal mode (which edits via tools) is locked off.
+  const [modelSupportsTools, setModelSupportsTools] = useState(true);
+  const [modeOpen, setModeOpen] = useState(false);
+  const modeRef = useRef<HTMLDivElement>(null);
   const toggleMode = () => {
     setNextSendMode(null); // an explicit toggle overrides any one-shot override
     setAgentMode((m) => {
-      const next = m === "build" ? "plan" : "build";
+      const order: AgentMode[] = modelSupportsTools
+        ? ["chat", "plan", "goal"]
+        : ["chat", "plan"];
+      const next = order[(order.indexOf(m) + 1) % order.length] ?? "chat";
       localStorage.setItem("klide.agentMode", next);
       return next;
     });
   };
+
+  function selectMode(mode: AgentMode) {
+    setNextSendMode(null);
+    setAgentMode(mode);
+    localStorage.setItem("klide.agentMode", mode);
+    setModeOpen(false);
+  }
+
+  useEffect(() => {
+    if (!modeOpen) return;
+    function onDown(e: MouseEvent) {
+      if (modeRef.current && !modeRef.current.contains(e.target as Node)) {
+        setModeOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [modeOpen]);
 
   // @-mention file picker state.
   const [fileList, setFileList] = useState<string[]>([]);
@@ -1014,7 +1143,8 @@ export function AiPanel({
   const mentionMatches =
     mention !== null ? fuzzyFiles(fileList, mention.query) : [];
 
-  // Provider switcher state. Persisted, but only "ollama" is functional today.
+  // Provider switcher state. API providers run through Rust so keys never enter
+  // the webview. Expected env vars: OPENAI_API_KEY, MISTRAL_API_KEY, XAI_API_KEY.
   const [provider, setProvider] = useState<ProviderId>(
     () => (localStorage.getItem("klide.provider") as ProviderId) || "ollama"
   );
@@ -1036,6 +1166,9 @@ export function AiPanel({
   function selectProvider(id: ProviderId) {
     setProvider(id);
     localStorage.setItem("klide.provider", id);
+    const stored = localStorage.getItem(`klide.model.${id}`);
+    onModelChange(stored || DEFAULT_MODELS[id]);
+    onAvailableModelsChange([stored || DEFAULT_MODELS[id]]);
     setProviderOpen(false);
   }
 
@@ -1051,20 +1184,26 @@ export function AiPanel({
     run: () => void;
   }[] = [
     {
-      name: "plan",
-      desc: "Switch to Plan mode (read-only, proposes a plan)",
+      name: "chat",
+      desc: "Switch to Chat mode (no tools)",
       run: () => {
-        setAgentMode("plan");
-        localStorage.setItem("klide.agentMode", "plan");
+        selectMode("chat");
         setInput("");
       },
     },
     {
-      name: "build",
-      desc: "Switch to Build mode (can propose edits)",
+      name: "plan",
+      desc: "Switch to Plan mode (read-only, proposes a plan)",
       run: () => {
-        setAgentMode("build");
-        localStorage.setItem("klide.agentMode", "build");
+        selectMode("plan");
+        setInput("");
+      },
+    },
+    {
+      name: "goal",
+      desc: "Switch to Goal mode (can propose edits)",
+      run: () => {
+        selectMode(modelSupportsTools ? "goal" : "plan");
         setInput("");
       },
     },
@@ -1090,7 +1229,7 @@ export function AiPanel({
       desc: "Analyze the repo and create a CLAUDE.md",
       run: () =>
         void send({
-          mode: "build",
+          mode: "goal",
           text:
             "Explore this project (read key files like package.json, README, and the main source folders) and create a concise CLAUDE.md at the workspace root documenting what the project is, its stack, how to run it, and the repo layout. Use create_file so I can review the diff.",
         }),
@@ -1218,6 +1357,17 @@ export function AiPanel({
     }
     return out;
   }
+  const contextUsed =
+    msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0) +
+    estimateTokens(input) +
+    estimateTokens(projectRules);
+  const contextRatio = Math.min(1, contextUsed / contextLimit);
+  const contextTone =
+    contextRatio > 0.85
+      ? "var(--danger, #B42318)"
+      : contextRatio > 0.65
+      ? "#A15C00"
+      : "var(--accent)";
   const [conversations, setConversations] = useState<Conversation[]>(() =>
     loadConversations()
   );
@@ -1332,35 +1482,75 @@ export function AiPanel({
   }, [historyOpen]);
 
   useEffect(() => {
+    localStorage.setItem(`klide.model.${provider}`, model);
+  }, [model, provider]);
+
+  useEffect(() => {
     let cancelled = false;
-    async function loadOllamaModels() {
+    async function loadProviderModels() {
       try {
-        const res = await fetch("http://localhost:11434/api/tags");
-        if (!res.ok) {
-          setConnected(false);
-          return;
-        }
-        if (!cancelled) setConnected(true);
-        const data = await res.json();
-        const names = Array.isArray(data.models)
-          ? data.models
-              .map((m: { name?: string }) => m.name)
-              .filter((name: unknown): name is string => typeof name === "string")
-          : [];
-        if (!cancelled && names.length > 0) {
-          onAvailableModelsChange(names);
-          if (!names.includes(model)) onModelChange(names[0]);
-        }
+        const names = await invoke<string[]>("ai_provider_models", { provider });
+        if (cancelled) return;
+        setConnected(true);
+        const next = names.length > 0 ? names : [DEFAULT_MODELS[provider]];
+        onAvailableModelsChange(next);
+        if (!next.includes(model)) onModelChange(next[0]);
       } catch {
-        if (!cancelled) setConnected(false);
-        /* Ollama may be offline; keep the configured fallback model. */
+        if (cancelled) return;
+        setConnected(false);
+        const fallback = localStorage.getItem(`klide.model.${provider}`) || DEFAULT_MODELS[provider];
+        onAvailableModelsChange([fallback]);
+        if (model !== fallback) onModelChange(fallback);
       }
     }
-    loadOllamaModels();
+    void loadProviderModels();
     return () => {
       cancelled = true;
     };
-  }, [model, onAvailableModelsChange, onModelChange]);
+  }, [provider, model, onAvailableModelsChange, onModelChange]);
+
+  // Ask the backend whether the selected model/provider can call tools. Ollama
+  // checks the local model capabilities; OpenAI-compatible providers are wired
+  // as tool-capable and errors are handled at request time.
+  useEffect(() => {
+    let cancelled = false;
+    async function checkToolSupport() {
+      try {
+        const supports = await invoke<boolean>("ai_model_supports_tools", {
+          provider,
+          model,
+        });
+        if (!cancelled) setModelSupportsTools(supports);
+      } catch {
+        if (!cancelled) setModelSupportsTools(provider !== "ollama");
+      }
+    }
+    void checkToolSupport();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, model]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadContextWindow() {
+      try {
+        const windowSize = await invoke<number>("ai_context_window", {
+          provider,
+          model,
+        });
+        if (!cancelled && Number.isFinite(windowSize) && windowSize > 0) {
+          setContextLimit(windowSize);
+        }
+      } catch {
+        if (!cancelled) setContextLimit(128_000);
+      }
+    }
+    void loadContextWindow();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, model]);
 
   async function streamOnce(
     history: Msg[],
@@ -1377,60 +1567,73 @@ export function AiPanel({
       ),
     };
 
-    const res = await fetch("http://localhost:11434/api/chat", {
-      method: "POST",
-      body: JSON.stringify({
-        model,
-        messages: [sys, ...history].map(toOllamaMessage),
-        tools: toolsForMode(mode),
-        stream: true,
-      }),
-    });
-    if (!res.ok || !res.body) throw new Error(`Ollama returned ${res.status}`);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    let text = "";
-    const toolCalls: ToolCall[] = [];
-
-    const handleLine = (line: string) => {
-      if (!line.trim()) return;
-      try {
-        const j = JSON.parse(line);
-        text += j.message?.content ?? "";
-        const newCalls = parseToolCallsFromChunk(j.message?.tool_calls);
-        if (newCalls.length) toolCalls.push(...newCalls);
-        setMsgs((cur) => {
-          const next = [...cur];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: text,
-            toolCalls: toolCalls.length ? [...toolCalls] : undefined,
-          };
-          return next;
-        });
-      } catch {
-        /* partial line */
-      }
+    // Live deltas stream back over a per-request Channel. We accumulate them
+    // here purely for the typing effect; the invoke() return below is the
+    // authoritative final state (it also carries the assembled tool calls).
+    let streamedRaw = ""; // visible content + any inline <think> fragments
+    let streamedThinking = ""; // provider's separate `thinking` field, if any
+    const onChunk = new Channel<{ content: string; thinking: string }>();
+    onChunk.onmessage = (chunk) => {
+      streamedRaw += chunk.content;
+      streamedThinking += chunk.thinking;
+      const { thinking: inline, content } = splitThinking(streamedRaw);
+      const thinking = [streamedThinking, inline].filter(Boolean).join("\n").trim();
+      setMsgs((cur) => {
+        const next = [...cur];
+        next[next.length - 1] = {
+          role: "assistant",
+          content,
+          thinking: thinking || undefined,
+        };
+        return next;
+      });
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) handleLine(line);
-    }
-    if (buf.trim()) handleLine(buf);
-    return { text, toolCalls };
+    const res = await invoke<{
+      content: string;
+      thinking?: string;
+      toolCalls?: unknown[];
+      tool_calls?: unknown[];
+    }>("ai_chat", {
+      provider,
+      model,
+      messages: [sys, ...history].map(toOllamaMessage),
+      // Models without tool support 400 if `tools` is present at all, so we
+      // omit the field entirely for them.
+      tools: modelSupportsTools ? toolsForMode(mode) : undefined,
+      workspaceRoot,
+      onChunk,
+    });
+
+    const raw = res.content || streamedRaw; // may contain inline <think> blocks
+    const toolCalls = parseToolCallsFromChunk(res.toolCalls ?? res.tool_calls);
+    const { thinking: inline, content } = splitThinking(raw);
+    // res.thinking is the full accumulated field; fall back to the streamed
+    // copy so we never double-count the same reasoning.
+    const nativeThinking = res.thinking?.trim() ? res.thinking : streamedThinking;
+    const thinking = [nativeThinking, inline].filter(Boolean).join("\n").trim();
+    setMsgs((cur) => {
+      const next = [...cur];
+      next[next.length - 1] = {
+        role: "assistant",
+        content,
+        thinking: thinking || undefined,
+        toolCalls: toolCalls.length ? [...toolCalls] : undefined,
+      };
+      return next;
+    });
+    // History keeps only the visible answer — reasoning isn't fed back to the model.
+    return { text: content, toolCalls };
   }
 
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
     if (!text.trim() || streaming) return;
-    const mode = opts?.mode ?? nextSendMode ?? agentMode;
+    // Models without tool support can still use the prompt-only Chat/Plan modes,
+    // but Goal requires edit tools.
+    const requestedMode = opts?.mode ?? nextSendMode ?? agentMode;
+    const mode: AgentMode =
+      !modelSupportsTools && requestedMode === "goal" ? "chat" : requestedMode;
 
     setInput("");
     setMention(null);
@@ -1476,7 +1679,12 @@ export function AiPanel({
             requireDiffReview,
             onFileWritten
           );
-          toolMsgs.push({ role: "tool", content: result, toolName: call.name });
+          toolMsgs.push({
+            role: "tool",
+            content: result,
+            toolName: call.name,
+            toolCallId: call.id,
+          });
         }
 
         setActivity("thinking");
@@ -1492,7 +1700,7 @@ export function AiPanel({
         const next = [...cur];
         next[next.length - 1] = {
           role: "assistant",
-          content: `⚠ ${(e as Error).message}. Is Ollama running?`,
+          content: `⚠ ${(e as Error).message}. Check ${providerName(provider)} connection and credentials.`,
         };
         return next;
       });
@@ -1533,6 +1741,38 @@ export function AiPanel({
     if (m.role === "assistant") {
       return (
         <>
+          {m.thinking && (
+            <details
+              open={!m.content}
+              style={{
+                marginBottom: 8,
+                borderLeft: "2px solid var(--border-strong)",
+                paddingLeft: 10,
+              }}
+            >
+              <summary
+                style={{
+                  color: "var(--fg-muted)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  userSelect: "none",
+                }}
+              >
+                {m.content ? "Thought process" : "Thinking…"}
+              </summary>
+              <div
+                style={{
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                  color: "var(--fg-muted)",
+                  whiteSpace: "pre-wrap",
+                  margin: "6px 0 0",
+                }}
+              >
+                {m.thinking}
+              </div>
+            </details>
+          )}
           {m.content && (
             <div style={{ marginBottom: m.toolCalls ? 6 : 0 }}>
               {renderMarkdown(m.content)}
@@ -1609,7 +1849,13 @@ export function AiPanel({
                 ? connected
                   ? "Ollama · connected"
                   : "Ollama · not reachable on localhost:11434"
-                : "Choose AI provider"
+                : provider === "claude-code" || provider === "codex" || provider === "gemini-cli"
+                ? connected
+                  ? `${providerName(provider)} · CLI available`
+                  : `${providerName(provider)} · check CLI install/auth`
+                : connected
+                ? `${providerName(provider)} · connected`
+                : `${providerName(provider)} · check API key`
             }
             aria-haspopup="menu"
             aria-expanded={providerOpen}
@@ -2096,7 +2342,7 @@ export function AiPanel({
             </div>
             <div style={{ fontSize: 12 }}>
               {workspaceRoot
-                ? "Read, reason, and propose edits with your local Ollama model."
+                ? `Read, reason, and propose edits with ${providerName(provider)}.`
                 : "Open a folder to enable local agent mode."}
             </div>
           </div>
@@ -2108,6 +2354,7 @@ export function AiPanel({
             isLast &&
             m.role === "assistant" &&
             m.content === "" &&
+            !m.thinking &&
             !m.toolCalls;
           const isStreamingActive =
             streaming && isLast && m.role === "assistant" && m.content !== "";
@@ -2435,7 +2682,7 @@ export function AiPanel({
                 e.preventDefault();
                 send();
               } else if (e.key === "Tab") {
-                // OpenCode muscle memory: Tab flips Plan ⇄ Build.
+                // OpenCode muscle memory: Tab cycles Chat -> Plan -> Goal.
                 e.preventDefault();
                 toggleMode();
               }
@@ -2477,69 +2724,198 @@ export function AiPanel({
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-            <button
-              onClick={toggleMode}
-              disabled={streaming}
-              title="Plan investigates and proposes; Build edits files. Press Tab to switch."
-              aria-label={`Agent mode: ${nextSendMode ?? agentMode}. Click or press Tab to switch.`}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                height: 24,
-                padding: "0 9px",
-                flexShrink: 0,
-                borderRadius: 999,
-                border: "1px solid var(--border-strong)",
-                background: "transparent",
-                color: "var(--fg-subtle)",
-                fontSize: 11,
-                fontWeight: 500,
-                letterSpacing: "0.01em",
-                cursor: streaming ? "default" : "pointer",
-                transition:
-                  "color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
-              }}
-              onMouseEnter={(e) => {
-                if (!streaming) e.currentTarget.style.color = "var(--fg-strong)";
-              }}
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.color = "var(--fg-subtle)")
-              }
-            >
-              <span
+              <div
+                ref={modeRef}
                 style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
+                  position: "relative",
                   flexShrink: 0,
-                  background:
-                    (nextSendMode ?? agentMode) === "build"
-                      ? "var(--accent)"
-                      : "var(--fg-dim)",
-                  transition: "background var(--motion-med) var(--ease-out)",
                 }}
-              />
-              {(nextSendMode ?? agentMode) === "build" ? "Build" : "Plan"}
-            </button>
-            <div
-              style={{
-                position: "relative",
-                display: "flex",
-                alignItems: "center",
-                minWidth: 0,
-              }}
-            >
+              >
+                {(() => {
+                  const activeMode = nextSendMode ?? agentMode;
+                  const effectiveMode =
+                    !modelSupportsTools && activeMode === "goal" ? "chat" : activeMode;
+                  const activeOption =
+                    MODE_OPTIONS.find((option) => option.id === effectiveMode) ??
+                    MODE_OPTIONS[0];
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!streaming) setModeOpen((open) => !open);
+                        }}
+                        disabled={streaming}
+                        title={`${activeOption.title} Click to choose Chat, Plan, or Goal. Press Tab to cycle.`}
+                        aria-haspopup="menu"
+                        aria-expanded={modeOpen}
+                        aria-label={`AI mode: ${activeOption.label}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          height: 24,
+                          minWidth: 66,
+                          padding: "0 8px",
+                          borderRadius: 999,
+                          border: "1px solid var(--border-strong)",
+                          background: modeOpen
+                            ? "var(--bg-hover)"
+                            : "color-mix(in srgb, var(--panel) 88%, transparent)",
+                          boxShadow: modeOpen
+                            ? "0 6px 18px rgba(38, 38, 32, 0.10)"
+                            : "inset 0 1px 0 rgba(255,255,255,0.05)",
+                          color: modeOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
+                          fontSize: 11,
+                          fontWeight: 560,
+                          letterSpacing: 0,
+                          cursor: streaming ? "default" : "pointer",
+                          transition:
+                            "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!streaming) e.currentTarget.style.color = "var(--fg-strong)";
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!modeOpen) e.currentTarget.style.color = "var(--fg-subtle)";
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: "50%",
+                            background:
+                              effectiveMode === "goal"
+                                ? "var(--accent)"
+                                : effectiveMode === "plan"
+                                ? "#A15C00"
+                                : "var(--fg-dim)",
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span>{activeOption.label}</span>
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                          style={{
+                            opacity: 0.65,
+                            transform: modeOpen ? "rotate(180deg)" : "none",
+                            transition: "transform var(--motion-fast) var(--ease-out)",
+                          }}
+                        >
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
+                      </button>
+                      {modeOpen && (
+                        <div
+                          role="menu"
+                          aria-label="AI mode"
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            bottom: "calc(100% + 8px)",
+                            width: 132,
+                            padding: 4,
+                            borderRadius: "var(--radius-md)",
+                            border: "1px solid var(--border-strong)",
+                            background: "var(--bg-elevated)",
+                            boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)",
+                            zIndex: 20,
+                          }}
+                        >
+                          {MODE_OPTIONS.map((option) => {
+                            const disabled =
+                              option.id === "goal" && !modelSupportsTools;
+                            const active = option.id === effectiveMode;
+                            return (
+                              <button
+                                key={option.id}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={active}
+                                disabled={disabled}
+                                onClick={() => {
+                                  if (!disabled) selectMode(option.id);
+                                }}
+                                title={
+                                  disabled
+                                    ? `${model} cannot use edit tools.`
+                                    : option.title
+                                }
+                                style={{
+                                  width: "100%",
+                                  height: 28,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 8,
+                                  padding: "0 8px",
+                                  border: "none",
+                                  borderRadius: "var(--radius-sm)",
+                                  background: active ? "var(--bg-hover)" : "transparent",
+                                  color: disabled
+                                    ? "var(--fg-dim)"
+                                    : active
+                                    ? "var(--fg-strong)"
+                                    : "var(--fg-subtle)",
+                                  font: "inherit",
+                                  fontSize: 12,
+                                  cursor: disabled ? "default" : "pointer",
+                                }}
+                              >
+                                <span>{option.label}</span>
+                                {active && (
+                                  <svg
+                                    width="12"
+                                    height="12"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="var(--accent)"
+                                    strokeWidth="2.4"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    aria-hidden="true"
+                                  >
+                                    <path d="M20 6 9 17l-5-5" />
+                                  </svg>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+              <div
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  width: 118,
+                  flex: "0 1 118px",
+                  minWidth: 72,
+                }}
+              >
               <select
                 value={model}
                 onChange={(e) => onModelChange(e.target.value)}
                 disabled={streaming}
-                title="Select an Ollama model"
+                title={`Select a ${providerName(provider)} model`}
                 style={{
                   appearance: "none",
                   WebkitAppearance: "none",
                   MozAppearance: "none",
-                  maxWidth: 180,
+                  width: "100%",
                   height: 24,
                   color: "var(--fg-subtle)",
                   background: "transparent",
@@ -2551,6 +2927,8 @@ export function AiPanel({
                   padding: "0 18px 0 6px",
                   cursor: streaming ? "default" : "pointer",
                   textOverflow: "ellipsis",
+                  overflow: "hidden",
+                  whiteSpace: "nowrap",
                   transition: "color var(--motion-fast) var(--ease-out)",
                 }}
                 onMouseEnter={(e) => {
@@ -2587,6 +2965,122 @@ export function AiPanel({
                 <path d="M6 9l6 6 6-6" />
               </svg>
             </div>
+            <button
+              type="button"
+              aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
+              style={{
+                width: 28,
+                height: 28,
+                flexShrink: 0,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: "50%",
+                background: contextHover ? "var(--bg-hover)" : "transparent",
+                color: contextTone,
+                cursor: "default",
+                position: "relative",
+                zIndex: 2,
+                transition:
+                  "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)",
+              }}
+              onMouseEnter={(e) => {
+                setContextHover(true);
+                e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                setContextHover(false);
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 22 22"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="11"
+                  cy="11"
+                  r="7.5"
+                  fill="none"
+                  stroke="var(--border)"
+                  strokeWidth="1.6"
+                />
+                <circle
+                  cx="11"
+                  cy="11"
+                  r="7.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  pathLength="100"
+                  strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`}
+                  transform="rotate(-90 11 11)"
+                  style={{
+                    transition:
+                      "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)",
+                  }}
+                />
+              </svg>
+              {contextHover && (
+                <div
+                  role="tooltip"
+                  style={{
+                    position: "absolute",
+                    right: -2,
+                    bottom: "calc(100% + 8px)",
+                    width: 218,
+                    padding: "10px 11px",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--border-strong)",
+                    background: "var(--bg-elevated)",
+                    boxShadow: "0 10px 30px rgba(38, 38, 32, 0.16)",
+                    color: "var(--fg)",
+                    textAlign: "left",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <span style={{ color: "var(--fg-strong)", fontSize: 12, fontWeight: 600 }}>
+                      Context
+                    </span>
+                    <span style={{ color: contextTone, fontSize: 12, fontWeight: 600 }}>
+                      {Math.round(contextRatio * 100)}%
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      height: 4,
+                      borderRadius: 999,
+                      background: "var(--bg-hover)",
+                      overflow: "hidden",
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(2, contextRatio * 100)}%`,
+                        height: "100%",
+                        borderRadius: 999,
+                        background: contextTone,
+                      }}
+                    />
+                  </div>
+                  <div style={{ color: "var(--fg-subtle)", fontSize: 11, lineHeight: 1.45 }}>
+                    {contextUsed.toLocaleString()} / {contextLimit.toLocaleString()} tokens
+                  </div>
+                </div>
+              )}
+            </button>
             </div>
             <button
               onClick={() => send()}

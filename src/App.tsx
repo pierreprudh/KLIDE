@@ -185,7 +185,10 @@ function App() {
     readBoolSetting("klide-editor-minimap", true)
   );
   const [aiModel, setAiModel] = useState(
-    () => localStorage.getItem("klide-ollama-model") || DEFAULT_AI_MODEL
+    () =>
+      localStorage.getItem("klide-ai-model") ||
+      localStorage.getItem("klide-ollama-model") ||
+      DEFAULT_AI_MODEL
   );
   const [ollamaModels, setOllamaModels] = useState<string[]>([aiModel]);
   const [requireDiffReview, setRequireDiffReview] = useState(() =>
@@ -605,7 +608,7 @@ function App() {
   }, [editorMinimap]);
 
   useEffect(() => {
-    localStorage.setItem("klide-ollama-model", aiModel);
+    localStorage.setItem("klide-ai-model", aiModel);
   }, [aiModel]);
 
   useEffect(() => {

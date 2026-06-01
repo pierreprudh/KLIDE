@@ -1,4 +1,5 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
@@ -21,6 +22,8 @@ type SectionId =
   | "appearance"
   | "layout"
   | "ai"
+  | "api"
+  | "subscription"
   | "editor"
   | "terminal";
 
@@ -60,11 +63,50 @@ type Props = {
   onBack: () => void;
 };
 
+type SubscriptionProviderId = "claude-code" | "codex" | "gemini-cli";
+
+type SubscriptionStatus = {
+  provider: SubscriptionProviderId;
+  installed: boolean;
+  connected: boolean;
+  detail: string;
+  commandPath?: string | null;
+  loginOptions: string[];
+};
+
+const subscriptionProviders: {
+  id: SubscriptionProviderId;
+  title: string;
+  command: string;
+  description: string;
+}[] = [
+  {
+    id: "claude-code",
+    title: "Claude Code",
+    command: "claude",
+    description: "Subscription login, Console login, SSO, or long-lived setup token.",
+  },
+  {
+    id: "codex",
+    title: "Codex",
+    command: "codex",
+    description: "ChatGPT login, device auth, API key, or access token.",
+  },
+  {
+    id: "gemini-cli",
+    title: "Gemini CLI",
+    command: "gemini",
+    description: "Staged until the Gemini CLI is installed and its command shape is wired.",
+  },
+];
+
 const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "general", label: "General", icon: <GearIcon /> },
   { id: "appearance", label: "Appearance", icon: <SunIcon /> },
   { id: "layout", label: "Layout", icon: <GridIcon /> },
   { id: "ai", label: "AI Assistant", icon: <SparkIcon /> },
+  { id: "api", label: "API", icon: <KeyIcon /> },
+  { id: "subscription", label: "Subscription", icon: <CloudIcon /> },
   { id: "editor", label: "Editor", icon: <CodeIcon /> },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon /> },
 ];
@@ -432,6 +474,242 @@ function GhostButton({
   );
 }
 
+function LinkButton({
+  children,
+  onClick,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        height: 32,
+        padding: "0 12px",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border-strong)",
+        background: "var(--bg-hover)",
+        color: "var(--fg-strong)",
+        fontSize: 13,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CodePill({ children }: { children: ReactNode }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        minHeight: 28,
+        padding: "0 10px",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        background: "var(--bg-hover)",
+        color: "var(--fg-strong)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 12,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function StatusPill({
+  tone,
+  children,
+}: {
+  tone: "ok" | "warn" | "idle";
+  children: ReactNode;
+}) {
+  const color =
+    tone === "ok" ? "var(--accent)" : tone === "warn" ? "#A15C00" : "var(--fg-subtle)";
+  const background =
+    tone === "ok"
+      ? "var(--accent-soft)"
+      : tone === "warn"
+      ? "color-mix(in srgb, #A15C00 12%, var(--bg-hover))"
+      : "var(--bg-hover)";
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        minHeight: 28,
+        padding: "0 10px",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        background,
+        color,
+        fontSize: 12,
+        fontWeight: 500,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ModelChips({ models }: { models: string[] }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        justifyContent: "flex-end",
+        gap: 6,
+        maxWidth: 420,
+      }}
+    >
+      {models.map((model) => (
+        <CodePill key={model}>{model}</CodePill>
+      ))}
+    </div>
+  );
+}
+
+// API providers whose keys live in the OS keychain (managed from the API tab).
+const API_KEY_PROVIDERS: {
+  id: string;
+  title: string;
+  envVar: string;
+  placeholder: string;
+}[] = [
+  { id: "openai", title: "OpenAI", envVar: "OPENAI_API_KEY", placeholder: "sk-..." },
+  { id: "mistral", title: "Mistral", envVar: "MISTRAL_API_KEY", placeholder: "..." },
+  { id: "xai", title: "xAI Grok", envVar: "XAI_API_KEY", placeholder: "xai-..." },
+];
+
+type KeyStatus = { hasKey: boolean; source: "keychain" | "env" | "none" };
+
+// One provider's key control: shows where the key comes from (keychain / env /
+// none), lets you paste a new one (saved into the keychain via Rust), and clear
+// it. The key value never lives in React state once saved — only its status.
+function ApiKeyRow({
+  id,
+  title,
+  envVar,
+  placeholder,
+}: {
+  id: string;
+  title: string;
+  envVar: string;
+  placeholder: string;
+}) {
+  const [status, setStatus] = useState<KeyStatus>({ hasKey: false, source: "none" });
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await invoke<KeyStatus>("ai_provider_key_status", {
+        provider: id,
+      });
+      setStatus(next);
+    } catch {
+      setStatus({ hasKey: false, source: "none" });
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function save() {
+    if (!value.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("ai_set_provider_key", { provider: id, key: value });
+      setValue("");
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("ai_clear_provider_key", { provider: id });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const pill =
+    status.source === "keychain" ? (
+      <StatusPill tone="ok">Saved</StatusPill>
+    ) : status.source === "env" ? (
+      <StatusPill tone="warn">From env</StatusPill>
+    ) : (
+      <StatusPill tone="idle">Not set</StatusPill>
+    );
+
+  const description = error
+    ? error
+    : status.source === "keychain"
+    ? "Stored securely in your macOS Keychain."
+    : status.source === "env"
+    ? `Using ${envVar} from the environment. Save here to move it into the Keychain (survives a packaged build).`
+    : `Paste a key to store it in your macOS Keychain, or export ${envVar}.`;
+
+  return (
+    <Row
+      title={title}
+      description={description}
+      control={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {pill}
+          <input
+            type="password"
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void save();
+            }}
+            aria-label={`${title} API key`}
+            autoComplete="off"
+            style={{
+              width: 190,
+              height: 34,
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)",
+              background: "var(--bg-hover)",
+              color: "var(--fg-strong)",
+              font: "inherit",
+              padding: "0 12px",
+            }}
+          />
+          <LinkButton onClick={() => void save()}>
+            {busy ? "..." : "Save"}
+          </LinkButton>
+          {status.source === "keychain" && (
+            <GhostButton onClick={() => void clear()}>Clear</GhostButton>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
 function RegionEditor({
   title,
   axisHint,
@@ -509,6 +787,13 @@ export function SettingsPanel({
   );
   const [draft, setDraft] = useState(() => emptyDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [subscriptionStatuses, setSubscriptionStatuses] = useState<
+    Partial<Record<SubscriptionProviderId, SubscriptionStatus>>
+  >({});
+  const [subscriptionModels, setSubscriptionModels] = useState<
+    Partial<Record<SubscriptionProviderId, string[]>>
+  >({});
+  const [connectionLoading, setConnectionLoading] = useState(false);
 
   const sectionTitle = useMemo(
     () => sections.find((section) => section.id === activeSection)?.label ?? "Settings",
@@ -563,6 +848,46 @@ export function SettingsPanel({
     onCustomLayoutsChange(customLayouts.filter((preset) => preset.id !== id));
     if (editingId === id) resetBuilder();
   }
+
+  async function refreshSubscriptionConnections() {
+    setConnectionLoading(true);
+    const entries = await Promise.all(
+      subscriptionProviders.map(async (provider) => {
+        const [statusResult, modelsResult] = await Promise.allSettled([
+          invoke<SubscriptionStatus>("ai_subscription_status", {
+            provider: provider.id,
+          }),
+          invoke<string[]>("ai_provider_models", { provider: provider.id }),
+        ]);
+        return {
+          id: provider.id,
+          status:
+            statusResult.status === "fulfilled"
+              ? statusResult.value
+              : {
+                  provider: provider.id,
+                  installed: false,
+                  connected: false,
+                  detail: String(statusResult.reason),
+                  commandPath: null,
+                  loginOptions: [],
+                },
+          models: modelsResult.status === "fulfilled" ? modelsResult.value : [],
+        };
+      })
+    );
+    setSubscriptionStatuses(
+      Object.fromEntries(entries.map((entry) => [entry.id, entry.status]))
+    );
+    setSubscriptionModels(
+      Object.fromEntries(entries.map((entry) => [entry.id, entry.models]))
+    );
+    setConnectionLoading(false);
+  }
+
+  useEffect(() => {
+    void refreshSubscriptionConnections();
+  }, []);
 
   return (
     <main
@@ -985,6 +1310,157 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              <SettingBlock title="Connections">
+                <Panel>
+                  <Row
+                    title="API providers"
+                    description="OpenAI, Mistral, and xAI keys are read by the Tauri backend."
+                    control={
+                      <LinkButton onClick={() => setActiveSection("api")}>
+                        Open API
+                      </LinkButton>
+                    }
+                  />
+                  <Row
+                    title="Subscription providers"
+                    description="Claude Code and Codex use your local CLI login."
+                    control={
+                      <LinkButton onClick={() => setActiveSection("subscription")}>
+                        Open Subscription
+                      </LinkButton>
+                    }
+                  />
+                </Panel>
+              </SettingBlock>
+            </>
+          )}
+
+          {activeSection === "api" && (
+            <>
+              <SettingBlock title="API Keys">
+                <Panel>
+                  {API_KEY_PROVIDERS.map((provider) => (
+                    <ApiKeyRow
+                      key={provider.id}
+                      id={provider.id}
+                      title={provider.title}
+                      envVar={provider.envVar}
+                      placeholder={provider.placeholder}
+                    />
+                  ))}
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Notes">
+                <Panel>
+                  <Row
+                    title="Secret boundary"
+                    description="Keys are stored in the OS keychain and read only by Rust — they never enter the React webview."
+                    control={<CodePill>src-tauri</CodePill>}
+                  />
+                  <Row
+                    title="Tool support"
+                    description="These providers use the OpenAI-compatible chat and function-calling adapter."
+                    control={<CodePill>Build</CodePill>}
+                  />
+                </Panel>
+              </SettingBlock>
+            </>
+          )}
+
+          {activeSection === "subscription" && (
+            <>
+              <SettingBlock title="Subscription Connections">
+                <Panel>
+                  {subscriptionProviders.map((provider) => {
+                    const status = subscriptionStatuses[provider.id];
+                    const tone = status?.connected
+                      ? "ok"
+                      : status?.installed
+                      ? "warn"
+                      : "idle";
+                    const label = status?.connected
+                      ? "Connected"
+                      : status?.installed
+                      ? "Installed"
+                      : "Missing";
+                    return (
+                      <Row
+                        key={provider.id}
+                        title={provider.title}
+                        description={status?.detail || provider.description}
+                        control={<StatusPill tone={tone}>{label}</StatusPill>}
+                      />
+                    );
+                  })}
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Connection Options">
+                <Panel>
+                  {subscriptionProviders.map((provider) => {
+                    const status = subscriptionStatuses[provider.id];
+                    const options = status?.loginOptions.length
+                      ? status.loginOptions
+                      : [`${provider.command} login`];
+                    return (
+                      <Row
+                        key={provider.id}
+                        title={provider.title}
+                        description={
+                          status?.commandPath
+                            ? `CLI path: ${status.commandPath}`
+                            : provider.description
+                        }
+                        control={<ModelChips models={options} />}
+                      />
+                    );
+                  })}
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Model Options">
+                <Panel>
+                  {subscriptionProviders.map((provider) => {
+                    const models = subscriptionModels[provider.id] ?? [];
+                    return (
+                      <Row
+                        key={provider.id}
+                        title={provider.title}
+                        description={
+                          provider.id === "claude-code"
+                            ? "Loaded from Claude Code's local model usage cache."
+                            : provider.id === "codex"
+                            ? "Loaded from the current Codex model cache when available."
+                            : "Shown for when Gemini CLI support is enabled."
+                        }
+                        control={
+                          models.length > 0 ? (
+                            <ModelChips models={models} />
+                          ) : (
+                            <StatusPill tone="idle">Unavailable</StatusPill>
+                          )
+                        }
+                      />
+                    );
+                  })}
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Mode">
+                <Panel>
+                  <Row
+                    title="Read-only bridge"
+                    description="Subscription CLIs can answer with your logged-in account without bypassing Klide diff review."
+                    control={<CodePill>Plan</CodePill>}
+                  />
+                  <Row
+                    title="Refresh status"
+                    description="Re-check CLI installation, login state, and cached model options."
+                    control={
+                      <LinkButton onClick={() => void refreshSubscriptionConnections()}>
+                        {connectionLoading ? "Checking..." : "Refresh"}
+                      </LinkButton>
+                    }
+                  />
+                </Panel>
+              </SettingBlock>
             </>
           )}
 
@@ -1135,6 +1611,25 @@ function SparkIcon() {
     <IconBase>
       <path d="M12 3.5l1.6 4.4L18 9.5l-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5z" />
       <path d="M18 16l.7 1.8 1.8.7-1.8.7L18 21l-.7-1.8-1.8-.7 1.8-.7L18 16z" />
+    </IconBase>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <IconBase>
+      <circle cx="8" cy="12" r="3.5" />
+      <path d="M11.5 12H21" />
+      <path d="M17 12v3" />
+      <path d="M14 12v2" />
+    </IconBase>
+  );
+}
+
+function CloudIcon() {
+  return (
+    <IconBase>
+      <path d="M7.5 18h9.2a4 4 0 0 0 .5-7.9 5.5 5.5 0 0 0-10.5 1.4A3.3 3.3 0 0 0 7.5 18z" />
     </IconBase>
   );
 }
