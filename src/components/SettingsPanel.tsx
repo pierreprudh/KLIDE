@@ -59,6 +59,7 @@ type Props = {
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
   onApplyLayout: (layout: ResolvedLayout) => void;
+  onProviderKeyChange?: (provider: string) => void;
   initialSection?: string | null;
   onBack: () => void;
 };
@@ -583,6 +584,7 @@ const API_KEY_PROVIDERS: {
   envVar: string;
   placeholder: string;
 }[] = [
+  { id: "anthropic", title: "Anthropic", envVar: "ANTHROPIC_API_KEY", placeholder: "sk-ant-..." },
   { id: "openai", title: "OpenAI", envVar: "OPENAI_API_KEY", placeholder: "sk-..." },
   { id: "mistral", title: "Mistral", envVar: "MISTRAL_API_KEY", placeholder: "..." },
   { id: "xai", title: "xAI Grok", envVar: "XAI_API_KEY", placeholder: "xai-..." },
@@ -598,11 +600,13 @@ function ApiKeyRow({
   title,
   envVar,
   placeholder,
+  onChange,
 }: {
   id: string;
   title: string;
   envVar: string;
   placeholder: string;
+  onChange?: (provider: string) => void;
 }) {
   const [status, setStatus] = useState<KeyStatus>({ hasKey: false, source: "none" });
   const [value, setValue] = useState("");
@@ -632,6 +636,7 @@ function ApiKeyRow({
       await invoke("ai_set_provider_key", { provider: id, key: value });
       setValue("");
       await refresh();
+      onChange?.(id);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -646,6 +651,7 @@ function ApiKeyRow({
     try {
       await invoke("ai_clear_provider_key", { provider: id });
       await refresh();
+      onChange?.(id);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -777,6 +783,7 @@ export function SettingsPanel({
   customLayouts,
   onCustomLayoutsChange,
   onApplyLayout,
+  onProviderKeyChange,
   initialSection,
   onBack,
 }: Props) {
@@ -1346,6 +1353,7 @@ export function SettingsPanel({
                       title={provider.title}
                       envVar={provider.envVar}
                       placeholder={provider.placeholder}
+                      onChange={onProviderKeyChange}
                     />
                   ))}
                 </Panel>

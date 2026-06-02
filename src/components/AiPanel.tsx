@@ -12,8 +12,20 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import { DiffModal, PendingEdit } from "./DiffModal";
 import { enabledSkillsPrompt, type Skill } from "../skills";
+import {
+  CONTEXT_MODE_LABELS,
+  estimateProjectContextTokens,
+  lensItemsForPrompt,
+  type ProjectContextItem,
+  type ProjectContextMode,
+  type ProjectContextSnapshot,
+} from "../contextTray";
 
 type ToolCall = { id?: string; name: string; args: any };
 
@@ -21,14 +33,25 @@ type ToolCall = { id?: string; name: string; args: any };
 // rendered as inline "@path" text — the contents ride along to the model via
 // toOllamaMessage, so the chat bubble stays clean.
 type Attachment = { path: string; content: string };
+type ProjectContextPayload = {
+  mode: ProjectContextMode;
+  items: ProjectContextItem[];
+};
 
 type Msg =
-  | { role: "user"; content: string; attachments?: Attachment[] }
+  | {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      projectContext?: ProjectContextPayload;
+    }
   | {
       role: "assistant";
       content: string;
       toolCalls?: ToolCall[];
       thinking?: string;
+      delegateConsole?: boolean;
+      delegateProvider?: string;
     }
   | { role: "system"; content: string }
   | { role: "tool"; content: string; toolName: string; toolCallId?: string };
@@ -36,6 +59,7 @@ type Msg =
 type Props = {
   workspaceRoot: string | null;
   onFileWritten?: (path: string, newContent: string) => void;
+  onWorkspaceChanged?: () => void;
   visible: boolean;
   width: number;
   fill?: boolean;
@@ -43,9 +67,11 @@ type Props = {
   onModelChange: (model: string) => void;
   availableModels: string[];
   onAvailableModelsChange: (models: string[]) => void;
+  apiKeyVersion?: number;
   requireDiffReview: boolean;
   stopAfterRejection: boolean;
   skills: Skill[];
+  projectContext?: ProjectContextSnapshot | null;
   onDuplicate?: () => void;
   onClose?: () => void;
 };
@@ -216,7 +242,7 @@ const PROVIDER_GROUPS: ProviderGroup[] = [
   {
     label: "API",
     items: [
-      { id: "anthropic", name: "Anthropic", available: false },
+      { id: "anthropic", name: "Anthropic", available: true },
       { id: "openai", name: "OpenAI", available: true },
       { id: "gemini", name: "Google Gemini", available: false },
       { id: "mistral", name: "Mistral", available: true },
@@ -231,6 +257,14 @@ function providerName(id: ProviderId): string {
   return ALL_PROVIDERS.find((p) => p.id === id)?.name ?? "Ollama";
 }
 
+function isDelegateProvider(id: ProviderId): boolean {
+  return id === "claude-code" || id === "codex" || id === "gemini-cli";
+}
+
+function cssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 const DEFAULT_MODELS: Record<ProviderId, string> = {
   ollama: "llama3.1:8b",
   lmstudio: "local-model",
@@ -239,7 +273,7 @@ const DEFAULT_MODELS: Record<ProviderId, string> = {
   "claude-code": "claude-sonnet-4-6",
   codex: "gpt-5",
   "gemini-cli": "gemini-cli",
-  anthropic: "claude-sonnet-4-5",
+  anthropic: "claude-sonnet-4-6",
   openai: "gpt-4.1",
   gemini: "gemini-2.5-pro",
   mistral: "mistral-large-latest",
@@ -347,7 +381,7 @@ CHAT MODE is active. You have no tools. Answer conversationally from the context
 PLAN MODE is active. You have ONLY read-only tools (read_file, list_dir) and CANNOT edit files. Investigate as needed and answer the user's question directly. If — and only if — the user asked you to make code changes, do NOT edit: present a clear, numbered implementation plan (the files you'd touch and what each needs) and tell them to switch to Goal mode to apply it.`
       : `
 
-GOAL MODE is active. Work toward the user's requested outcome. Use read tools to understand the code and edit tools only when a concrete change is needed. Every edit is diff-reviewed by the user before it is written.`;
+GOAL MODE is active. Work toward the user's requested outcome as a coding operator. Keep your work concrete and visible: inspect first, make the smallest useful set of edits, and after tool work summarize what changed, what was applied or rejected, and what remains. Every edit is diff-reviewed by the user before it is written.`;
   return `You are Klide's coding assistant, embedded in a code editor.
 
 Workspace root: ${workspaceRoot}
@@ -484,13 +518,24 @@ function toOllamaMessage(m: Msg): any {
       tool_call_id: m.toolCallId ?? m.toolName,
     };
   }
-  if (m.role === "user" && m.attachments && m.attachments.length > 0) {
-    const ctx = m.attachments
-      .map((a) => `File: ${a.path}\n\`\`\`\n${a.content}\n\`\`\``)
-      .join("\n\n");
+  if (m.role === "user" && ((m.attachments && m.attachments.length > 0) || (m.projectContext && m.projectContext.items.length > 0))) {
+    const parts: string[] = [];
+    if (m.projectContext && m.projectContext.items.length > 0) {
+      parts.push(
+        `[Project context lens: ${CONTEXT_MODE_LABELS[m.projectContext.mode]}]\n${m.projectContext.items
+          .map((item) => `${item.label.toUpperCase()}: ${item.path}\n${item.detail}`)
+          .join("\n\n")}`
+      );
+    }
+    if (m.attachments && m.attachments.length > 0) {
+      const ctx = m.attachments
+        .map((a) => `File: ${a.path}\n\`\`\`\n${a.content}\n\`\`\``)
+        .join("\n\n");
+      parts.push(`[Files the user attached for context — read more with read_file if needed:]\n${ctx}`);
+    }
     return {
       role: "user",
-      content: `${m.content}\n\n[Files the user attached for context — read more with read_file if needed:]\n${ctx}`,
+      content: `${m.content}\n\n${parts.join("\n\n")}`,
     };
   }
   return { role: m.role, content: m.content };
@@ -628,6 +673,9 @@ function messageTokenEstimate(m: Msg): number {
         sum + estimateTokens(attachment.path) + estimateTokens(attachment.content),
       0
     );
+  }
+  if (m.role === "user" && m.projectContext) {
+    total += estimateProjectContextTokens(m.projectContext.items);
   }
   if (m.role === "assistant") {
     total += estimateTokens(m.thinking ?? "");
@@ -1071,9 +1119,199 @@ function DuplicateIcon() {
   );
 }
 
+function DelegateConsole({
+  provider,
+  output,
+  active,
+}: {
+  provider: string;
+  output: string;
+  active: boolean;
+}) {
+  const lines = output.trimEnd().split("\n").filter(Boolean);
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border-strong)",
+        borderRadius: "var(--radius-md)",
+        background: "color-mix(in srgb, var(--bg-elevated) 88%, #000 12%)",
+        boxShadow:
+          "inset 0 1px 0 var(--panel-highlight), 0 12px 34px rgba(38, 38, 32, 0.12)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          height: 34,
+          padding: "0 10px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          borderBottom: "1px solid var(--border)",
+          color: "var(--fg-subtle)",
+          fontSize: 11,
+        }}
+      >
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <span
+            aria-hidden
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: active ? "var(--accent)" : "var(--fg-dim)",
+              boxShadow: active ? "0 0 14px var(--accent)" : "none",
+            }}
+          />
+          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
+            Delegate Console
+          </span>
+          <span>{provider}</span>
+        </span>
+        <span>{active ? "Running" : "Finished"}</span>
+      </div>
+      <pre
+        style={{
+          margin: 0,
+          minHeight: 96,
+          maxHeight: 260,
+          overflow: "auto",
+          padding: "10px 11px",
+          color: "var(--fg)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 11.5,
+          lineHeight: 1.55,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {lines.length
+          ? lines.join("\n")
+          : active
+          ? "launching delegate agent..."
+          : "delegate finished without console output."}
+      </pre>
+    </div>
+  );
+}
+
+function DelegateTerminalSurface({
+  sessionId,
+  providerId,
+  provider,
+  workspaceRoot,
+}: {
+  sessionId: string;
+  providerId: ProviderId;
+  provider: string;
+  workspaceRoot: string | null;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const term = new Terminal({
+      fontSize: 11,
+      fontFamily:
+        "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
+      theme: {
+        background: cssVar("--terminal-bg"),
+        foreground: cssVar("--terminal-fg"),
+        cursor: cssVar("--terminal-cursor"),
+      },
+      cursorBlink: true,
+      scrollback: 5000,
+      convertEol: true,
+      disableStdin: false,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(ref.current);
+
+    const syncSize = () => {
+      fit.fit();
+      void invoke("delegate_pty_resize", {
+        sessionId,
+        rows: term.rows,
+        cols: term.cols,
+      });
+    };
+
+    void invoke("delegate_pty_spawn", {
+      sessionId,
+      provider: providerId,
+      workspaceRoot,
+    }).then(syncSize);
+    const unlisten = listen<{ sessionId: string; data: string }>(
+      "delegate-pty:data",
+      (e) => {
+        if (e.payload.sessionId === sessionId) term.write(e.payload.data);
+      }
+    );
+    term.onData((data) => {
+      void invoke("delegate_pty_write", { sessionId, data });
+    });
+
+    const resize = new ResizeObserver(syncSize);
+    resize.observe(ref.current);
+    requestAnimationFrame(syncSize);
+
+    return () => {
+      unlisten.then((u) => u());
+      resize.disconnect();
+      term.dispose();
+    };
+  }, [providerId, sessionId, workspaceRoot]);
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        background: "color-mix(in srgb, var(--terminal-bg) 94%, var(--bg))",
+      }}
+    >
+      <div
+        style={{
+          height: 38,
+          padding: "0 10px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          borderBottom: "1px solid var(--terminal-border)",
+          color: "var(--terminal-muted)",
+          fontSize: 11,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <ProviderLogo id={providerId} size={16} />
+          <span
+            style={{
+              color: "var(--terminal-fg)",
+              fontWeight: 650,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+            }}
+          >
+            {provider}
+          </span>
+        </span>
+        <span>Interactive PTY</span>
+      </div>
+      <div ref={ref} style={{ flex: 1, minHeight: 0, padding: 4 }} />
+    </div>
+  );
+}
+
 export function AiPanel({
   workspaceRoot,
   onFileWritten,
+  onWorkspaceChanged,
   visible,
   width,
   fill,
@@ -1081,9 +1319,11 @@ export function AiPanel({
   onModelChange,
   availableModels,
   onAvailableModelsChange,
+  apiKeyVersion = 0,
   requireDiffReview,
   stopAfterRejection,
   skills,
+  projectContext,
   onDuplicate,
   onClose,
 }: Props) {
@@ -1095,6 +1335,9 @@ export function AiPanel({
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
   const [contextLimit, setContextLimit] = useState(128_000);
+  const [contextMode, setContextMode] = useState<ProjectContextMode>(
+    () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
+  );
   const [connected, setConnected] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
@@ -1109,7 +1352,7 @@ export function AiPanel({
   const toggleMode = () => {
     setNextSendMode(null); // an explicit toggle overrides any one-shot override
     setAgentMode((m) => {
-      const order: AgentMode[] = modelSupportsTools
+      const order: AgentMode[] = modelSupportsTools || providerDelegatesWork
         ? ["chat", "plan", "goal"]
         : ["chat", "plan"];
       const next = order[(order.indexOf(m) + 1) % order.length] ?? "chat";
@@ -1148,6 +1391,7 @@ export function AiPanel({
   const [provider, setProvider] = useState<ProviderId>(
     () => (localStorage.getItem("klide.provider") as ProviderId) || "ollama"
   );
+  const providerDelegatesWork = isDelegateProvider(provider);
   const [providerOpen, setProviderOpen] = useState(false);
   const providerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1171,6 +1415,10 @@ export function AiPanel({
     onAvailableModelsChange([stored || DEFAULT_MODELS[id]]);
     setProviderOpen(false);
   }
+
+  useEffect(() => {
+    localStorage.setItem("klide.contextMode", contextMode);
+  }, [contextMode]);
 
   // Slash-command palette state.
   const [slash, setSlash] = useState<{ query: string } | null>(null);
@@ -1203,7 +1451,7 @@ export function AiPanel({
       name: "goal",
       desc: "Switch to Goal mode (can propose edits)",
       run: () => {
-        selectMode(modelSupportsTools ? "goal" : "plan");
+        selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan");
         setInput("");
       },
     },
@@ -1357,10 +1605,14 @@ export function AiPanel({
     }
     return out;
   }
+  const lensProjectContext = providerDelegatesWork
+    ? []
+    : lensItemsForPrompt(projectContext, input, contextMode);
   const contextUsed =
     msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0) +
     estimateTokens(input) +
-    estimateTokens(projectRules);
+    estimateTokens(projectRules) +
+    estimateProjectContextTokens(lensProjectContext);
   const contextRatio = Math.min(1, contextUsed / contextLimit);
   const contextTone =
     contextRatio > 0.85
@@ -1378,6 +1630,11 @@ export function AiPanel({
   const historyRef = useRef<HTMLDivElement>(null);
 
   function newConversation() {
+    if (providerDelegatesWork) {
+      void invoke("delegate_pty_stop", {
+        sessionId: `${currentId}:${provider}`,
+      });
+    }
     setHistoryOpen(false);
     setMsgs([]);
     setInput("");
@@ -1507,7 +1764,7 @@ export function AiPanel({
     return () => {
       cancelled = true;
     };
-  }, [provider, model, onAvailableModelsChange, onModelChange]);
+  }, [provider, model, apiKeyVersion, onAvailableModelsChange, onModelChange]);
 
   // Ask the backend whether the selected model/provider can call tools. Ollama
   // checks the local model capabilities; OpenAI-compatible providers are wired
@@ -1572,6 +1829,8 @@ export function AiPanel({
     // authoritative final state (it also carries the assembled tool calls).
     let streamedRaw = ""; // visible content + any inline <think> fragments
     let streamedThinking = ""; // provider's separate `thinking` field, if any
+    const delegateConsole = providerDelegatesWork;
+    const delegateProvider = providerName(provider);
     const onChunk = new Channel<{ content: string; thinking: string }>();
     onChunk.onmessage = (chunk) => {
       streamedRaw += chunk.content;
@@ -1584,6 +1843,8 @@ export function AiPanel({
           role: "assistant",
           content,
           thinking: thinking || undefined,
+          delegateConsole,
+          delegateProvider,
         };
         return next;
       });
@@ -1619,6 +1880,8 @@ export function AiPanel({
         content,
         thinking: thinking || undefined,
         toolCalls: toolCalls.length ? [...toolCalls] : undefined,
+        delegateConsole,
+        delegateProvider,
       };
       return next;
     });
@@ -1629,17 +1892,33 @@ export function AiPanel({
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
     if (!text.trim() || streaming) return;
+
+    if (providerDelegatesWork) {
+      setInput("");
+      setMention(null);
+      setSlash(null);
+      setNextSendMode(null);
+      await invoke("delegate_pty_write", {
+        sessionId: `${currentId}:${provider}`,
+        data: `${text}\r`,
+      });
+      return;
+    }
+
     // Models without tool support can still use the prompt-only Chat/Plan modes,
     // but Goal requires edit tools.
     const requestedMode = opts?.mode ?? nextSendMode ?? agentMode;
     const mode: AgentMode =
-      !modelSupportsTools && requestedMode === "goal" ? "chat" : requestedMode;
+      !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal"
+        ? "chat"
+        : requestedMode;
 
     setInput("");
     setMention(null);
     setSlash(null);
     setNextSendMode(null);
     const attachments = await collectAttachments(text);
+    const activeProjectContext = lensItemsForPrompt(projectContext, text, contextMode);
 
     let history: Msg[] = [
       ...msgs,
@@ -1647,8 +1926,17 @@ export function AiPanel({
         role: "user",
         content: text,
         attachments: attachments.length ? attachments : undefined,
+        projectContext:
+          activeProjectContext.length > 0
+            ? { mode: contextMode, items: activeProjectContext }
+            : undefined,
       },
-      { role: "assistant", content: "" },
+      {
+        role: "assistant",
+        content: "",
+        delegateConsole: providerDelegatesWork,
+        delegateProvider: providerName(provider),
+      },
     ];
     setMsgs(history);
     setStreaming(true);
@@ -1664,6 +1952,8 @@ export function AiPanel({
             role: "assistant",
             content: text,
             toolCalls: toolCalls.length ? toolCalls : undefined,
+            delegateConsole: providerDelegatesWork,
+            delegateProvider: providerName(provider),
           },
         ];
 
@@ -1707,9 +1997,10 @@ export function AiPanel({
     }
     setStreaming(false);
     setActivity(null);
+    if (providerDelegatesWork) onWorkspaceChanged?.();
   }
 
-  function renderMessageBody(m: Msg) {
+  function renderMessageBody(m: Msg, active = false) {
     if (m.role === "tool") {
       return (
         <details>
@@ -1739,6 +2030,16 @@ export function AiPanel({
     }
 
     if (m.role === "assistant") {
+      if (m.delegateConsole) {
+        return (
+          <DelegateConsole
+            provider={m.delegateProvider ?? "Delegate"}
+            output={m.content}
+            active={active}
+          />
+        );
+      }
+
       return (
         <>
           {m.thinking && (
@@ -1831,6 +2132,8 @@ export function AiPanel({
           justifyContent: "space-between",
           alignItems: "center",
           gap: 8,
+          position: "relative",
+          zIndex: 40,
         }}
       >
         <div
@@ -1938,10 +2241,13 @@ export function AiPanel({
                       padding: "6px 8px 3px",
                     }}
                   >
-                    {group.label}
+                    {group.label === "Subscription"
+                      ? "Subscription · Delegate"
+                      : group.label}
                   </div>
                   {group.items.map((item) => {
                     const active = item.id === provider;
+                    const delegates = isDelegateProvider(item.id);
                     return (
                       <button
                         key={item.id}
@@ -1998,6 +2304,22 @@ export function AiPanel({
                         >
                           {item.name}
                         </span>
+                        {item.available && delegates && (
+                          <span
+                            style={{
+                              fontSize: 9.5,
+                              fontWeight: 500,
+                              letterSpacing: "0.04em",
+                              textTransform: "uppercase",
+                              color: "var(--fg-subtle)",
+                              border: "1px solid var(--border)",
+                              borderRadius: 999,
+                              padding: "1px 6px",
+                            }}
+                          >
+                            Delegate
+                          </span>
+                        )}
                         {active && (
                           <svg
                             width="13"
@@ -2165,15 +2487,18 @@ export function AiPanel({
           {historyOpen && (
             <div
               className="floating-panel"
+              onWheel={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               style={{
                 position: "absolute",
                 top: "calc(100% + 6px)",
                 right: 0,
                 width: 264,
-                maxHeight: 340,
+                maxHeight: "min(340px, calc(100vh - 96px))",
                 overflow: "auto",
+                overscrollBehavior: "contain",
                 padding: 6,
-                zIndex: 20,
+                zIndex: 100,
               }}
             >
               {conversations.length === 0 ? (
@@ -2286,14 +2611,23 @@ export function AiPanel({
         ref={scrollRef}
         style={{
           flex: 1,
-          overflow: "auto",
-          padding: 12,
+          overflow: providerDelegatesWork ? "hidden" : "auto",
+          padding: providerDelegatesWork ? 0 : 12,
           fontSize: 13,
-          display: msgs.length === 0 ? "grid" : "block",
-          placeItems: msgs.length === 0 ? "center" : undefined,
+          display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block",
+          placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined,
           minHeight: 0,
         }}
       >
+        {providerDelegatesWork ? (
+          <DelegateTerminalSurface
+            sessionId={`${currentId}:${provider}`}
+            providerId={provider}
+            provider={providerName(provider)}
+            workspaceRoot={workspaceRoot}
+          />
+        ) : (
+          <>
         {msgs.length === 0 && (
           <div
             style={{
@@ -2342,7 +2676,9 @@ export function AiPanel({
             </div>
             <div style={{ fontSize: 12 }}>
               {workspaceRoot
-                ? `Read, reason, and propose edits with ${providerName(provider)}.`
+                ? providerDelegatesWork
+                  ? `Delegate workspace tasks to ${providerName(provider)}.`
+                  : `Read, reason, and propose edits with ${providerName(provider)}.`
                 : "Open a folder to enable local agent mode."}
             </div>
           </div>
@@ -2455,7 +2791,7 @@ export function AiPanel({
                   </span>
                 ) : (
                   <>
-                    {renderMessageBody(m)}
+                    {renderMessageBody(m, isStreamingActive)}
                     {isStreamingActive && <span className="ai-caret" />}
                   </>
                 )}
@@ -2463,8 +2799,11 @@ export function AiPanel({
             </div>
           );
         })}
+          </>
+        )}
       </div>
 
+      {!providerDelegatesWork && (
       <div style={{ padding: 10 }}>
         {(streaming || pending) && (
           <div
@@ -2480,6 +2819,89 @@ export function AiPanel({
           >
             {activity === "waiting" || pending ? <OrbitLoader /> : <BouncingDots />}
             <span>{activity === "waiting" || pending ? "Waiting for output" : "Thinking"}</span>
+          </div>
+        )}
+        {!providerDelegatesWork && projectContext && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: "7px 8px",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-md)",
+              background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
+              display: "grid",
+              gap: 6,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: "var(--fg-subtle)", fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 700 }}>
+                  Context Lens
+                </div>
+                <div style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {projectContext.selectedPath} - {lensProjectContext.length} inferred, ~{estimateProjectContextTokens(lensProjectContext).toLocaleString()} tokens
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setContextMode((mode) => (mode === "auto" ? "off" : "auto"))}
+                disabled={streaming}
+                title="Toggle automatic project context inference for the next chat turn"
+                style={{
+                  height: 26,
+                  minWidth: 72,
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  background: contextMode === "auto" ? "var(--accent-soft)" : "var(--bg)",
+                  color: contextMode === "auto" ? "var(--accent)" : "var(--fg-subtle)",
+                  font: "inherit",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "0 8px",
+                }}
+              >
+                {CONTEXT_MODE_LABELS[contextMode]}
+              </button>
+            </div>
+            {lensProjectContext.length > 0 && (
+              <div style={{ display: "grid", gap: 4 }}>
+                {lensProjectContext.slice(0, 4).map((item) => (
+                  <div
+                    key={item.id}
+                    title={item.detail}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "86px minmax(0, 1fr)",
+                      gap: 7,
+                      color: "var(--fg)",
+                      fontSize: 11,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--accent)",
+                        fontWeight: 700,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {item.path}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <div
@@ -2681,7 +3103,7 @@ export function AiPanel({
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();
-              } else if (e.key === "Tab") {
+              } else if (e.key === "Tab" && !providerDelegatesWork) {
                 // OpenCode muscle memory: Tab cycles Chat -> Plan -> Goal.
                 e.preventDefault();
                 toggleMode();
@@ -2724,17 +3146,41 @@ export function AiPanel({
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-              <div
-                ref={modeRef}
-                style={{
-                  position: "relative",
-                  flexShrink: 0,
-                }}
-              >
-                {(() => {
+              {providerDelegatesWork ? (
+                <div
+                  title={`Speaking to ${providerName(provider)} delegate`}
+                  style={{
+                    height: 24,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 8px",
+                    borderRadius: 999,
+                    border: "1px solid var(--border-strong)",
+                    background: "color-mix(in srgb, var(--panel) 88%, transparent)",
+                    color: "var(--fg-subtle)",
+                    fontSize: 11,
+                    fontWeight: 560,
+                    flexShrink: 0,
+                  }}
+                >
+                  <ProviderLogo id={provider} size={13} />
+                  <span>{providerName(provider)}</span>
+                </div>
+              ) : (
+                <div
+                  ref={modeRef}
+                  style={{
+                    position: "relative",
+                    flexShrink: 0,
+                  }}
+                >
+                  {(() => {
                   const activeMode = nextSendMode ?? agentMode;
                   const effectiveMode =
-                    !modelSupportsTools && activeMode === "goal" ? "chat" : activeMode;
+                    !modelSupportsTools && !providerDelegatesWork && activeMode === "goal"
+                      ? "chat"
+                      : activeMode;
                   const activeOption =
                     MODE_OPTIONS.find((option) => option.id === effectiveMode) ??
                     MODE_OPTIONS[0];
@@ -2833,7 +3279,9 @@ export function AiPanel({
                         >
                           {MODE_OPTIONS.map((option) => {
                             const disabled =
-                              option.id === "goal" && !modelSupportsTools;
+                              option.id === "goal" &&
+                              !modelSupportsTools &&
+                              !providerDelegatesWork;
                             const active = option.id === effectiveMode;
                             return (
                               <button
@@ -2895,7 +3343,8 @@ export function AiPanel({
                     </>
                   );
                 })()}
-              </div>
+                </div>
+              )}
               <div
                 style={{
                   position: "relative",
@@ -3114,6 +3563,7 @@ export function AiPanel({
           </div>
         </div>
       </div>
+      )}
     </aside>
     {pending && (
       <DiffModal

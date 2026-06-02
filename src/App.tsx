@@ -5,11 +5,14 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, watch, writeTextFile } from "@tauri-apps/plugin-fs";
 import { ActivityBar } from "./components/ActivityBar";
+import { MissionControl } from "./components/MissionControl";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea } from "./components/EditorArea";
+import { WelcomeScreen } from "./components/WelcomeScreen";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
@@ -31,9 +34,10 @@ import {
 } from "./layouts";
 import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts";
 import { GridWorkbench } from "./components/GridWorkbench";
+import type { ProjectContextSnapshot } from "./contextTray";
 import "./styles/tokens.css";
 
-type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "settings";
+type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
 type Tab = { path: string; code: string; dirty: boolean; externalChanged?: boolean };
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
@@ -117,7 +121,7 @@ function filename(path: string): string {
 }
 
 function App() {
-  const [view, setView] = useState<"workbench" | "settings">("workbench");
+  const [view, setView] = useState<"workbench" | "runs" | "settings">("workbench");
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
@@ -134,12 +138,26 @@ function App() {
     () => localStorage.getItem("klide-ai-visible") !== "false"
   );
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
+  const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
+  const [apiKeyVersion, setApiKeyVersion] = useState(0);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [activeGitDiff, setActiveGitDiff] = useState<GitDiff | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
+  const [recentFolders, setRecentFolders] = useState<string[]>(() => {
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem("klide.recentFolders") || "[]"
+      );
+      return Array.isArray(parsed)
+        ? parsed.filter((p): p is string => typeof p === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
   const [terminalVisible, setTerminalVisible] = useState(
     () => localStorage.getItem("klide-terminal-visible") === "true"
   );
@@ -209,12 +227,17 @@ function App() {
     skills: view === "workbench" && skillsVisible,
     settings: view === "settings",
     ai: view === "workbench" && aiVisible,
+    runs: view === "runs",
   };
 
   function togglePanel(panel: Panel) {
     if (panel === "settings") {
       setSettingsInitial(null);
       setView("settings");
+      return;
+    }
+    if (panel === "runs") {
+      setView("runs");
       return;
     }
     setView("workbench");
@@ -294,7 +317,6 @@ function App() {
               onChange={updateActiveCode}
               language={language ?? "plaintext"}
               hasFile={active !== null}
-              workspaceOpen={workspaceRoot !== null}
               theme={theme}
               fontSize={editorFontSize}
               lineNumbers={editorLineNumbers}
@@ -338,6 +360,8 @@ function App() {
             visible
             width={graphWidth}
             workspaceRoot={workspaceRoot}
+            activePath={active?.path ?? null}
+            onContextChange={setProjectContext}
           />
         );
       case "terminal":
@@ -361,13 +385,18 @@ function App() {
             width={aiWidth}
             workspaceRoot={workspaceRoot}
             onFileWritten={onAgentWrote}
+            onWorkspaceChanged={() =>
+              workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+            }
             model={aiModel}
             onModelChange={setAiModel}
             availableModels={ollamaModels}
             onAvailableModelsChange={setOllamaModels}
+            apiKeyVersion={apiKeyVersion}
             requireDiffReview={requireDiffReview}
             stopAfterRejection={stopAfterRejection}
             skills={skills}
+            projectContext={projectContext}
           />
         );
       default:
@@ -443,6 +472,23 @@ function App() {
     }
     setTabs([...tabs, { path: p, code: content, dirty: false, externalChanged: false }]);
     setActiveIdx(tabs.length);
+  }
+
+  function forgetFolder(path: string) {
+    setRecentFolders((prev) => {
+      const next = prev.filter((p) => p !== path);
+      try {
+        localStorage.setItem("klide.recentFolders", JSON.stringify(next));
+      } catch {
+        /* storage unavailable — skip */
+      }
+      return next;
+    });
+  }
+
+  async function openFolderDialog() {
+    const picked = await open({ directory: true });
+    if (typeof picked === "string") setWorkspaceRoot(picked);
   }
 
   function updateActiveCode(v: string) {
@@ -543,6 +589,10 @@ function App() {
   }, [activeGridId]);
 
   useEffect(() => {
+    setProjectContext(null);
+  }, [workspaceRoot]);
+
+  useEffect(() => {
     localStorage.setItem("klide-explorer-visible", String(explorerVisible));
   }, [explorerVisible]);
 
@@ -618,6 +668,21 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-stop-after-rejection", String(stopAfterRejection));
   }, [stopAfterRejection]);
+
+  // Record every opened workspace as most-recent — covers folders opened from
+  // the welcome screen, the sidebar, or restored sessions alike. Capped at 8.
+  useEffect(() => {
+    if (!workspaceRoot) return;
+    setRecentFolders((prev) => {
+      const next = [workspaceRoot, ...prev.filter((p) => p !== workspaceRoot)].slice(0, 8);
+      try {
+        localStorage.setItem("klide.recentFolders", JSON.stringify(next));
+      } catch {
+        /* storage unavailable — skip */
+      }
+      return next;
+    });
+  }, [workspaceRoot]);
 
   useEffect(() => {
     if (!workspaceRoot) {
@@ -713,12 +778,40 @@ function App() {
         e.preventDefault();
         setTerminalVisible((v) => !v);
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "o") {
+        e.preventDefault();
+        openFolderDialog();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [active, activeIdx, tabs]);
 
   const language = active ? detectLanguage(active.path) : null;
+
+  // Nothing open → a full-screen welcome page (no chrome at all). Settings stays
+  // reachable so API keys can be set up before a folder is ever opened.
+  if (view !== "settings" && !workspaceRoot) {
+    return (
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          borderTop: "1px solid var(--border-strong)",
+          background: "var(--bg)",
+        }}
+      >
+        <WelcomeScreen
+          recentFolders={recentFolders}
+          onOpenFolder={openFolderDialog}
+          onOpenRecent={setWorkspaceRoot}
+          onRemoveRecent={forgetFolder}
+          onOpenSettings={() => setView("settings")}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -765,12 +858,15 @@ function App() {
             customLayouts={customLayouts}
             onCustomLayoutsChange={updateCustomLayouts}
             onApplyLayout={applyLayout}
+            onProviderKeyChange={() => setApiKeyVersion((version) => version + 1)}
             onBack={() => setView("workbench")}
           />
         ) : (
           <>
             <ActivityBar active={activityState} onToggle={togglePanel} />
-            {activeGrid ? (
+            {view === "runs" ? (
+              <MissionControl />
+            ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : (
               <>
@@ -825,6 +921,8 @@ function App() {
               visible={graphVisible}
               width={graphWidth}
               workspaceRoot={workspaceRoot}
+              activePath={active?.path ?? null}
+              onContextChange={setProjectContext}
             />
             {graphVisible && (
               <ResizeHandle
@@ -864,7 +962,6 @@ function App() {
                   onChange={updateActiveCode}
                   language={language ?? "plaintext"}
                   hasFile={active !== null}
-                  workspaceOpen={workspaceRoot !== null}
                   theme={theme}
                   fontSize={editorFontSize}
                   lineNumbers={editorLineNumbers}
@@ -917,15 +1014,20 @@ function App() {
                 key={id}
                 workspaceRoot={workspaceRoot}
                 onFileWritten={onAgentWrote}
+                onWorkspaceChanged={() =>
+                  workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+                }
                 visible={aiVisible}
                 width={aiWidth}
                 model={aiModel}
                 onModelChange={setAiModel}
                 availableModels={ollamaModels}
                 onAvailableModelsChange={setOllamaModels}
+                apiKeyVersion={apiKeyVersion}
                 requireDiffReview={requireDiffReview}
                 stopAfterRejection={stopAfterRejection}
                 skills={skills}
+                projectContext={projectContext}
                 onDuplicate={duplicateAiPanel}
                 onClose={
                   aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined

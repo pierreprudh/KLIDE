@@ -535,6 +535,17 @@ input:focus-visible {
   }
 }
 
+/* Soft pulse for an actively-running agent's status dot (Mission Control) */
+@keyframes klide-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* Subtle scrollbars matching the quiet aesthetic */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

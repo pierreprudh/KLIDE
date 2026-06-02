@@ -2,7 +2,7 @@
 
 # Klide
 
-### Looks like a 2026 design tool. Works like VS Code.
+### A quiet agentic control surface for coding.
 
 Local models by default · online providers when you want them · a real terminal built in.
 
@@ -23,9 +23,9 @@ Local models by default · online providers when you want them · a real termina
 
 ---
 
-**Klide is a small, fast, AI-native code editor.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — and wraps it in a quiet, design-forward surface where every pixel is considered. Local models run out of the box, and the agent doesn't just chat: it reads your code, drafts a plan, and edits files behind a diff you approve. No Electron bloat, no busy chrome, no AI bolted on as an afterthought.
+**Klide is a small, fast, AI-native coding control surface.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — but the center of gravity is the agent loop: modes, context, diffs, skills, and workspace state are available when needed instead of always shouting for attention. Local models run out of the box, and the agent doesn't just chat: it reads your code, drafts a plan, and edits files behind a diff you approve. No Electron bloat, no busy chrome, no black-box autonomy.
 
-> **VS Code's structure · Linear's aesthetic · Cursor's AI fluency** — Tauri-light and local-model-first.
+> **VS Code's structure · Linear's aesthetic · agent harness transparency** — Tauri-light and local-model-first.
 
 ---
 
@@ -36,12 +36,12 @@ Most editors today fall into two camps:
 - **Heavy** — VS Code, JetBrains. Powerful, but busy chrome, slow cold start, AI bolted on after the fact.
 - **Niche** — Zed, Lapce, Helix. Beautiful and fast, but you give up the VS Code muscle memory.
 
-Klide aims for a third spot, and treats local models as a first-class option rather than a fallback. It's an opinionated IDE inspired by [Sinew](https://sinew-ide.com/), with a nod to [Cursor](https://cursor.com) and [Cline](https://cline.bot).
+Klide aims for a third spot: not the next Cursor, but a calm operator surface for code work where the agent can act, the risky parts are gated, and the UI stays quiet until you need deeper control. It's an opinionated IDE inspired by [Sinew](https://sinew-ide.com/), with a nod to [Ara](https://ara.so/), [Cursor](https://cursor.com), and [Cline](https://cline.bot).
 
 ## Principles
 
 1. **Visually minimalist, structurally complete** — the full VS Code layout, but quiet palette, generous whitespace, thin borders, restrained type.
-2. **AI is built in, not bolted on** — the agent reads, plans, and writes with diff review. Plan mode investigates; Build mode edits.
+2. **Agent control without clutter** — modes, tools, skills, context, task state, and diff review are reachable at the point of action, not permanently exposed.
 3. **Local first** — Ollama works out of the box; subscription and API providers are opt-in.
 4. **Fast cold start** — Tauri shell, ~10 MB binary, native webview.
 5. **Familiar muscle memory** — VS Code layout and keybindings where it makes sense.
@@ -81,10 +81,11 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 
 **AI panel**
 - **Streaming chat** — all providers stream token-by-token through a single Rust `ai_chat` command, so keys never enter the webview
-- **Multi-provider** — local Ollama, OpenAI-compatible APIs (OpenAI · Mistral · xAI), and read-only subscription CLIs (Claude Code · Codex), all behind one switcher
-- **Plan / Build modes** — Plan is read-only and proposes; Build edits files behind a diff you approve (`Tab` to switch)
+- **Multi-provider** — local Ollama, direct/API providers, and delegate subscription CLIs (Claude Code · Codex), all behind one switcher
+- **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits (`Tab` to switch)
+- **Quiet agent controls** — mode switching, provider selection, context pressure, history, skills, project rules, and diff review stay close to the work without becoming a dashboard
 - **`@`-mentions** — fuzzy-pick workspace files to attach as context
-- **Slash commands** — `/plan`, `/build`, `/clear`, `/explain`, `/init`
+- **Slash commands** — `/chat`, `/plan`, `/goal`, `/clear`, `/explain`, `/init`
 - **Keychain-stored keys** — API keys live in the OS keychain (env vars as fallback); managed from Settings → API
 - Auto-loads project rules from `AGENTS.md` / `CLAUDE.md`
 
@@ -107,8 +108,9 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] Provider switcher — Ollama, OpenAI-compatible APIs, and subscription CLIs all live
 - [x] Streaming through Rust for every provider
 - [x] API keys stored in the OS keychain, managed from Settings
-- [ ] Anthropic + Google Gemini direct APIs (need their own adapters)
-- [ ] Command palette · find-in-files · settings depth
+- [x] Quiet agent control surface with mode switching, provider choice, context pressure, skills, rules, history, and diff review
+- [ ] Verify Anthropic direct API end-to-end; add Google Gemini direct API
+- [ ] Command palette · find-in-files · editable harness settings · checkpoint rollback
 
 ## Build & run
 

@@ -1,4 +1,4 @@
-type View = "explorer" | "git" | "graph" | "skills" | "ai" | "settings";
+type View = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
 type Props = { active: Record<View, boolean>; onToggle: (v: View) => void };
 
 function FolderIcon() {
@@ -99,6 +99,27 @@ function SkillsIcon() {
   );
 }
 
+function MissionIcon() {
+  // Central agent + satellites on an orbit — "many runs, one control panel".
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="7.5" opacity="0.5" />
+      <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+      <circle cx="19.5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="7" cy="5" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg
@@ -131,6 +152,7 @@ export function ActivityBar({ active, onToggle }: Props) {
     { id: "graph" as const, label: "Project Graph", Icon: GraphIcon },
     { id: "skills" as const, label: "Skills", Icon: SkillsIcon },
     { id: "ai" as const, label: "AI", Icon: SparkIcon },
+    { id: "runs" as const, label: "Mission Control", Icon: MissionIcon },
     { id: "settings" as const, label: "Settings", Icon: SettingsIcon },
   ];
 
