@@ -207,6 +207,7 @@ type ProviderId =
   | "vllm"
   | "claude-code"
   | "codex"
+  | "opencode"
   | "gemini-cli"
   | "anthropic"
   | "openai"
@@ -236,6 +237,7 @@ const PROVIDER_GROUPS: ProviderGroup[] = [
     items: [
       { id: "claude-code", name: "Claude Code", available: true },
       { id: "codex", name: "Codex", available: true },
+      { id: "opencode", name: "OpenCode", available: true },
       { id: "gemini-cli", name: "Gemini CLI", available: false },
     ],
   },
@@ -258,7 +260,7 @@ function providerName(id: ProviderId): string {
 }
 
 function isDelegateProvider(id: ProviderId): boolean {
-  return id === "claude-code" || id === "codex" || id === "gemini-cli";
+  return id === "claude-code" || id === "codex" || id === "opencode" || id === "gemini-cli";
 }
 
 function cssVar(name: string): string {
@@ -272,6 +274,7 @@ const DEFAULT_MODELS: Record<ProviderId, string> = {
   vllm: "local-model",
   "claude-code": "claude-sonnet-4-6",
   codex: "gpt-5",
+  opencode: "opencode",
   "gemini-cli": "gemini-cli",
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-4.1",
@@ -303,13 +306,66 @@ const LOGO_ALIAS: Partial<Record<ProviderId, ProviderId>> = {
   "gemini-cli": "gemini",
 };
 
+const PROVIDER_LOGO_COLOR: Partial<Record<ProviderId, string>> = {
+  ollama: "var(--fg-strong)",
+  anthropic: "#D97757",
+  "claude-code": "#D97757",
+  openai: "var(--fg-strong)",
+  codex: "var(--fg-strong)",
+  opencode: "var(--fg-strong)",
+  xai: "var(--fg-strong)",
+};
+
+const PROVIDER_LOGO_IMAGE: Partial<Record<ProviderId, string>> = {
+  gemini: "/gemini-logo.png",
+  "gemini-cli": "/gemini-logo.png",
+  mistral: "/mistral-logo.png",
+};
+
 function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number }) {
+  if (id === "opencode") {
+    return (
+      <span
+        className="opencode-logo"
+        aria-hidden="true"
+        style={{
+          width: size,
+          height: size,
+          flexShrink: 0,
+        }}
+      >
+        <img className="opencode-logo-light" src="/opencode-logo-light.svg" alt="" />
+        <img className="opencode-logo-dark" src="/opencode-logo-dark.svg" alt="" />
+      </span>
+    );
+  }
+
+  const image = PROVIDER_LOGO_IMAGE[id];
+  if (image) {
+    return (
+      <img
+        src={image}
+        alt=""
+        aria-hidden="true"
+        width={size}
+        height={size}
+        style={{
+          width: size,
+          height: size,
+          objectFit: "contain",
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+
+  const color = PROVIDER_LOGO_COLOR[id] ?? "currentColor";
   const base = {
     width: size,
     height: size,
     viewBox: "0 0 24 24",
     "aria-hidden": true as const,
-    style: { flexShrink: 0 },
+    style: { flexShrink: 0, color },
   };
   const brand = BRAND_LOGO_PATHS[LOGO_ALIAS[id] ?? id];
   if (brand) {
@@ -1242,7 +1298,13 @@ function DelegateTerminalSurface({
       sessionId,
       provider: providerId,
       workspaceRoot,
-    }).then(syncSize);
+    })
+      .then(() => {
+        syncSize();
+      })
+      .catch((err) => {
+        term.writeln(`Failed to start ${provider}: ${err instanceof Error ? err.message : String(err)}`);
+      });
     const unlisten = listen<{ sessionId: string; data: string }>(
       "delegate-pty:data",
       (e) => {
@@ -1274,35 +1336,6 @@ function DelegateTerminalSurface({
         background: "color-mix(in srgb, var(--terminal-bg) 94%, var(--bg))",
       }}
     >
-      <div
-        style={{
-          height: 38,
-          padding: "0 10px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          borderBottom: "1px solid var(--terminal-border)",
-          color: "var(--terminal-muted)",
-          fontSize: 11,
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <ProviderLogo id={providerId} size={16} />
-          <span
-            style={{
-              color: "var(--terminal-fg)",
-              fontWeight: 650,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-            }}
-          >
-            {provider}
-          </span>
-        </span>
-        <span>Interactive PTY</span>
-      </div>
       <div ref={ref} style={{ flex: 1, minHeight: 0, padding: 4 }} />
     </div>
   );
@@ -2152,7 +2185,7 @@ export function AiPanel({
                 ? connected
                   ? "Ollama · connected"
                   : "Ollama · not reachable on localhost:11434"
-                : provider === "claude-code" || provider === "codex" || provider === "gemini-cli"
+                : isDelegateProvider(provider)
                 ? connected
                   ? `${providerName(provider)} · CLI available`
                   : `${providerName(provider)} · check CLI install/auth`

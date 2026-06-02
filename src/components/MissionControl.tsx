@@ -4,6 +4,7 @@ import {
   fetchRunMessages,
   seedRuns,
   relativeTime,
+  SOURCE_COLOR,
   SOURCE_LABEL,
   STATUS_COLOR,
   STATUS_LABEL,
@@ -50,9 +51,17 @@ const BRAND_PATH: Partial<Record<RunSource, string>> = {
 
 function SourceLogo({ source, size = 14 }: { source: RunSource; size?: number }) {
   const path = BRAND_PATH[source];
+  const color = SOURCE_COLOR[source];
   if (path) {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        aria-hidden="true"
+        style={{ color }}
+      >
         <path d={path} />
       </svg>
     );
@@ -69,6 +78,7 @@ function SourceLogo({ source, size = 14 }: { source: RunSource; size?: number })
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      style={{ color }}
     >
       <path d="M12 3.5l1.6 4.4L18 9.5l-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5z" />
     </svg>
@@ -85,9 +95,9 @@ function RunAvatar({ source, size = 26 }: { source: RunSource; size?: number }) 
         display: "grid",
         placeItems: "center",
         borderRadius: "var(--radius-sm)",
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        color: "var(--fg-strong)",
+        background: `color-mix(in srgb, ${SOURCE_COLOR[source]} 12%, var(--bg-elevated))`,
+        border: `1px solid color-mix(in srgb, ${SOURCE_COLOR[source]} 28%, var(--border))`,
+        color: SOURCE_COLOR[source],
       }}
     >
       <SourceLogo source={source} size={Math.round(size * 0.56)} />
@@ -196,6 +206,42 @@ function MetaRow({ label, value }: { label: string; value: string }) {
         {value}
       </dd>
     </>
+  );
+}
+
+function CopyButton({ value, label = "Copy" }: { value: string | null; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const disabled = !value;
+
+  async function copy() {
+    if (!value) return;
+    try {
+      await navigator.clipboard?.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => void copy()}
+      title={disabled ? "Nothing to copy" : label}
+      style={{
+        fontSize: 11,
+        padding: "3px 7px",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: disabled ? "var(--fg-dim)" : copied ? "var(--accent)" : "var(--fg-subtle)",
+        background: copied ? "var(--accent-soft)" : "transparent",
+        opacity: disabled ? 0.55 : 1,
+      }}
+    >
+      {copied ? "Copied" : label}
+    </button>
   );
 }
 
@@ -312,9 +358,25 @@ function RunDetail({ run }: { run: Run }) {
         {run.title}
       </h2>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <ActionButton primary disabled label="Open session" />
-        <ActionButton disabled label="Resume" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <CopyButton value={run.path} label="Copy log path" />
+        <CopyButton value={run.cwd} label="Copy cwd" />
+        <ActionButton disabled label="Resume later" />
+      </div>
+
+      <div
+        style={{
+          marginBottom: 18,
+          padding: "8px 10px",
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--border)",
+          color: "var(--fg-subtle)",
+          fontSize: 12,
+          lineHeight: 1.45,
+        }}
+      >
+        Read-only inspector for the local session log. Resume/open controls are
+        intentionally parked until Klide can hand the run back to the right CLI.
       </div>
 
       <dl
@@ -331,6 +393,7 @@ function RunDetail({ run }: { run: Run }) {
         <MetaRow label="Branch" value={run.branch ?? "—"} />
         <MetaRow label="Messages" value={String(run.messageCount)} />
         <MetaRow label="Updated" value={relativeTime(run.updatedMs)} />
+        <MetaRow label="Log" value={run.path} />
         {run.cwd && <MetaRow label="Directory" value={run.cwd} />}
       </dl>
 
@@ -352,7 +415,7 @@ function ActionButton({
   return (
     <button
       disabled={disabled}
-      title={disabled ? "Coming in the next step" : undefined}
+      title={disabled ? "Not wired yet" : undefined}
       style={{
         fontSize: 12,
         padding: "5px 12px",
@@ -547,8 +610,12 @@ export function MissionControl() {
 
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
           {!loading && filtered.length === 0 && (
-            <div style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)" }}>
-              No runs found.
+            <div style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
+              <div style={{ color: "var(--fg-strong)", marginBottom: 5 }}>
+                No matching runs.
+              </div>
+              Mission Control reads Claude Code and Codex session logs from your
+              local machine. Start or refresh an agent session, then come back here.
             </div>
           )}
           {STATUS_ORDER.map((status) => {
@@ -619,7 +686,7 @@ export function MissionControl() {
               borderTop: "1px solid var(--border)",
             }}
           >
-            Showing sample data — couldn't read local sessions.
+            Showing sample data. Local session logs were unavailable in this run.
           </div>
         )}
       </div>
@@ -636,9 +703,11 @@ export function MissionControl() {
               placeItems: "center",
               color: "var(--fg-subtle)",
               fontSize: 13,
+              textAlign: "center",
+              padding: 24,
             }}
           >
-            {loading ? "Loading runs…" : "Select a run."}
+            {loading ? "Loading runs..." : "Select a run to inspect its transcript and metadata."}
           </div>
         )}
       </div>

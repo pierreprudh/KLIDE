@@ -4,7 +4,7 @@
 
 ### A quiet agentic control surface for coding.
 
-Local models by default · online providers when you want them · a real terminal built in.
+Local models by default · online providers when you want them · real agent terminals built in.
 
 <br/>
 
@@ -82,12 +82,18 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 **AI panel**
 - **Streaming chat** — all providers stream token-by-token through a single Rust `ai_chat` command, so keys never enter the webview
 - **Multi-provider** — local Ollama, direct/API providers, and delegate subscription CLIs (Claude Code · Codex), all behind one switcher
+- **Real delegate terminals** — Claude Code and Codex run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
 - **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits (`Tab` to switch)
 - **Quiet agent controls** — mode switching, provider selection, context pressure, history, skills, project rules, and diff review stay close to the work without becoming a dashboard
+- **Context Lens (experimental)** — Klide infers a small working set from the active file, project movement, memory notes, and your draft prompt
 - **`@`-mentions** — fuzzy-pick workspace files to attach as context
 - **Slash commands** — `/chat`, `/plan`, `/goal`, `/clear`, `/explain`, `/init`
 - **Keychain-stored keys** — API keys live in the OS keychain (env vars as fallback); managed from Settings → API
 - Auto-loads project rules from `AGENTS.md` / `CLAUDE.md`
+
+**Agent operations**
+- **Mission Control** — read-only board for local Claude Code / Codex / Klide runs, with transcript preview and session metadata
+- **Project Memory** — a working-map experiment for project areas, recent movement, notes, and relationships
 
 ## Roadmap
 
@@ -109,6 +115,9 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] Streaming through Rust for every provider
 - [x] API keys stored in the OS keychain, managed from Settings
 - [x] Quiet agent control surface with mode switching, provider choice, context pressure, skills, rules, history, and diff review
+- [x] Real Claude Code / Codex delegate PTYs in the AI panel
+- [x] Mission Control read-only run inspector
+- [ ] Context Lens / Project Memory: keep iterating until it feels like project intelligence, not context plumbing
 - [ ] Verify Anthropic direct API end-to-end; add Google Gemini direct API
 - [ ] Command palette · find-in-files · editable harness settings · checkpoint rollback
 

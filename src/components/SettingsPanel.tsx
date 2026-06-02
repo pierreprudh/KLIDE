@@ -64,7 +64,7 @@ type Props = {
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "gemini-cli";
+type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "gemini-cli";
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -92,6 +92,12 @@ const subscriptionProviders: {
     title: "Codex",
     command: "codex",
     description: "ChatGPT login, device auth, API key, or access token.",
+  },
+  {
+    id: "opencode",
+    title: "OpenCode",
+    command: "opencode",
+    description: "Interactive OpenCode CLI, launched as a real delegate terminal.",
   },
   {
     id: "gemini-cli",
@@ -1437,6 +1443,8 @@ export function SettingsPanel({
                             ? "Loaded from Claude Code's local model usage cache."
                             : provider.id === "codex"
                             ? "Loaded from the current Codex model cache when available."
+                            : provider.id === "opencode"
+                            ? "OpenCode chooses models inside its own interactive CLI."
                             : "Shown for when Gemini CLI support is enabled."
                         }
                         control={

@@ -546,6 +546,37 @@ input:focus-visible {
   }
 }
 
+.opencode-logo {
+  display: inline-grid;
+  place-items: center;
+}
+
+.opencode-logo img {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.opencode-logo-dark {
+  display: none !important;
+}
+
+:root[data-theme="cursor-dark"] .opencode-logo-light,
+:root[data-theme="dark"] .opencode-logo-light,
+:root[data-theme="vscode-dark"] .opencode-logo-light,
+:root[data-theme="solarized-dark"] .opencode-logo-light {
+  display: none !important;
+}
+
+:root[data-theme="cursor-dark"] .opencode-logo-dark,
+:root[data-theme="dark"] .opencode-logo-dark,
+:root[data-theme="vscode-dark"] .opencode-logo-dark,
+:root[data-theme="solarized-dark"] .opencode-logo-dark {
+  display: block !important;
+}
+
 /* Subtle scrollbars matching the quiet aesthetic */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

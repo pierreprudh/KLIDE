@@ -225,6 +225,7 @@ fn delegate_command(provider: &str) -> Result<&'static str, String> {
     match provider {
         "claude-code" => Ok("claude"),
         "codex" => Ok("codex"),
+        "opencode" => Ok("opencode"),
         _ => Err(format!("No delegate PTY command for provider: {provider}")),
     }
 }

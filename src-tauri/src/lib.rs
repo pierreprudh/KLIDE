@@ -237,13 +237,14 @@ fn ai_clear_provider_key(provider: String) -> Result<(), String> {
 }
 
 fn is_subscription_provider(provider: &str) -> bool {
-    matches!(provider, "claude-code" | "codex" | "gemini-cli")
+    matches!(provider, "claude-code" | "codex" | "opencode" | "gemini-cli")
 }
 
 fn subscription_command(provider: &str) -> Result<&'static str, String> {
     match provider {
         "claude-code" => Ok("claude"),
         "codex" => Ok("codex"),
+        "opencode" => Ok("opencode"),
         "gemini-cli" => Ok("gemini"),
         _ => Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     }
@@ -376,6 +377,7 @@ fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
                 "gpt-5.2".to_string(),
             ]
         }),
+        "opencode" => vec!["opencode".to_string()],
         "gemini-cli" => vec!["gemini-2.5-pro".to_string(), "gemini-2.5-flash".to_string()],
         _ => return Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     };
@@ -609,6 +611,7 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
             "codex login --with-access-token".to_string(),
         ],
         "gemini-cli" => vec!["gemini auth login".to_string()],
+        "opencode" => vec!["opencode".to_string()],
         _ => Vec::new(),
     };
 
@@ -676,6 +679,10 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
         "gemini-cli" => (
             false,
             "Gemini CLI status check is not wired yet".to_string(),
+        ),
+        "opencode" => (
+            true,
+            "OpenCode CLI is installed; authentication is handled by OpenCode.".to_string(),
         ),
         _ => (false, "Unknown provider".to_string()),
     };
@@ -760,6 +767,7 @@ fn resolve_command(command: &str) -> Result<String, String> {
             "/Applications/Codex.app/Contents/Resources/codex".to_string(),
         ],
         "gemini" => vec![format!("{home}/.local/bin/gemini")],
+        "opencode" => vec![format!("{home}/.local/bin/opencode")],
         _ => Vec::new(),
     };
     candidates
@@ -949,6 +957,10 @@ async fn subscription_cli_chat(
         "gemini-cli" => {
             ensure_command_available("gemini")?;
             return Err("Gemini CLI command shape is not wired yet".to_string());
+        }
+        "opencode" => {
+            ensure_command_available("opencode")?;
+            return Err("OpenCode is available as an interactive PTY delegate.".to_string());
         }
         _ => return Err(format!("Provider \"{provider}\" is not wired yet")),
     };

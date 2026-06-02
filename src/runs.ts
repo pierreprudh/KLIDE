@@ -74,8 +74,8 @@ export const SOURCE_LABEL: Record<RunSource, string> = {
 
 // A subtle per-source tint for the row badge — distinct but never loud.
 export const SOURCE_COLOR: Record<RunSource, string> = {
-  "claude-code": "#B6713F",
-  codex: "#3E7C5A",
+  "claude-code": "#D97757",
+  codex: "var(--fg-strong)",
   klide: "var(--accent)",
 };
 
