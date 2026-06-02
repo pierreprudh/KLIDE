@@ -1,11 +1,14 @@
 mod pty;
-use pty::{pty_spawn, pty_write, PtyState};
+use pty::{
+    delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn, pty_write,
+    DelegatePtyState, PtyState,
+};
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::ipc::Channel;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
@@ -121,6 +124,10 @@ struct AiConnectionStatus {
 // keyed by provider id (the "account"). Keys never touch the React webview.
 const KEYCHAIN_SERVICE: &str = "com.klide.app";
 
+// Anthropic requires this header on every Messages API call; pinning a known
+// version keeps the request/response shape stable as the API evolves.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
 fn env_key(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("{name} is not set"))
 }
@@ -132,6 +139,7 @@ fn provider_env_name(provider: &str) -> Option<&'static str> {
         "openai" => Some("OPENAI_API_KEY"),
         "mistral" => Some("MISTRAL_API_KEY"),
         "xai" => Some("XAI_API_KEY"),
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
         _ => None,
     }
 }
@@ -170,7 +178,7 @@ fn env_fallback(provider: &str) -> Option<String> {
 fn provider_key(provider: &str) -> Result<Option<String>, String> {
     match provider {
         "ollama" => Ok(None),
-        "openai" | "mistral" | "xai" => {
+        "openai" | "mistral" | "xai" | "anthropic" => {
             match keyring_lookup(provider).or_else(|| env_fallback(provider)) {
                 Some(key) => Ok(Some(key)),
                 None => Err(format!("No API key saved for {provider}")),
@@ -229,13 +237,14 @@ fn ai_clear_provider_key(provider: String) -> Result<(), String> {
 }
 
 fn is_subscription_provider(provider: &str) -> bool {
-    matches!(provider, "claude-code" | "codex" | "gemini-cli")
+    matches!(provider, "claude-code" | "codex" | "opencode" | "gemini-cli")
 }
 
 fn subscription_command(provider: &str) -> Result<&'static str, String> {
     match provider {
         "claude-code" => Ok("claude"),
         "codex" => Ok("codex"),
+        "opencode" => Ok("opencode"),
         "gemini-cli" => Ok("gemini"),
         _ => Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     }
@@ -314,6 +323,24 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
         return Ok(names);
     }
 
+    if provider == "anthropic" {
+        let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
+        let res = reqwest::Client::new()
+            .get("https://api.anthropic.com/v1/models")
+            .header("x-api-key", key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .send()
+            .await
+            .map_err(|e| format!("Unable to reach Anthropic: {e}"))?;
+        let status = res.status();
+        let body = res.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(response_error("Anthropic", status, &body));
+        }
+        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        return Ok(normalize_model_ids(&value));
+    }
+
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
     let url = provider_models_url(&provider)?;
     let res = reqwest::Client::new()
@@ -350,6 +377,7 @@ fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
                 "gpt-5.2".to_string(),
             ]
         }),
+        "opencode" => vec!["opencode".to_string()],
         "gemini-cli" => vec!["gemini-2.5-pro".to_string(), "gemini-2.5-flash".to_string()],
         _ => return Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     };
@@ -583,6 +611,7 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
             "codex login --with-access-token".to_string(),
         ],
         "gemini-cli" => vec!["gemini auth login".to_string()],
+        "opencode" => vec!["opencode".to_string()],
         _ => Vec::new(),
     };
 
@@ -651,6 +680,10 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
             false,
             "Gemini CLI status check is not wired yet".to_string(),
         ),
+        "opencode" => (
+            true,
+            "OpenCode CLI is installed; authentication is handled by OpenCode.".to_string(),
+        ),
         _ => (false, "Unknown provider".to_string()),
     };
 
@@ -707,6 +740,9 @@ async fn ai_chat(
     if provider == "ollama" {
         return ollama_chat(model, messages, tools, &on_chunk).await;
     }
+    if provider == "anthropic" {
+        return anthropic_chat(model, messages, tools, &on_chunk).await;
+    }
     openai_compatible_chat(provider, model, messages, tools, &on_chunk).await
 }
 
@@ -731,6 +767,7 @@ fn resolve_command(command: &str) -> Result<String, String> {
             "/Applications/Codex.app/Contents/Resources/codex".to_string(),
         ],
         "gemini" => vec![format!("{home}/.local/bin/gemini")],
+        "opencode" => vec![format!("{home}/.local/bin/opencode")],
         _ => Vec::new(),
     };
     candidates
@@ -765,7 +802,10 @@ fn prompt_from_messages(messages: &[serde_json::Value]) -> String {
     let mut out = String::from(
         "You are running as a subscription CLI backend inside Klide.\n\
          Answer the user's latest request using the conversation below.\n\
-         Do not edit files directly. If changes are needed, describe them clearly; Klide's own diff review handles writes.\n\n",
+         Follow the active Klide mode described in the system message. In Goal mode,\n\
+         you may edit files directly in the current workspace; Klide will surface the\n\
+         resulting file and git diffs after you finish. In Chat or Plan mode, do not\n\
+         edit files unless the mode instructions explicitly allow it.\n\n",
     );
 
     for message in messages {
@@ -789,6 +829,7 @@ async fn run_cli_with_stdin(
     mut command: TokioCommand,
     prompt: String,
     label: &str,
+    on_chunk: &Channel<StreamChunk>,
 ) -> Result<String, String> {
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
@@ -804,19 +845,70 @@ async fn run_cli_with_stdin(
             .map_err(|e| format!("Unable to write prompt to {label}: {e}"))?;
     }
 
-    let output = timeout(Duration::from_secs(180), child.wait_with_output())
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("Unable to capture {label} stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("Unable to capture {label} stderr"))?;
+
+    let (status, stdout, stderr) = timeout(Duration::from_secs(180), async {
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        let mut stderr_lines = BufReader::new(stderr).lines();
+        let mut stdout_done = false;
+        let mut stderr_done = false;
+        let mut stdout_text = String::new();
+        let mut stderr_text = String::new();
+
+        while !stdout_done || !stderr_done {
+            tokio::select! {
+                line = stdout_lines.next_line(), if !stdout_done => {
+                    match line.map_err(|e| format!("Unable to read {label} stdout: {e}"))? {
+                        Some(line) => {
+                            stdout_text.push_str(&line);
+                            stdout_text.push('\n');
+                            let _ = on_chunk.send(StreamChunk {
+                                content: format!("{line}\n"),
+                                thinking: String::new(),
+                            });
+                        }
+                        None => stdout_done = true,
+                    }
+                }
+                line = stderr_lines.next_line(), if !stderr_done => {
+                    match line.map_err(|e| format!("Unable to read {label} stderr: {e}"))? {
+                        Some(line) => {
+                            stderr_text.push_str(&line);
+                            stderr_text.push('\n');
+                            let _ = on_chunk.send(StreamChunk {
+                                content: format!("stderr: {line}\n"),
+                                thinking: String::new(),
+                            });
+                        }
+                        None => stderr_done = true,
+                    }
+                }
+            }
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| format!("Unable to read {label} exit status: {e}"))?;
+        Ok::<_, String>((status, stdout_text.trim().to_string(), stderr_text.trim().to_string()))
+    })
         .await
         .map_err(|_| format!("{label} timed out after 180 seconds"))?
-        .map_err(|e| format!("Unable to read {label} output: {e}"))?;
+        .map_err(|e| e)?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if output.status.success() {
-        Ok(stdout)
+    if status.success() {
+        Ok(if stdout.is_empty() { stderr } else { stdout })
     } else if stderr.is_empty() {
-        Err(format!("{label} exited with {}", output.status))
+        Err(format!("{label} exited with {status}"))
     } else {
-        Err(format!("{label} exited with {}: {stderr}", output.status))
+        Err(format!("{label} exited with {status}: {stderr}"))
     }
 }
 
@@ -840,12 +932,10 @@ async fn subscription_cli_chat(
                 .arg("--model")
                 .arg(model)
                 .arg("--permission-mode")
-                .arg("plan")
-                .arg("--tools")
-                .arg("")
+                .arg("acceptEdits")
                 .arg("--output-format")
                 .arg("text");
-            run_cli_with_stdin(command, prompt, "Claude Code").await?
+            run_cli_with_stdin(command, prompt, "Claude Code", on_chunk).await?
         }
         "codex" => {
             let cli = resolve_command("codex")?;
@@ -855,28 +945,25 @@ async fn subscription_cli_chat(
                 .arg("-m")
                 .arg(model)
                 .arg("-s")
-                .arg("read-only")
+                .arg("workspace-write")
                 .arg("-C")
                 .arg(&cwd)
                 .arg("--skip-git-repo-check")
                 .arg("--color")
                 .arg("never")
                 .arg("-");
-            run_cli_with_stdin(command, prompt, "Codex").await?
+            run_cli_with_stdin(command, prompt, "Codex", on_chunk).await?
         }
         "gemini-cli" => {
             ensure_command_available("gemini")?;
             return Err("Gemini CLI command shape is not wired yet".to_string());
         }
+        "opencode" => {
+            ensure_command_available("opencode")?;
+            return Err("OpenCode is available as an interactive PTY delegate.".to_string());
+        }
         _ => return Err(format!("Provider \"{provider}\" is not wired yet")),
     };
-
-    // CLIs are blocking — no token stream to forward — so emit the finished
-    // answer as a single chunk to keep the frontend's streaming path uniform.
-    let _ = on_chunk.send(StreamChunk {
-        content: content.clone(),
-        thinking: String::new(),
-    });
 
     Ok(AiChatResponse {
         content,
@@ -1119,6 +1206,289 @@ fn normalize_openai_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json
             message
         })
         .collect()
+}
+
+// Accumulates one Anthropic streamed content block, keyed by its `index`. Text
+// blocks stream as `text_delta`; tool calls start with id+name then stream
+// their arguments as `input_json_delta` fragments we concatenate.
+#[derive(Default)]
+struct AnthropicBlock {
+    is_tool: bool,
+    id: String,
+    name: String,
+    args: String,
+}
+
+// Append a turn's blocks, merging into the previous turn when the role matches.
+// Anthropic requires strictly alternating user/assistant turns, so consecutive
+// tool results (which we model as `user`) must collapse into one message.
+fn anthropic_push(
+    turns: &mut Vec<(String, Vec<serde_json::Value>)>,
+    role: &str,
+    blocks: Vec<serde_json::Value>,
+) {
+    if blocks.is_empty() {
+        return;
+    }
+    if let Some(last) = turns.last_mut() {
+        if last.0 == role {
+            last.1.extend(blocks);
+            return;
+        }
+    }
+    turns.push((role.to_string(), blocks));
+}
+
+// Convert OpenAI-shaped history into Anthropic's (system, messages) split.
+// System prompts become a top-level string; tool results become `tool_result`
+// blocks inside a user turn; assistant tool calls become `tool_use` blocks.
+fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_json::Value>) {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut turns: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+
+    for message in &messages {
+        let role = message
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("user");
+        match role {
+            "system" => {
+                let text = text_from_message(message);
+                if !text.trim().is_empty() {
+                    system_parts.push(text);
+                }
+            }
+            "tool" => {
+                let id = message
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let block = serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": text_from_message(message),
+                });
+                anthropic_push(&mut turns, "user", vec![block]);
+            }
+            "assistant" => {
+                let mut blocks = Vec::new();
+                let text = text_from_message(message);
+                if !text.trim().is_empty() {
+                    blocks.push(serde_json::json!({ "type": "text", "text": text }));
+                }
+                if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+                    for call in calls {
+                        let id = call.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                        let function = call.get("function");
+                        let name = function
+                            .and_then(|f| f.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        // Arguments may be a JSON string (OpenAI shape) or already
+                        // an object; Anthropic wants a parsed object in `input`.
+                        let input = match function.and_then(|f| f.get("arguments")) {
+                            Some(serde_json::Value::String(s)) => {
+                                serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({}))
+                            }
+                            Some(other) => other.clone(),
+                            None => serde_json::json!({}),
+                        };
+                        blocks.push(serde_json::json!({
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input,
+                        }));
+                    }
+                }
+                anthropic_push(&mut turns, "assistant", blocks);
+            }
+            _ => {
+                let text = text_from_message(message);
+                if !text.trim().is_empty() {
+                    anthropic_push(
+                        &mut turns,
+                        "user",
+                        vec![serde_json::json!({ "type": "text", "text": text })],
+                    );
+                }
+            }
+        }
+    }
+
+    let out = turns
+        .into_iter()
+        .map(|(role, blocks)| serde_json::json!({ "role": role, "content": blocks }))
+        .collect();
+    (system_parts.join("\n\n"), out)
+}
+
+// Convert OpenAI function-tool definitions into Anthropic's tool shape:
+// `{name, description, input_schema}` where input_schema is the JSON Schema.
+fn anthropic_tools(tools: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    tools
+        .into_iter()
+        .filter_map(|t| {
+            let function = t.get("function")?;
+            let name = function.get("name")?.as_str()?;
+            let mut tool = serde_json::json!({ "name": name });
+            if let Some(description) = function.get("description") {
+                tool["description"] = description.clone();
+            }
+            tool["input_schema"] = function
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
+            Some(tool)
+        })
+        .collect()
+}
+
+async fn anthropic_chat(
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    on_chunk: &Channel<StreamChunk>,
+) -> Result<AiChatResponse, String> {
+    let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
+    let (system, msgs) = anthropic_messages(messages);
+    let mut body = serde_json::json!({
+        "model": model,
+        "max_tokens": 4096,
+        "stream": true,
+        "messages": msgs,
+    });
+    if !system.trim().is_empty() {
+        body["system"] = serde_json::Value::String(system);
+    }
+    if let Some(tools) = tools {
+        let converted = anthropic_tools(tools);
+        if !converted.is_empty() {
+            body["tools"] = serde_json::Value::Array(converted);
+            body["tool_choice"] = serde_json::json!({ "type": "auto" });
+        }
+    }
+
+    let mut res = reqwest::Client::new()
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach Anthropic: {e}"))?;
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(response_error("Anthropic", status, &text));
+    }
+
+    let mut content = String::new();
+    let mut blocks: Vec<AnthropicBlock> = Vec::new();
+    let mut buf = String::new();
+
+    // Anthropic streams SSE: each `data:` line is a typed event. We only need
+    // content_block_start (to learn a block's kind/id/name) and
+    // content_block_delta (text or tool-arg fragments); other events are noise.
+    let mut handle_line = |line: &str, content: &mut String| {
+        let Some(data) = line.trim().strip_prefix("data:") else {
+            return;
+        };
+        let data = data.trim();
+        if data.is_empty() {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            return;
+        };
+        match value.get("type").and_then(|v| v.as_str()).unwrap_or_default() {
+            "content_block_start" => {
+                let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                while blocks.len() <= index {
+                    blocks.push(AnthropicBlock::default());
+                }
+                if let Some(cb) = value.get("content_block") {
+                    if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                        let acc = &mut blocks[index];
+                        acc.is_tool = true;
+                        acc.id = cb
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        acc.name = cb
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                    }
+                }
+            }
+            "content_block_delta" => {
+                let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                while blocks.len() <= index {
+                    blocks.push(AnthropicBlock::default());
+                }
+                let Some(delta) = value.get("delta") else {
+                    return;
+                };
+                match delta.get("type").and_then(|v| v.as_str()) {
+                    Some("text_delta") => {
+                        if let Some(t) = delta.get("text").and_then(|v| v.as_str()) {
+                            if !t.is_empty() {
+                                content.push_str(t);
+                                let _ = on_chunk.send(StreamChunk {
+                                    content: t.to_string(),
+                                    thinking: String::new(),
+                                });
+                            }
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(p) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                            blocks[index].args.push_str(p);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    };
+
+    while let Some(bytes) = res.chunk().await.map_err(|e| e.to_string())? {
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+        while let Some(nl) = buf.find('\n') {
+            let line: String = buf.drain(..=nl).collect();
+            handle_line(&line, &mut content);
+        }
+    }
+    if !buf.trim().is_empty() {
+        let line = std::mem::take(&mut buf);
+        handle_line(&line, &mut content);
+    }
+
+    // Re-emit tool calls in the OpenAI shape the frontend parser expects.
+    let tool_calls: Vec<serde_json::Value> = blocks
+        .into_iter()
+        .filter(|b| b.is_tool && !b.name.is_empty())
+        .map(|b| {
+            serde_json::json!({
+                "id": b.id,
+                "type": "function",
+                "function": {
+                    "name": b.name,
+                    "arguments": if b.args.is_empty() { "{}".to_string() } else { b.args },
+                },
+            })
+        })
+        .collect();
+
+    Ok(AiChatResponse {
+        content,
+        thinking: None,
+        tool_calls,
+    })
 }
 
 #[tauri::command]
@@ -1468,6 +1838,455 @@ fn project_graph(workspace_root: String) -> Result<ProjectGraph, String> {
     })
 }
 
+// ── Agent runs aggregation ──────────────────────────────────────────────
+// Mission Control reads the local session logs that other agentic CLIs leave
+// on disk, so KIDE can show your real recent runs across tools in one board:
+//   • Claude Code → ~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl
+//   • Codex       → ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+//                   (+ ~/.codex/session_index.jsonl for human thread names)
+// Read-only: we never write to those files.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentRun {
+    id: String,
+    path: String,   // absolute path to the session log, for reading its transcript
+    source: String, // "claude-code" | "codex"
+    title: String,
+    model: Option<String>,
+    cwd: Option<String>,
+    project: Option<String>, // last path segment of cwd
+    git_branch: Option<String>,
+    updated_ms: i64,
+    message_count: u32,
+    status: String, // "running" (touched <2min ago) | "done"
+}
+
+fn mtime_ms(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn project_name(cwd: &str) -> Option<String> {
+    std::path::Path::new(cwd)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+}
+
+fn clean_title(s: &str) -> String {
+    let one = s.split('\n').next().unwrap_or(s).trim();
+    one.chars().take(120).collect()
+}
+
+fn recency_status(updated_ms: i64) -> String {
+    if now_ms() - updated_ms < 120_000 {
+        "running".to_string()
+    } else {
+        "done".to_string()
+    }
+}
+
+// The first genuine user prompt becomes the run's title. Skips system/tool
+// wrappers (content that begins with "<", e.g. "<command-name>…").
+fn extract_user_text(message: &serde_json::Value) -> Option<String> {
+    let content = message.get("content")?;
+    if let Some(s) = content.as_str() {
+        let t = s.trim();
+        return if !t.is_empty() && !t.starts_with('<') {
+            Some(t.to_string())
+        } else {
+            None
+        };
+    }
+    if let Some(arr) = content.as_array() {
+        for part in arr {
+            if part.get("type").and_then(|v| v.as_str()) == Some("text") {
+                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() && !t.starts_with('<') {
+                        return Some(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_claude_run(path: &std::path::Path) -> Option<AgentRun> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let id = path.file_stem()?.to_string_lossy().to_string();
+    let (mut title, mut model, mut cwd, mut branch) = (None, None, None, None);
+    let mut count: u32 = 0;
+    for line in content.lines() {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if cwd.is_none() {
+            cwd = v.get("cwd").and_then(|c| c.as_str()).map(str::to_string);
+        }
+        if branch.is_none() {
+            if let Some(b) = v.get("gitBranch").and_then(|b| b.as_str()) {
+                if !b.is_empty() {
+                    branch = Some(b.to_string());
+                }
+            }
+        }
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") => {
+                count += 1;
+                if title.is_none() {
+                    if let Some(t) = v.get("message").and_then(extract_user_text) {
+                        title = Some(clean_title(&t));
+                    }
+                }
+            }
+            Some("assistant") => {
+                count += 1;
+                if model.is_none() {
+                    model = v
+                        .get("message")
+                        .and_then(|m| m.get("model"))
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string);
+                }
+            }
+            _ => {}
+        }
+    }
+    let updated_ms = mtime_ms(path);
+    Some(AgentRun {
+        status: recency_status(updated_ms),
+        project: cwd.as_deref().and_then(project_name),
+        id,
+        path: path.to_string_lossy().to_string(),
+        source: "claude-code".to_string(),
+        title: title.unwrap_or_else(|| "Untitled session".to_string()),
+        model,
+        cwd,
+        git_branch: branch,
+        updated_ms,
+        message_count: count,
+    })
+}
+
+fn parse_codex_run(
+    path: &std::path::Path,
+    index: &std::collections::HashMap<String, String>,
+) -> Option<AgentRun> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let (mut id, mut cwd, mut branch, mut model) = (None, None, None, None);
+    let mut count: u32 = 0;
+    for line in content.lines() {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let payload = v.get("payload");
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("session_meta") => {
+                if let Some(p) = payload {
+                    if id.is_none() {
+                        id = p.get("id").and_then(|x| x.as_str()).map(str::to_string);
+                    }
+                    if cwd.is_none() {
+                        cwd = p.get("cwd").and_then(|x| x.as_str()).map(str::to_string);
+                    }
+                    if branch.is_none() {
+                        branch = p
+                            .get("git")
+                            .and_then(|g| g.get("branch"))
+                            .and_then(|b| b.as_str())
+                            .map(str::to_string);
+                    }
+                }
+            }
+            Some("turn_context") => {
+                if model.is_none() {
+                    if let Some(m) = payload.and_then(|p| p.get("model")).and_then(|m| m.as_str()) {
+                        if !m.is_empty() {
+                            model = Some(m.to_string());
+                        }
+                    }
+                }
+            }
+            Some("response_item") => count += 1,
+            _ => {}
+        }
+    }
+    let id = id.unwrap_or_else(|| {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    let updated_ms = mtime_ms(path);
+    Some(AgentRun {
+        status: recency_status(updated_ms),
+        title: index
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| "Codex session".to_string()),
+        project: cwd.as_deref().and_then(project_name),
+        id,
+        path: path.to_string_lossy().to_string(),
+        source: "codex".to_string(),
+        model,
+        cwd,
+        git_branch: branch,
+        updated_ms,
+        message_count: count,
+    })
+}
+
+fn load_codex_index(home: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let path = std::path::Path::new(home).join(".codex/session_index.jsonl");
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        for line in content.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let (Some(id), Some(name)) = (
+                    v.get("id").and_then(|x| x.as_str()),
+                    v.get("thread_name").and_then(|x| x.as_str()),
+                ) {
+                    map.insert(id.to_string(), name.to_string());
+                }
+            }
+        }
+    }
+    map
+}
+
+fn collect_codex_rollouts(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_codex_rollouts(&p, out);
+            } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("rollout-") && name.ends_with(".jsonl") {
+                    out.push(p);
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn list_agent_runs(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<AgentRun>, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let cap = limit.unwrap_or(10);
+    let off = offset.unwrap_or(0);
+
+    // (path, source, mtime) for every candidate session, newest first.
+    let mut candidates: Vec<(std::path::PathBuf, &'static str, i64)> = Vec::new();
+
+    let claude_root = std::path::Path::new(&home).join(".claude/projects");
+    if let Ok(projects) = std::fs::read_dir(&claude_root) {
+        for proj in projects.flatten() {
+            if !proj.path().is_dir() {
+                continue;
+            }
+            if let Ok(files) = std::fs::read_dir(proj.path()) {
+                for f in files.flatten() {
+                    let p = f.path();
+                    if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                        let m = mtime_ms(&p);
+                        candidates.push((p, "claude-code", m));
+                    }
+                }
+            }
+        }
+    }
+
+    let codex_root = std::path::Path::new(&home).join(".codex/sessions");
+    let mut codex_files = Vec::new();
+    collect_codex_rollouts(&codex_root, &mut codex_files);
+    for p in codex_files {
+        let m = mtime_ms(&p);
+        candidates.push((p, "codex", m));
+    }
+
+    // Stat-and-sort is cheap; parse only the requested page (offset..offset+cap)
+    // so big histories stay fast and the UI can lazily page in older runs.
+    candidates.sort_by(|a, b| b.2.cmp(&a.2));
+
+    let codex_index = load_codex_index(&home);
+    let mut runs: Vec<AgentRun> = candidates
+        .into_iter()
+        .skip(off)
+        .take(cap)
+        .filter_map(|(path, source, _)| {
+            if source == "claude-code" {
+                parse_claude_run(&path)
+            } else {
+                parse_codex_run(&path, &codex_index)
+            }
+        })
+        .collect();
+    runs.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
+    Ok(runs)
+}
+
+// One readable line of a run's conversation, for the Mission Control detail
+// pane. We strip system/context wrappers and tool plumbing so what shows is the
+// actual back-and-forth (a "résumé" of the session).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunMessage {
+    role: String, // "user" | "assistant"
+    text: String,
+}
+
+fn claude_message_text(message: &serde_json::Value) -> Option<String> {
+    let content = message.get("content")?;
+    if let Some(s) = content.as_str() {
+        let t = s.trim();
+        return if t.is_empty() || t.starts_with('<') {
+            None
+        } else {
+            Some(t.to_string())
+        };
+    }
+    if let Some(arr) = content.as_array() {
+        let mut buf = String::new();
+        for part in arr {
+            match part.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            if !buf.is_empty() {
+                                buf.push('\n');
+                            }
+                            buf.push_str(t);
+                        }
+                    }
+                }
+                Some("tool_use") => {
+                    let name = part.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(&format!("[tool: {name}]"));
+                }
+                _ => {} // skip thinking / tool_result noise
+            }
+        }
+        let t = buf.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+fn codex_message_text(payload: &serde_json::Value) -> Option<String> {
+    let content = payload.get("content")?;
+    if let Some(arr) = content.as_array() {
+        let mut buf = String::new();
+        for part in arr {
+            if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
+                let t = t.trim();
+                if !t.is_empty() {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(t);
+                }
+            }
+        }
+        let t = buf.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    } else if let Some(s) = content.as_str() {
+        let t = s.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, String> {
+    // Sandbox: only ever read the two agent-log directories.
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let p = std::path::Path::new(&path);
+    let claude = std::path::Path::new(&home).join(".claude");
+    let codex = std::path::Path::new(&home).join(".codex");
+    if !(p.starts_with(&claude) || p.starts_with(&codex)) {
+        return Err("Path is outside the agent log directories".to_string());
+    }
+    let content = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+
+    let mut msgs: Vec<RunMessage> = Vec::new();
+    for line in content.lines() {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if source == "codex" {
+            if v.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+                continue;
+            }
+            let payload = match v.get("payload") {
+                Some(p) if p.get("type").and_then(|t| t.as_str()) == Some("message") => p,
+                _ => continue,
+            };
+            let role = payload.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            if role != "user" && role != "assistant" {
+                continue; // skip developer/system noise
+            }
+            if let Some(text) = codex_message_text(payload) {
+                if role == "user" && text.starts_with('<') {
+                    continue; // environment / permissions context wrappers
+                }
+                msgs.push(RunMessage {
+                    role: role.to_string(),
+                    text,
+                });
+            }
+        } else {
+            let role = match v.get("type").and_then(|t| t.as_str()) {
+                Some("user") => "user",
+                Some("assistant") => "assistant",
+                _ => continue,
+            };
+            if let Some(text) = v.get("message").and_then(claude_message_text) {
+                msgs.push(RunMessage {
+                    role: role.to_string(),
+                    text,
+                });
+            }
+        }
+    }
+
+    // Bound payload: trim long messages, keep the most recent ~80.
+    for m in msgs.iter_mut() {
+        if m.text.chars().count() > 4000 {
+            m.text = m.text.chars().take(4000).collect::<String>() + "…";
+        }
+    }
+    let len = msgs.len();
+    if len > 80 {
+        msgs.drain(0..len - 80);
+    }
+    Ok(msgs)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1475,11 +2294,18 @@ pub fn run() {
             writer: Mutex::new(None),
             cwd: Mutex::new(None),
         })
+        .manage(DelegatePtyState {
+            sessions: Mutex::new(std::collections::HashMap::new()),
+        })
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
+            delegate_pty_spawn,
+            delegate_pty_write,
+            delegate_pty_resize,
+            delegate_pty_stop,
             list_dir,
             read_text_file,
             git_status,
@@ -1488,6 +2314,8 @@ pub fn run() {
             git_commit,
             git_diff,
             project_graph,
+            list_agent_runs,
+            read_agent_run,
             ai_provider_models,
             ai_subscription_status,
             ai_context_window,

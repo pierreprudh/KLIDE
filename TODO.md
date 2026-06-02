@@ -1,37 +1,41 @@
 # TODO
 
-Working notes for the next sessions. Most recent context: the multi-provider AI
-backend (streaming + keychain keys) just landed on
-`ai-panel/tool-support-and-thinking`.
+Working thesis: Klide is a quiet agentic coding control surface. Keep the VS
+Code muscle memory, but make agent power available at the point of action:
+mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
+dashboards, seeded demos, and telemetry panels unless the user explicitly opens
+them.
 
-## Next up — #3 Anthropic direct API
+## Stabilize v0.2
 
-Anthropic is the flagship provider but its direct API is still `available: false`
-in the switcher (`src/components/AiPanel.tsx`). It can't reuse
-`openai_compatible_chat` — different shape:
+- [ ] Verify provider paths end-to-end:
+  - Ollama streaming + tools
+  - Anthropic direct API streaming + tool calls
+  - One OpenAI-compatible API provider
+  - Claude Code / Codex delegate mode, including workspace diff refresh
+- [x] Reconcile README with real delegate PTYs, Mission Control, and Context Lens status.
+- [ ] Run `cargo check` and `npx tsc --noEmit` clean before shipping.
 
-- [ ] Add `anthropic_chat` in `src-tauri/src/lib.rs` — endpoint `https://api.anthropic.com/v1/messages`, header `x-api-key` + `anthropic-version`, **not** bearer auth.
-- [ ] Request: system prompt is a top-level `system` field (not a message); messages are `user`/`assistant` only.
-- [ ] Stream: SSE with `event:`/`data:` lines (`content_block_delta` → `delta.text`); reassemble `tool_use` blocks for tool calls.
-- [ ] Map tool calls back into the shape `parseToolCallsFromChunk` expects.
-- [ ] Add `anthropic` to `provider_key` (`ANTHROPIC_API_KEY` fallback) and to the keychain-managed list in `SettingsPanel.tsx` (`API_KEY_PROVIDERS`).
-- [ ] Flip `anthropic` to `available: true` once it streams end-to-end.
+## Next Product Moves
 
-## Small follow-ups
+- [ ] Command palette (`Cmd+P` / `Cmd+Shift+P`) as the main hidden control surface.
+- [ ] Find-in-files using a Rust ripgrep-style search command.
+- [ ] Editable harness settings: mode prompts, tool toggles, and tool descriptions.
+- [ ] Checkpoint rollback: preview files changed since a turn and revert selected files.
+- [ ] Settings depth without adding persistent chrome.
+- [ ] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
+- [ ] Context Lens v2: use real imports, Tauri invokes, and edited-file history instead of mostly heuristics.
 
-- [ ] After saving a key in Settings, refresh the AI panel connection immediately (today it re-checks only on provider re-select).
-- [ ] Finish or shelve `gemini-cli` — `subscription_cli_chat` currently returns an error for it.
-- [ ] Label the subscription CLI family (Claude Code / Codex) as **chat-only** in the UI — agent/diff mode can't run through them.
+## Small Follow-Ups
 
-## Later (rest of v0.2)
+- [x] Refresh the AI panel connection after saving or clearing a provider key.
+- [x] Let Claude Code / Codex run as delegate agents in Goal mode; Klide surfaces resulting workspace diffs.
+- [x] Show delegate PTY launch/live/error state in the terminal header.
+- [x] Make Mission Control useful as a read-only transcript/log inspector.
+- [ ] Finish or shelve `gemini-cli`.
 
-- [ ] Command palette (`Cmd+P` / `Cmd+Shift+P`)
-- [ ] Find-in-files (needs a Rust ripgrep-style search command)
-- [ ] Settings depth
+## Parking Lot
 
-## Verify before shipping the branch
-
-- [ ] Streaming types in token-by-token for Ollama and an API provider.
-- [ ] Tool calls still fire after a streamed response (agent mode).
-- [ ] Saving/clearing an API key in Settings → API works and the pill updates.
-- [ ] `cargo check` + `npx tsc --noEmit` both clean.
+- Project Memory / Context Lens is promising but not there yet. Avoid overfitting
+  the UI around manual context controls; the differentiator should feel like
+  Klide understands the project graph and proposes the right working set.

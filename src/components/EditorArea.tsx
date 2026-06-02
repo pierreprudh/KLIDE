@@ -10,7 +10,6 @@ type Props = {
   onChange: (v: string) => void;
   language?: string;
   hasFile: boolean;
-  workspaceOpen: boolean;
   theme: ThemeId;
   fontSize: number;
   lineNumbers: boolean;
@@ -23,7 +22,6 @@ export function EditorArea({
   onChange,
   language = "plaintext",
   hasFile,
-  workspaceOpen,
   theme,
   fontSize,
   lineNumbers,
@@ -32,6 +30,8 @@ export function EditorArea({
 }: Props) {
   const editorTheme = getMonacoThemeId(theme);
 
+  // A folder is always open by the time we render here (App shows the
+  // full-screen welcome otherwise); this is the "no file selected yet" hint.
   if (!hasFile) {
     return (
       <div
@@ -62,9 +62,7 @@ export function EditorArea({
             Klide
           </div>
           <div style={{ fontSize: 14, color: "var(--fg)" }}>
-            {workspaceOpen
-              ? "Choose a file from the explorer to start editing."
-              : "Open a folder from the Explorer to begin."}
+            Choose a file from the explorer to start editing.
           </div>
           <div style={{ marginTop: 14, fontSize: 12, color: "var(--fg-subtle)" }}>
             Files on the left · AI on the right · Terminal below

@@ -59,11 +59,12 @@ type Props = {
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
   onApplyLayout: (layout: ResolvedLayout) => void;
+  onProviderKeyChange?: (provider: string) => void;
   initialSection?: string | null;
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "gemini-cli";
+type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "gemini-cli";
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -91,6 +92,12 @@ const subscriptionProviders: {
     title: "Codex",
     command: "codex",
     description: "ChatGPT login, device auth, API key, or access token.",
+  },
+  {
+    id: "opencode",
+    title: "OpenCode",
+    command: "opencode",
+    description: "Interactive OpenCode CLI, launched as a real delegate terminal.",
   },
   {
     id: "gemini-cli",
@@ -583,6 +590,7 @@ const API_KEY_PROVIDERS: {
   envVar: string;
   placeholder: string;
 }[] = [
+  { id: "anthropic", title: "Anthropic", envVar: "ANTHROPIC_API_KEY", placeholder: "sk-ant-..." },
   { id: "openai", title: "OpenAI", envVar: "OPENAI_API_KEY", placeholder: "sk-..." },
   { id: "mistral", title: "Mistral", envVar: "MISTRAL_API_KEY", placeholder: "..." },
   { id: "xai", title: "xAI Grok", envVar: "XAI_API_KEY", placeholder: "xai-..." },
@@ -598,11 +606,13 @@ function ApiKeyRow({
   title,
   envVar,
   placeholder,
+  onChange,
 }: {
   id: string;
   title: string;
   envVar: string;
   placeholder: string;
+  onChange?: (provider: string) => void;
 }) {
   const [status, setStatus] = useState<KeyStatus>({ hasKey: false, source: "none" });
   const [value, setValue] = useState("");
@@ -632,6 +642,7 @@ function ApiKeyRow({
       await invoke("ai_set_provider_key", { provider: id, key: value });
       setValue("");
       await refresh();
+      onChange?.(id);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -646,6 +657,7 @@ function ApiKeyRow({
     try {
       await invoke("ai_clear_provider_key", { provider: id });
       await refresh();
+      onChange?.(id);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -777,6 +789,7 @@ export function SettingsPanel({
   customLayouts,
   onCustomLayoutsChange,
   onApplyLayout,
+  onProviderKeyChange,
   initialSection,
   onBack,
 }: Props) {
@@ -1346,6 +1359,7 @@ export function SettingsPanel({
                       title={provider.title}
                       envVar={provider.envVar}
                       placeholder={provider.placeholder}
+                      onChange={onProviderKeyChange}
                     />
                   ))}
                 </Panel>
@@ -1429,6 +1443,8 @@ export function SettingsPanel({
                             ? "Loaded from Claude Code's local model usage cache."
                             : provider.id === "codex"
                             ? "Loaded from the current Codex model cache when available."
+                            : provider.id === "opencode"
+                            ? "OpenCode chooses models inside its own interactive CLI."
                             : "Shown for when Gemini CLI support is enabled."
                         }
                         control={
