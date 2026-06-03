@@ -1,12 +1,15 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { watch } from "@tauri-apps/plugin-fs";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ContextMenu, MenuItem } from "./ContextMenu";
 
 type Props = {
   onOpen: (path: string, content: string) => void;
   onRootChange: (root: string | null) => void;
   onOpenGitDiff?: (path: string, staged: boolean) => void;
+  onEntryRenamed?: (oldPath: string, newPath: string) => void;
+  onEntryDeleted?: (path: string) => void;
   visible: boolean;
   width: number;
   workspaceRoot: string | null;
@@ -35,6 +38,17 @@ type GitDecoration = {
   color: string;
   title: string;
 };
+
+type MenuTarget = {
+  x: number;
+  y: number;
+  path: string;
+  isDirectory: boolean;
+};
+
+type Editing =
+  | { mode: "rename"; path: string }
+  | { mode: "create"; parent: string; isDirectory: boolean };
 
 function ChevronRight() {
   return (
@@ -268,10 +282,76 @@ function loadExpanded(root: string | null): Set<string> {
   }
 }
 
+function InlineNameInput({
+  defaultValue,
+  onCommit,
+  onCancel,
+}: {
+  defaultValue: string;
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  // The input commits on both Enter and blur; Enter unmounts it, which
+  // fires blur too — this flag makes sure we only commit once.
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    // Select the basename but not the extension (like VS Code's rename).
+    const dot = defaultValue.lastIndexOf(".");
+    el.setSelectionRange(0, dot > 0 ? dot : defaultValue.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function commit(value: string) {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCommit(value);
+  }
+
+  function cancel() {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCancel();
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      defaultValue={defaultValue}
+      spellCheck={false}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit(e.currentTarget.value);
+        else if (e.key === "Escape") cancel();
+      }}
+      onBlur={(e) => commit(e.currentTarget.value)}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        font: "inherit",
+        fontSize: 13,
+        color: "var(--fg-strong)",
+        background: "var(--bg)",
+        border: "1px solid var(--accent)",
+        borderRadius: "var(--radius-xs)",
+        padding: "0 4px",
+        outline: "none",
+      }}
+    />
+  );
+}
+
 export function Sidebar({
   onOpen,
   onRootChange,
   onOpenGitDiff,
+  onEntryRenamed,
+  onEntryDeleted,
   visible,
   width,
   workspaceRoot,
@@ -284,6 +364,21 @@ export function Sidebar({
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [dirErrors, setDirErrors] = useState<Record<string, string>>({});
   const [gitFiles, setGitFiles] = useState<GitFile[]>([]);
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [fsNotice, setFsNotice] = useState<string | null>(null);
+
+  // File-operation errors surface here instead of dying in the console.
+  useEffect(() => {
+    if (!fsNotice) return;
+    const timer = setTimeout(() => setFsNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [fsNotice]);
+
+  function reportFsError(prefix: string, e: unknown) {
+    console.error(prefix, e);
+    setFsNotice(`${prefix}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   async function refreshGitStatus(workspaceRoot: string) {
     try {
@@ -470,6 +565,138 @@ export function Sidebar({
     }
   }
 
+  function startCreate(parent: string, isDirectory: boolean) {
+    // Make sure the target folder is open so the input row is visible.
+    if (parent !== root && !expanded.has(parent)) void toggleFolder(parent);
+    setEditing({ mode: "create", parent, isDirectory });
+  }
+
+  async function commitCreate(parent: string, rawName: string, isDirectory: boolean) {
+    setEditing(null);
+    const name = rawName.trim();
+    if (!name || name.includes("/") || !root) return;
+    const target = joinPath(parent, name);
+    try {
+      // Rust-side command: existence check + workspace-root guard included.
+      await invoke("create_entry", {
+        workspaceRoot: root,
+        path: target,
+        isDirectory,
+      });
+      if (!isDirectory) pick(target); // open the fresh file right away
+    } catch (e) {
+      reportFsError("Create failed", e);
+    }
+  }
+
+  async function commitRename(path: string, rawName: string) {
+    setEditing(null);
+    const name = rawName.trim();
+    if (!name || name.includes("/") || !root) return;
+    // Note: parentPath() is for git-relative paths and drops the leading
+    // slash, so compute the absolute parent directly here.
+    const target = `${path.slice(0, path.lastIndexOf("/"))}/${name}`;
+    if (target === path) return;
+    try {
+      await invoke("rename_entry", { workspaceRoot: root, from: path, to: target });
+      // Keep renamed folders (and anything expanded inside them) open.
+      setExpanded((cur) => {
+        const next = new Set<string>();
+        for (const p of cur) {
+          if (p === path) next.add(target);
+          else if (p.startsWith(`${path}/`)) next.add(target + p.slice(path.length));
+          else next.add(p);
+        }
+        return next;
+      });
+      onEntryRenamed?.(path, target);
+    } catch (e) {
+      reportFsError("Rename failed", e);
+    }
+  }
+
+  async function deleteEntry(path: string, isDirectory: boolean) {
+    if (!root) return;
+    const name = path.split("/").pop() ?? path;
+    const ok = await confirm(
+      isDirectory
+        ? `Delete folder "${name}" and all its contents?`
+        : `Delete "${name}"?`,
+      { title: "Delete", kind: "warning" }
+    );
+    if (!ok) return;
+    try {
+      await invoke("delete_entry", { workspaceRoot: root, path });
+      // Drop stale expanded entries so they don't linger in localStorage.
+      setExpanded(
+        (cur) =>
+          new Set(
+            Array.from(cur).filter((p) => p !== path && !p.startsWith(`${path}/`))
+          )
+      );
+      onEntryDeleted?.(path);
+    } catch (e) {
+      reportFsError("Delete failed", e);
+    }
+  }
+
+  function copyToClipboard(text: string) {
+    navigator.clipboard
+      .writeText(text)
+      .catch((e) => reportFsError("Copy failed", e));
+  }
+
+  function menuItems(target: MenuTarget): MenuItem[] {
+    const { path, isDirectory } = target;
+    const isRoot = path === root;
+    const items: MenuItem[] = [];
+
+    if (isDirectory) {
+      items.push(
+        { type: "item", label: "New File…", onSelect: () => startCreate(path, false) },
+        { type: "item", label: "New Folder…", onSelect: () => startCreate(path, true) },
+        { type: "separator" }
+      );
+    }
+
+    items.push({ type: "item", label: "Copy Path", onSelect: () => copyToClipboard(path) });
+    if (root && !isRoot) {
+      items.push({
+        type: "item",
+        label: "Copy Relative Path",
+        onSelect: () => copyToClipboard(relativePath(root, path)),
+      });
+    }
+    items.push({
+      type: "item",
+      label: "Reveal in Finder",
+      onSelect: () => {
+        invoke("reveal_entry", { path }).catch((e) =>
+          reportFsError("Reveal failed", e)
+        );
+      },
+    });
+
+    if (!isRoot) {
+      items.push(
+        { type: "separator" },
+        {
+          type: "item",
+          label: "Rename…",
+          onSelect: () => setEditing({ mode: "rename", path }),
+        },
+        {
+          type: "item",
+          label: "Delete",
+          danger: true,
+          onSelect: () => void deleteEntry(path, isDirectory),
+        }
+      );
+    }
+
+    return items;
+  }
+
   function renderEntries(list: TreeEntry[], basePath: string, depth = 0) {
     const existingNames = new Set(list.map((entry) => entry.name));
     const mergedEntries =
@@ -480,7 +707,34 @@ export function Sidebar({
             ...gitVirtualEntries(root, basePath, existingNames, gitFiles),
           ];
 
-    return mergedEntries
+    // Input row for "New File…" / "New Folder…" targeting this folder.
+    const createRow =
+      editing?.mode === "create" && editing.parent === basePath ? (
+        <li key="__create__">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 8px",
+              paddingLeft: 8 + depth * 14,
+              fontSize: 13,
+            }}
+          >
+            <span style={{ display: "inline-flex", width: 12, flexShrink: 0 }} />
+            <span style={{ display: "inline-flex", flexShrink: 0 }}>
+              {editing.isDirectory ? <FolderRow open={false} /> : <FileRow name="" />}
+            </span>
+            <InlineNameInput
+              defaultValue=""
+              onCommit={(name) => void commitCreate(basePath, name, editing.isDirectory)}
+              onCancel={() => setEditing(null)}
+            />
+          </div>
+        </li>
+      ) : null;
+
+    const rows = mergedEntries
       .slice()
       .sort(
         (a, b) =>
@@ -511,6 +765,12 @@ export function Sidebar({
                 if (isDir) toggleFolder(path, isVirtual);
                 else if (isVirtual && gitFile) onOpenGitDiff?.(gitFile.path, gitFile.staged);
                 else if (!isVirtual) pick(path);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isVirtual) return; // deleted-file ghosts have no disk entry
+                setMenu({ x: event.clientX, y: event.clientY, path, isDirectory: isDir });
               }}
               title={decoration ? `${path} · ${decoration.title}` : path}
               style={{
@@ -557,16 +817,24 @@ export function Sidebar({
               >
                 {isDir ? <FolderRow open={isExpanded} /> : <FileRow name={e.name} />}
               </span>
-              <span
-                style={{
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  minWidth: 0,
-                }}
-              >
-                {e.name}
-              </span>
+              {editing?.mode === "rename" && editing.path === path ? (
+                <InlineNameInput
+                  defaultValue={e.name}
+                  onCommit={(name) => void commitRename(path, name)}
+                  onCancel={() => setEditing(null)}
+                />
+              ) : (
+                <span
+                  style={{
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    minWidth: 0,
+                  }}
+                >
+                  {e.name}
+                </span>
+              )}
               {decoration && (
                 <span
                   title={decoration.title}
@@ -637,7 +905,9 @@ export function Sidebar({
                   >
                     Retry folder
                   </li>
-                ) : nested && nested.length > 0 ? (
+                ) : nested &&
+                  (nested.length > 0 ||
+                    (editing?.mode === "create" && editing.parent === path)) ? (
                   renderEntries(nested, path, depth + 1)
                 ) : (
                   <li
@@ -656,11 +926,19 @@ export function Sidebar({
           </li>
         );
       });
+
+    return createRow ? [createRow, ...rows] : rows;
   }
 
   return (
     <aside
       className="floating-panel"
+      onContextMenu={(event) => {
+        // Right-click on empty space targets the workspace root.
+        if (!root) return;
+        event.preventDefault();
+        setMenu({ x: event.clientX, y: event.clientY, path: root, isDirectory: true });
+      }}
       style={{
         width: fill ? "100%" : width,
         height: fill ? "100%" : undefined,
@@ -708,6 +986,26 @@ export function Sidebar({
           Open…
         </button>
       </header>
+
+      {fsNotice && (
+        <div
+          onClick={() => setFsNotice(null)}
+          title="Click to dismiss"
+          style={{
+            margin: "0 8px 6px",
+            padding: "5px 8px",
+            fontSize: 11,
+            lineHeight: 1.4,
+            color: "#D64545",
+            background: "color-mix(in srgb, #D64545 8%, transparent)",
+            borderRadius: "var(--radius-sm)",
+            cursor: "pointer",
+            wordBreak: "break-word",
+          }}
+        >
+          {fsNotice}
+        </div>
+      )}
 
       {root && (
         <div
@@ -763,22 +1061,35 @@ export function Sidebar({
         </div>
       )}
 
-      {root && entries.length === 0 && (
-        <div
-          style={{
-            padding: "18px 14px",
-            color: "var(--fg-subtle)",
-            fontSize: 13,
-          }}
-        >
-          This folder is empty.
-        </div>
-      )}
+      {root &&
+        entries.length === 0 &&
+        !(editing?.mode === "create" && editing.parent === root) && (
+          <div
+            style={{
+              padding: "18px 14px",
+              color: "var(--fg-subtle)",
+              fontSize: 13,
+            }}
+          >
+            This folder is empty.
+          </div>
+        )}
 
-      {root && entries.length > 0 && (
-        <ul style={{ listStyle: "none", padding: "4px 4px 8px", margin: 0 }}>
-          {renderEntries(entries, root)}
-        </ul>
+      {root &&
+        (entries.length > 0 ||
+          (editing?.mode === "create" && editing.parent === root)) && (
+          <ul style={{ listStyle: "none", padding: "4px 4px 8px", margin: 0 }}>
+            {renderEntries(entries, root)}
+          </ul>
+        )}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu)}
+          onClose={() => setMenu(null)}
+        />
       )}
     </aside>
   );

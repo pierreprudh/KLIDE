@@ -1,4 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import {
+  addTask,
+  dispatchTask,
+  getTaskBuffer,
+  getTaskSessions,
+  lastAgent,
+  removeTask,
+  stopTask,
+  subscribeTasks,
+  type TaskSession,
+  type TaskSource,
+} from "../tasks";
+import {
+  getKlideConvos,
+  subscribeKlideConvos,
+  type KlideConvo,
+} from "../klideConvos";
+import type { ThemeId } from "../theme";
 import {
   fetchAgentRuns,
   fetchRunMessages,
@@ -20,7 +43,52 @@ import {
 // sessions), grouped by status, with a metadata detail pane. Inspired by the
 // 2026 "dispatch hub" pattern (GitHub Agent HQ, Antigravity Agent Manager,
 // Codex app): aggregate every run in one place, filter by source, drill in.
-// Read-only today; mid-run steering, resume, and artifact tabs come next.
+//
+// Devin-style delegation: the composer at the top is a todo list — add a
+// task, it sits in Queued; open it and send an agent (claude / codex) to
+// complete it. A dispatched task's detail pane is a live terminal you can
+// watch, type into (take over), or stop. Klide's own AI-panel conversations
+// are listed on the same board. Diff review on completion comes next.
+
+function cssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Present a dispatched task as a Run so it shares the board's rows, filters
+// and status groups with the disk-log runs.
+function taskToRun(t: TaskSession): Run {
+  return {
+    id: t.id,
+    path: "",
+    // Undispatched todos wear the Klide mark until an agent is sent.
+    source: t.source ?? "klide",
+    title: t.title,
+    status: t.status,
+    model: null,
+    project: t.cwd ? t.cwd.split("/").filter(Boolean).pop() ?? null : null,
+    cwd: t.cwd,
+    branch: null,
+    messageCount: 0,
+    updatedMs: t.startedMs,
+  };
+}
+
+// Same for an AI-panel conversation — Klide's own chats join the board.
+function convoToRun(c: KlideConvo): Run {
+  return {
+    id: c.id,
+    path: "",
+    source: "klide",
+    title: c.title,
+    status: c.status,
+    model: c.model,
+    project: c.cwd ? c.cwd.split("/").filter(Boolean).pop() ?? null : null,
+    cwd: c.cwd,
+    branch: null,
+    messageCount: c.messages.length,
+    updatedMs: c.updatedMs,
+  };
+}
 
 function StatusDot({ status, size = 7 }: { status: RunStatus; size?: number }) {
   const color = STATUS_COLOR[status];
@@ -109,17 +177,24 @@ function RunRow({
   run,
   selected,
   onSelect,
+  action,
 }: {
   run: Run;
   selected: boolean;
   onSelect: () => void;
+  // Hover-revealed control (e.g. quick-send on a todo) — swaps in where the
+  // status dot sits so rows stay quiet until you reach for them.
+  action?: React.ReactNode;
 }) {
+  const [hovered, setHovered] = useState(false);
   const meta = [SOURCE_LABEL[run.source], run.model, run.branch]
     .filter(Boolean)
     .join(" · ");
   return (
     <button
       onClick={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -128,14 +203,12 @@ function RunRow({
         textAlign: "left",
         padding: "8px 10px",
         borderRadius: "var(--radius-sm)",
-        background: selected ? "var(--bg-selected)" : "transparent",
+        background: selected
+          ? "var(--bg-selected)"
+          : hovered
+          ? "var(--bg-hover)"
+          : "transparent",
         transition: "background var(--motion-fast) var(--ease-out)",
-      }}
-      onMouseEnter={(e) => {
-        if (!selected) e.currentTarget.style.background = "var(--bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        if (!selected) e.currentTarget.style.background = "transparent";
       }}
     >
       <RunAvatar source={run.source} />
@@ -166,8 +239,62 @@ function RunRow({
           {relativeTime(run.updatedMs)}
         </span>
       </span>
-      <StatusDot status={run.status} />
+      {action && hovered ? action : <StatusDot status={run.status} />}
     </button>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 12h14" />
+      <path d="m13 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+// One-click dispatch on a todo row: sends the last-used agent and selects the
+// task so its terminal is in view as the agent lands. Nested inside the row's
+// <button>, so it's a span with button semantics.
+function QuickSend({ taskId, onSent }: { taskId: string; onSent: () => void }) {
+  const agent = lastAgent();
+  return (
+    <span
+      role="button"
+      aria-label={`Send ${SOURCE_LABEL[agent]}`}
+      title={`Send ${SOURCE_LABEL[agent]}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSent();
+        void dispatchTask(taskId, agent).catch(() => {
+          // Failure flips the task to error in the store; the detail pane
+          // (now selected) shows the message and re-send controls.
+        });
+      }}
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: "var(--accent)",
+        background: "var(--accent-soft)",
+      }}
+    >
+      <SendIcon />
+    </span>
   );
 }
 
@@ -262,12 +389,19 @@ function DetailLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ConversationView({ run }: { run: Run }) {
+function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage[] }) {
   const [messages, setMessages] = useState<RunMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    // In-memory conversations (Klide's own panels) skip the disk read.
+    if (preloaded) {
+      setMessages(preloaded);
+      setLoading(false);
+      setError(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(false);
@@ -285,7 +419,7 @@ function ConversationView({ run }: { run: Run }) {
     return () => {
       cancelled = true;
     };
-  }, [run.id, run.path, run.source]);
+  }, [run.id, run.path, run.source, preloaded]);
 
   const muted = { fontSize: 12, color: "var(--fg-subtle)" } as const;
   if (loading) return <div style={muted}>Loading conversation…</div>;
@@ -325,7 +459,230 @@ function ConversationView({ run }: { run: Run }) {
   );
 }
 
-function RunDetail({ run }: { run: Run }) {
+// The todo box. Type a task and hit Enter — it lands in Queued. Sending an
+// agent to it happens from the task's detail pane, so adding stays instant.
+function TaskComposer({
+  workspaceRoot,
+  onAdded,
+}: {
+  workspaceRoot: string | null;
+  onAdded: (id: string) => void;
+}) {
+  const [text, setText] = useState("");
+
+  function add() {
+    const title = text.trim();
+    if (!title) return;
+    const task = addTask(title, workspaceRoot);
+    setText("");
+    onAdded(task.id);
+  }
+
+  return (
+    <div style={{ padding: "10px 16px 12px", borderBottom: "1px solid var(--border)" }}>
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add();
+          }
+        }}
+        placeholder="Add a task…"
+        style={{
+          width: "100%",
+          fontSize: 12.5,
+          lineHeight: 1.5,
+          fontFamily: "inherit",
+          color: "var(--fg-strong)",
+          background: "var(--bg-elevated)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          padding: "7px 9px",
+          outline: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+// Live console of a dispatched task. The PTY was spawned at dispatch time —
+// here we replay the buffered scrollback, then stream. Typing goes straight to
+// the CLI, so "take over" is just clicking in and typing. Mirrors the main
+// TerminalPanel's xterm setup so both terminals feel like the same surface.
+function TaskTerminal({ sessionId, theme }: { sessionId: string; theme: ThemeId }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const term = new Terminal({
+      fontSize: 12,
+      fontFamily:
+        "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
+      theme: {
+        background: cssVar("--terminal-bg"),
+        foreground: cssVar("--terminal-fg"),
+        cursor: cssVar("--terminal-cursor"),
+      },
+      cursorBlink: true,
+      scrollback: 5000,
+      convertEol: true,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(ref.current);
+    // Fit (and tell the PTY the real size) BEFORE replaying the scrollback —
+    // otherwise the replay wraps at the spawn-time 100 cols and looks mangled
+    // until the CLI's next full redraw.
+    const syncSize = () => {
+      fit.fit();
+      void invoke("delegate_pty_resize", { sessionId, rows: term.rows, cols: term.cols });
+    };
+    syncSize();
+    term.write(getTaskBuffer(sessionId));
+    term.focus();
+
+    const unlisten = listen<{ sessionId: string; data: string }>(
+      "delegate-pty:data",
+      (e) => {
+        if (e.payload.sessionId === sessionId) term.write(e.payload.data);
+      }
+    );
+    term.onData((data) => {
+      void invoke("delegate_pty_write", { sessionId, data });
+    });
+
+    const resize = new ResizeObserver(syncSize);
+    resize.observe(ref.current);
+
+    return () => {
+      unlisten.then((u) => u());
+      resize.disconnect();
+      term.dispose();
+    };
+    // `theme` re-creates the terminal so cssVar() picks up the new palette —
+    // same pattern as TerminalPanel. The replay buffer restores the content.
+  }, [sessionId, theme]);
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        background: "color-mix(in srgb, var(--terminal-bg) 96%, var(--bg))",
+        borderTop: "1px solid var(--terminal-border)",
+      }}
+    >
+      <div ref={ref} style={{ flex: 1, minHeight: 0, padding: 6 }} />
+    </div>
+  );
+}
+
+function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
+  const [agent, setAgent] = useState<TaskSource>(lastAgent);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  // queued/error = the todo needs (re)dispatching; running/done = a delegate
+  // worked on it and the terminal is the record.
+  const needsAgent = task.status === "queued" || task.status === "error";
+
+  async function send() {
+    setFailure(null);
+    try {
+      await dispatchTask(task.id, agent);
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div style={{ padding: "20px 24px 14px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <RunAvatar source={task.source ?? "klide"} size={30} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span
+              style={{ fontSize: 12, color: "var(--fg-strong)", fontFamily: "var(--font-mono)" }}
+            >
+              {task.source ? SOURCE_LABEL[task.source] : "Todo"}
+            </span>
+            <span
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                color: STATUS_COLOR[task.status],
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              <StatusDot status={task.status} size={6} />
+              {STATUS_LABEL[task.status]}
+            </span>
+          </div>
+          <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {task.status === "running" ? (
+              <ActionButton label="Stop" onClick={() => void stopTask(task.id)} />
+            ) : (
+              <ActionButton label="Remove" onClick={() => removeTask(task.id)} />
+            )}
+          </span>
+        </div>
+        <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", margin: 0 }}>
+          {task.title}
+        </h2>
+        {task.cwd && (
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 11,
+              color: "var(--fg-subtle)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {task.cwd}
+          </div>
+        )}
+      </div>
+      {needsAgent ? (
+        <div style={{ padding: "6px 24px 24px" }}>
+          <DetailLabel>Send an agent</DetailLabel>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {(["claude-code", "codex"] as const).map((s) => (
+              <FilterChip
+                key={s}
+                label={SOURCE_LABEL[s]}
+                active={agent === s}
+                onClick={() => setAgent(s)}
+              />
+            ))}
+            <span style={{ marginLeft: 10 }}>
+              <ActionButton label="Send agent" primary onClick={() => void send()} />
+            </span>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.5 }}>
+            The agent opens in the workspace with this task as its first
+            prompt. You can watch it live here, type to take over, or stop it.
+          </div>
+          {failure && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--danger, #B42318)" }}>
+              {failure}
+            </div>
+          )}
+        </div>
+      ) : (
+        <TaskTerminal sessionId={task.id} theme={theme} />
+      )}
+    </div>
+  );
+}
+
+function RunDetail({ run, messages }: { run: Run; messages?: RunMessage[] }) {
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -359,25 +716,27 @@ function RunDetail({ run }: { run: Run }) {
       </h2>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <CopyButton value={run.path} label="Copy log path" />
+        <CopyButton value={run.path || null} label="Copy log path" />
         <CopyButton value={run.cwd} label="Copy cwd" />
         <ActionButton disabled label="Resume later" />
       </div>
 
-      <div
-        style={{
-          marginBottom: 18,
-          padding: "8px 10px",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--border)",
-          color: "var(--fg-subtle)",
-          fontSize: 12,
-          lineHeight: 1.45,
-        }}
-      >
-        Read-only inspector for the local session log. Resume/open controls are
-        intentionally parked until Klide can hand the run back to the right CLI.
-      </div>
+      {!messages && (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: "8px 10px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            color: "var(--fg-subtle)",
+            fontSize: 12,
+            lineHeight: 1.45,
+          }}
+        >
+          Read-only inspector for the local session log. Resume/open controls are
+          intentionally parked until Klide can hand the run back to the right CLI.
+        </div>
+      )}
 
       <dl
         style={{
@@ -393,12 +752,12 @@ function RunDetail({ run }: { run: Run }) {
         <MetaRow label="Branch" value={run.branch ?? "—"} />
         <MetaRow label="Messages" value={String(run.messageCount)} />
         <MetaRow label="Updated" value={relativeTime(run.updatedMs)} />
-        <MetaRow label="Log" value={run.path} />
+        {run.path && <MetaRow label="Log" value={run.path} />}
         {run.cwd && <MetaRow label="Directory" value={run.cwd} />}
       </dl>
 
       <DetailLabel>Conversation</DetailLabel>
-      <ConversationView run={run} />
+      <ConversationView run={run} preloaded={messages} />
     </div>
   );
 }
@@ -407,15 +766,18 @@ function ActionButton({
   label,
   primary,
   disabled,
+  onClick,
 }: {
   label: string;
   primary?: boolean;
   disabled?: boolean;
+  onClick?: () => void;
 }) {
   return (
     <button
       disabled={disabled}
-      title={disabled ? "Not wired yet" : undefined}
+      onClick={onClick}
+      title={disabled && !onClick ? "Not wired yet" : undefined}
       style={{
         fontSize: 12,
         padding: "5px 12px",
@@ -453,7 +815,15 @@ function RefreshIcon() {
 
 const PAGE = 10;
 
-export function MissionControl() {
+export function MissionControl({
+  workspaceRoot,
+  theme,
+}: {
+  workspaceRoot: string | null;
+  theme: ThemeId;
+}) {
+  const tasks = useSyncExternalStore(subscribeTasks, getTaskSessions);
+  const convos = useSyncExternalStore(subscribeKlideConvos, getKlideConvos);
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -505,16 +875,24 @@ export function MissionControl() {
     void load();
   }, []);
 
+  // Your todos lead the board, then Klide's own conversations, then runs
+  // pulled off disk from the external CLIs.
+  const allRuns = useMemo(
+    () => [...tasks.map(taskToRun), ...convos.map(convoToRun), ...runs],
+    [tasks, convos, runs]
+  );
+
   // Which source chips to show — only sources actually present.
   const presentSources = useMemo(() => {
     const set = new Set<RunSource>();
-    for (const r of runs) set.add(r.source);
+    for (const r of allRuns) set.add(r.source);
     return Array.from(set);
-  }, [runs]);
+  }, [allRuns]);
 
   const filtered = useMemo(
-    () => (sourceFilter === "all" ? runs : runs.filter((r) => r.source === sourceFilter)),
-    [runs, sourceFilter]
+    () =>
+      sourceFilter === "all" ? allRuns : allRuns.filter((r) => r.source === sourceFilter),
+    [allRuns, sourceFilter]
   );
 
   const grouped = useMemo(() => {
@@ -538,7 +916,14 @@ export function MissionControl() {
     }
   }, [filtered, selectedId]);
 
-  const selected = runs.find((r) => r.id === selectedId) ?? null;
+  const selectedTask = tasks.find((t) => t.id === selectedId) ?? null;
+  const selectedConvo = selectedTask
+    ? null
+    : convos.find((c) => c.id === selectedId) ?? null;
+  const selected =
+    selectedTask || selectedConvo
+      ? null
+      : allRuns.find((r) => r.id === selectedId) ?? null;
   const activeCount =
     grouped.running.length + grouped.waiting.length + grouped.queued.length;
 
@@ -608,6 +993,11 @@ export function MissionControl() {
           </div>
         </header>
 
+        <TaskComposer
+          workspaceRoot={workspaceRoot}
+          onAdded={(id) => setSelectedId(id)}
+        />
+
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
           {!loading && filtered.length === 0 && (
             <div style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
@@ -639,14 +1029,28 @@ export function MissionControl() {
                   {STATUS_LABEL[status]}
                   <span style={{ opacity: 0.7 }}>{list.length}</span>
                 </div>
-                {list.map((run) => (
-                  <RunRow
-                    key={run.id}
-                    run={run}
-                    selected={run.id === selectedId}
-                    onSelect={() => setSelectedId(run.id)}
-                  />
-                ))}
+                {list.map((run) => {
+                  // Todos (and failed dispatches) get the one-click send.
+                  const task = tasks.find((t) => t.id === run.id);
+                  const sendable =
+                    task && (task.status === "queued" || task.status === "error");
+                  return (
+                    <RunRow
+                      key={run.id}
+                      run={run}
+                      selected={run.id === selectedId}
+                      onSelect={() => setSelectedId(run.id)}
+                      action={
+                        sendable ? (
+                          <QuickSend
+                            taskId={run.id}
+                            onSent={() => setSelectedId(run.id)}
+                          />
+                        ) : undefined
+                      }
+                    />
+                  );
+                })}
               </div>
             );
           })}
@@ -693,7 +1097,11 @@ export function MissionControl() {
 
       {/* Right: detail */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        {selected ? (
+        {selectedTask ? (
+          <TaskDetail task={selectedTask} theme={theme} />
+        ) : selectedConvo ? (
+          <RunDetail run={convoToRun(selectedConvo)} messages={selectedConvo.messages} />
+        ) : selected ? (
           <RunDetail run={selected} />
         ) : (
           <div

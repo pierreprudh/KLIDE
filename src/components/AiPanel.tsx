@@ -17,26 +17,36 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { DiffModal, PendingEdit } from "./DiffModal";
+import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import { enabledSkillsPrompt, type Skill } from "../skills";
 import {
   CONTEXT_MODE_LABELS,
   estimateProjectContextTokens,
   lensItemsForPrompt,
-  type ProjectContextItem,
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-
-type ToolCall = { id?: string; name: string; args: any };
-
-// Files the user pulled in with @-mentions. Stored on the user message but only
-// rendered as inline "@path" text — the contents ride along to the model via
-// toOllamaMessage, so the chat bubble stays clean.
-type Attachment = { path: string; content: string };
-type ProjectContextPayload = {
-  mode: ProjectContextMode;
-  items: ProjectContextItem[];
-};
+import { startAgentRun, stopAgentRun } from "../agent/client";
+import {
+  DEFAULT_MODELS,
+  MODE_OPTIONS,
+  PROVIDER_GROUPS,
+  isDelegateProvider,
+  normalizeAgentMode,
+  providerName,
+} from "../agent/providers";
+import {
+  parseToolCallsFromChunk,
+  toolsForMode,
+  type AgentToolCall as ToolCall,
+} from "../agent/tools";
+import type {
+  AgentAttachment as Attachment,
+  AgentContextPayload as ProjectContextPayload,
+  AgentEvent,
+  AgentMode,
+  ProviderId,
+} from "../agent/types";
 
 type Msg =
   | {
@@ -44,6 +54,8 @@ type Msg =
       content: string;
       attachments?: Attachment[];
       projectContext?: ProjectContextPayload;
+      queueState?: "queued" | "running";
+      queueId?: string;
     }
   | {
       role: "assistant";
@@ -83,205 +95,20 @@ type PendingEditRequest = PendingEdit & {
 
 const MAX_TOOL_CALLS = 10;
 
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read the full text contents of a file in the workspace.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description:
-              'Path relative to the workspace root, e.g. "src/App.tsx".',
-          },
-        },
-        required: ["path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_dir",
-      description: "List the entries (files and folders) of a directory.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description:
-              'Path relative to the workspace root. Use "." for the workspace root itself.',
-          },
-        },
-        required: ["path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_file",
-      description:
-        "Propose a search-and-replace edit to an existing file. The user reviews the diff and approves or rejects it — this tool does NOT write directly.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: 'Path of the existing file, relative to the workspace root.',
-          },
-          old_str: {
-            type: "string",
-            description:
-              "The exact text to find in the file. Must match a unique substring (whitespace included). Include enough surrounding context that no other occurrence exists.",
-          },
-          new_str: {
-            type: "string",
-            description:
-              "The replacement text. Use an empty string to delete the matched text.",
-          },
-        },
-        required: ["path", "old_str", "new_str"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_file",
-      description:
-        "Propose creating a brand-new file with the given contents. Fails if the file already exists. The user reviews the new contents and approves or rejects.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: "Path of the new file, relative to the workspace root.",
-          },
-          contents: {
-            type: "string",
-            description: "Full text contents of the new file.",
-          },
-        },
-        required: ["path", "contents"],
-      },
-    },
-  },
-];
-
-// Chat mode never receives tools. Plan mode is read-only. Goal mode is the full
-// agentic loop with diff-reviewed edits.
-export type AgentMode = "chat" | "plan" | "goal";
-
-// The two read-only tools, by name, so Plan mode can offer only these.
-const READ_ONLY_TOOLS = TOOLS.filter(
-  (t) => t.function.name === "read_file" || t.function.name === "list_dir"
-);
-
-function toolsForMode(mode: AgentMode) {
-  if (mode === "chat") return undefined;
-  return mode === "plan" ? READ_ONLY_TOOLS : TOOLS;
-}
-
-const MODE_OPTIONS: { id: AgentMode; label: string; title: string }[] = [
-  { id: "chat", label: "Chat", title: "Answer without tools." },
-  { id: "plan", label: "Plan", title: "Read files and propose a plan." },
-  { id: "goal", label: "Goal", title: "Use tools and propose diff-reviewed edits." },
-];
-
-function normalizeAgentMode(value: string | null): AgentMode {
-  if (value === "build" || value === "goal") return "goal";
-  if (value === "plan") return "plan";
-  return "chat";
-}
-
-// Provider catalogue for the header switcher. Only Ollama is wired today; the
-// rest render as disabled "Soon" entries so the surface is honest about scope.
-type ProviderId =
-  | "ollama"
-  | "lmstudio"
-  | "llamacpp"
-  | "vllm"
-  | "claude-code"
-  | "codex"
-  | "opencode"
-  | "gemini-cli"
-  | "anthropic"
-  | "openai"
-  | "gemini"
-  | "mistral"
-  | "xai";
-
-type ProviderGroup = {
-  label: string;
-  items: { id: ProviderId; name: string; available: boolean }[];
+type QueuedTurn = {
+  clientId: string;
+  text: string;
+  mode: AgentMode;
+  provider: ProviderId;
+  model: string;
+  modelSupportsTools: boolean;
+  attachments: Attachment[];
+  projectContext?: ProjectContextPayload;
 };
-
-// Single source of truth for the switcher. To ship a provider, flip `available`
-// and branch the request logic on its id — nothing else here needs to change.
-const PROVIDER_GROUPS: ProviderGroup[] = [
-  {
-    label: "Local",
-    items: [
-      { id: "ollama", name: "Ollama", available: true },
-      { id: "lmstudio", name: "LM Studio", available: false },
-      { id: "llamacpp", name: "llama.cpp", available: false },
-      { id: "vllm", name: "vLLM", available: false },
-    ],
-  },
-  {
-    label: "Subscription",
-    items: [
-      { id: "claude-code", name: "Claude Code", available: true },
-      { id: "codex", name: "Codex", available: true },
-      { id: "opencode", name: "OpenCode", available: true },
-      { id: "gemini-cli", name: "Gemini CLI", available: false },
-    ],
-  },
-  {
-    label: "API",
-    items: [
-      { id: "anthropic", name: "Anthropic", available: true },
-      { id: "openai", name: "OpenAI", available: true },
-      { id: "gemini", name: "Google Gemini", available: false },
-      { id: "mistral", name: "Mistral", available: true },
-      { id: "xai", name: "xAI Grok", available: true },
-    ],
-  },
-];
-
-const ALL_PROVIDERS = PROVIDER_GROUPS.flatMap((g) => g.items);
-
-function providerName(id: ProviderId): string {
-  return ALL_PROVIDERS.find((p) => p.id === id)?.name ?? "Ollama";
-}
-
-function isDelegateProvider(id: ProviderId): boolean {
-  return id === "claude-code" || id === "codex" || id === "opencode" || id === "gemini-cli";
-}
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
-
-const DEFAULT_MODELS: Record<ProviderId, string> = {
-  ollama: "llama3.1:8b",
-  lmstudio: "local-model",
-  llamacpp: "local-model",
-  vllm: "local-model",
-  "claude-code": "claude-sonnet-4-6",
-  codex: "gpt-5",
-  opencode: "opencode",
-  "gemini-cli": "gemini-cli",
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-4.1",
-  gemini: "gemini-2.5-pro",
-  mistral: "mistral-large-latest",
-  xai: "grok-4",
-};
 
 // Official brand marks (Simple Icons, single-path, currentColor → theme- and
 // hover-aware). Subscription/CLI variants alias to their vendor's mark below.
@@ -417,6 +244,7 @@ function buildSystemPrompt(
   stopAfterRejection: boolean,
   skills: Skill[],
   mode: AgentMode,
+  toolsAvailable: boolean,
   projectRules: string
 ): string {
   const skillsBlock = enabledSkillsPrompt(skills);
@@ -431,10 +259,18 @@ function buildSystemPrompt(
       ? `
 
 CHAT MODE is active. You have no tools. Answer conversationally from the context already visible in the chat. If the user asks you to inspect or change files, tell them to switch to Plan or Goal.`
-      : mode === "plan"
-      ? `
+    : mode === "plan"
+      ? !toolsAvailable
+        ? `
+
+PLAN MODE is active, but the selected model/provider did not expose tool-call support for this turn. You cannot inspect files directly. Answer from the visible conversation/context only, and if the user asks about project files, say the current model cannot read them and suggest switching to a tool-capable model/provider. Do not describe this as Chat mode.`
+        : `
 
 PLAN MODE is active. You have ONLY read-only tools (read_file, list_dir) and CANNOT edit files. Investigate as needed and answer the user's question directly. If — and only if — the user asked you to make code changes, do NOT edit: present a clear, numbered implementation plan (the files you'd touch and what each needs) and tell them to switch to Goal mode to apply it.`
+    : !toolsAvailable
+      ? `
+
+GOAL MODE is active, but the selected model/provider did not expose tool-call support for this turn. You cannot inspect or edit files directly. Say that plainly and suggest switching to a tool-capable model/provider. Do not describe this as Chat mode.`
       : `
 
 GOAL MODE is active. Work toward the user's requested outcome as a coding operator. Keep your work concrete and visible: inspect first, make the smallest useful set of edits, and after tool work summarize what changed, what was applied or rejected, and what remains. Every edit is diff-reviewed by the user before it is written.`;
@@ -443,10 +279,15 @@ GOAL MODE is active. Work toward the user's requested outcome as a coding operat
 Workspace root: ${workspaceRoot}
 
 Tool usage:
-- read_file / list_dir: read-only. Use whenever you need to know contents or structure.
-- write_file / create_file: edit tools. Every edit opens a diff modal for the user to APPLY or REJECT — you never write directly.${modeBlock}
+${
+    toolsAvailable
+      ? "- read_file / list_dir: read-only. Use whenever you need to know contents or structure.\n- write_file / create_file: edit tools. Every edit opens a diff modal for the user to APPLY or REJECT — you never write directly."
+      : "- No tool APIs are available in this turn. Do not claim that you can read or edit files directly."
+  }${modeBlock}
 
 Paths are relative to the workspace root (e.g. "src/App.tsx" or ".").
+For the workspace root, use path ".". Do not use an absolute path like "/README.md"; use "README.md".
+If asked what you think of the project, inspect "." and README/package/config files before answering.
 
 How to read tool results:
 - "Applied: ..." → the user approved the edit. Confirm briefly and stop, unless more changes are needed.
@@ -455,7 +296,7 @@ How to read tool results:
       ? "STOP. Do NOT retry the same edit. Ask the user what they want differently, or end your turn."
       : "Do not retry the exact same edit. You may suggest a smaller alternative if it directly addresses the user's request."
   }
-- "Error: ..." → the tool itself failed (e.g. file not found, ambiguous match). Read the error and fix the call.
+- "Tool error from ..." → the tool itself failed (e.g. file not found, ambiguous match). Read the error and fix the call. Do not say the workspace is inaccessible unless the error says no workspace is open or access was denied.
 
 Be concise. When you have enough information, answer the user directly.${skillsBlock}${rulesBlock}`;
 }
@@ -471,8 +312,11 @@ async function executeTool(
     return "Error: no workspace folder is open. Ask the user to open one via the Files panel.";
   }
   const resolvePath = (p: string): string => {
-    const full = p.startsWith("/") ? p : `${workspaceRoot}/${p}`;
-    if (!full.startsWith(workspaceRoot)) {
+    const raw = typeof p === "string" ? p.trim() : "";
+    const rel = raw === "" || raw === "/" ? "." : raw.replace(/^\/+/, "");
+    const root = workspaceRoot.replace(/\/+$/, "");
+    const full = rel === "." ? root : `${root}/${rel}`;
+    if (full !== root && !full.startsWith(`${root}/`)) {
       throw new Error(`Path "${p}" is outside the workspace`);
     }
     return full;
@@ -480,11 +324,12 @@ async function executeTool(
 
   try {
     if (call.name === "read_file") {
-      const content = await readTextFile(resolvePath(call.args.path));
-      return `Contents of ${call.args.path} (${content.length} chars):\n\`\`\`\n${content}\n\`\`\``;
+      const p = String(call.args.path ?? "").trim().replace(/^\/+/, "") || ".";
+      const content = await readTextFile(resolvePath(p));
+      return `Contents of ${p} (${content.length} chars):\n\`\`\`\n${content}\n\`\`\``;
     }
     if (call.name === "list_dir") {
-      const p = call.args.path ?? ".";
+      const p = String(call.args.path ?? "").trim().replace(/^\/+/, "") || ".";
       const entries = await readDir(resolvePath(p));
       const formatted = entries
         .slice()
@@ -495,7 +340,69 @@ async function executeTool(
         )
         .map((e) => `${e.isDirectory ? "[dir] " : "      "}${e.name}`)
         .join("\n");
-      return `Entries in ${p}:\n${formatted}`;
+      return `Entries in ${p}:\n${formatted || "(empty)"}`;
+    }
+    if (call.name === "glob") {
+      const pattern = String(call.args.pattern ?? "").trim();
+      const base = String(call.args.path ?? ".").trim().replace(/^\/+/, "") || ".";
+      if (!pattern) return "Error: glob requires a pattern.";
+      const files = await listWorkspaceFiles(resolvePath(base));
+      const normalizedBase = base === "." ? "" : `${base.replace(/\/+$/, "")}/`;
+      const simplePattern = pattern.replace(/^\.\//, "").replace(/\*\*\//g, "");
+      const wildcard = new RegExp(
+        `^${simplePattern
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*")
+          .replace(/\?/g, ".")}$`
+      );
+      const matches = files
+        .map((path) => `${normalizedBase}${path}`)
+        .filter((path) => wildcard.test(path) || wildcard.test(path.split("/").pop() ?? path))
+        .slice(0, 200);
+      return `Glob matches for ${pattern}:\n${matches.join("\n") || "(none)"}`;
+    }
+    if (call.name === "grep") {
+      const pattern = String(call.args.pattern ?? "");
+      const base = String(call.args.path ?? ".").trim().replace(/^\/+/, "") || ".";
+      const max = Math.min(Number(call.args.maxResults ?? 200) || 200, 200);
+      if (!pattern) return "Error: grep requires a pattern.";
+      const files = await listWorkspaceFiles(resolvePath(base));
+      const normalizedBase = base === "." ? "" : `${base.replace(/\/+$/, "")}/`;
+      const rows: string[] = [];
+      for (const rel of files) {
+        if (rows.length >= max) break;
+        const display = `${normalizedBase}${rel}`;
+        try {
+          const content = await readTextFile(resolvePath(display));
+          content.split("\n").forEach((line, idx) => {
+            if (rows.length < max && line.includes(pattern)) {
+              rows.push(`${display}:${idx + 1}: ${line}`);
+            }
+          });
+        } catch {
+          /* skip binary or unreadable files */
+        }
+      }
+      return `Grep matches for ${pattern}:\n${rows.join("\n") || "(none)"}`;
+    }
+    if (call.name === "get_git_status") {
+      const status = await invoke<{
+        branch: string;
+        files: { path: string; status: string; staged: boolean }[];
+      }>("git_status", { workspaceRoot });
+      const files = status.files
+        .map((file) => `${file.status.padEnd(2)} ${file.path}${file.staged ? " (staged)" : ""}`)
+        .join("\n");
+      return `Git status:\n## ${status.branch}\n${files || "(clean)"}`;
+    }
+    if (call.name === "get_git_diff") {
+      const path = String(call.args.path ?? "").trim();
+      const staged = Boolean(call.args.staged);
+      const diff = await invoke<{ path: string; diff: string; additions: number; deletions: number }>(
+        "git_diff",
+        { workspaceRoot, path, staged }
+      );
+      return `Git diff${staged ? " (staged)" : ""}${path ? ` for ${path}` : ""} (+${diff.additions}/-${diff.deletions}):\n${diff.diff || "(empty)"}`;
     }
     if (call.name === "write_file") {
       const { path, old_str, new_str } = call.args;
@@ -550,7 +457,7 @@ async function executeTool(
     return `Error: unknown tool "${call.name}"`;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return `Error: ${msg}`;
+    return `Tool error from ${call.name}: ${msg}. Do not claim you cannot access files unless this says no workspace is open or the user denied access. Try a normalized relative path like "." or "README.md" if appropriate.`;
   }
 }
 
@@ -655,26 +562,6 @@ function isSubsequence(needle: string, hay: string): boolean {
     if (hay[j] === needle[i]) i++;
   }
   return i === needle.length;
-}
-
-function parseToolCallsFromChunk(raw: any): ToolCall[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((tc): ToolCall | null => {
-      const fn = tc.function ?? tc;
-      const name = fn?.name;
-      const id = typeof tc.id === "string" ? tc.id : undefined;
-      let args = fn?.arguments;
-      if (typeof args === "string") {
-        try {
-          args = JSON.parse(args);
-        } catch {
-          args = { _raw: args };
-        }
-      }
-      return name ? { id, name, args: args ?? {} } : null;
-    })
-    .filter((x): x is ToolCall => x !== null);
 }
 
 type Conversation = {
@@ -1078,24 +965,13 @@ function renderMarkdown(text: string): MdNode[] {
   return out;
 }
 
-function BouncingDots() {
+function AssistantPlaceholderLoader() {
   return (
-    <div className="loader-bounce" aria-label="Model is thinking">
+    <span className="ai-assistant-placeholder-loader" aria-label="Assistant is working">
       <span />
       <span />
       <span />
-    </div>
-  );
-}
-
-function OrbitLoader() {
-  return (
-    <div className="loader-orbit" aria-label="Waiting for output">
-      <span />
-      <span />
-      <span />
-      <span />
-    </div>
+    </span>
   );
 }
 
@@ -1364,9 +1240,55 @@ export function AiPanel({
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
+  void activity; // TODO: render the thinking/waiting indicator in the composer
+  const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [pending, setPending] = useState<PendingEditRequest | null>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
+
+  // Surface this panel's conversation on Mission Control. Each chat keeps a
+  // stable id for its lifetime; clearing the chat (or closing the panel)
+  // settles the convo to done and the next message starts a fresh one.
+  const convoIdRef = useRef<string | null>(null);
+  const lastPublishRef = useRef({ count: -1, streaming: false });
+  useEffect(() => {
+    if (msgs.length === 0) {
+      if (convoIdRef.current) settleKlideConvo(convoIdRef.current);
+      convoIdRef.current = null;
+      lastPublishRef.current = { count: -1, streaming: false };
+      return;
+    }
+    // During streaming, msgs changes on every token — only republish on
+    // message boundaries or when streaming starts/stops, so the board isn't
+    // rebuilt per token. The final content lands when streaming flips off.
+    const last = lastPublishRef.current;
+    if (streaming && last.streaming && last.count === msgs.length) return;
+    lastPublishRef.current = { count: msgs.length, streaming };
+    if (!convoIdRef.current) convoIdRef.current = crypto.randomUUID();
+    const firstUser = msgs.find((m) => m.role === "user");
+    publishKlideConvo({
+      id: convoIdRef.current,
+      title: (firstUser?.content.trim() || "Untitled chat").slice(0, 120),
+      // Streaming = the agent is working; idle = the chat is waiting on you.
+      status: streaming ? "running" : "waiting",
+      model: model ?? null,
+      cwd: workspaceRoot,
+      messages: msgs.flatMap((m) =>
+        (m.role === "user" || (m.role === "assistant" && !m.delegateConsole)) &&
+        m.content.trim()
+          ? [{ role: m.role, text: m.content }]
+          : []
+      ),
+      updatedMs: Date.now(),
+    });
+  }, [msgs, streaming, model, workspaceRoot]);
+  useEffect(
+    () => () => {
+      if (convoIdRef.current) settleKlideConvo(convoIdRef.current);
+    },
+    []
+  );
+
   const [contextLimit, setContextLimit] = useState(128_000);
   const [contextMode, setContextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
@@ -1375,6 +1297,7 @@ export function AiPanel({
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
   );
+  const agentModeRef = useRef(agentMode);
   // Whether the selected Ollama model declares the "tools" capability. Models
   // without it (e.g. many community GGUFs like Liquid's LFM2) 400 on any chat
   // request that includes a `tools` field, so we detect support up front and
@@ -1389,6 +1312,7 @@ export function AiPanel({
         ? ["chat", "plan", "goal"]
         : ["chat", "plan"];
       const next = order[(order.indexOf(m) + 1) % order.length] ?? "chat";
+      agentModeRef.current = next;
       localStorage.setItem("klide.agentMode", next);
       return next;
     });
@@ -1396,10 +1320,15 @@ export function AiPanel({
 
   function selectMode(mode: AgentMode) {
     setNextSendMode(null);
+    agentModeRef.current = mode;
     setAgentMode(mode);
     localStorage.setItem("klide.agentMode", mode);
     setModeOpen(false);
   }
+
+  useEffect(() => {
+    agentModeRef.current = agentMode;
+  }, [agentMode]);
 
   useEffect(() => {
     if (!modeOpen) return;
@@ -1658,9 +1587,29 @@ export function AiPanel({
   );
   const [currentId, setCurrentId] = useState<string>(() => genId());
   const [historyOpen, setHistoryOpen] = useState(false);
+  const msgsRef = useRef<Msg[]>([]);
+  const queueRef = useRef<QueuedTurn[]>([]);
+  const processingQueueRef = useRef(false);
+  const queueGenerationRef = useRef(0);
+  // Run id of the in-flight harness run, so clearing/switching chats can
+  // actually abort it on the Rust side instead of just ignoring its events.
+  const activeHarnessRunRef = useRef<string | null>(null);
+
+  function abortActiveHarnessRun() {
+    const runId = activeHarnessRunRef.current;
+    if (!runId) return;
+    activeHarnessRunRef.current = null;
+    void stopAgentRun(runId).catch((e) =>
+      console.error("Failed to abort harness run:", e)
+    );
+  }
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    msgsRef.current = msgs;
+  }, [msgs]);
 
   function newConversation() {
     if (providerDelegatesWork) {
@@ -1669,15 +1618,28 @@ export function AiPanel({
       });
     }
     setHistoryOpen(false);
+    abortActiveHarnessRun();
     setMsgs([]);
+    msgsRef.current = [];
+    queueRef.current = [];
+    queueGenerationRef.current += 1;
+    setQueuedTurns([]);
+    processingQueueRef.current = false;
+    setStreaming(false);
+    setActivity(null);
     setInput("");
     setCurrentId(genId());
   }
 
   function loadConversation(c: Conversation) {
     setHistoryOpen(false);
+    abortActiveHarnessRun();
     setCurrentId(c.id);
     setMsgs(c.msgs);
+    msgsRef.current = c.msgs;
+    queueRef.current = [];
+    queueGenerationRef.current += 1;
+    setQueuedTurns([]);
   }
 
   function deleteConversation(id: string, e: ReactMouseEvent) {
@@ -1844,8 +1806,12 @@ export function AiPanel({
 
   async function streamOnce(
     history: Msg[],
-    mode: AgentMode
+    mode: AgentMode,
+    turn: QueuedTurn,
+    generation: number,
+    assistantIndex: number
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
+    const availableTools = turn.modelSupportsTools ? toolsForMode(mode) : undefined;
     const sys: Msg = {
       role: "system",
       content: buildSystemPrompt(
@@ -1853,6 +1819,7 @@ export function AiPanel({
         stopAfterRejection,
         skills,
         mode,
+        Boolean(availableTools),
         projectRules
       ),
     };
@@ -1862,17 +1829,120 @@ export function AiPanel({
     // authoritative final state (it also carries the assembled tool calls).
     let streamedRaw = ""; // visible content + any inline <think> fragments
     let streamedThinking = ""; // provider's separate `thinking` field, if any
-    const delegateConsole = providerDelegatesWork;
-    const delegateProvider = providerName(provider);
+    const delegateConsole = isDelegateProvider(turn.provider);
+    const delegateProvider = providerName(turn.provider);
+    const useHarness = mode === "chat" || (mode === "plan" && turn.modelSupportsTools);
+    if (useHarness) {
+      let finalText = "";
+      let finalThinking = "";
+      let harnessError: Error | null = null;
+      const handleEvent = (event: AgentEvent) => {
+        if (event.type === "assistant_delta") {
+          streamedRaw += event.text;
+          streamedThinking += event.thinking ?? "";
+          const { thinking: inline, content } = splitThinking(streamedRaw);
+          const thinking = [streamedThinking, inline].filter(Boolean).join("\n").trim();
+          finalText = content;
+          finalThinking = thinking;
+          setMsgs((cur) => {
+            const next = [...cur];
+            if (!next[assistantIndex] || next[assistantIndex].role !== "assistant") {
+              return cur;
+            }
+            next[assistantIndex] = {
+              role: "assistant",
+              content,
+              thinking: thinking || undefined,
+              delegateConsole,
+              delegateProvider,
+            };
+            return next;
+          });
+        } else if (event.type === "assistant_message") {
+          const text = event.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("");
+          const thinking = event.content
+            .filter((block) => block.type === "thinking")
+            .map((block) => block.text)
+            .join("\n")
+            .trim();
+          finalText = text || finalText;
+          finalThinking = thinking || finalThinking;
+          setMsgs((cur) => {
+            const next = [...cur];
+            if (!next[assistantIndex] || next[assistantIndex].role !== "assistant") {
+              return cur;
+            }
+            next[assistantIndex] = {
+              role: "assistant",
+              content: finalText,
+              thinking: finalThinking || undefined,
+              delegateConsole,
+              delegateProvider,
+            };
+            return next;
+          });
+        } else if (event.type === "run_error") {
+          harnessError = new Error(event.error.message);
+        }
+      };
+      const session = await startAgentRun(
+        {
+          workspaceRoot,
+          mode,
+          provider: turn.provider,
+          model: turn.model,
+          text: turn.text,
+          attachments: turn.attachments,
+          context: {
+            workspaceRoot,
+            attachments: turn.attachments,
+            lensItems: turn.projectContext?.items ?? [],
+            estimatedTokens: messageTokenEstimate({
+              role: "user",
+              content: turn.text,
+              attachments: turn.attachments,
+              projectContext: turn.projectContext,
+            }),
+            omitted: [],
+          },
+          systemPrompt: buildSystemPrompt(
+            workspaceRoot,
+            stopAfterRejection,
+            skills,
+            mode,
+            mode === "plan" && turn.modelSupportsTools,
+            projectRules
+          ),
+        },
+        handleEvent
+      );
+      // The command returns as soon as the run is spawned; completion (and
+      // abortability) live on the session.
+      activeHarnessRunRef.current = session.runId;
+      try {
+        await session.done;
+      } finally {
+        activeHarnessRunRef.current = null;
+      }
+      if (harnessError) throw harnessError;
+      return { text: finalText, toolCalls: [] };
+    }
     const onChunk = new Channel<{ content: string; thinking: string }>();
     onChunk.onmessage = (chunk) => {
+      if (queueGenerationRef.current !== generation) return;
       streamedRaw += chunk.content;
       streamedThinking += chunk.thinking;
       const { thinking: inline, content } = splitThinking(streamedRaw);
       const thinking = [streamedThinking, inline].filter(Boolean).join("\n").trim();
       setMsgs((cur) => {
         const next = [...cur];
-        next[next.length - 1] = {
+        if (!next[assistantIndex] || next[assistantIndex].role !== "assistant") {
+          return cur;
+        }
+        next[assistantIndex] = {
           role: "assistant",
           content,
           thinking: thinking || undefined,
@@ -1889,17 +1959,24 @@ export function AiPanel({
       toolCalls?: unknown[];
       tool_calls?: unknown[];
     }>("ai_chat", {
-      provider,
-      model,
+      provider: turn.provider,
+      model: turn.model,
       messages: [sys, ...history].map(toOllamaMessage),
       // Models without tool support 400 if `tools` is present at all, so we
       // omit the field entirely for them.
-      tools: modelSupportsTools ? toolsForMode(mode) : undefined,
+      tools: availableTools,
       workspaceRoot,
       onChunk,
     });
 
+    if (queueGenerationRef.current !== generation) {
+      return { text: "", toolCalls: [] };
+    }
+
     const raw = res.content || streamedRaw; // may contain inline <think> blocks
+    if (queueGenerationRef.current !== generation) {
+      return { text: "", toolCalls: [] };
+    }
     const toolCalls = parseToolCallsFromChunk(res.toolCalls ?? res.tool_calls);
     const { thinking: inline, content } = splitThinking(raw);
     // res.thinking is the full accumulated field; fall back to the streamed
@@ -1908,7 +1985,10 @@ export function AiPanel({
     const thinking = [nativeThinking, inline].filter(Boolean).join("\n").trim();
     setMsgs((cur) => {
       const next = [...cur];
-      next[next.length - 1] = {
+      if (!next[assistantIndex] || next[assistantIndex].role !== "assistant") {
+        return cur;
+      }
+      next[assistantIndex] = {
         role: "assistant",
         content,
         thinking: thinking || undefined,
@@ -1924,7 +2004,7 @@ export function AiPanel({
 
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
-    if (!text.trim() || streaming) return;
+    if (!text.trim()) return;
 
     if (providerDelegatesWork) {
       setInput("");
@@ -1940,7 +2020,7 @@ export function AiPanel({
 
     // Models without tool support can still use the prompt-only Chat/Plan modes,
     // but Goal requires edit tools.
-    const requestedMode = opts?.mode ?? nextSendMode ?? agentMode;
+    const requestedMode = opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const mode: AgentMode =
       !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal"
         ? "chat"
@@ -1952,43 +2032,113 @@ export function AiPanel({
     setNextSendMode(null);
     const attachments = await collectAttachments(text);
     const activeProjectContext = lensItemsForPrompt(projectContext, text, contextMode);
+    enqueueTurn({
+      clientId: genId(),
+      text,
+      mode,
+      provider,
+      model,
+      modelSupportsTools,
+      attachments,
+      projectContext:
+        activeProjectContext.length > 0
+          ? { mode: contextMode, items: activeProjectContext }
+          : undefined,
+    });
+  }
 
-    let history: Msg[] = [
-      ...msgs,
-      {
-        role: "user",
-        content: text,
-        attachments: attachments.length ? attachments : undefined,
-        projectContext:
-          activeProjectContext.length > 0
-            ? { mode: contextMode, items: activeProjectContext }
-            : undefined,
-      },
-      {
-        role: "assistant",
-        content: "",
-        delegateConsole: providerDelegatesWork,
-        delegateProvider: providerName(provider),
-      },
-    ];
-    setMsgs(history);
+  function enqueueTurn(turn: QueuedTurn) {
+    queueRef.current = [...queueRef.current, turn];
+    setQueuedTurns(queueRef.current);
+    const queuedMessage: Msg = {
+      role: "user",
+      content: turn.text,
+      attachments: turn.attachments.length ? turn.attachments : undefined,
+      projectContext: turn.projectContext,
+      queueState: "queued",
+      queueId: turn.clientId,
+    };
+    msgsRef.current = [...msgsRef.current, queuedMessage];
+    setMsgs(msgsRef.current);
+    void drainQueue();
+  }
+
+  async function drainQueue() {
+    if (processingQueueRef.current) return;
+    processingQueueRef.current = true;
+    const generation = queueGenerationRef.current;
+    try {
+      while (queueRef.current.length > 0 && queueGenerationRef.current === generation) {
+        const [turn, ...rest] = queueRef.current;
+        queueRef.current = rest;
+        setQueuedTurns(rest);
+        await runQueuedTurn(turn, generation);
+      }
+    } finally {
+      processingQueueRef.current = false;
+    }
+  }
+
+  async function runQueuedTurn(turn: QueuedTurn, generation: number) {
+    if (queueGenerationRef.current !== generation) return;
+    let userIndex = msgsRef.current.findIndex(
+      (m) => m.role === "user" && m.queueId === turn.clientId
+    );
+    if (userIndex < 0) return;
+
+    let nextMsgs = [...msgsRef.current];
+    const userMsg = nextMsgs[userIndex];
+    if (userMsg.role !== "user") return;
+    nextMsgs[userIndex] = { ...userMsg, queueState: "running" };
+    nextMsgs.splice(userIndex + 1, 0, {
+      role: "assistant",
+      content: "",
+      delegateConsole: isDelegateProvider(turn.provider),
+      delegateProvider: providerName(turn.provider),
+    });
+    let assistantIndex = userIndex + 1;
+    let history: Msg[] = nextMsgs.slice(0, assistantIndex + 1);
+    msgsRef.current = nextMsgs;
+    setMsgs(nextMsgs);
     setStreaming(true);
     setActivity("thinking");
 
     try {
       for (let iter = 0; iter < MAX_TOOL_CALLS; iter++) {
         setActivity("thinking");
-        const { text, toolCalls } = await streamOnce(history.slice(0, -1), mode);
-        history = [
-          ...history.slice(0, -1),
-          {
-            role: "assistant",
-            content: text,
-            toolCalls: toolCalls.length ? toolCalls : undefined,
-            delegateConsole: providerDelegatesWork,
-            delegateProvider: providerName(provider),
-          },
-        ];
+        const { text, toolCalls } = await streamOnce(
+          history.slice(0, -1),
+          turn.mode,
+          turn,
+          generation,
+          assistantIndex
+        );
+        if (queueGenerationRef.current !== generation) return;
+        nextMsgs = [...msgsRef.current];
+        userIndex = nextMsgs.findIndex(
+          (m) => m.role === "user" && m.queueId === turn.clientId
+        );
+        if (userIndex < 0 || !nextMsgs[assistantIndex] || nextMsgs[assistantIndex].role !== "assistant") {
+          return;
+        }
+        const currentUser = nextMsgs[userIndex];
+        if (currentUser.role === "user") {
+          nextMsgs[userIndex] = {
+            ...currentUser,
+            queueState: undefined,
+            queueId: undefined,
+          };
+        }
+        nextMsgs[assistantIndex] = {
+          role: "assistant",
+          content: text,
+          toolCalls: toolCalls.length ? toolCalls : undefined,
+          delegateConsole: isDelegateProvider(turn.provider),
+          delegateProvider: providerName(turn.provider),
+        };
+        msgsRef.current = nextMsgs;
+        setMsgs(nextMsgs);
+        history = nextMsgs.slice(0, assistantIndex + 1);
 
         if (toolCalls.length === 0) break;
 
@@ -2002,6 +2152,7 @@ export function AiPanel({
             requireDiffReview,
             onFileWritten
           );
+          if (queueGenerationRef.current !== generation) return;
           toolMsgs.push({
             role: "tool",
             content: result,
@@ -2011,26 +2162,48 @@ export function AiPanel({
         }
 
         setActivity("thinking");
-        history = [
-          ...history,
-          ...toolMsgs,
-          { role: "assistant", content: "" },
-        ];
-        setMsgs(history);
+        nextMsgs = [...msgsRef.current];
+        if (!nextMsgs[assistantIndex] || nextMsgs[assistantIndex].role !== "assistant") {
+          return;
+        }
+        nextMsgs.splice(assistantIndex + 1, 0, ...toolMsgs, {
+          role: "assistant",
+          content: "",
+        });
+        assistantIndex = assistantIndex + toolMsgs.length + 1;
+        history = nextMsgs.slice(0, assistantIndex + 1);
+        msgsRef.current = nextMsgs;
+        setMsgs(nextMsgs);
       }
     } catch (e) {
+      if (queueGenerationRef.current !== generation) return;
       setMsgs((cur) => {
         const next = [...cur];
-        next[next.length - 1] = {
+        if (!next[assistantIndex] || next[assistantIndex].role !== "assistant") {
+          return cur;
+        }
+        const failedUserIndex = next.findIndex(
+          (m) => m.role === "user" && m.queueId === turn.clientId
+        );
+        const failedUser = next[failedUserIndex];
+        if (failedUser?.role === "user") {
+          next[failedUserIndex] = {
+            ...failedUser,
+            queueState: undefined,
+            queueId: undefined,
+          };
+        }
+        next[assistantIndex] = {
           role: "assistant",
-          content: `⚠ ${(e as Error).message}. Check ${providerName(provider)} connection and credentials.`,
+          content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.`,
         };
+        msgsRef.current = next;
         return next;
       });
     }
     setStreaming(false);
     setActivity(null);
-    if (providerDelegatesWork) onWorkspaceChanged?.();
+    if (isDelegateProvider(turn.provider)) onWorkspaceChanged?.();
   }
 
   function renderMessageBody(m: Msg, active = false) {
@@ -2718,9 +2891,7 @@ export function AiPanel({
         )}
         {msgs.map((m, i) => {
           const isLast = i === msgs.length - 1;
-          const isStreamingPlaceholder =
-            streaming &&
-            isLast &&
+          const isAssistantPlaceholder =
             m.role === "assistant" &&
             m.content === "" &&
             !m.thinking &&
@@ -2729,6 +2900,8 @@ export function AiPanel({
             streaming && isLast && m.role === "assistant" && m.content !== "";
 
           if (m.role === "user") {
+            const queued = m.queueState === "queued";
+            const running = m.queueState === "running";
             return (
               <div
                 key={i}
@@ -2740,16 +2913,29 @@ export function AiPanel({
                 }}
               >
                 <div
+                  className={
+                    running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined
+                  }
                   style={{
                     maxWidth: "88%",
-                    background: "var(--accent-soft)",
-                    color: "var(--fg-strong)",
+                    background: running
+                      ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))"
+                      : queued
+                      ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))"
+                      : "var(--accent-soft)",
+                    color: queued ? "var(--fg-subtle)" : "var(--fg-strong)",
+                    border:
+                      queued || running
+                        ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))"
+                        : "1px solid transparent",
                     borderRadius: "13px 13px 4px 13px",
                     padding: "8px 12px",
                     fontSize: 13,
                     lineHeight: 1.55,
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
+                    opacity: queued ? 0.82 : 1,
+                    backgroundSize: running ? "220% 100%" : undefined,
                   }}
                 >
                   {m.content}
@@ -2812,16 +2998,8 @@ export function AiPanel({
                   lineHeight: 1.6,
                 }}
               >
-                {isStreamingPlaceholder ? (
-                  <span
-                    style={{
-                      color: "var(--fg-dim)",
-                      display: "inline-flex",
-                      marginTop: 2,
-                    }}
-                  >
-                    {activity === "waiting" ? <OrbitLoader /> : <BouncingDots />}
-                  </span>
+                {isAssistantPlaceholder ? (
+                  <AssistantPlaceholderLoader />
                 ) : (
                   <>
                     {renderMessageBody(m, isStreamingActive)}
@@ -2838,20 +3016,38 @@ export function AiPanel({
 
       {!providerDelegatesWork && (
       <div style={{ padding: 10 }}>
-        {(streaming || pending) && (
+        {queuedTurns.length > 0 && (
           <div
             style={{
-              height: 18,
+              minHeight: 18,
               display: "flex",
               alignItems: "center",
               gap: 6,
               color: "var(--fg-subtle)",
               fontSize: 11,
               padding: "0 2px 6px",
+              flexWrap: "wrap",
             }}
           >
-            {activity === "waiting" || pending ? <OrbitLoader /> : <BouncingDots />}
-            <span>{activity === "waiting" || pending ? "Waiting for output" : "Thinking"}</span>
+            <span
+              title={queuedTurns.map((turn) => turn.text).join("\n\n")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                maxWidth: "100%",
+                minWidth: 0,
+                height: 18,
+                padding: "0 7px",
+                borderRadius: 999,
+                border: "1px solid var(--border)",
+                background: "var(--bg-elevated)",
+                color: "var(--fg-subtle)",
+              }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {queuedTurns.length} queued
+              </span>
+            </span>
           </div>
         )}
         {!providerDelegatesWork && projectContext && (
@@ -2950,7 +3146,6 @@ export function AiPanel({
               : "0 1px 2px rgba(38, 38, 32, 0.04)",
             transition:
               "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)",
-            opacity: streaming ? 0.7 : 1,
           }}
         >
           {slash !== null && slashMatches.length > 0 && (
@@ -3149,9 +3344,8 @@ export function AiPanel({
               setSlash(null);
             }}
             placeholder={
-              streaming ? "Working…" : "Ask anything, @ to attach a file…"
+              streaming ? "Queue another message…" : "Ask anything, @ to attach a file…"
             }
-            disabled={streaming}
             rows={1}
             style={{
               width: "100%",
@@ -3566,9 +3760,9 @@ export function AiPanel({
             </div>
             <button
               onClick={() => send()}
-              disabled={!input.trim() || streaming}
-              aria-label="Send message"
-              title="Send (Enter)"
+              disabled={!input.trim()}
+              aria-label={streaming ? "Queue message" : "Send message"}
+              title={streaming ? "Queue message (Enter)" : "Send (Enter)"}
               style={{
                 width: 28,
                 height: 28,
@@ -3576,17 +3770,17 @@ export function AiPanel({
                 display: "grid",
                 placeItems: "center",
                 borderRadius: "50%",
-                color: input.trim() && !streaming ? "#fff" : "var(--fg-dim)",
+                color: input.trim() ? "#fff" : "var(--fg-dim)",
                 background:
-                  input.trim() && !streaming
+                  input.trim()
                     ? "var(--accent)"
                     : "var(--bg-elevated)",
-                cursor: input.trim() && !streaming ? "pointer" : "default",
+                cursor: input.trim() ? "pointer" : "default",
                 transition:
                   "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)",
               }}
               onMouseEnter={(e) => {
-                if (input.trim() && !streaming)
+                if (input.trim())
                   e.currentTarget.style.filter = "brightness(1.08)";
               }}
               onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}

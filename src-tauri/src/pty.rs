@@ -2,7 +2,7 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Mutex;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 pub struct PtyState {
     pub writer: Mutex<Option<Box<dyn Write + Send>>>,
@@ -49,7 +49,12 @@ pub fn pty_spawn(
 
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())?;
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
@@ -68,7 +73,9 @@ pub fn pty_spawn(
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
             let _ = app.emit("pty:data", chunk);
         }
@@ -97,6 +104,7 @@ pub fn delegate_pty_spawn(
     session_id: String,
     provider: String,
     workspace_root: Option<String>,
+    task: Option<String>,
 ) -> Result<(), String> {
     let cwd = workspace_root
         .filter(|path| !path.trim().is_empty())
@@ -114,7 +122,10 @@ pub fn delegate_pty_spawn(
         if session.cwd != cwd {
             if let Some(path) = cwd.as_deref() {
                 let cd = format!("cd {}\n", shell_quote(path));
-                session.writer.write_all(cd.as_bytes()).map_err(|e| e.to_string())?;
+                session
+                    .writer
+                    .write_all(cd.as_bytes())
+                    .map_err(|e| e.to_string())?;
                 session.cwd = cwd;
             }
         }
@@ -123,10 +134,22 @@ pub fn delegate_pty_spawn(
 
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())?;
 
-    let command = delegate_command(&provider)?;
+    let base = delegate_command(&provider)?;
+    // A task turns `claude` into `claude '<prompt>'` — the CLI opens its normal
+    // interactive UI with the mission already submitted as the first message,
+    // so the run is observable and the user can take over by typing.
+    let command = match task.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => format!("{base} {}", shell_quote(t)),
+        None => base.to_string(),
+    };
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.arg("-lc");
@@ -150,7 +173,13 @@ pub fn delegate_pty_spawn(
     );
 
     std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
+        // Rate-limit output events: TUI agents (claude's spinner especially)
+        // redraw constantly, and every emit crosses the Rust → webview IPC
+        // bridge — an unthrottled session floods the UI thread. Sleeping
+        // briefly after each emit lets bursts pile up in the kernel's PTY
+        // buffer, so the next (large) read drains them as one event. Caps
+        // traffic at ~60 events/s per session; nothing is ever left stuck.
+        let mut buf = [0u8; 65536];
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 {
                 break;
@@ -163,8 +192,17 @@ pub fn delegate_pty_spawn(
                     data: chunk,
                 },
             );
+            std::thread::sleep(std::time::Duration::from_millis(15));
         }
         let _ = child.wait();
+        // The CLI exited (finished, crashed, or was stopped). Drop our handle
+        // and tell the frontend so boards can flip the run from running → done.
+        app.state::<DelegatePtyState>()
+            .sessions
+            .lock()
+            .unwrap()
+            .remove(&session_id);
+        let _ = app.emit("delegate-pty:exit", DelegatePtyExit { session_id });
     });
 
     Ok(())
@@ -177,7 +215,10 @@ pub fn delegate_pty_write(
     data: String,
 ) -> Result<(), String> {
     if let Some(session) = state.sessions.lock().unwrap().get_mut(&session_id) {
-        session.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        session
+            .writer
+            .write_all(data.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -219,6 +260,12 @@ pub fn delegate_pty_stop(state: State<DelegatePtyState>, session_id: String) -> 
 struct DelegatePtyChunk {
     session_id: String,
     data: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DelegatePtyExit {
+    session_id: String,
 }
 
 fn delegate_command(provider: &str) -> Result<&'static str, String> {

@@ -1,7 +1,8 @@
+mod agent;
 mod pty;
 use pty::{
-    delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn, pty_write,
-    DelegatePtyState, PtyState,
+    delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
+    pty_write, DelegatePtyState, PtyState,
 };
 use std::process::Command;
 use std::process::Stdio;
@@ -83,20 +84,20 @@ struct ProjectGraph {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AiChatResponse {
-    content: String,
-    thinking: Option<String>,
-    tool_calls: Vec<serde_json::Value>,
+pub(crate) struct AiChatResponse {
+    pub(crate) content: String,
+    pub(crate) thinking: Option<String>,
+    pub(crate) tool_calls: Vec<serde_json::Value>,
 }
 
 // One streamed delta pushed to the frontend through the per-request Channel.
 // `content`/`thinking` are incremental fragments — the UI appends them for the
 // live typing effect, then reconciles against ai_chat's authoritative return.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StreamChunk {
-    content: String,
-    thinking: String,
+pub(crate) struct StreamChunk {
+    pub(crate) content: String,
+    pub(crate) thinking: String,
 }
 
 // Accumulates one OpenAI streamed tool call. The API splits a single call
@@ -237,7 +238,10 @@ fn ai_clear_provider_key(provider: String) -> Result<(), String> {
 }
 
 fn is_subscription_provider(provider: &str) -> bool {
-    matches!(provider, "claude-code" | "codex" | "opencode" | "gemini-cli")
+    matches!(
+        provider,
+        "claude-code" | "codex" | "opencode" | "gemini-cli"
+    )
 }
 
 fn subscription_command(provider: &str) -> Result<&'static str, String> {
@@ -897,11 +901,15 @@ async fn run_cli_with_stdin(
             .wait()
             .await
             .map_err(|e| format!("Unable to read {label} exit status: {e}"))?;
-        Ok::<_, String>((status, stdout_text.trim().to_string(), stderr_text.trim().to_string()))
+        Ok::<_, String>((
+            status,
+            stdout_text.trim().to_string(),
+            stderr_text.trim().to_string(),
+        ))
     })
-        .await
-        .map_err(|_| format!("{label} timed out after 180 seconds"))?
-        .map_err(|e| e)?;
+    .await
+    .map_err(|_| format!("{label} timed out after 180 seconds"))?
+    .map_err(|e| e)?;
 
     if status.success() {
         Ok(if stdout.is_empty() { stderr } else { stdout })
@@ -1401,7 +1409,11 @@ async fn anthropic_chat(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return;
         };
-        match value.get("type").and_then(|v| v.as_str()).unwrap_or_default() {
+        match value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+        {
             "content_block_start" => {
                 let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 while blocks.len() <= index {
@@ -1513,6 +1525,69 @@ fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Unable to read file: {e}"))
+}
+
+/// Guard for explorer file operations: the entry's parent directory must
+/// resolve inside the opened workspace. Canonicalizing both sides defeats
+/// `..` segments and symlink tricks.
+fn assert_in_workspace(workspace_root: &str, path: &std::path::Path) -> Result<(), String> {
+    let root = std::fs::canonicalize(workspace_root)
+        .map_err(|e| format!("Invalid workspace root: {e}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Path has no parent folder".to_string())?;
+    let parent = std::fs::canonicalize(parent).map_err(|e| format!("Invalid path: {e}"))?;
+    if parent.starts_with(&root) {
+        Ok(())
+    } else {
+        Err("Path is outside the open workspace".to_string())
+    }
+}
+
+#[tauri::command]
+fn create_entry(workspace_root: String, path: String, is_directory: bool) -> Result<(), String> {
+    let target = std::path::PathBuf::from(&path);
+    assert_in_workspace(&workspace_root, &target)?;
+    if target.exists() {
+        return Err("An entry with that name already exists".to_string());
+    }
+    if is_directory {
+        std::fs::create_dir(&target).map_err(|e| format!("Unable to create folder: {e}"))
+    } else {
+        std::fs::write(&target, "").map_err(|e| format!("Unable to create file: {e}"))
+    }
+}
+
+#[tauri::command]
+fn rename_entry(workspace_root: String, from: String, to: String) -> Result<(), String> {
+    let from_path = std::path::PathBuf::from(&from);
+    let to_path = std::path::PathBuf::from(&to);
+    assert_in_workspace(&workspace_root, &from_path)?;
+    assert_in_workspace(&workspace_root, &to_path)?;
+    if to_path.exists() {
+        return Err("An entry with that name already exists".to_string());
+    }
+    std::fs::rename(&from_path, &to_path).map_err(|e| format!("Unable to rename: {e}"))
+}
+
+#[tauri::command]
+fn delete_entry(workspace_root: String, path: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(&path);
+    assert_in_workspace(&workspace_root, &target)?;
+    // symlink_metadata: delete a symlink itself, never follow it.
+    let meta =
+        std::fs::symlink_metadata(&target).map_err(|e| format!("Unable to read entry: {e}"))?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(&target).map_err(|e| format!("Unable to delete folder: {e}"))
+    } else {
+        std::fs::remove_file(&target).map_err(|e| format!("Unable to delete file: {e}"))
+    }
+}
+
+#[tauri::command]
+fn reveal_entry(path: String) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(&path)
+        .map_err(|e| format!("Unable to reveal in Finder: {e}"))
 }
 
 fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
@@ -2015,7 +2090,10 @@ fn parse_codex_run(
             }
             Some("turn_context") => {
                 if model.is_none() {
-                    if let Some(m) = payload.and_then(|p| p.get("model")).and_then(|m| m.as_str()) {
+                    if let Some(m) = payload
+                        .and_then(|p| p.get("model"))
+                        .and_then(|m| m.as_str())
+                    {
                         if !m.is_empty() {
                             model = Some(m.to_string());
                         }
@@ -2297,6 +2375,7 @@ pub fn run() {
         .manage(DelegatePtyState {
             sessions: Mutex::new(std::collections::HashMap::new()),
         })
+        .manage(agent::AgentSupervisorState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -2308,6 +2387,10 @@ pub fn run() {
             delegate_pty_stop,
             list_dir,
             read_text_file,
+            create_entry,
+            rename_entry,
+            delete_entry,
+            reveal_entry,
             git_status,
             git_stage,
             git_unstage,
@@ -2323,7 +2406,14 @@ pub fn run() {
             ai_provider_key_status,
             ai_set_provider_key,
             ai_clear_provider_key,
-            ai_chat
+            ai_chat,
+            agent::agent_start_run,
+            agent::agent_submit_user_turn,
+            agent::agent_resolve_permission,
+            agent::agent_resolve_diff,
+            agent::agent_abort_run,
+            agent::agent_list_runs,
+            agent::agent_read_run
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
