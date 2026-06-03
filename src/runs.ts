@@ -31,6 +31,7 @@ type AgentRunDto = {
   path: string;
   source: string;
   title: string;
+  provider?: string;
   model: string | null;
   cwd: string | null;
   project: string | null;
@@ -107,13 +108,46 @@ function fromDto(a: AgentRunDto): Run {
 // command is unavailable (e.g. running outside Tauri) — callers fall back to
 // the seed. Pages are offset-based so loading more never re-parses earlier runs.
 export async function fetchAgentRuns(limit = 10, offset = 0): Promise<Run[]> {
-  const rows = await invoke<AgentRunDto[]>("list_agent_runs", { limit, offset });
-  return rows.map(fromDto);
+  const [external, klide] = await Promise.allSettled([
+    invoke<AgentRunDto[]>("list_agent_runs", { limit, offset }),
+    invoke<AgentRunDto[]>("agent_list_runs", { limit, offset }),
+  ]);
+  const rows = [
+    ...(external.status === "fulfilled" ? external.value : []),
+    ...(klide.status === "fulfilled" ? klide.value : []),
+  ];
+  if (rows.length === 0 && external.status === "rejected" && klide.status === "rejected") {
+    throw external.reason;
+  }
+  return rows
+    .map(fromDto)
+    .sort((a, b) => b.updatedMs - a.updatedMs)
+    .slice(0, limit);
 }
 
 // Read a single run's conversation (the detail pane's résumé). Throws if the
 // command is unavailable; callers handle the empty/error state.
 export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
+  if (run.source === "klide") {
+    const events = await invoke<any[]>("agent_read_run", { runId: run.id });
+    return events
+      .flatMap((event): RunMessage[] => {
+        if (event.type === "user_message") {
+          return [{ role: "user", text: event.text ?? "" }];
+        }
+        if (event.type === "assistant_message") {
+          const text = Array.isArray(event.content)
+            ? event.content
+                .filter((block: any) => block?.type === "text")
+                .map((block: any) => String(block.text ?? ""))
+                .join("")
+            : "";
+          return text.trim() ? [{ role: "assistant", text }] : [];
+        }
+        return [];
+      })
+      .filter((m) => m.text.trim());
+  }
   return invoke<RunMessage[]>("read_agent_run", {
     path: run.path,
     source: run.source,

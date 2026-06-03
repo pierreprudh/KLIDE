@@ -27,6 +27,7 @@ tauri-plugin-fs = { version = "2.5.1", features = ["watch"] }
 tauri-plugin-dialog = "2.7.1"
 portable-pty = "0.9.0"
 tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = "0.7"
 # Secrets live in the OS keychain, never a plaintext store. `apple-native`
 # selects the macOS Keychain backend; add windows-native / sync-secret-service
 # when those platforms are targeted.

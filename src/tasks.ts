@@ -1,0 +1,152 @@
+// Delegated tasks — Mission Control's todo list (Devin-style). A task starts
+// life as a queued todo; "send an agent" dispatches a delegate CLI (claude /
+// codex) that works on it async in the workspace while you observe / take
+// over / stop. State lives at module level rather than in React so a running
+// task survives switching views — the PTY on the Rust side outlives any
+// component. Mission Control reads this store via useSyncExternalStore.
+
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { RunSource, RunStatus } from "./runs";
+
+export type TaskSource = Extract<RunSource, "claude-code" | "codex">;
+
+export type TaskSession = {
+  id: string;
+  title: string;
+  // null until an agent is sent — a plain todo wears the Klide mark.
+  source: TaskSource | null;
+  status: RunStatus;
+  cwd: string | null;
+  startedMs: number;
+};
+
+let sessions: TaskSession[] = [];
+// Raw PTY output per dispatched task, so re-opening a task replays its
+// scrollback instead of showing a blank terminal.
+const buffers = new Map<string, string>();
+const subscribers = new Set<() => void>();
+
+function emitChange() {
+  for (const fn of subscribers) fn();
+}
+
+function patch(id: string, fields: Partial<TaskSession>) {
+  if (!sessions.some((s) => s.id === id)) return;
+  sessions = sessions.map((s) => (s.id === id ? { ...s, ...fields } : s));
+  emitChange();
+}
+
+// One app-wide listener pair, attached lazily on first use. Data chunks only
+// feed the replay buffer (the open terminal streams them itself); the exit
+// event is what flips a task from running → done.
+let wired = false;
+function wire() {
+  if (wired) return;
+  wired = true;
+  void listen<{ sessionId: string; data: string }>("delegate-pty:data", (e) => {
+    const { sessionId, data } = e.payload;
+    // Ignore sessions we didn't start (e.g. AiPanel's own delegates).
+    const existing = buffers.get(sessionId);
+    if (existing === undefined) return;
+    // TUI redraws accumulate fast — keep only the most recent output, or a
+    // long-running agent grows the buffer (and every append) without bound.
+    // Replays may open mid-escape-sequence; xterm recovers within a frame.
+    const MAX_BUFFER = 200_000;
+    let next = existing + data;
+    if (next.length > MAX_BUFFER) next = next.slice(next.length - MAX_BUFFER);
+    buffers.set(sessionId, next);
+  });
+  void listen<{ sessionId: string }>("delegate-pty:exit", (e) => {
+    const id = e.payload.sessionId;
+    if (buffers.has(id)) patch(id, { status: "done", startedMs: Date.now() });
+  });
+}
+
+export function subscribeTasks(fn: () => void): () => void {
+  wire();
+  subscribers.add(fn);
+  return () => {
+    subscribers.delete(fn);
+  };
+}
+
+export function getTaskSessions(): TaskSession[] {
+  return sessions;
+}
+
+export function getTaskBuffer(id: string): string {
+  return buffers.get(id) ?? "";
+}
+
+// The agent used for the previous dispatch — quick-send defaults to it so
+// landing an agent on a todo is one click.
+export function lastAgent(): TaskSource {
+  const stored = localStorage.getItem("klide-last-agent");
+  return stored === "codex" ? "codex" : "claude-code";
+}
+
+// Add a todo. Nothing runs yet — it sits in Queued until an agent is sent.
+export function addTask(title: string, workspaceRoot: string | null): TaskSession {
+  wire();
+  const task: TaskSession = {
+    id: crypto.randomUUID(),
+    title,
+    source: null,
+    status: "queued",
+    cwd: workspaceRoot,
+    startedMs: Date.now(),
+  };
+  sessions = [task, ...sessions];
+  emitChange();
+  return task;
+}
+
+export async function startTask(
+  source: TaskSource,
+  title: string,
+  workspaceRoot: string | null
+): Promise<TaskSession> {
+  const task = addTask(title, workspaceRoot);
+  await dispatchTask(task.id, source);
+  return getTaskSessions().find((s) => s.id === task.id) ?? task;
+}
+
+// Send an agent to a todo: spawn the delegate CLI in the task's workspace with
+// the todo text as its first prompt. Flips queued → running; on failure the
+// task flips to error (and can be re-dispatched).
+export async function dispatchTask(id: string, source: TaskSource): Promise<void> {
+  const task = sessions.find((s) => s.id === id);
+  if (!task || task.status === "running") return;
+  localStorage.setItem("klide-last-agent", source);
+  buffers.set(id, "");
+  patch(id, { source, status: "running", startedMs: Date.now() });
+  try {
+    await invoke("delegate_pty_spawn", {
+      sessionId: id,
+      provider: source,
+      workspaceRoot: task.cwd,
+      task: task.title,
+    });
+  } catch (err) {
+    patch(id, { status: "error" });
+    throw err;
+  }
+}
+
+// Interrupt a running task (Ctrl-C + exit on the Rust side). The PTY exit
+// event confirms the flip to done; we set it eagerly so the UI reacts at once.
+export async function stopTask(id: string): Promise<void> {
+  await invoke("delegate_pty_stop", { sessionId: id });
+  patch(id, { status: "done" });
+}
+
+// Drop a task off the board (todos you no longer want, finished runs).
+// Running tasks must be stopped first.
+export function removeTask(id: string): void {
+  const task = sessions.find((s) => s.id === id);
+  if (!task || task.status === "running") return;
+  sessions = sessions.filter((s) => s.id !== id);
+  buffers.delete(id);
+  emitChange();
+}

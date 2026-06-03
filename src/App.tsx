@@ -5,7 +5,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, watch, writeTextFile } from "@tauri-apps/plugin-fs";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
@@ -38,7 +38,15 @@ import type { ProjectContextSnapshot } from "./contextTray";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
-type Tab = { path: string; code: string; dirty: boolean; externalChanged?: boolean };
+type Tab = {
+  path: string;
+  code: string;
+  dirty: boolean;
+  externalChanged?: boolean;
+  // Last content loaded from / saved to disk — the baseline for deciding
+  // whether a watch event is a real external edit or just noise (rename, save).
+  diskCode?: string;
+};
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
 function readNumberSetting(key: string, fallback: number, min: number, max: number): number {
@@ -336,6 +344,8 @@ function App() {
             onOpen={openFile}
             onRootChange={setWorkspaceRoot}
             onOpenGitDiff={openGitDiff}
+            onEntryRenamed={onEntryRenamed}
+            onEntryDeleted={onEntryDeleted}
           />
         );
       case "git":
@@ -470,7 +480,10 @@ function App() {
       setActiveIdx(existing);
       return;
     }
-    setTabs([...tabs, { path: p, code: content, dirty: false, externalChanged: false }]);
+    setTabs([
+      ...tabs,
+      { path: p, code: content, dirty: false, externalChanged: false, diskCode: content },
+    ]);
     setActiveIdx(tabs.length);
   }
 
@@ -498,11 +511,48 @@ function App() {
     );
   }
 
-  function closeTab(i: number) {
+  function onEntryRenamed(oldPath: string, newPath: string) {
+    // Folder-aware: renaming a folder remaps every open tab underneath it.
+    setTabs((cur) =>
+      cur.map((t) => {
+        if (t.path === oldPath) return { ...t, path: newPath };
+        if (t.path.startsWith(`${oldPath}/`))
+          return { ...t, path: newPath + t.path.slice(oldPath.length) };
+        return t;
+      })
+    );
+  }
+
+  function onEntryDeleted(path: string) {
+    const isGone = (p: string) => p === path || p.startsWith(`${path}/`);
+    const next = tabs.filter((t) => !isGone(t.path));
+    if (next.length === tabs.length) return;
+    const activePath = active?.path ?? null;
+    setTabs(next);
+    if (next.length === 0) setActiveIdx(-1);
+    else if (activePath && !isGone(activePath))
+      setActiveIdx(next.findIndex((t) => t.path === activePath));
+    else setActiveIdx(Math.min(Math.max(activeIdx, 0), next.length - 1));
+  }
+
+  async function closeTab(i: number) {
     const closing = tabs[i];
     if (closing?.dirty) {
-      const ok = window.confirm(`Close ${filename(closing.path)} with unsaved changes?`);
-      if (!ok) return;
+      // window.confirm is a no-op in Tauri's webview (always falsy) —
+      // use the dialog plugin's native confirm instead.
+      try {
+        const ok = await confirm(
+          `Close ${filename(closing.path)} with unsaved changes?`,
+          { title: "Unsaved changes", kind: "warning" }
+        );
+        if (!ok) return;
+      } catch (e) {
+        console.error("Confirm dialog failed:", e);
+        setFileNotice(
+          `Confirm failed: ${e instanceof Error ? e.message : String(e)}`
+        );
+        return;
+      }
     }
     const next = tabs.filter((_, idx) => idx !== i);
     setTabs(next);
@@ -513,26 +563,37 @@ function App() {
 
   async function saveActive() {
     if (!active) return;
-    if (active.externalChanged) {
-      const ok = window.confirm(
-        `${filename(active.path)} changed on disk while you were editing. Save anyway and overwrite the disk version?`
+    try {
+      if (active.externalChanged) {
+        const ok = await confirm(
+          `${filename(active.path)} changed on disk while you were editing. Save anyway and overwrite the disk version?`,
+          { title: "File changed on disk", kind: "warning" }
+        );
+        if (!ok) return;
+      }
+      await writeTextFile(active.path, active.code);
+      setTabs((cur) =>
+        cur.map((t, i) =>
+          i === activeIdx
+            ? { ...t, dirty: false, externalChanged: false, diskCode: t.code }
+            : t
+        )
       );
-      if (!ok) return;
+      setFileNotice(`Saved ${filename(active.path)}`);
+    } catch (e) {
+      // Surface the failure in the status notice instead of dying silently.
+      console.error("Save failed:", e);
+      setFileNotice(
+        `Save failed: ${e instanceof Error ? e.message : String(e)}`
+      );
     }
-    await writeTextFile(active.path, active.code);
-    setTabs((cur) =>
-      cur.map((t, i) =>
-        i === activeIdx ? { ...t, dirty: false, externalChanged: false } : t
-      )
-    );
-    setFileNotice(`Saved ${filename(active.path)}`);
   }
 
   function onAgentWrote(path: string, newContent: string) {
     setTabs((cur) =>
       cur.map((t) =>
         t.path === path
-          ? { ...t, code: newContent, dirty: false, externalChanged: false }
+          ? { ...t, code: newContent, dirty: false, externalChanged: false, diskCode: newContent }
           : t
       )
     );
@@ -729,28 +790,32 @@ function App() {
               if (cancelled) return;
               setTabs((cur) =>
                 cur.map((tab) => {
-                  if (tab.path !== path || tab.code === diskCode) {
-                    return tab.path === path
-                      ? { ...tab, externalChanged: false }
-                      : tab;
+                  if (tab.path !== path) return tab;
+                  // Same as the last disk content we know about? Then this
+                  // event is noise (our own save, or a rename) — not an edit.
+                  if (diskCode === (tab.diskCode ?? tab.code)) {
+                    return { ...tab, diskCode, externalChanged: false };
                   }
                   if (tab.dirty) {
                     setFileNotice(`${filename(path)} changed on disk`);
-                    return { ...tab, externalChanged: true };
+                    return { ...tab, diskCode, externalChanged: true };
                   }
                   setFileNotice(`Reloaded ${filename(path)}`);
-                  return { ...tab, code: diskCode, externalChanged: false };
+                  return { ...tab, code: diskCode, diskCode, externalChanged: false };
                 })
               );
             })
             .catch(() => {
               if (cancelled) return;
-              setTabs((cur) =>
-                cur.map((tab) =>
+              setTabs((cur) => {
+                // Tab may have been renamed or closed already (e.g. via the
+                // explorer context menu) — don't raise a false alarm.
+                if (!cur.some((tab) => tab.path === path)) return cur;
+                setFileNotice(`${filename(path)} is unavailable on disk`);
+                return cur.map((tab) =>
                   tab.path === path ? { ...tab, externalChanged: true } : tab
-                )
-              );
-              setFileNotice(`${filename(path)} is unavailable on disk`);
+                );
+              });
             });
         }
       },
@@ -865,7 +930,7 @@ function App() {
           <>
             <ActivityBar active={activityState} onToggle={togglePanel} />
             {view === "runs" ? (
-              <MissionControl />
+              <MissionControl workspaceRoot={workspaceRoot} theme={theme} />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : (
@@ -874,6 +939,8 @@ function App() {
               onOpen={openFile}
               onRootChange={setWorkspaceRoot}
               onOpenGitDiff={openGitDiff}
+              onEntryRenamed={onEntryRenamed}
+              onEntryDeleted={onEntryDeleted}
               visible={explorerVisible}
               width={explorerWidth}
               workspaceRoot={workspaceRoot}
