@@ -55,6 +55,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -785,6 +787,8 @@ export function SettingsPanel({
   onRequireDiffReviewChange,
   stopAfterRejection,
   onStopAfterRejectionChange,
+  harnessSettings,
+  onHarnessSettingsChange,
   explorerVisible,
   customLayouts,
   onCustomLayoutsChange,
@@ -1321,6 +1325,42 @@ export function SettingsPanel({
                       />
                     }
                   />
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Harness Prompts">
+                <Panel>
+                  <p style={{ margin: 0, color: "var(--fg-subtle)", fontSize: 12 }}>
+                    Override the system prompt the agent receives per mode. Leave blank to use the default.
+                  </p>
+                  {(["chat", "plan", "goal"] as const).map((mode) => (
+                    <div key={mode} style={{ marginTop: 10 }}>
+                      <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 4, textTransform: "capitalize" }}>
+                        {mode} mode prompt
+                      </label>
+                      <textarea
+                        value={harnessSettings?.[`${mode}Prompt` as keyof typeof harnessSettings] ?? ""}
+                        onChange={(e) => {
+                          const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
+                          onHarnessSettingsChange?.(next);
+                        }}
+                        placeholder={`Default ${mode} prompt...`}
+                        rows={mode === "chat" ? 2 : 4}
+                        style={{
+                          width: "100%",
+                          resize: "vertical",
+                          background: "var(--bg)",
+                          color: "var(--fg-strong)",
+                          border: "1px solid var(--border-strong)",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                          padding: "6px 8px",
+                          outline: "none",
+                          lineHeight: 1.45,
+                        }}
+                      />
+                    </div>
+                  ))}
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Connections">

@@ -7,6 +7,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, watch, writeTextFile } from "@tauri-apps/plugin-fs";
+import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
 import { Sidebar } from "./components/Sidebar";
@@ -26,7 +27,7 @@ import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
-import { loadSkills, saveSkills, type Skill } from "./skills";
+import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
 import {
   loadCustomPresets,
   saveCustomPresets,
@@ -35,6 +36,8 @@ import {
 import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts";
 import { GridWorkbench } from "./components/GridWorkbench";
 import type { ProjectContextSnapshot } from "./contextTray";
+import { CommandPalette } from "./components/CommandPalette";
+import { SearchPanel } from "./components/SearchPanel";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
@@ -148,6 +151,9 @@ function App() {
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [searchVisible, setSearchVisible] = useState(false);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [fileNotice, setFileNotice] = useState<string | null>(null);
@@ -179,6 +185,21 @@ function App() {
     readNumberSetting("klide-graph-width", 320, 260, 560)
   );
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const fsSkills = await loadFilesystemSkills(workspaceRoot);
+      if (cancelled) return;
+      setSkills((prev) => {
+        const userDefined = prev.filter((s) => !s.fromFile);
+        const existingFileIds = new Set(userDefined.map((s) => s.id));
+        const newFileSkills = fsSkills.filter((s) => !existingFileIds.has(s.id));
+        return [...userDefined, ...newFileSkills];
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceRoot]);
   const [customLayouts, setCustomLayouts] = useState<LayoutPreset[]>(() =>
     loadCustomPresets()
   );
@@ -221,8 +242,22 @@ function App() {
     readBoolSetting("klide-confirm-agent-edits", true)
   );
   const [stopAfterRejection, setStopAfterRejection] = useState(() =>
-    readBoolSetting("klide-stop-after-rejection", true)
+    readBoolSetting("klide.stopAfterRejection", false)
   );
+  type HarnessSettings = {
+    chatPrompt?: string;
+    planPrompt?: string;
+    goalPrompt?: string;
+  };
+  const [harnessSettings, setHarnessSettings] = useState<HarnessSettings>(() => {
+    try {
+      const raw = localStorage.getItem("klide.harnessSettings");
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    localStorage.setItem("klide.harnessSettings", JSON.stringify(harnessSettings));
+  }, [harnessSettings]);
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
   const activeGrid =
     activeGridId != null
@@ -320,6 +355,12 @@ function App() {
               onClose={closeTab}
               workspaceRoot={workspaceRoot}
             />
+            <SearchPanel
+              workspaceRoot={workspaceRoot}
+              visible={searchVisible}
+              onClose={() => setSearchVisible(false)}
+              onOpenFile={openFile}
+            />
             <EditorArea
               code={active?.code ?? ""}
               onChange={updateActiveCode}
@@ -407,6 +448,7 @@ function App() {
             stopAfterRejection={stopAfterRejection}
             skills={skills}
             projectContext={projectContext}
+            harnessSettings={harnessSettings}
           />
         );
       default:
@@ -835,24 +877,139 @@ function App() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s" && active) {
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (mod && !e.shiftKey && e.key === "s" && active) {
         e.preventDefault();
         saveActive();
+        return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "`") {
+      if (mod && !e.shiftKey && e.key === "`") {
         e.preventDefault();
         setTerminalVisible((v) => !v);
+        return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "o") {
+      if (mod && !e.shiftKey && e.key === "o") {
         e.preventDefault();
         openFolderDialog();
+        return;
+      }
+      if (mod && e.shiftKey && e.key === "F") {
+        e.preventDefault();
+        setSearchVisible((v) => !v);
+        return;
+      }
+      if (mod && !e.shiftKey && e.key === "f") {
+        e.preventDefault();
+        setSearchVisible((v) => !v);
+        return;
+      }
+      if (mod && !e.shiftKey && e.key === "p") {
+        e.preventDefault();
+        setPaletteQuery(e.shiftKey ? "> " : "");
+        setPaletteOpen(true);
+        return;
+      }
+      if (mod && e.shiftKey && e.key === "P") {
+        e.preventDefault();
+        setPaletteQuery("> ");
+        setPaletteOpen(true);
+        return;
+      }
+      if (mod && !e.shiftKey && e.key === "w" && tabs.length > 0) {
+        e.preventDefault();
+        closeTab(activeIdx >= 0 ? activeIdx : 0);
+        return;
+      }
+      if (mod && !e.shiftKey && e.key === ",") {
+        e.preventDefault();
+        setView("settings");
+        return;
+      }
+      if (mod && !e.shiftKey && e.key === "n") {
+        e.preventDefault();
+        setView("workbench");
+        return;
+      }
+      // Tab navigation
+      if (mod && !e.shiftKey && e.key === "Tab" && tabs.length > 1) {
+        e.preventDefault();
+        setActiveIdx((i) => (i + 1) % tabs.length);
+        return;
+      }
+      if (mod && e.shiftKey && e.key === "Tab" && tabs.length > 1) {
+        e.preventDefault();
+        setActiveIdx((i) => (i - 1 + tabs.length) % tabs.length);
+        return;
+      }
+      // Escape — close palette or search panel
+      if (e.key === "Escape") {
+        if (paletteOpen) { setPaletteOpen(false); return; }
+        if (searchVisible) { setSearchVisible(false); return; }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, activeIdx, tabs]);
+  }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible]);
+
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+    void (async () => {
+      unlisteners.push(await listen("menu:command-palette", () => {
+        setPaletteQuery("> ");
+        setPaletteOpen(true);
+      }));
+      unlisteners.push(await listen("menu:find-in-files", () => {
+        setSearchVisible((v) => !v);
+      }));
+      unlisteners.push(await listen("menu:toggle-terminal", () => {
+        setTerminalVisible((v) => !v);
+      }));
+      unlisteners.push(await listen("menu:toggle-search", () => {
+        setSearchVisible((v) => !v);
+      }));
+      unlisteners.push(await listen("menu:open-settings", () => {
+        setView("settings");
+      }));
+      unlisteners.push(await listen("menu:close-tab", () => {
+        if (activeIdx >= 0 && activeIdx < tabs.length) closeTab(activeIdx);
+      }));
+      unlisteners.push(await listen("menu:close-window", () => {
+        // On macOS, window close is handled by the system; this is a fallback
+      }));
+      unlisteners.push(await listen("menu:open-folder", () => {
+        openFolderDialog();
+      }));
+    })();
+    return () => { unlisteners.forEach((u) => u()); };
+  }, [activeIdx, tabs]);
 
   const language = active ? detectLanguage(active.path) : null;
+
+  // ── Command palette ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    function onPaletteClose() { setPaletteOpen(false); }
+    window.addEventListener("command-palette-close" as any, onPaletteClose);
+    return () => window.removeEventListener("command-palette-close" as any, onPaletteClose);
+  }, []);
+
+  const paletteCommands = [
+    { id: "save", label: "File: Save", shortcut: "⌘S", action: () => { saveActive(); setPaletteOpen(false); } },
+    { id: "open-folder", label: "File: Open Folder…", shortcut: "⌘O", action: () => { openFolderDialog(); setPaletteOpen(false); } },
+    { id: "close-tab", label: "View: Close Tab", shortcut: "⌘W", action: () => { if (activeIdx >= 0) closeTab(activeIdx); setPaletteOpen(false); } },
+    { id: "find", label: "Edit: Find in Files", shortcut: "⌘⇧F", action: () => { setSearchVisible((v) => !v); setPaletteOpen(false); } },
+    { id: "terminal-toggle", label: "Terminal: Toggle", shortcut: "⌘`", action: () => { setTerminalVisible((v) => !v); setPaletteOpen(false); } },
+    { id: "settings", label: "Preferences: Open Settings", shortcut: "⌘,", action: () => { setView("settings"); setPaletteOpen(false); } },
+    { id: "theme", label: "Appearance: Toggle Theme", action: () => { setTheme((t) => getNextThemeId(t)); setPaletteOpen(false); } },
+    { id: "word-wrap", label: "Editor: Toggle Word Wrap", action: () => { setEditorWordWrap((v) => !v); setPaletteOpen(false); } },
+    { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
+    { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
+    { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
+    { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const url = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${url}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
+    { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
+    { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
+  ];
 
   // Nothing open → a full-screen welcome page (no chrome at all). Settings stays
   // reachable so API keys can be set up before a folder is ever opened.
@@ -919,6 +1076,8 @@ function App() {
             onRequireDiffReviewChange={setRequireDiffReview}
             stopAfterRejection={stopAfterRejection}
             onStopAfterRejectionChange={setStopAfterRejection}
+            harnessSettings={harnessSettings}
+            onHarnessSettingsChange={setHarnessSettings}
             explorerVisible={explorerVisible}
             customLayouts={customLayouts}
             onCustomLayoutsChange={updateCustomLayouts}
@@ -1024,6 +1183,12 @@ function App() {
                   onClose={closeTab}
                   workspaceRoot={workspaceRoot}
                 />
+                <SearchPanel
+                  workspaceRoot={workspaceRoot}
+                  visible={searchVisible}
+                  onClose={() => setSearchVisible(false)}
+                  onOpenFile={openFile}
+                />
                 <EditorArea
                   code={active?.code ?? ""}
                   onChange={updateActiveCode}
@@ -1095,6 +1260,7 @@ function App() {
                 stopAfterRejection={stopAfterRejection}
                 skills={skills}
                 projectContext={projectContext}
+                harnessSettings={harnessSettings}
                 onDuplicate={duplicateAiPanel}
                 onClose={
                   aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
@@ -1131,6 +1297,14 @@ function App() {
         onChange={updateSkills}
         onClose={() => setSkillsVisible(false)}
       />
+      {paletteOpen && (
+        <CommandPalette
+          workspaceRoot={workspaceRoot}
+          commands={paletteCommands}
+          onOpenFile={openFile}
+          initialQuery={paletteQuery}
+        />
+      )}
     </div>
   );
 }

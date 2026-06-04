@@ -64,6 +64,9 @@ pub fn append_event(
         | AgentEvent::ToolCallFinished { ts, .. }
         | AgentEvent::PermissionResolved { ts, .. }
         | AgentEvent::DiffResolved { ts, .. }
+        | AgentEvent::PermissionRequested { ts, .. }
+        | AgentEvent::DiffProposed { ts, .. }
+        | AgentEvent::FileChanged { ts, .. }
         | AgentEvent::RunResult { ts, .. }
         | AgentEvent::RunError { ts, .. } => *ts,
     };

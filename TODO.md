@@ -14,12 +14,20 @@ them.
   - One OpenAI-compatible API provider
   - Claude Code / Codex delegate mode, including workspace diff refresh
 - [x] Reconcile README with real delegate PTYs, Mission Control, and Context Lens status.
-- [ ] Run `cargo check` and `npx tsc --noEmit` clean before shipping.
+- [x] Run `cargo check` and `npx tsc --noEmit` clean before shipping.
+
+## Refactoring (completed 2026-06-04)
+
+- [x] Split AiPanel.tsx (3809 → 902 lines) — extracted 9 sub-modules into `src/components/ai/`
+- [x] One agent loop — retired TS tool-dispatch loop; Rust harness handles all modes (Chat/Plan/Goal)
+- [x] Write-tool diff review wired — harness pauses for approval via `tokio::sync::oneshot`; `agent_resolve_diff` unblocks
+- [x] Provider seam — `StreamingProvider` trait + shared `stream_provider()` loop; 3 adapters (Ollama, OpenAI, Anthropic)
+- [x] Tool registry — Rust `ToolEntry` struct bundles schema + execution; frontend fetches schemas over IPC
+- [x] Command palette — Cmd+P (fuzzy file search), Cmd+Shift+P (command mode, 9 commands)
+- [x] Find-in-files — Cmd+Shift+F, Rust `search_in_files` command, results panel with file-open-on-click
 
 ## Next Product Moves
 
-- [ ] Command palette (`Cmd+P` / `Cmd+Shift+P`) as the main hidden control surface.
-- [ ] Find-in-files using a Rust ripgrep-style search command.
 - [ ] Editable harness settings: mode prompts, tool toggles, and tool descriptions.
 - [ ] Checkpoint rollback: preview files changed since a turn and revert selected files.
 - [ ] Settings depth without adding persistent chrome.

@@ -10,6 +10,7 @@ import {
   getTaskBuffer,
   getTaskSessions,
   lastAgent,
+  lastModel,
   removeTask,
   stopTask,
   subscribeTasks,
@@ -33,6 +34,7 @@ import {
   STATUS_LABEL,
   STATUS_ORDER,
   type Run,
+  type RunKind,
   type RunMessage,
   type RunSource,
   type RunStatus,
@@ -55,16 +57,19 @@ function cssVar(name: string): string {
 }
 
 // Present a dispatched task as a Run so it shares the board's rows, filters
-// and status groups with the disk-log runs.
+// and status groups with the disk-log runs. `kind: "task"` is what tells
+// the row renderer to use the task avatar + TASK badge (vs. the Klide
+// spark used for AI-panel conversations).
 function taskToRun(t: TaskSession): Run {
   return {
     id: t.id,
     path: "",
+    kind: "task",
     // Undispatched todos wear the Klide mark until an agent is sent.
     source: t.source ?? "klide",
     title: t.title,
     status: t.status,
-    model: null,
+    model: t.model,
     project: t.cwd ? t.cwd.split("/").filter(Boolean).pop() ?? null : null,
     cwd: t.cwd,
     branch: null,
@@ -78,6 +83,7 @@ function convoToRun(c: KlideConvo): Run {
   return {
     id: c.id,
     path: "",
+    kind: "convo",
     source: "klide",
     title: c.title,
     status: c.status,
@@ -108,6 +114,46 @@ function StatusDot({ status, size = 7 }: { status: RunStatus; size?: number }) {
   );
 }
 
+// Extract the model provider prefix from OpenCode model strings.
+// Format: "opencode-go/minimax-m3" → provider: "opencode-go", name: "minimax-m3"
+function modelProvider(model: string | null): string | null {
+  if (!model) return null;
+  const slash = model.indexOf("/");
+  return slash >= 0 ? model.slice(0, slash) : null;
+}
+function modelShortName(model: string | null): string | null {
+  if (!model) return null;
+  const slash = model.indexOf("/");
+  return slash >= 0 ? model.slice(slash + 1) : model;
+}
+
+function ModelProviderBadge({ model }: { model: string | null }) {
+  const provider = modelProvider(model);
+  if (!provider) return null;
+  const color = provider === "opencode-go" ? "#D97757" : "var(--fg-dim)";
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 9,
+        fontWeight: 600,
+        fontFamily: "var(--font-mono)",
+        letterSpacing: "0.04em",
+        color,
+        padding: "1px 5px",
+        borderRadius: 3,
+        background: `color-mix(in srgb, ${provider === "opencode-go" ? "#D97757" : "var(--fg-dim)"} 10%, var(--bg-elevated))`,
+        border: `1px solid color-mix(in srgb, ${provider === "opencode-go" ? "#D97757" : "var(--border)"} 25%, var(--border))`,
+        flexShrink: 0,
+      }}
+    >
+      {provider}
+    </span>
+  );
+}
+
 // Official brand marks (Simple Icons, single-path, currentColor → theme- and
 // hover-aware), so each run wears its tool's real logo instead of a flat color.
 const BRAND_PATH: Partial<Record<RunSource, string>> = {
@@ -117,7 +163,37 @@ const BRAND_PATH: Partial<Record<RunSource, string>> = {
     "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z",
 };
 
-function SourceLogo({ source, size = 14 }: { source: RunSource; size?: number }) {
+// A small inline checkmark-in-square — used for todos. We want this to read
+// at a glance as "task to do", not as any particular agent or tool.
+const TASK_AVATAR_PATH =
+  "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 2v14h14V5H5zm3.3 7.7l1.4-1.4 1.8 1.8 4.5-4.5 1.4 1.4-5.9 5.9-3.2-3.2z";
+
+function SourceLogo({
+  source,
+  kind,
+  size = 14,
+}: {
+  source: RunSource;
+  kind?: RunKind;
+  size?: number;
+}) {
+  // Tasks always wear the task mark — even after dispatch — so a row reads
+  // as "this todo is being worked on by Claude Code", not "this is a Claude
+  // Code session".
+  if (kind === "task") {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        aria-hidden="true"
+        style={{ color: "var(--accent)" }}
+      >
+        <path d={TASK_AVATAR_PATH} />
+      </svg>
+    );
+  }
   const path = BRAND_PATH[source];
   const color = SOURCE_COLOR[source];
   if (path) {
@@ -132,6 +208,21 @@ function SourceLogo({ source, size = 14 }: { source: RunSource; size?: number })
       >
         <path d={path} />
       </svg>
+    );
+  }
+  // OpenCode uses its own two-tone logo (light/dark variants in /public) with
+  // a CSS theme-swap rule already in tokens.css. The wrapper class stacks the
+  // two <img>s at the same grid cell so only the right one shows per theme.
+  if (source === "opencode") {
+    return (
+      <span
+        className="opencode-logo"
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      >
+        <img className="opencode-logo-light" src="/opencode-logo-light.svg" alt="" />
+        <img className="opencode-logo-dark" src="/opencode-logo-dark.svg" alt="" />
+      </span>
     );
   }
   // Klide's own runs — a quiet spark.
@@ -153,7 +244,19 @@ function SourceLogo({ source, size = 14 }: { source: RunSource; size?: number })
   );
 }
 
-function RunAvatar({ source, size = 26 }: { source: RunSource; size?: number }) {
+function RunAvatar({
+  source,
+  kind,
+  size = 26,
+}: {
+  source: RunSource;
+  kind?: RunKind;
+  size?: number;
+}) {
+  // Tasks use the accent (Klide's brand color) so they read as first-class
+  // objects on the board, not as a third-party run that's been misclassified.
+  const tint =
+    kind === "task" ? "var(--accent)" : SOURCE_COLOR[source];
   return (
     <span
       style={{
@@ -163,12 +266,12 @@ function RunAvatar({ source, size = 26 }: { source: RunSource; size?: number }) 
         display: "grid",
         placeItems: "center",
         borderRadius: "var(--radius-sm)",
-        background: `color-mix(in srgb, ${SOURCE_COLOR[source]} 12%, var(--bg-elevated))`,
-        border: `1px solid color-mix(in srgb, ${SOURCE_COLOR[source]} 28%, var(--border))`,
-        color: SOURCE_COLOR[source],
+        background: `color-mix(in srgb, ${tint} 12%, var(--bg-elevated))`,
+        border: `1px solid color-mix(in srgb, ${tint} 28%, var(--border))`,
+        color: tint,
       }}
     >
-      <SourceLogo source={source} size={Math.round(size * 0.56)} />
+      <SourceLogo source={source} kind={kind} size={Math.round(size * 0.56)} />
     </span>
   );
 }
@@ -187,9 +290,6 @@ function RunRow({
   action?: React.ReactNode;
 }) {
   const [hovered, setHovered] = useState(false);
-  const meta = [SOURCE_LABEL[run.source], run.model, run.branch]
-    .filter(Boolean)
-    .join(" · ");
   return (
     <button
       onClick={onSelect}
@@ -211,19 +311,48 @@ function RunRow({
         transition: "background var(--motion-fast) var(--ease-out)",
       }}
     >
-      <RunAvatar source={run.source} />
+      <RunAvatar source={run.source} kind={run.kind} />
       <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
         <span
           style={{
-            fontSize: 13,
-            color: "var(--fg-strong)",
-            lineHeight: 1.3,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            minWidth: 0,
           }}
         >
-          {run.title}
+          {run.kind === "task" && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: "var(--accent)",
+                background: "color-mix(in srgb, var(--accent) 14%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--accent) 28%, transparent)",
+                padding: "1px 5px",
+                borderRadius: 999,
+                flexShrink: 0,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              Task
+            </span>
+          )}
+          <span
+            style={{
+              fontSize: 13,
+              color: "var(--fg-strong)",
+              lineHeight: 1.3,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {run.title}
+          </span>
         </span>
         <span
           style={{
@@ -235,7 +364,19 @@ function RunRow({
             whiteSpace: "nowrap",
           }}
         >
-          {meta ? `${meta} · ` : ""}
+          {SOURCE_LABEL[run.source]}
+          {run.source === "opencode" && run.model ? (
+            <>
+              {" · "}
+              <ModelProviderBadge model={run.model} />
+              {" "}
+              {modelShortName(run.model)}
+            </>
+          ) : run.model ? (
+            <> · {run.model}</>
+          ) : null}
+          {run.branch ? ` · ${run.branch}` : ""}
+          {" · "}
           {relativeTime(run.updatedMs)}
         </span>
       </span>
@@ -427,35 +568,580 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
   if (messages.length === 0) return <div style={muted}>No readable messages.</div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {messages.map((m, i) => (
         <div key={i}>
           <div
             style={{
-              fontSize: 10,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              fontFamily: "var(--font-mono)",
-              color: m.role === "user" ? "var(--accent)" : "var(--fg-subtle)",
-              marginBottom: 4,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginBottom: 6,
             }}
           >
-            {m.role === "user" ? "You" : SOURCE_LABEL[run.source]}
+            <span
+              aria-hidden
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background:
+                  m.role === "user" ? "var(--accent)" : SOURCE_COLOR[run.source],
+                boxShadow: `0 0 0 3px ${
+                  m.role === "user"
+                    ? "color-mix(in srgb, var(--accent) 18%, transparent)"
+                    : `color-mix(in srgb, ${SOURCE_COLOR[run.source]} 18%, transparent)`
+                }`,
+              }}
+            />
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                fontFamily: "var(--font-mono)",
+                color: m.role === "user" ? "var(--accent)" : "var(--fg-subtle)",
+              }}
+            >
+              {m.role === "user" ? "You" : SOURCE_LABEL[run.source]}
+            </span>
           </div>
           <div
             style={{
-              fontSize: 12.5,
+              fontSize: 13,
               color: "var(--fg)",
-              lineHeight: 1.55,
-              whiteSpace: "pre-wrap",
+              lineHeight: 1.6,
               wordBreak: "break-word",
             }}
           >
-            {m.text}
+            {renderMessageBody(m.text)}
           </div>
         </div>
       ))}
     </div>
+  );
+}
+
+// Tiny inline markdown renderer for the conversation résumé. We avoid
+// `dangerouslySetInnerHTML` and any third-party dep — every node is a real
+// React element built from a regex pass, so model output is treated as
+// text, not HTML, by construction.
+//
+// Supported syntax: ```fenced code```, `inline code`, **bold**, *italic*,
+// [text](url), # / ## / ### headers, and `- item` / `* item` lists.
+// ── Conversation body renderer ──────────────────────────────────────────
+// Premium markdown + tool-call rendering. Everything is real React (no
+// `dangerouslySetInnerHTML`, no third-party dep) so model output is text by
+// construction.
+//
+// Pipeline: extract fenced code blocks first → walk the remaining text
+// line-by-line → split into prose / tool / hr / code-placeholder segments
+// → render each with the right component.
+
+function CopyInline({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(value).then(
+          () => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1200);
+          },
+          () => {}
+        );
+      }}
+      style={{
+        fontSize: 9,
+        fontWeight: 600,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        padding: "1px 5px",
+        border: "1px solid var(--border)",
+        borderRadius: 3,
+        background: "transparent",
+        color: copied ? "var(--accent)" : "var(--fg-dim)",
+        fontFamily: "var(--font-mono)",
+        cursor: "pointer",
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  return (
+    <div
+      style={{
+        margin: "8px 0",
+        background: "var(--bg)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        overflow: "hidden",
+      }}
+    >
+      {lang && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "4px 8px 4px 10px",
+            fontSize: 9,
+            fontWeight: 600,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            color: "var(--fg-dim)",
+            fontFamily: "var(--font-mono)",
+            borderBottom: "1px solid var(--border)",
+            background: "color-mix(in srgb, var(--bg-elevated) 70%, var(--bg))",
+          }}
+        >
+          <span>{lang}</span>
+          <CopyInline value={code} />
+        </div>
+      )}
+      <pre
+        style={{
+          margin: 0,
+          padding: "10px 12px",
+          overflowX: "auto",
+          fontSize: 11.5,
+          fontFamily: "var(--font-mono)",
+          lineHeight: 1.55,
+          color: "var(--fg)",
+        }}
+      >
+        <code style={{ fontFamily: "inherit" }}>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+// The Claude-Code-style tool call card. The opencode message flattener
+// emits a `[tool: <name>]` line for every tool invocation; we lift that
+// out of the prose stream and render it as a pill with a status dot.
+function ToolCard({ name }: { name: string }) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
+        padding: "3px 9px 3px 7px",
+        margin: "4px 0",
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        lineHeight: 1.3,
+        color: "var(--fg-subtle)",
+        verticalAlign: "middle",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: "var(--accent)",
+          boxShadow: "0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent)",
+        }}
+      />
+      <span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>{name}</span>
+      <span style={{ color: "var(--fg-dim)" }}>·</span>
+      <span style={{ color: "var(--fg-dim)", fontSize: 10 }}>tool</span>
+    </div>
+  );
+}
+
+function renderInline(text: string): React.ReactNode {
+  const nodes: React.ReactNode[] = [];
+  let rest = text;
+  let key = 0;
+  while (rest.length > 0) {
+    const patterns: Array<[RegExp, (m: RegExpMatchArray) => React.ReactNode]> = [
+      [/\[([^\]]+)\]\(([^)]+)\)/, (m) => (
+        <a
+          key={`lnk-${key++}`}
+          href={m[2]}
+          target="_blank"
+          rel="noreferrer"
+          className="md-link"
+          style={{
+            color: "var(--accent)",
+            textDecoration: "underline",
+            textDecorationColor: "color-mix(in srgb, var(--accent) 35%, transparent)",
+            textUnderlineOffset: 2,
+          }}
+        >
+          {m[1]}
+        </a>
+      )],
+      [/`([^`]+)`/, (m) => (
+        <code
+          key={`ic-${key++}`}
+          style={{
+            background: "color-mix(in srgb, var(--bg-elevated) 80%, var(--bg))",
+            color: "var(--fg)",
+            padding: "1px 5px",
+            borderRadius: 4,
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.92em",
+            border: "1px solid var(--border)",
+          }}
+        >
+          {m[1]}
+        </code>
+      )],
+      [/\*\*([^*]+)\*\*/, (m) => (
+        <strong key={`bd-${key++}`} style={{ fontWeight: 600, color: "var(--fg-strong)" }}>
+          {m[1]}
+        </strong>
+      )],
+      [/(?<![*])\*([^*\n]+)\*(?![*])/, (m) => (
+        <em key={`it-${key++}`} style={{ fontStyle: "italic", color: "var(--fg)" }}>
+          {m[1]}
+        </em>
+      )],
+      [/~~([^~]+)~~/, (m) => (
+        <span
+          key={`sk-${key++}`}
+          style={{ textDecoration: "line-through", color: "var(--fg-subtle)" }}
+        >
+          {m[1]}
+        </span>
+      )],
+    ];
+    let earliest: { idx: number; len: number; node: React.ReactNode } | null = null;
+    for (const [re, build] of patterns) {
+      const m = rest.match(re);
+      if (m && m.index !== undefined && (earliest === null || m.index < earliest.idx)) {
+        earliest = { idx: m.index, len: m[0].length, node: build(m) };
+      }
+    }
+    if (!earliest) {
+      nodes.push(<span key={`t-${key++}`}>{rest}</span>);
+      break;
+    }
+    if (earliest.idx > 0) {
+      nodes.push(<span key={`t-${key++}`}>{rest.slice(0, earliest.idx)}</span>);
+    }
+    nodes.push(earliest.node);
+    rest = rest.slice(earliest.idx + earliest.len);
+  }
+  return <>{nodes}</>;
+}
+
+function renderMarkdownLines(text: string, baseKey: number): React.ReactNode {
+  const lines = text.split("\n");
+  const out: React.ReactNode[] = [];
+  type ListKind = "ul" | "ol" | "tasks";
+  let listBuffer: string[] | null = null;
+  let listKind: ListKind = "ul";
+  let listKey = 0;
+  const flushList = () => {
+    if (!listBuffer || listBuffer.length === 0) return;
+    if (listKind === "tasks") {
+      out.push(
+        <ul
+          key={`list-${baseKey}-${listKey++}`}
+          style={{ margin: "4px 0", paddingLeft: 0, listStyle: "none" }}
+        >
+          {listBuffer.map((item, i) => {
+            const done = item.startsWith("[x] ");
+            const text = item.replace(/^\[[ x]\]\s+/, "");
+            return (
+              <li
+                key={i}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 6,
+                  padding: "2px 0",
+                  fontSize: 12.5,
+                  lineHeight: 1.55,
+                  color: done ? "var(--fg-subtle)" : "var(--fg)",
+                  textDecoration: done ? "line-through" : "none",
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 12,
+                    height: 12,
+                    flexShrink: 0,
+                    marginTop: 2,
+                    borderRadius: 3,
+                    border: done
+                      ? "1px solid var(--accent)"
+                      : "1px solid var(--border)",
+                    background: done ? "var(--accent)" : "transparent",
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 9,
+                    color: "var(--bg)",
+                    fontWeight: 700,
+                    lineHeight: 1,
+                  }}
+                >
+                  {done ? "✓" : ""}
+                </span>
+                <span style={{ flex: 1 }}>{renderInline(text)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      );
+    } else if (listKind === "ol") {
+      out.push(
+        <ol
+          key={`list-${baseKey}-${listKey++}`}
+          style={{ margin: "4px 0", paddingLeft: 22 }}
+        >
+          {listBuffer.map((item, i) => (
+            <li
+              key={i}
+              style={{ fontSize: 12.5, lineHeight: 1.55, color: "var(--fg)" }}
+            >
+              {renderInline(item)}
+            </li>
+          ))}
+        </ol>
+      );
+    } else {
+      out.push(
+        <ul
+          key={`list-${baseKey}-${listKey++}`}
+          style={{ margin: "4px 0", paddingLeft: 0, listStyle: "none" }}
+        >
+          {listBuffer.map((item, i) => (
+            <li
+              key={i}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                padding: "2px 0",
+                fontSize: 12.5,
+                lineHeight: 1.55,
+                color: "var(--fg)",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  color: "var(--fg-dim)",
+                  marginTop: 0,
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                  userSelect: "none",
+                }}
+              >
+                ·
+              </span>
+              <span style={{ flex: 1 }}>{renderInline(item)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    listBuffer = null;
+    listKind = "ul";
+  };
+  let inBlockquote = false;
+  let bqBuf: string[] = [];
+  let bqKey = 0;
+  const flushBlockquote = () => {
+    if (bqBuf.length === 0) return;
+    out.push(
+      <blockquote
+        key={`bq-${baseKey}-${bqKey++}`}
+        style={{
+          margin: "6px 0",
+          padding: "4px 12px",
+          borderLeft: "2px solid var(--border-strong, var(--border))",
+          color: "var(--fg-subtle)",
+          fontStyle: "italic",
+        }}
+      >
+        {renderMarkdownLines(bqBuf.join("\n"), baseKey * 100 + bqKey)}
+      </blockquote>
+    );
+    bqBuf = [];
+  };
+  lines.forEach((line, i) => {
+    if (/^>\s?/.test(line)) {
+      flushList();
+      bqBuf.push(line.replace(/^>\s?/, ""));
+      inBlockquote = true;
+      return;
+    } else if (inBlockquote) {
+      flushBlockquote();
+      inBlockquote = false;
+    }
+    const header = line.match(/^(#{1,3})\s+(.*)$/);
+    if (header) {
+      flushList();
+      const level = header[1].length;
+      const size = level === 1 ? 16 : level === 2 ? 14 : 13;
+      const weight = level === 1 ? 700 : 600;
+      out.push(
+        <div
+          key={`h-${baseKey}-${i}`}
+          style={{
+            fontSize: size,
+            fontWeight: weight,
+            marginTop: level === 1 ? 12 : 8,
+            marginBottom: 2,
+            color: "var(--fg-strong)",
+            lineHeight: 1.3,
+          }}
+        >
+          {renderInline(header[2])}
+        </div>
+      );
+    } else if (/^[-*]\s+\[[ x]\]\s+/.test(line)) {
+      if (listKind !== "tasks") {
+        flushList();
+        listKind = "tasks";
+      }
+      listBuffer = listBuffer ?? [];
+      listBuffer.push(line.replace(/^[-*]\s+/, ""));
+    } else if (/^\d+\.\s+/.test(line)) {
+      if (listKind !== "ol") {
+        flushList();
+        listKind = "ol";
+      }
+      listBuffer = listBuffer ?? [];
+      listBuffer.push(line.replace(/^\d+\.\s+/, ""));
+    } else if (/^[-*]\s+/.test(line)) {
+      if (listKind !== "ul") {
+        flushList();
+        listKind = "ul";
+      }
+      listBuffer = listBuffer ?? [];
+      listBuffer.push(line.replace(/^[-*]\s+/, ""));
+    } else {
+      flushList();
+      // A blank line in source = paragraph break (visual gap).
+      const isBlank = line.trim() === "";
+      out.push(
+        <span
+          key={`p-${baseKey}-${i}`}
+          style={{
+            display: "block",
+            minHeight: isBlank ? 6 : undefined,
+          }}
+        >
+          {!isBlank && renderInline(line)}
+        </span>
+      );
+    }
+  });
+  flushList();
+  flushBlockquote();
+  return <>{out}</>;
+}
+
+function renderMessageBody(text: string): React.ReactNode {
+  // 1) Pull out fenced code blocks first. Their contents can look like
+  //    tool markers or markdown of their own — we don't want any inline
+  //    parsing on them. We replace them with a placeholder line so the
+  //    line-by-line walker skips them.
+  const codeBlocks: Array<{ lang: string; code: string; placeholder: string }> = [];
+  const codeRe = /```(\w*)\n([\s\S]*?)```/g;
+  let placeholderText = text;
+  let m: RegExpExecArray | null;
+  while ((m = codeRe.exec(text)) !== null) {
+    const placeholder = `\u00A0@@CODE_${codeBlocks.length}@@\u00A0`;
+    codeBlocks.push({ lang: m[1], code: m[2], placeholder });
+    placeholderText = placeholderText.replace(m[0], `\n${placeholder}\n`);
+  }
+
+  // 2) Walk line-by-line and segment. A line is either:
+  //    • a code placeholder → emit a code-idx segment
+  //    • `[tool: <name>]` (own line) → emit a tool segment
+  //    • `---` / `***` (own line) → emit a horizontal rule
+  //    • anything else → accumulate into the prose buffer
+  type Segment =
+    | { kind: "prose"; text: string }
+    | { kind: "code-idx"; idx: number }
+    | { kind: "tool"; name: string }
+    | { kind: "hr" };
+  const segments: Segment[] = [];
+  let proseBuf: string[] = [];
+  const flushProse = () => {
+    if (proseBuf.length === 0) return;
+    const joined = proseBuf.join("\n");
+    if (joined.trim().length > 0) {
+      segments.push({ kind: "prose", text: joined });
+    }
+    proseBuf = [];
+  };
+  for (const line of placeholderText.split("\n")) {
+    const codeMatch = line.match(/^\u00A0@@CODE_(\d+)@@\u00A0$/);
+    if (codeMatch) {
+      flushProse();
+      segments.push({ kind: "code-idx", idx: Number(codeMatch[1]) });
+      continue;
+    }
+    const toolMatch = line.match(/^\[tool:\s*([^\]]+)\]\s*$/);
+    if (toolMatch) {
+      flushProse();
+      segments.push({ kind: "tool", name: toolMatch[1].trim() });
+      continue;
+    }
+    if (/^-{3,}\s*$|^\*{3,}\s*$/.test(line)) {
+      flushProse();
+      segments.push({ kind: "hr" });
+      continue;
+    }
+    proseBuf.push(line);
+  }
+  flushProse();
+
+  // 3) Render.
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.kind === "prose") {
+          return (
+            <div key={i} style={{ margin: "1px 0" }}>
+              {renderMarkdownLines(seg.text, i)}
+            </div>
+          );
+        }
+        if (seg.kind === "tool") {
+          return <ToolCard key={i} name={seg.name} />;
+        }
+        if (seg.kind === "code-idx") {
+          const c = codeBlocks[seg.idx];
+          return <CodeBlock key={i} lang={c.lang} code={c.code} />;
+        }
+        if (seg.kind === "hr") {
+          return (
+            <hr
+              key={i}
+              style={{
+                border: "none",
+                borderTop: "1px solid var(--border)",
+                margin: "10px 0",
+              }}
+            />
+          );
+        }
+        return null;
+      })}
+    </>
   );
 }
 
@@ -581,18 +1267,258 @@ function TaskTerminal({ sessionId, theme }: { sessionId: string; theme: ThemeId 
   );
 }
 
+// Custom model picker. The native <select> works but is cramped for 17+
+// opencode models and can't group the opencode-go (paid) and opencode
+// (free) tiers. This is a button + popover list with click-outside dismiss,
+// grouped headers, and the opencode logo for opencode groups.
+function ModelSelect({
+  models,
+  value,
+  onChange,
+  emptyLabel,
+}: {
+  models: string[];
+  value: string;
+  onChange: (m: string) => void;
+  emptyLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  // Group models by their provider prefix (the part before the first "/").
+  // Claude/Codex don't have a slash, so they land in an empty-prefix group;
+  // opencode splits naturally into "opencode-go" (paid) and "opencode"
+  // (free). Empty groups are dropped so a single-provider list stays flat.
+  const groups = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const m of models) {
+      const slash = m.indexOf("/");
+      const key = slash >= 0 ? m.slice(0, slash) : "";
+      const arr = map.get(key) ?? [];
+      arr.push(m);
+      map.set(key, arr);
+    }
+    return Array.from(map.entries()).map(([provider, items]) => ({ provider, items }));
+  }, [models]);
+
+  const isOpencodeGroup = (p: string) => p === "opencode" || p === "opencode-go";
+  const label = value || emptyLabel || "Select a model";
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          padding: "5px 9px",
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--border)",
+          color: value ? "var(--fg-strong)" : "var(--fg-subtle)",
+          background: "var(--bg-elevated)",
+          fontFamily: "var(--font-mono)",
+          minWidth: 220,
+          maxWidth: 320,
+          cursor: "pointer",
+        }}
+      >
+        <span
+          style={{
+            flex: 1,
+            textAlign: "left",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </span>
+        <span style={{ color: "var(--fg-subtle)", fontSize: 10 }}>▾</span>
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            minWidth: 280,
+            maxHeight: 360,
+            overflowY: "auto",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-md)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+            zIndex: 20,
+          }}
+        >
+          {groups.length === 0 ? (
+            <div style={{ padding: "12px", fontSize: 11, color: "var(--fg-dim)" }}>
+              No models available.
+            </div>
+          ) : (
+            groups.map(({ provider, items }) => (
+              <div key={provider || "default"}>
+                {provider && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 10,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: "var(--fg-subtle)",
+                      padding: "8px 12px 4px",
+                      fontFamily: "var(--font-mono)",
+                      background: "var(--bg)",
+                      borderBottom: "1px solid var(--border)",
+                    }}
+                  >
+                    {isOpencodeGroup(provider) ? (
+                      <>
+                        <span
+                          className="opencode-logo"
+                          style={{ width: 12, height: 12, display: "inline-block" }}
+                          aria-hidden="true"
+                        >
+                          <img
+                            className="opencode-logo-light"
+                            src="/opencode-logo-light.svg"
+                            alt=""
+                            style={{ width: 12, height: 12 }}
+                          />
+                          <img
+                            className="opencode-logo-dark"
+                            src="/opencode-logo-dark.svg"
+                            alt=""
+                            style={{ width: 12, height: 12 }}
+                          />
+                        </span>
+                        <span>
+                          opencode · {provider === "opencode-go" ? "paid" : "free"}
+                        </span>
+                      </>
+                    ) : (
+                      <span>{provider}</span>
+                    )}
+                  </div>
+                )}
+                {items.map((m) => {
+                  const isSelected = m === value;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      onClick={() => {
+                        onChange(m);
+                        setOpen(false);
+                      }}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        fontSize: 12,
+                        padding: "7px 12px",
+                        color: isSelected ? "var(--accent)" : "var(--fg)",
+                        background: isSelected ? "var(--bg-selected)" : "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) e.currentTarget.style.background = "var(--bg-hover)";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) e.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      {m}
+                    </button>
+                  );
+                })}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
   const [agent, setAgent] = useState<TaskSource>(lastAgent);
+  const [model, setModel] = useState<string>(lastModel(lastAgent()));
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
   // queued/error = the todo needs (re)dispatching; running/done = a delegate
   // worked on it and the terminal is the record.
   const needsAgent = task.status === "queued" || task.status === "error";
 
+  // Reload the model list whenever the user picks a different source. We
+  // also clear `model` immediately so the dropdown doesn't flash the
+  // previous provider's model name during the refetch.
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingModels(true);
+    setModels([]);
+    setModel("");
+    invoke<string[]>("ai_provider_models", { provider: agent })
+      .then((list) => {
+        if (cancelled) return;
+        setModels(list);
+        const remembered = lastModel(agent);
+        if (list.includes(remembered)) {
+          setModel(remembered);
+        } else if (list.length > 0) {
+          setModel(list[0]);
+        } else {
+          setModel("");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent]);
+
   async function send() {
     setFailure(null);
     try {
-      await dispatchTask(task.id, agent);
+      // Pass undefined (not "") so the Rust side skips the model flag and the
+      // CLI uses its own default. The tasks store remembers the pick for
+      // next time regardless.
+      await dispatchTask(task.id, agent, model || undefined);
     } catch (err) {
       setFailure(err instanceof Error ? err.message : String(err));
     }
@@ -602,7 +1528,7 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div style={{ padding: "20px 24px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-          <RunAvatar source={task.source ?? "klide"} size={30} />
+          <RunAvatar source={task.source ?? "klide"} kind="task" size={30} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span
               style={{ fontSize: 12, color: "var(--fg-strong)", fontFamily: "var(--font-mono)" }}
@@ -652,8 +1578,8 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
       {needsAgent ? (
         <div style={{ padding: "6px 24px 24px" }}>
           <DetailLabel>Send an agent</DetailLabel>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {(["claude-code", "codex"] as const).map((s) => (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {(["claude-code", "codex", "opencode"] as const).map((s) => (
               <FilterChip
                 key={s}
                 label={SOURCE_LABEL[s]}
@@ -664,6 +1590,56 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
             <span style={{ marginLeft: 10 }}>
               <ActionButton label="Send agent" primary onClick={() => void send()} />
             </span>
+          </div>
+          <div
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: "var(--fg-subtle)",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              Model
+            </span>
+            {loadingModels ? (
+              <span
+                style={{
+                  fontSize: 12,
+                  padding: "5px 9px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border)",
+                  color: "var(--fg-dim)",
+                  background: "var(--bg-elevated)",
+                  fontFamily: "var(--font-mono)",
+                  minWidth: 220,
+                  maxWidth: 320,
+                  opacity: 0.7,
+                }}
+              >
+                Loading {SOURCE_LABEL[agent]} models…
+              </span>
+            ) : models.length > 0 ? (
+              <ModelSelect
+                models={models}
+                value={model}
+                onChange={setModel}
+                emptyLabel={`Default ${SOURCE_LABEL[agent]} model`}
+              />
+            ) : (
+              <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+                {SOURCE_LABEL[agent]} CLI isn't installed — install it to pick a model.
+              </span>
+            )}
           </div>
           <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.5 }}>
             The agent opens in the workspace with this task as its first
@@ -682,7 +1658,49 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
   );
 }
 
-function RunDetail({ run, messages }: { run: Run; messages?: RunMessage[] }) {
+function RunDetail({ run, messages, theme }: { run: Run; messages?: RunMessage[]; theme: ThemeId }) {
+  // Resume mode: spawning a new PTY that continues the previous run's
+  // session. The sessionId is locally generated (so the TaskTerminal can
+  // subscribe to it); the opencode session id is passed as
+  // `resumeSessionId` to delegate_pty_spawn.
+  const [resumedSessionId, setResumedSessionId] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const resumedRef = useRef<HTMLDivElement>(null);
+
+  // Opencode TUI is the only provider we can usefully "pick up" for —
+  // Claude/Codex have resume flags too, but their TUIs are interactive in
+  // a way that's awkward in Klide's terminal pane. Opencode's `-s <id>`
+  // keeps the same model + workspace and loads the prior transcript.
+  const resumable = run.source === "opencode";
+
+  async function resume() {
+    setResumeError(null);
+    const sessionId = crypto.randomUUID();
+    try {
+      await invoke("delegate_pty_spawn", {
+        sessionId,
+        provider: "opencode",
+        workspaceRoot: run.cwd,
+        task: null,
+        model: run.model,
+        resumeSessionId: run.id,
+      });
+      setResumedSessionId(sessionId);
+    } catch (err) {
+      setResumeError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function stopResume() {
+    if (!resumedSessionId) return;
+    try {
+      await invoke("delegate_pty_stop", { sessionId: resumedSessionId });
+    } catch {
+      // Best-effort — the PTY may already be gone.
+    }
+    setResumedSessionId(null);
+  }
+
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -718,10 +1736,74 @@ function RunDetail({ run, messages }: { run: Run; messages?: RunMessage[] }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <CopyButton value={run.path || null} label="Copy log path" />
         <CopyButton value={run.cwd} label="Copy cwd" />
-        <ActionButton disabled label="Resume later" />
+        {resumable && !resumedSessionId && (
+          <ActionButton label="Resume in OpenCode" onClick={() => void resume()} />
+        )}
+        {resumable && resumedSessionId && (
+          <ActionButton label="Stop & return to log" onClick={() => void stopResume()} />
+        )}
       </div>
 
-      {!messages && (
+      {resumable && resumedSessionId && (
+        <div
+          ref={resumedRef}
+          style={{
+            height: 320,
+            marginBottom: 18,
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-md)",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            background: "color-mix(in srgb, var(--terminal-bg) 96%, var(--bg))",
+          }}
+        >
+          <div
+            style={{
+              padding: "6px 10px",
+              fontSize: 10,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "var(--fg-subtle)",
+              fontFamily: "var(--font-mono)",
+              borderBottom: "1px solid var(--terminal-border)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span
+              className="opencode-logo"
+              style={{ width: 12, height: 12, display: "inline-block" }}
+              aria-hidden="true"
+            >
+              <img className="opencode-logo-light" src="/opencode-logo-light.svg" alt="" style={{ width: 12, height: 12 }} />
+              <img className="opencode-logo-dark" src="/opencode-logo-dark.svg" alt="" style={{ width: 12, height: 12 }} />
+            </span>
+            Resumed · {run.id}
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <TaskTerminal sessionId={resumedSessionId} theme={theme} />
+          </div>
+        </div>
+      )}
+
+      {resumeError && (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: "8px 10px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--danger, #B42318)",
+            color: "var(--danger, #B42318)",
+            fontSize: 11,
+          }}
+        >
+          Resume failed: {resumeError}
+        </div>
+      )}
+
+      {!messages && !resumedSessionId && (
         <div
           style={{
             marginBottom: 18,
@@ -733,8 +1815,9 @@ function RunDetail({ run, messages }: { run: Run; messages?: RunMessage[] }) {
             lineHeight: 1.45,
           }}
         >
-          Read-only inspector for the local session log. Resume/open controls are
-          intentionally parked until Klide can hand the run back to the right CLI.
+          {resumable
+            ? "Read-only transcript. Click Resume in OpenCode above to pick the session back up in Klide's terminal — your prior context, model, and workspace are preserved."
+            : "Read-only inspector for the local session log. Resume/open controls are intentionally parked until Klide can hand the run back to the right CLI."}
         </div>
       )}
 
@@ -747,7 +1830,26 @@ function RunDetail({ run, messages }: { run: Run; messages?: RunMessage[] }) {
           margin: "0 0 22px",
         }}
       >
-        <MetaRow label="Model" value={run.model ?? "—"} />
+        <dt style={{ color: "var(--fg-subtle)" }}>Model</dt>
+        <dd
+          style={{
+            margin: 0,
+            color: "var(--fg-strong)",
+            fontFamily: "var(--font-mono)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          {run.source === "opencode" && run.model ? (
+            <>
+              <ModelProviderBadge model={run.model} />
+              {modelShortName(run.model)}
+            </>
+          ) : (
+            run.model ?? "—"
+          )}
+        </dd>
         <MetaRow label="Project" value={run.project ?? "—"} />
         <MetaRow label="Branch" value={run.branch ?? "—"} />
         <MetaRow label="Messages" value={String(run.messageCount)} />
@@ -1100,9 +2202,13 @@ export function MissionControl({
         {selectedTask ? (
           <TaskDetail task={selectedTask} theme={theme} />
         ) : selectedConvo ? (
-          <RunDetail run={convoToRun(selectedConvo)} messages={selectedConvo.messages} />
+          <RunDetail
+            run={convoToRun(selectedConvo)}
+            messages={selectedConvo.messages}
+            theme={theme}
+          />
         ) : selected ? (
-          <RunDetail run={selected} />
+          <RunDetail run={selected} theme={theme} />
         ) : (
           <div
             style={{

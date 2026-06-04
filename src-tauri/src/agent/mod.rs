@@ -2,7 +2,10 @@ pub mod tools;
 pub mod transcripts;
 pub mod types;
 
-use self::tools::{execute_read_only_tool, parse_tool_calls, schemas_for_mode, NormalizedToolCall};
+use self::tools::{
+    execute_read_only_tool, execute_write_tool_preview, is_write_tool, parse_tool_calls,
+    schemas_for_mode, NormalizedToolCall, apply_write, clean_context_ids,
+};
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
     write_summary,
@@ -26,6 +29,9 @@ use tokio_util::sync::CancellationToken;
 pub struct AgentRunHandle {
     pub status: AgentRunStatus,
     pub cancel: CancellationToken,
+    /// When the loop pauses for a diff review, it stores a oneshot sender
+    /// here so agent_resolve_diff can unblock it.
+    pub pending_diff: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
 }
 
 pub struct AgentSupervisorState {
@@ -162,12 +168,18 @@ fn no_workspace_result() -> ToolResult {
 
 fn tool_summary(call: &NormalizedToolCall) -> String {
     match call.name.as_str() {
-        "read_file" | "list_dir" => call
+        "read_file" | "list_dir" | "write_file" => call
             .input
             .get("path")
             .and_then(|v| v.as_str())
             .map(|path| format!("{} {}", call.name, path))
             .unwrap_or_else(|| call.name.clone()),
+        "create_file" => call
+            .input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|path| format!("create_file {}", path))
+            .unwrap_or_else(|| "create_file".to_string()),
         "glob" | "grep" => call
             .input
             .get("pattern")
@@ -229,6 +241,7 @@ pub async fn agent_start_run(
             AgentRunHandle {
                 status: AgentRunStatus::Running,
                 cancel: cancel.clone(),
+                pending_diff: std::sync::Mutex::new(None),
             },
         );
 
@@ -443,7 +456,6 @@ async fn run_agent_loop(
         })?;
 
         for call in tool_calls {
-            // A long tool batch should also notice an abort promptly.
             if cancel.is_cancelled() {
                 finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                 return Ok(());
@@ -456,24 +468,145 @@ async fn run_agent_loop(
                 summary: tool_summary(&call),
                 ts: now_ms(),
             })?;
-            let result = match request.workspace_root.as_deref() {
-                Some(root) => execute_read_only_tool(root, &call),
-                None => no_workspace_result(),
-            };
+
+            let tool_result: ToolResult;
+
+            if is_write_tool(&call.name) {
+                let root = match request.workspace_root.as_deref() {
+                    Some(root) => root,
+                    None => {
+                        tool_result = no_workspace_result();
+                        emit(AgentEvent::ToolCallFinished {
+                            run_id: id.clone(),
+                            tool_call_id: call.id.clone(),
+                            result: tool_result.clone(),
+                            ts: now_ms(),
+                        })?;
+                        messages.push(tool_provider_message(&call, &tool_result));
+                        continue;
+                    }
+                };
+
+                let proposal = match execute_write_tool_preview(root, &call, &id) {
+                    Ok(p) => p,
+                    Err(error_result) => {
+                        tool_result = error_result;
+                        emit(AgentEvent::ToolCallFinished {
+                            run_id: id.clone(),
+                            tool_call_id: call.id.clone(),
+                            result: tool_result.clone(),
+                            ts: now_ms(),
+                        })?;
+                        messages.push(tool_provider_message(&call, &tool_result));
+                        continue;
+                    }
+                };
+
+                // Pause for diff review
+                set_run_status(&app, &id, AgentRunStatus::WaitingForDiff);
+                let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+                {
+                    let state = app.state::<AgentSupervisorState>();
+                    let mut runs = state.runs.lock().map_err(|_| "Agent state unavailable".to_string())?;
+                    if let Some(handle) = runs.get_mut(&id) {
+                        *handle.pending_diff.lock().unwrap() = Some(tx);
+                    }
+                }
+
+                emit(AgentEvent::DiffProposed {
+                    run_id: id.clone(),
+                    proposal: proposal.clone(),
+                    ts: now_ms(),
+                })?;
+
+                // Wait for diff resolution, cancellation, or channel close
+                let decision = tokio::select! {
+                    _ = cancel.cancelled() => {
+                        set_run_status(&app, &id, AgentRunStatus::Running);
+                        finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                        return Ok(());
+                    }
+                    result = rx => result.unwrap_or_else(|_| "reject".to_string()),
+                };
+
+                set_run_status(&app, &id, AgentRunStatus::Running);
+
+                let decision_obj = serde_json::json!({ "behavior": decision });
+                emit(AgentEvent::DiffResolved {
+                    run_id: id.clone(),
+                    proposal_id: proposal.id.clone(),
+                    decision: decision_obj.clone(),
+                    ts: now_ms(),
+                })?;
+
+                if decision == "apply" {
+                    match apply_write(root, &proposal) {
+                        Ok(result) => {
+                            // Save checkpoint for rollback
+                            let checkpoint_dir = runs_dir.join(&id).join("checkpoints");
+                            let _ = std::fs::create_dir_all(&checkpoint_dir);
+                            let checkpoint_file = checkpoint_dir.join(format!("{}.json", proposal.tool_call_id));
+                            let entry = serde_json::json!({
+                                "path": proposal.path,
+                                "old_content": proposal.old_content,
+                                "new_content": proposal.new_content,
+                                "is_create": proposal.is_create,
+                                "ts": now_ms(),
+                            });
+                            let _ = std::fs::write(&checkpoint_file, entry.to_string());
+                            tool_result = result;
+                            emit(AgentEvent::FileChanged {
+                                run_id: id.clone(),
+                                path: proposal.path.clone(),
+                                old_hash: proposal.old_hash.clone(),
+                                new_hash: proposal.new_hash.clone(),
+                                ts: now_ms(),
+                            })?;
+                        }
+                        Err(result) => {
+                            tool_result = result;
+                        }
+                    }
+                } else {
+                    tool_result = ToolResult {
+                        ok: false,
+                        content: format!(
+                            "Rejected by user: {} was not {}.",
+                            proposal.path,
+                            if proposal.is_create { "created" } else { "changed" }
+                        ),
+                        metadata: None,
+                    };
+                }
+            } else {
+                tool_result = match request.workspace_root.as_deref() {
+                    Some(root) => execute_read_only_tool(root, &call),
+                    None => no_workspace_result(),
+                };
+            }
+
             emit(AgentEvent::ToolCallFinished {
                 run_id: id.clone(),
                 tool_call_id: call.id.clone(),
-                result: result.clone(),
+                result: tool_result.clone(),
                 ts: now_ms(),
             })?;
-            messages.push(tool_provider_message(&call, &result));
+            messages.push(tool_provider_message(&call, &tool_result));
+
+            if call.name == "clean_context" {
+                let ids: Vec<String> = call.input.get("ids")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                clean_context_ids(&ids, &mut messages);
+            }
         }
     }
 
     if !completed {
         let error = AgentError {
             code: "max_turns".to_string(),
-            message: "Agent reached the maximum read-only tool turns.".to_string(),
+            message: "Agent reached the maximum tool turns.".to_string(),
             detail: None,
             retryable: true,
         };
@@ -516,8 +649,31 @@ pub async fn agent_resolve_permission(
 }
 
 #[tauri::command]
-pub async fn agent_resolve_diff(_decision: DiffDecisionRequest) -> Result<(), String> {
-    Err("The harness does not pause for diff review yet; nothing to resolve.".to_string())
+pub async fn agent_resolve_diff(
+    state: tauri::State<'_, AgentSupervisorState>,
+    decision: DiffDecisionRequest,
+) -> Result<(), String> {
+    let runs = state
+        .runs
+        .lock()
+        .map_err(|_| "Agent state is unavailable".to_string())?;
+    match runs.get(&decision.run_id) {
+        Some(handle) => {
+            let sender = handle.pending_diff.lock().unwrap().take();
+            if let Some(tx) = sender {
+                let behavior = decision
+                    .decision
+                    .get("behavior")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("reject");
+                let _ = tx.send(behavior.to_string());
+                Ok(())
+            } else {
+                Err("No pending diff review for this run.".to_string())
+            }
+        }
+        None => Err(format!("No known run with id {}", decision.run_id)),
+    }
 }
 
 #[tauri::command]
@@ -557,4 +713,70 @@ pub async fn agent_read_run(
 ) -> Result<Vec<AgentEvent>, String> {
     let runs_dir = app_runs_dir(&app)?;
     read_events(&runs_dir, &run_id)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CheckpointEntry {
+    tool_call_id: String,
+    path: String,
+    old_content: String,
+    new_content: String,
+    is_create: bool,
+    ts: i64,
+}
+
+#[tauri::command]
+pub async fn agent_list_checkpoints(
+    app: tauri::AppHandle,
+    run_id: String,
+) -> Result<Vec<CheckpointEntry>, String> {
+    let runs_dir = app_runs_dir(&app)?;
+    let checkpoint_dir = runs_dir.join(&run_id).join("checkpoints");
+    if !checkpoint_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries: Vec<CheckpointEntry> = Vec::new();
+    if let Ok(dir) = std::fs::read_dir(&checkpoint_dir) {
+        for file in dir.flatten() {
+            if let Ok(content) = std::fs::read_to_string(file.path()) {
+                if let Ok(entry) = serde_json::from_str::<CheckpointEntry>(&content) {
+                    entries.push(entry);
+                }
+            }
+        }
+    }
+    entries.sort_by(|a, b| b.ts.cmp(&a.ts));
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn agent_revert_checkpoint(
+    app: tauri::AppHandle,
+    run_id: String,
+    tool_call_id: String,
+) -> Result<(), String> {
+    let runs_dir = app_runs_dir(&app)?;
+    let checkpoint_file = runs_dir.join(&run_id).join("checkpoints").join(format!("{tool_call_id}.json"));
+    let content = std::fs::read_to_string(&checkpoint_file)
+        .map_err(|_| format!("Checkpoint {tool_call_id} not found"))?;
+    let entry: CheckpointEntry = serde_json::from_str(&content)
+        .map_err(|e| format!("Invalid checkpoint: {e}"))?;
+
+    let workspace_root = std::env::current_dir().map_err(|e| e.to_string())?;
+    let full = workspace_root.join(&entry.path);
+
+    if entry.is_create {
+        std::fs::remove_file(&full).map_err(|e| format!("Cannot remove {}: {e}", entry.path))?;
+    } else {
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&full, &entry.old_content)
+            .map_err(|e| format!("Cannot write {}: {e}", entry.path))?;
+    }
+
+    // Remove the checkpoint file so it can't be reverted twice
+    let _ = std::fs::remove_file(&checkpoint_file);
+    Ok(())
 }

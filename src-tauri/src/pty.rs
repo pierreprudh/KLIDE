@@ -105,6 +105,8 @@ pub fn delegate_pty_spawn(
     provider: String,
     workspace_root: Option<String>,
     task: Option<String>,
+    model: Option<String>,
+    resume_session_id: Option<String>,
 ) -> Result<(), String> {
     let cwd = workspace_root
         .filter(|path| !path.trim().is_empty())
@@ -143,12 +145,54 @@ pub fn delegate_pty_spawn(
         .map_err(|e| e.to_string())?;
 
     let base = delegate_command(&provider)?;
-    // A task turns `claude` into `claude '<prompt>'` — the CLI opens its normal
-    // interactive UI with the mission already submitted as the first message,
-    // so the run is observable and the user can take over by typing.
+    // Resume mode: opencode's TUI supports `-s <session-id>` to continue a
+    // specific past session. The positional `[project]` arg is ignored when
+    // -s is set, so the TUI comes up in the run's cwd with that session's
+    // history loaded — the user picks up where they left off.
+    let resume = resume_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // Opencode's TUI treats the first positional arg as a project path
+    // (`opencode [project]`), not a prompt — so `opencode '<task title>'`
+    // tries to cd to `<cwd>/<task title>` and dies. Its `run` subcommand is
+    // the non-interactive mode that *does* take a message. Claude and Codex
+    // both have TUIs that accept the task as the first arg directly, so
+    // they don't need the `run` prefix. In resume mode we always use the
+    // TUI (no `run`) so the user can keep interacting after the resume.
+    let prefix = if provider == "opencode" && resume.is_none() {
+        format!("{base} run")
+    } else {
+        base.to_string()
+    };
+    // Each CLI takes the model with a different flag. We only insert the flag
+    // when the caller actually picked a model — leaving the CLI to fall back
+    // to its own default otherwise. The same flag handling is used by the
+    // ai_chat path (lib.rs::subscription_cli_chat), so dispatch and chat
+    // behaviour stay in lockstep.
+    let model_arg = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| match provider.as_str() {
+            "claude-code" => format!(" --model {}", shell_quote(m)),
+            "codex" | "opencode" => format!(" -m {}", shell_quote(m)),
+            _ => String::new(),
+        })
+        .unwrap_or_default();
+    // Resume: `opencode -s <sessionId>` — the TUI continues that session.
+    // Dispatch: `claude -m <m> '<prompt>'` (or `opencode run -m <m> '<prompt>'`)
+    // — the CLI runs the prompt and the PTY surfaces the streamed response.
+    let resume_arg = match (provider.as_str(), resume) {
+        ("opencode", Some(id)) => format!(" -s {}", shell_quote(id)),
+        ("claude-code", Some(id)) => format!(" --resume {}", shell_quote(id)),
+        ("codex", Some(id)) => format!(" resume {}", shell_quote(id)),
+        _ => String::new(),
+    };
     let command = match task.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        Some(t) => format!("{base} {}", shell_quote(t)),
-        None => base.to_string(),
+        Some(t) => format!("{prefix}{resume_arg}{model_arg} {}", shell_quote(t)),
+        None => format!("{prefix}{resume_arg}{model_arg}"),
     };
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(shell);

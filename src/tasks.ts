@@ -9,13 +9,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { RunSource, RunStatus } from "./runs";
 
-export type TaskSource = Extract<RunSource, "claude-code" | "codex">;
+export type TaskSource = Extract<RunSource, "claude-code" | "codex" | "opencode">;
 
 export type TaskSession = {
   id: string;
   title: string;
   // null until an agent is sent — a plain todo wears the Klide mark.
   source: TaskSource | null;
+  // The model the user picked in the dispatch dropdown. null when undispatched
+  // or when the caller didn't pass a model (the CLI falls back to its own
+  // default in that case). Persisted on the session so the detail pane can
+  // re-show what the run was launched with.
+  model: string | null;
   status: RunStatus;
   cwd: string | null;
   startedMs: number;
@@ -83,7 +88,16 @@ export function getTaskBuffer(id: string): string {
 // landing an agent on a todo is one click.
 export function lastAgent(): TaskSource {
   const stored = localStorage.getItem("klide-last-agent");
-  return stored === "codex" ? "codex" : "claude-code";
+  if (stored === "codex") return "codex";
+  if (stored === "opencode") return "opencode";
+  return "claude-code";
+}
+
+// The model last used for a given source, persisted separately per source so
+// switching from Claude Sonnet to Codex gpt-5.4 to OpenCode minimax-m3 lands
+// each new dispatch on the right model. Empty string means "let the CLI pick".
+export function lastModel(source: TaskSource): string {
+  return localStorage.getItem(`klide-last-model-${source}`) ?? "";
 }
 
 // Add a todo. Nothing runs yet — it sits in Queued until an agent is sent.
@@ -93,6 +107,7 @@ export function addTask(title: string, workspaceRoot: string | null): TaskSessio
     id: crypto.randomUUID(),
     title,
     source: null,
+    model: null,
     status: "queued",
     cwd: workspaceRoot,
     startedMs: Date.now(),
@@ -113,20 +128,37 @@ export async function startTask(
 }
 
 // Send an agent to a todo: spawn the delegate CLI in the task's workspace with
-// the todo text as its first prompt. Flips queued → running; on failure the
-// task flips to error (and can be re-dispatched).
-export async function dispatchTask(id: string, source: TaskSource): Promise<void> {
+// the todo text as its first prompt. `model` is optional — the Rust side
+// skips the model flag when None so each CLI falls back to its own default.
+// Flips queued → running; on failure the task flips to error (and can be
+// re-dispatched).
+export async function dispatchTask(
+  id: string,
+  source: TaskSource,
+  model?: string
+): Promise<void> {
   const task = sessions.find((s) => s.id === id);
   if (!task || task.status === "running") return;
   localStorage.setItem("klide-last-agent", source);
+  // Only persist non-empty selections so a quick-send with no model chosen
+  // doesn't clobber a previously-saved preference.
+  if (model && model.trim()) {
+    localStorage.setItem(`klide-last-model-${source}`, model.trim());
+  }
   buffers.set(id, "");
-  patch(id, { source, status: "running", startedMs: Date.now() });
+  patch(id, {
+    source,
+    model: model && model.trim() ? model.trim() : null,
+    status: "running",
+    startedMs: Date.now(),
+  });
   try {
     await invoke("delegate_pty_spawn", {
       sessionId: id,
       provider: source,
       workspaceRoot: task.cwd,
       task: task.title,
+      model: model && model.trim() ? model.trim() : null,
     });
   } catch (err) {
     patch(id, { status: "error" });
