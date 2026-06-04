@@ -10,6 +10,7 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
     label: "Local",
     items: [
       { id: "ollama", name: "Ollama", available: true },
+      { id: "mlx", name: "MLX (Apple Silicon)", available: true },
       { id: "lmstudio", name: "LM Studio", available: false },
       { id: "llamacpp", name: "llama.cpp", available: false },
       { id: "vllm", name: "vLLM", available: false },
@@ -40,6 +41,7 @@ export const ALL_PROVIDERS = PROVIDER_GROUPS.flatMap((g) => g.items);
 
 export const DEFAULT_MODELS: Record<ProviderId, string> = {
   ollama: "llama3.1:8b",
+  mlx: "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
   lmstudio: "local-model",
   llamacpp: "local-model",
   vllm: "local-model",

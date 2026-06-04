@@ -14,6 +14,7 @@ export type AgentRunStatus =
 
 export type ProviderId =
   | "ollama"
+  | "mlx"
   | "lmstudio"
   | "llamacpp"
   | "vllm"

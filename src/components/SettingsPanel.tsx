@@ -35,12 +35,12 @@ type Props = {
   onAiVisibleChange: (visible: boolean) => void;
   terminalVisible: boolean;
   onTerminalVisibleChange: (visible: boolean) => void;
-  leftPanelWidth: number;
-  onLeftPanelWidthChange: (width: number) => void;
-  aiWidth: number;
-  onAiWidthChange: (width: number) => void;
-  terminalHeight: number;
-  onTerminalHeightChange: (height: number) => void;
+  // Bento layout. The user resizes panels directly in the workbench by
+  // dragging their edges; the Settings sliders here are a fallback for
+  // keyboard-driven / precise control. Each slider writes one rect field.
+  panelLayout: { explorer?: { w: number }; ai?: { w: number }[]; terminal?: { h: number } };
+  onPanelWidthChange: (panel: "explorer" | "ai", width: number) => void;
+  onPanelHeightChange: (panel: "terminal", height: number) => void;
   editorFontSize: number;
   onEditorFontSizeChange: (fontSize: number) => void;
   editorLineNumbers: boolean;
@@ -853,12 +853,9 @@ export function SettingsPanel({
   onAiVisibleChange,
   terminalVisible,
   onTerminalVisibleChange,
-  leftPanelWidth,
-  onLeftPanelWidthChange,
-  aiWidth,
-  onAiWidthChange,
-  terminalHeight,
-  onTerminalHeightChange,
+  panelLayout,
+  onPanelWidthChange,
+  onPanelHeightChange,
   editorFontSize,
   onEditorFontSizeChange,
   editorLineNumbers,
@@ -1131,29 +1128,29 @@ export function SettingsPanel({
               <SettingBlock title="Layout">
                 <Panel>
                   <Row
-                    title="Left panel width"
-                    description="Controls the explorer and Git panel width."
+                    title="Explorer width"
+                    description="Width of the file explorer panel."
                     control={
                       <Range
-                        label="Left panel width"
-                        value={leftPanelWidth}
-                        min={220}
-                        max={520}
-                        onChange={onLeftPanelWidthChange}
+                        label="Explorer width"
+                        value={panelLayout.explorer?.w ?? 280}
+                        min={200}
+                        max={600}
+                        onChange={(w) => onPanelWidthChange("explorer", w)}
                         suffix="px"
                       />
                     }
                   />
                   <Row
                     title="AI panel width"
-                    description="Controls the assistant panel width."
+                    description="Width of the assistant panel."
                     control={
                       <Range
                         label="AI panel width"
-                        value={aiWidth}
-                        min={300}
-                        max={620}
-                        onChange={onAiWidthChange}
+                        value={panelLayout.ai?.[0]?.w ?? 360}
+                        min={280}
+                        max={720}
+                        onChange={(w) => onPanelWidthChange("ai", w)}
                         suffix="px"
                       />
                     }
@@ -1703,14 +1700,14 @@ export function SettingsPanel({
                 />
                 <Row
                   title="Terminal height"
-                  description="Controls the default height of the bottom terminal panel."
+                  description="Height of the bottom terminal panel."
                   control={
                     <Range
                       label="Terminal height"
-                      value={terminalHeight}
-                      min={140}
-                      max={460}
-                      onChange={onTerminalHeightChange}
+                      value={panelLayout.terminal?.h ?? 240}
+                      min={120}
+                      max={900}
+                      onChange={(h) => onPanelHeightChange("terminal", h)}
                       suffix="px"
                     />
                   }

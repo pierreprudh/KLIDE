@@ -252,9 +252,7 @@ fn provider_chat_url(provider: &str) -> Result<&'static str, String> {
         "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
         "xai" => Ok("https://api.x.ai/v1/chat/completions"),
         "mlx" => Ok("http://localhost:8080/v1/chat/completions"),
-        _ => Err(format!(
-            "Provider \"{provider}\" has no chat-completions endpoint"
-        )),
+        _ => Err(format!("Provider \"{provider}\" has no chat-completions endpoint")),
     }
 }
 

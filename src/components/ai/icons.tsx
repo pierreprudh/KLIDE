@@ -21,7 +21,6 @@ const LOGO_ALIAS: Partial<Record<ProviderId, ProviderId>> = {
 };
 
 const PROVIDER_LOGO_COLOR: Partial<Record<ProviderId, string>> = {
-  ollama: "var(--fg-strong)",
   anthropic: "#D97757",
   "claude-code": "#D97757",
   openai: "var(--fg-strong)",
@@ -31,6 +30,7 @@ const PROVIDER_LOGO_COLOR: Partial<Record<ProviderId, string>> = {
 };
 
 const PROVIDER_LOGO_IMAGE: Partial<Record<ProviderId, string>> = {
+  ollama: "/ollama-logo.png",
   gemini: "/gemini-logo.png",
   "gemini-cli": "/gemini-logo.png",
   mistral: "/mistral-logo.png",
@@ -58,6 +58,7 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
   if (image) {
     return (
       <img
+        className="provider-logo-img"
         src={image}
         alt=""
         aria-hidden="true"
