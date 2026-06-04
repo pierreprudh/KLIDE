@@ -1,9 +1,11 @@
 import {
   useEffect,
+  useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
+import { type OnMount } from "@monaco-editor/react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, watch, writeTextFile } from "@tauri-apps/plugin-fs";
@@ -142,11 +144,11 @@ function App() {
   const [graphVisible, setGraphVisible] = useState(
     () => localStorage.getItem("klide-graph-visible") === "true"
   );
-  const [skillsVisible, setSkillsVisible] = useState(
-    () => localStorage.getItem("klide-skills-visible") === "true"
-  );
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
+  );
+  const [skillsVisible, setSkillsVisible] = useState(
+    () => localStorage.getItem("klide-skills-visible") === "true"
   );
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
@@ -259,6 +261,21 @@ function App() {
     localStorage.setItem("klide.harnessSettings", JSON.stringify(harnessSettings));
   }, [harnessSettings]);
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
+  // Monaco instance + the position a search-result click wants to land on.
+  // The reveal runs in an effect so it fires after the tab's content commits.
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const [pendingReveal, setPendingReveal] = useState<
+    { path: string; line: number; column: number } | null
+  >(null);
+  useEffect(() => {
+    if (!pendingReveal || active?.path !== pendingReveal.path) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.revealLineInCenter(pendingReveal.line);
+    editor.setPosition({ lineNumber: pendingReveal.line, column: pendingReveal.column });
+    editor.focus();
+    setPendingReveal(null);
+  }, [pendingReveal, activeIdx]);
   const activeGrid =
     activeGridId != null
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
@@ -268,9 +285,9 @@ function App() {
     git: view === "workbench" && gitVisible,
     graph: view === "workbench" && graphVisible,
     skills: view === "workbench" && skillsVisible,
-    settings: view === "settings",
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
+    settings: view === "settings",
   };
 
   function togglePanel(panel: Panel) {
@@ -302,6 +319,7 @@ function App() {
     }
     if (panel === "skills") {
       setSkillsVisible((cur) => !cur);
+      return;
     }
   }
 
@@ -371,6 +389,7 @@ function App() {
               lineNumbers={editorLineNumbers}
               wordWrap={editorWordWrap}
               minimap={editorMinimap}
+              onEditorMount={(editor) => { editorRef.current = editor; }}
             />
           </div>
         );
@@ -516,7 +535,12 @@ function App() {
     window.addEventListener("mouseup", onUp);
   }
 
-  function openFile(p: string, content: string) {
+  function openFile(
+    p: string,
+    content: string,
+    position?: { line: number; column: number }
+  ) {
+    if (position) setPendingReveal({ path: p, ...position });
     const existing = tabs.findIndex((t) => t.path === p);
     if (existing >= 0) {
       setActiveIdx(existing);
@@ -707,9 +731,6 @@ function App() {
     localStorage.setItem("klide-graph-visible", String(graphVisible));
   }, [graphVisible]);
 
-  useEffect(() => {
-    localStorage.setItem("klide-skills-visible", String(skillsVisible));
-  }, [skillsVisible]);
 
   useEffect(() => {
     localStorage.setItem("klide-ai-visible", String(aiVisible));
@@ -732,9 +753,10 @@ function App() {
   }, [graphWidth]);
 
   function updateSkills(next: Skill[]) {
-    setSkills(next);
     saveSkills(next);
+    setSkills(next);
   }
+  void updateSkills;
 
   useEffect(() => {
     localStorage.setItem("klide-ai-width", String(aiWidth));
@@ -769,7 +791,7 @@ function App() {
   }, [requireDiffReview]);
 
   useEffect(() => {
-    localStorage.setItem("klide-stop-after-rejection", String(stopAfterRejection));
+    localStorage.setItem("klide.stopAfterRejection", String(stopAfterRejection));
   }, [stopAfterRejection]);
 
   // Record every opened workspace as most-recent — covers folders opened from
@@ -899,11 +921,7 @@ function App() {
         setSearchVisible((v) => !v);
         return;
       }
-      if (mod && !e.shiftKey && e.key === "f") {
-        e.preventDefault();
-        setSearchVisible((v) => !v);
-        return;
-      }
+      // Plain Cmd+F is NOT intercepted — it belongs to Monaco's in-editor find.
       if (mod && !e.shiftKey && e.key === "p") {
         e.preventDefault();
         setPaletteQuery(e.shiftKey ? "> " : "");
@@ -1006,7 +1024,8 @@ function App() {
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
-    { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const url = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${url}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
+    { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
+    { id: "worktree", label: "Git: New Worktree…", action: () => { setPaletteOpen(false); const name = prompt("Worktree name:"); if (name && workspaceRoot) { void (async () => { try { const path = await invoke<string>("create_worktree", { workspaceRoot, name }); setFileNotice(`Worktree: ${path}`); } catch(e) { setFileNotice(`Failed: ${e}`); } })(); } } },
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
   ];
@@ -1199,6 +1218,7 @@ function App() {
                   lineNumbers={editorLineNumbers}
                   wordWrap={editorWordWrap}
                   minimap={editorMinimap}
+                  onEditorMount={(editor) => { editorRef.current = editor; }}
                 />
               </div>
               {terminalVisible && (

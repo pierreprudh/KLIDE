@@ -1203,9 +1203,10 @@ function TaskTerminal({ sessionId, theme }: { sessionId: string; theme: ThemeId 
   useEffect(() => {
     if (!ref.current) return;
     const term = new Terminal({
-      fontSize: 12,
+      fontSize: 11.5,
+      lineHeight: 1.25,
       fontFamily:
-        "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
+        "Monaspace Neon, Monaspace Argon, JetBrains Mono, SF Mono, Menlo, ui-monospace, monospace",
       theme: {
         background: cssVar("--terminal-bg"),
         foreground: cssVar("--terminal-fg"),
@@ -1214,6 +1215,7 @@ function TaskTerminal({ sessionId, theme }: { sessionId: string; theme: ThemeId 
       cursorBlink: true,
       scrollback: 5000,
       convertEol: true,
+      allowProposedApi: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -1262,7 +1264,7 @@ function TaskTerminal({ sessionId, theme }: { sessionId: string; theme: ThemeId 
         borderTop: "1px solid var(--terminal-border)",
       }}
     >
-      <div ref={ref} style={{ flex: 1, minHeight: 0, padding: 6 }} />
+      <div ref={ref} style={{ minHeight: 0, padding: 4, height: "min(100%, 520px)" }} />
     </div>
   );
 }

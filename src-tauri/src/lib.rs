@@ -6,6 +6,7 @@ use pty::{
 };
 use std::process::Command;
 use std::process::Stdio;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::ipc::Channel;
@@ -169,7 +170,7 @@ fn env_fallback(provider: &str) -> Option<String> {
 
 fn provider_key(provider: &str) -> Result<Option<String>, String> {
     match provider {
-        "ollama" => Ok(None),
+        "ollama" | "mlx" => Ok(None),
         "openai" | "mistral" | "xai" | "anthropic" => {
             match keyring_lookup(provider).or_else(|| env_fallback(provider)) {
                 Some(key) => Ok(Some(key)),
@@ -250,6 +251,7 @@ fn provider_chat_url(provider: &str) -> Result<&'static str, String> {
         "openai" => Ok("https://api.openai.com/v1/chat/completions"),
         "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
         "xai" => Ok("https://api.x.ai/v1/chat/completions"),
+        "mlx" => Ok("http://localhost:8080/v1/chat/completions"),
         _ => Err(format!(
             "Provider \"{provider}\" has no chat-completions endpoint"
         )),
@@ -261,6 +263,7 @@ fn provider_models_url(provider: &str) -> Result<&'static str, String> {
         "openai" => Ok("https://api.openai.com/v1/models"),
         "mistral" => Ok("https://api.mistral.ai/v1/models"),
         "xai" => Ok("https://api.x.ai/v1/models"),
+        "mlx" => Ok("http://localhost:8080/v1/models"),
         _ => Err(format!("Provider \"{provider}\" has no models endpoint")),
     }
 }
@@ -331,6 +334,19 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
         let body = res.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
             return Err(response_error("Anthropic", status, &body));
+        }
+        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        return Ok(normalize_model_ids(&value));
+    }
+
+    if provider == "mlx" {
+        let res = reqwest::get("http://localhost:8080/v1/models")
+            .await
+            .map_err(|e| format!("Unable to reach MLX: {e}"))?;
+        let status = res.status();
+        let body = res.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(response_error("MLX", status, &body));
         }
         let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         return Ok(normalize_model_ids(&value));
@@ -541,6 +557,8 @@ fn fallback_context_window(provider: &str, model: &str) -> usize {
         128_000
     } else if lower.contains("grok") {
         256_000
+    } else if provider == "mlx" || lower.contains("gemma") {
+        128_000
     } else {
         128_000
     }
@@ -599,6 +617,10 @@ async fn ai_context_window(provider: String, model: String) -> Result<usize, Str
         return Ok(
             find_context_window(&value).unwrap_or_else(|| fallback_context_window("ollama", ""))
         );
+    }
+
+    if provider == "mlx" {
+        return Ok(fallback_context_window("mlx", &model));
     }
 
     Ok(fallback_context_window(&provider, &model))
@@ -744,6 +766,10 @@ async fn ai_model_supports_tools(provider: String, model: String) -> Result<bool
         return Ok(has_tools);
     }
 
+    if provider == "mlx" {
+        return Ok(true);
+    }
+
     Ok(true)
 }
 
@@ -869,6 +895,9 @@ async fn ai_chat(
     }
     if provider == "anthropic" {
         return anthropic_chat(model, messages, tools, &on_chunk).await;
+    }
+    if provider == "mlx" {
+        return mlx_chat(model, messages, tools, &on_chunk).await;
     }
     openai_compatible_chat(provider, model, messages, tools, &on_chunk).await
 }
@@ -1117,6 +1146,8 @@ trait StreamingProvider {
         client: &reqwest::Client,
     ) -> Result<reqwest::RequestBuilder, String>;
 
+    /// Parse one streamed line. Err means the provider reported a fatal
+    /// mid-stream error (delivered over HTTP 200) — the whole request fails.
     fn parse_line(
         &mut self,
         line: &str,
@@ -1124,7 +1155,7 @@ trait StreamingProvider {
         thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
         on_chunk: &Channel<StreamChunk>,
-    );
+    ) -> Result<(), String>;
 
     fn finalize_response(
         content: String,
@@ -1153,20 +1184,24 @@ async fn stream_provider<S: StreamingProvider>(
     let mut content = String::new();
     let mut thinking = String::new();
     let mut tools = S::ToolAccumulator::default();
-    let mut buf = String::new();
+    // Buffer raw bytes and only decode complete lines: a multi-byte UTF-8
+    // char can be split across network chunks, and decoding each chunk
+    // separately would corrupt it into U+FFFD (and break the line's JSON).
+    let mut buf: Vec<u8> = Vec::new();
 
     let mut stream = res;
     let mut provider = provider;
     while let Some(bytes) = stream.chunk().await.map_err(|e| e.to_string())? {
-        buf.push_str(&String::from_utf8_lossy(&bytes));
-        while let Some(nl) = buf.find('\n') {
-            let line: String = buf.drain(..=nl).collect();
-            provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk);
+        buf.extend_from_slice(&bytes);
+        while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
+            provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk)?;
         }
     }
-    if !buf.trim().is_empty() {
-        let line = std::mem::take(&mut buf);
-        provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk);
+    if buf.iter().any(|b| !b.is_ascii_whitespace()) {
+        let line = String::from_utf8_lossy(&buf).to_string();
+        provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk)?;
     }
 
     Ok(S::finalize_response(content, thinking, tools))
@@ -1206,11 +1241,14 @@ impl StreamingProvider for OllamaAdapter {
         thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
         on_chunk: &Channel<StreamChunk>,
-    ) {
+    ) -> Result<(), String> {
         let line = line.trim();
-        if line.is_empty() { return; }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { return; };
-        let Some(message) = value.get("message") else { return; };
+        if line.is_empty() { return Ok(()); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { return Ok(()); };
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            return Err(format!("Ollama error: {error}"));
+        }
+        let Some(message) = value.get("message") else { return Ok(()); };
         let c = message.get("content").and_then(|v| v.as_str()).unwrap_or_default();
         let t = message.get("thinking").and_then(|v| v.as_str()).unwrap_or_default();
         if !c.is_empty() || !t.is_empty() {
@@ -1221,6 +1259,7 @@ impl StreamingProvider for OllamaAdapter {
         if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
             tools.extend(calls.iter().cloned());
         }
+        Ok(())
     }
 
     fn finalize_response(content: String, thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
@@ -1256,7 +1295,7 @@ struct OpenAiAdapter {
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
-    key: String,
+    key: Option<String>,
 }
 
 impl StreamingProvider for OpenAiAdapter {
@@ -1274,10 +1313,13 @@ impl StreamingProvider for OpenAiAdapter {
             body["tools"] = serde_json::Value::Array(tools.clone());
             body["tool_choice"] = serde_json::json!("auto");
         }
-        Ok(client
+        let mut req = client
             .post(provider_chat_url(&self.provider)?)
-            .bearer_auth(&self.key)
-            .json(&body))
+            .json(&body);
+        if let Some(key) = &self.key {
+            req = req.bearer_auth(key);
+        }
+        Ok(req)
     }
 
     fn parse_line(
@@ -1287,17 +1329,21 @@ impl StreamingProvider for OpenAiAdapter {
         _thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
         on_chunk: &Channel<StreamChunk>,
-    ) {
-        let Some(data) = line.trim().strip_prefix("data:") else { return; };
+    ) -> Result<(), String> {
+        let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
         let data = data.trim();
-        if data.is_empty() || data == "[DONE]" { return; }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return; };
+        if data.is_empty() || data == "[DONE]" { return Ok(()); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return Ok(()); };
+        if let Some(error) = value.get("error") {
+            let message = error.get("message").and_then(|v| v.as_str()).unwrap_or("stream error");
+            return Err(format!("{} error: {message}", self.provider));
+        }
         let Some(delta) = value
             .get("choices")
             .and_then(|c| c.as_array())
             .and_then(|c| c.first())
             .and_then(|c| c.get("delta"))
-        else { return; };
+        else { return Ok(()); };
         if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
             if !c.is_empty() {
                 content.push_str(c);
@@ -1316,6 +1362,7 @@ impl StreamingProvider for OpenAiAdapter {
                 }
             }
         }
+        Ok(())
     }
 
     fn finalize_response(content: String, _thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
@@ -1339,7 +1386,17 @@ async fn openai_compatible_chat(
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
-    let adapter = OpenAiAdapter { provider, model, messages, tools, key };
+    let adapter = OpenAiAdapter { provider, model, messages, tools, key: Some(key) };
+    stream_provider(adapter, on_chunk).await
+}
+
+async fn mlx_chat(
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    on_chunk: &Channel<StreamChunk>,
+) -> Result<AiChatResponse, String> {
+    let adapter = OpenAiAdapter { provider: "mlx".to_string(), model, messages, tools, key: None };
     stream_provider(adapter, on_chunk).await
 }
 
@@ -1494,12 +1551,22 @@ impl StreamingProvider for AnthropicAdapter {
         _thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
         on_chunk: &Channel<StreamChunk>,
-    ) {
-        let Some(data) = line.trim().strip_prefix("data:") else { return; };
+    ) -> Result<(), String> {
+        let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
         let data = data.trim();
-        if data.is_empty() { return; }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return; };
+        if data.is_empty() { return Ok(()); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return Ok(()); };
         match value.get("type").and_then(|v| v.as_str()).unwrap_or_default() {
+            // Anthropic delivers mid-stream failures as `error` events over
+            // HTTP 200 — they must fail the request, not vanish.
+            "error" => {
+                let message = value
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("stream error");
+                return Err(format!("Anthropic error: {message}"));
+            }
             "content_block_start" => {
                 let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 while tools.len() <= index { tools.push(AnthropicToolAcc::default()); }
@@ -1514,7 +1581,7 @@ impl StreamingProvider for AnthropicAdapter {
             "content_block_delta" => {
                 let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 while tools.len() <= index { tools.push(AnthropicToolAcc::default()); }
-                let Some(delta) = value.get("delta") else { return; };
+                let Some(delta) = value.get("delta") else { return Ok(()); };
                 match delta.get("type").and_then(|v| v.as_str()) {
                     Some("text_delta") => {
                         if let Some(t) = delta.get("text").and_then(|v| v.as_str()) {
@@ -1534,6 +1601,7 @@ impl StreamingProvider for AnthropicAdapter {
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn finalize_response(content: String, _thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
@@ -1757,9 +1825,13 @@ fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
 
 #[tauri::command]
 fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Result<String, String> {
-    // Create a branch from the current changes
-    let branch = format!("klide/{}", title.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-'));
-    let branch = if branch.len() > 50 { &branch[..50] } else { &branch };
+    // Create a branch from the current changes. Cap the name at 50 chars —
+    // truncate() takes a BYTE index and panics mid-char on non-ASCII titles
+    // (is_alphanumeric keeps accented/Unicode letters), so count chars instead.
+    let branch: String = format!("klide/{}", title.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-'))
+        .chars()
+        .take(50)
+        .collect();
 
     // Check if gh CLI is available
     let gh_check = Command::new("gh").arg("--version").output();
@@ -1780,26 +1852,24 @@ fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Res
     }
 
     // Create and switch to new branch
-    run_git(&workspace_root, &["checkout", "-b", branch])?;
+    run_git(&workspace_root, &["checkout", "-b", &branch])?;
 
-    // Commit
-    run_git(&workspace_root, &["commit", "-m", &title])?;
+    // Commit the staged changes before pushing; otherwise the PR branch has no
+    // new commits for GitHub to compare against the base branch.
+    run_git(&workspace_root, &["commit", "-m", title.trim()])?;
 
-    // Push
     let push = Command::new("git")
-        .args(["-C", &workspace_root, "push", "-u", "origin", branch])
+        .args(["-C", &workspace_root, "push", "-u", "origin", branch.as_str()])
         .output()
         .map_err(|e| format!("Failed to push: {e}"))?;
     if !push.status.success() {
         let err = String::from_utf8_lossy(&push.stderr);
-        // Rollback: switch back and delete the branch
         let _ = Command::new("git").args(["-C", &workspace_root, "checkout", "-"]).status();
-        let _ = Command::new("git").args(["-C", &workspace_root, "branch", "-D", branch]).status();
+        let _ = Command::new("git").args(["-C", &workspace_root, "branch", "-D", branch.as_str()]).status();
         return Err(format!("Push failed: {}", err.trim()));
     }
 
-    // Create PR
-    let mut gh_args = vec!["pr", "create", "--title", &title, "--head", branch];
+    let mut gh_args = vec!["pr", "create", "--title", &title, "--head", branch.as_str()];
     let body_str;
     if let Some(b) = &body {
         body_str = b.clone();
@@ -1820,6 +1890,26 @@ fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Res
         let err = String::from_utf8_lossy(&pr.stderr);
         Err(format!("PR creation failed: {}", err.trim()))
     }
+}
+
+#[tauri::command]
+fn create_worktree(workspace_root: String, name: String) -> Result<String, String> {
+    let safe = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-').to_string();
+    let branch = format!("feature/{safe}");
+    let worktree_path = format!("{}-{}", workspace_root.trim_end_matches('/'), safe);
+
+    run_git(&workspace_root, &["checkout", "-b", &branch])?;
+    let output = Command::new("git")
+        .args(["-C", &workspace_root, "worktree", "add", worktree_path.as_str(), &branch])
+        .output()
+        .map_err(|e| format!("Failed to create worktree: {e}"))?;
+
+    if !output.status.success() {
+        let _ = run_git(&workspace_root, &["checkout", "-"]);
+        let _ = run_git(&workspace_root, &["branch", "-D", &branch]);
+        return Err(format!("Worktree creation failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    Ok(worktree_path)
 }
 
 #[tauri::command]
@@ -2771,6 +2861,175 @@ fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, Strin
     Ok(msgs)
 }
 
+// ── Local server management (Ollama, MLX) ───────────────────────────────
+
+#[derive(Default)]
+struct LocalServerState {
+    processes: Mutex<HashMap<String, std::process::Child>>,
+}
+
+fn is_local_server_provider(provider: &str) -> bool {
+    matches!(provider, "ollama" | "mlx")
+}
+
+fn local_server_command(provider: &str, model: &str) -> Result<(String, Vec<String>), String> {
+    match provider {
+        "ollama" => Ok(("ollama".to_string(), vec!["serve".to_string()])),
+        "mlx" => {
+            let python = if std::env::consts::OS == "macos" {
+                "python3"
+            } else {
+                "python"
+            };
+            Ok((python.to_string(), vec![
+                "-m".to_string(),
+                "mlx_lm.server".to_string(),
+                "--model".to_string(),
+                model.to_string(),
+            ]))
+        }
+        _ => Err(format!("{provider} is not a local server provider")),
+    }
+}
+
+#[tauri::command]
+async fn ai_local_server_start(
+    provider: String,
+    model: String,
+    state: tauri::State<'_, LocalServerState>,
+) -> Result<bool, String> {
+    if !is_local_server_provider(&provider) {
+        return Err(format!("{provider} is not a local server provider"));
+    }
+
+    let url = match provider.as_str() {
+        "ollama" => format!("{OLLAMA_URL}/api/tags"),
+        "mlx" => "http://localhost:8080/v1/models".to_string(),
+        _ => return Ok(false),
+    };
+
+    // Already running externally or previously started
+    if let Ok(res) = reqwest::get(&url).await {
+        if res.status().is_success() {
+            return Ok(true);
+        }
+    }
+
+    {
+        let procs = state.processes.lock().map_err(|e| e.to_string())?;
+        if procs.contains_key(&provider) {
+            return Ok(true);
+        }
+    }
+
+    let (cmd, args) = local_server_command(&provider, &model)?;
+
+    let stderr_path = std::env::temp_dir().join(format!("klide-{provider}-stderr.log"));
+    let stderr_file = std::fs::File::create(&stderr_path)
+        .map_err(|e| format!("Failed to create stderr log: {e}"))?;
+
+    let mut child = Command::new(&cmd)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                format!("Command not found: {cmd}. Make sure {provider} is installed.")
+            } else {
+                format!("Failed to start {provider}: {e}")
+            }
+        })?;
+
+    // Quick check for immediate exit (wrong args, missing module, etc.)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    if let Ok(Some(status)) = child.try_wait() {
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        let msg = if stderr.trim().is_empty() {
+            format!("{provider} exited immediately with {status}")
+        } else {
+            format!("{provider} exited immediately: {stderr}")
+        };
+        return Err(msg);
+    }
+
+    // MLX model loading can take 10–20 s on first run; retry up to 20 s.
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+                let msg = if stderr.trim().is_empty() {
+                    format!("{provider} process exited before the HTTP port came up")
+                } else {
+                    format!("{provider} process exited: {stderr}")
+                };
+                return Err(msg);
+            }
+            Ok(None) => {}
+            Err(e) => return Err(format!("Failed to check {provider} status: {e}")),
+        }
+
+        if let Ok(res) = reqwest::get(&url).await {
+            if res.status().is_success() {
+                let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
+                procs.insert(provider, child);
+                return Ok(true);
+            }
+        }
+    }
+
+    // Timeout — clean up and show last stderr lines
+    let _ = child.kill();
+    let _ = child.wait();
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    if stderr.trim().is_empty() {
+        Ok(false)
+    } else {
+        Err(format!("{provider} timed out starting. Last stderr:\n{stderr}"))
+    }
+}
+
+#[tauri::command]
+fn ai_local_server_stop(
+    provider: String,
+    state: tauri::State<'_, LocalServerState>,
+) -> Result<bool, String> {
+    if !is_local_server_provider(&provider) {
+        return Err(format!("{provider} is not a local server provider"));
+    }
+
+    let child = {
+        let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
+        procs.remove(&provider)
+    };
+
+    if let Some(mut c) = child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+
+    Ok(false)
+}
+
+#[tauri::command]
+async fn ai_local_server_status(provider: String) -> Result<bool, String> {
+    if !is_local_server_provider(&provider) {
+        return Ok(false);
+    }
+    let url = match provider.as_str() {
+        "ollama" => format!("{OLLAMA_URL}/api/tags"),
+        "mlx" => "http://localhost:8080/v1/models".to_string(),
+        _ => return Ok(false),
+    };
+    match reqwest::get(&url).await {
+        Ok(res) => Ok(res.status().is_success()),
+        Err(_) => Ok(false),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2782,6 +3041,7 @@ pub fn run() {
             sessions: Mutex::new(std::collections::HashMap::new()),
         })
         .manage(agent::AgentSupervisorState::default())
+        .manage(LocalServerState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -2906,6 +3166,9 @@ pub fn run() {
             ai_set_provider_key,
             ai_clear_provider_key,
             ai_chat,
+            ai_local_server_start,
+            ai_local_server_stop,
+            ai_local_server_status,
             agent::agent_start_run,
             agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
@@ -2915,7 +3178,8 @@ pub fn run() {
             agent::agent_read_run,
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,
-            create_pr
+            create_pr,
+            create_worktree
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

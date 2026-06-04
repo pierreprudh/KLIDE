@@ -18,7 +18,11 @@ type Props = {
   workspaceRoot: string | null;
   visible: boolean;
   onClose: () => void;
-  onOpenFile: (path: string, content: string) => void;
+  onOpenFile: (
+    path: string,
+    content: string,
+    position?: { line: number; column: number }
+  ) => void;
 };
 
 export function SearchPanel({ workspaceRoot, visible, onClose, onOpenFile }: Props) {
@@ -60,8 +64,10 @@ export function SearchPanel({ workspaceRoot, visible, onClose, onOpenFile }: Pro
     try {
       const { readTextFile } = await import("@tauri-apps/plugin-fs");
       const content = await readTextFile(`${workspaceRoot}/${m.file}`);
-      onOpenFile(m.file, content);
-    } catch {}
+      onOpenFile(m.file, content, { line: m.line, column: m.column });
+    } catch (e) {
+      setError(`Could not open ${m.file}: ${e}`);
+    }
   }
 
   if (!visible) return null;

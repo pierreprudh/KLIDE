@@ -9,8 +9,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { DiffModal } from "./DiffModal";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import type { Skill } from "../skills";
+import { appendProjectMemoryEntry } from "../projectMemory";
 import {
-  CONTEXT_MODE_LABELS,
   estimateProjectContextTokens,
   lensItemsForPrompt,
   type ProjectContextMode,
@@ -131,10 +131,14 @@ export function AiPanel({
   useEffect(() => () => { if (convoIdRef.current) settleKlideConvo(convoIdRef.current); }, []);
 
   const [contextLimit, setContextLimit] = useState(128_000);
-  const [contextMode, setContextMode] = useState<ProjectContextMode>(
+  const [contextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
   const [connected, setConnected] = useState(false);
+  const [serverRunning, setServerRunning] = useState(false);
+  const [serverStarting, setServerStarting] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [serverRefresh, setServerRefresh] = useState(0);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
   );
@@ -174,6 +178,7 @@ export function AiPanel({
 
   const [provider, setProvider] = useState<ProviderId>(() => (localStorage.getItem("klide.provider") as ProviderId) || "ollama");
   const providerDelegatesWork = isDelegateProvider(provider);
+  const isLocalProvider = provider === "ollama" || provider === "mlx";
   const [providerOpen, setProviderOpen] = useState(false);
   const providerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -201,6 +206,7 @@ export function AiPanel({
     { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)", run: () => { selectMode("plan"); setInput(""); } },
     { name: "goal", desc: "Switch to Goal mode (can propose edits)", run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
     { name: "clear", desc: "Start a new conversation", run: () => newConversation() },
+    { name: "handoff", desc: "Save this task state into Project Memory", run: () => saveHandoffToProjectMemory() },
     { name: "explain", desc: "Explain a file — pick one next (read-only)", run: () => {
       setInput("Explain what this file does and how it works: @");
       setNextSendMode("plan");
@@ -213,6 +219,29 @@ export function AiPanel({
   const slashMatches = slash !== null ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slash.query.toLowerCase())) : [];
 
   function acceptSlash(idx: number) { const cmd = slashMatches[idx]; setSlash(null); if (cmd) cmd.run(); }
+
+  function saveHandoffToProjectMemory() {
+    if (!workspaceRoot) {
+      setInput("");
+      const msg: Msg = { role: "assistant", content: "Open a workspace before saving a project handoff." };
+      msgsRef.current = [...msgsRef.current, msg];
+      setMsgs(msgsRef.current);
+      return;
+    }
+    const handoff = buildHandoffSummary(msgsRef.current, projectContext);
+    appendProjectMemoryEntry(workspaceRoot, {
+      source: "handoff",
+      title: handoff.title,
+      body: handoff.body,
+    });
+    setInput("");
+    const msg: Msg = {
+      role: "assistant",
+      content: `Saved Project Memory handoff: ${handoff.title}`,
+    };
+    msgsRef.current = [...msgsRef.current, msg];
+    setMsgs(msgsRef.current);
+  }
 
   useEffect(() => { setFileList([]); }, [workspaceRoot]);
 
@@ -304,6 +333,17 @@ export function AiPanel({
     void stopAgentRun(runId).catch((e) => console.error("Failed to abort harness run:", e));
   }
 
+  function stopCurrentStream() {
+    abortActiveHarnessRun();
+    if (providerDelegatesWork) { void invoke("delegate_pty_stop", { sessionId: `${currentId}:${provider}` }); }
+    // Bump the queue generation so any in-flight runProcessQueue sees its
+    // tokens as stale and bails before it can start another turn.
+    queueGenerationRef.current += 1;
+    processingQueueRef.current = false;
+    setStreaming(false);
+    setActivity(null);
+  }
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
@@ -391,7 +431,56 @@ export function AiPanel({
     }
     void loadProviderModels();
     return () => { cancelled = true; };
-  }, [provider, model, apiKeyVersion, onAvailableModelsChange, onModelChange]);
+  }, [provider, model, apiKeyVersion, serverRefresh, onAvailableModelsChange, onModelChange]);
+
+  useEffect(() => {
+    if (!isLocalProvider) {
+      setServerRunning(false);
+      return;
+    }
+    let timer: ReturnType<typeof setInterval>;
+    async function check() {
+      try {
+        const running = await invoke<boolean>("ai_local_server_status", { provider });
+        setServerRunning(running);
+      } catch {
+        setServerRunning(false);
+      }
+    }
+    check();
+    timer = setInterval(check, 4000);
+    return () => clearInterval(timer);
+  }, [provider]);
+
+  async function toggleLocalServer() {
+    if (serverStarting) return;
+    setServerError(null);
+    if (serverRunning) {
+      setServerStarting(true);
+      try {
+        await invoke("ai_local_server_stop", { provider });
+        setServerRunning(false);
+        setConnected(false);
+      } catch (e) {
+        setServerError(String(e));
+      } finally {
+        setServerStarting(false);
+      }
+    } else {
+      setServerStarting(true);
+      try {
+        const started = await invoke<boolean>("ai_local_server_start", { provider, model });
+        setServerRunning(started);
+        if (started) {
+          setServerRefresh((n) => n + 1);
+        }
+      } catch (e) {
+        setServerError(String(e));
+      } finally {
+        setServerStarting(false);
+      }
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -399,7 +488,7 @@ export function AiPanel({
       try {
         const supports = await invoke<boolean>("ai_model_supports_tools", { provider, model });
         if (!cancelled) setModelSupportsTools(supports);
-      } catch { if (!cancelled) setModelSupportsTools(provider !== "ollama"); }
+      } catch { if (!cancelled) setModelSupportsTools(!isLocalProvider); }
     }
     void checkToolSupport();
     return () => { cancelled = true; };
@@ -479,20 +568,6 @@ export function AiPanel({
         }
         case "assistant_message": {
           if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; pendingDelta = { content: "", thinking: "" }; }
-          const text = event.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-          const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("\n").trim();
-          const tcBlocks = event.content.filter((b) => b.type === "tool_call");
-          const tcCalls = tcBlocks.map((b) => ({ id: ("toolCallId" in b ? b.toolCallId : "") as string, name: "name" in b ? b.name as string : "", args: "input" in b ? b.input : {} }));
-          const msgContent = text || (cur[nextAssistantIdx] as Msg & { role: "assistant" })?.content || "";
-          setMsgs((prev) => {
-            const next = [...prev];
-            if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
-            next[nextAssistantIdx] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider };
-            return next;
-          });
-          break;
-        }
-        case "assistant_message": {
           const text = event.content.filter((b) => b.type === "text").map((b) => b.text).join("");
           const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("\n").trim();
           const tcBlocks = event.content.filter((b) => b.type === "tool_call");
@@ -597,7 +672,7 @@ export function AiPanel({
         const next = [...prev];
         if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
         const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
-        next[nextAssistantIdx] = { ...existing, content: (existing.content || "") + pendingDelta.content, thinking: [existing.thinking, pendingDelta.thinking].filter(Boolean).join("\n") || undefined, delegateConsole, delegateProvider };
+        next[nextAssistantIdx] = { ...existing, content: (existing.content || "") + pendingDelta.content, thinking: existing.thinking ? existing.thinking + (pendingDelta.thinking ?? "") : pendingDelta.thinking || undefined, delegateConsole, delegateProvider };
         return next;
       });
     }
@@ -667,7 +742,7 @@ export function AiPanel({
       <header style={{ padding: "8px 10px", fontSize: 11, color: "var(--fg-subtle)", letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 500, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, position: "relative", zIndex: 40 }}>
         <div ref={providerRef} style={{ position: "relative", minWidth: 0, textTransform: "none", letterSpacing: 0 }}>
           <button onClick={() => setProviderOpen((o) => !o)}
-            title={provider === "ollama" ? (connected ? "Ollama · connected" : "Ollama · not reachable on localhost:11434") : isDelegateProvider(provider) ? (connected ? `${providerName(provider)} · CLI available` : `${providerName(provider)} · check CLI install/auth`) : (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · check API key`)}
+            title={isLocalProvider ? (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · not reachable`) : isDelegateProvider(provider) ? (connected ? `${providerName(provider)} · CLI available` : `${providerName(provider)} · check CLI install/auth`) : (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · check API key`)}
             aria-haspopup="menu" aria-expanded={providerOpen}
             style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 200, height: 24, padding: "0 6px", borderRadius: "var(--radius-sm)", background: providerOpen ? "var(--bg-hover)" : "transparent", color: providerOpen ? "var(--fg-strong)" : "var(--fg-subtle)", cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -702,6 +777,46 @@ export function AiPanel({
             </div>
           )}
         </div>
+        {isLocalProvider && (
+          <button
+            onClick={toggleLocalServer}
+            title={serverRunning ? "Stop server" : "Start server"}
+            disabled={serverStarting}
+            style={{
+              width: 24, height: 24, display: "grid", placeItems: "center",
+              borderRadius: "var(--radius-sm)",
+              background: serverRunning ? "var(--accent-soft)" : "transparent",
+              color: serverRunning ? "var(--accent)" : "var(--fg-subtle)",
+              cursor: serverStarting ? "default" : "pointer",
+              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+              opacity: serverStarting ? 0.5 : 1,
+            }}
+            onMouseEnter={(e) => { if (!serverStarting) { e.currentTarget.style.color = serverRunning ? "var(--accent)" : "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; } }}
+            onMouseLeave={(e) => { if (!serverStarting) { e.currentTarget.style.color = serverRunning ? "var(--accent)" : "var(--fg-subtle)"; e.currentTarget.style.background = serverRunning ? "var(--accent-soft)" : "transparent"; } }}
+          >
+            {serverRunning ? (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="8,5 19,12 8,19" /></svg>
+            )}
+          </button>
+        )}
+        {isLocalProvider && serverError && (
+          <div
+            title={serverError}
+            style={{
+              maxWidth: 180,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 10,
+              color: "var(--fg-dim)",
+              padding: "0 4px",
+            }}
+          >
+            {serverError}
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 2, textTransform: "none", letterSpacing: 0 }}>
           {onDuplicate && (
             <button onClick={() => onDuplicate()} title="Duplicate panel" aria-label="Duplicate panel" style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: "var(--fg-subtle)", background: "transparent" }}
@@ -786,33 +901,6 @@ export function AiPanel({
             </span>
           </div>
         )}
-        {projectContext && (
-          <div style={{ marginBottom: 8, padding: "7px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)", display: "grid", gap: 6 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ color: "var(--fg-subtle)", fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 700 }}>Context Lens</div>
-                <div style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {projectContext.selectedPath} - {lensProjectContext.length} inferred, ~{estimateProjectContextTokens(lensProjectContext).toLocaleString()} tokens
-                </div>
-              </div>
-              <button type="button" onClick={() => setContextMode((mode) => (mode === "auto" ? "off" : "auto"))} disabled={streaming}
-                title="Toggle automatic project context inference for the next chat turn"
-                style={{ height: 26, minWidth: 72, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: contextMode === "auto" ? "var(--accent-soft)" : "var(--bg)", color: contextMode === "auto" ? "var(--accent)" : "var(--fg-subtle)", font: "inherit", fontSize: 11, fontWeight: 700, padding: "0 8px" }}>
-                {CONTEXT_MODE_LABELS[contextMode]}
-              </button>
-            </div>
-            {lensProjectContext.length > 0 && (
-              <div style={{ display: "grid", gap: 4 }}>
-                {lensProjectContext.slice(0, 4).map((item) => (
-                  <div key={item.id} title={item.detail} style={{ display: "grid", gridTemplateColumns: "86px minmax(0, 1fr)", gap: 7, color: "var(--fg)", fontSize: 11 }}>
-                    <span style={{ color: "var(--accent)", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.path}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-md)", background: "var(--bg)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 1px 2px rgba(38, 38, 32, 0.05)" : "0 1px 2px rgba(38, 38, 32, 0.04)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
@@ -862,6 +950,7 @@ export function AiPanel({
               }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               else if (e.key === "Tab" && !providerDelegatesWork) { e.preventDefault(); toggleMode(); }
+              else if (e.key === "Escape" && streaming) { e.preventDefault(); stopCurrentStream(); }
             }}
             onFocus={() => { setComposerFocused(true); }}
             onBlur={() => { setComposerFocused(false); setMention(null); setSlash(null); }}
@@ -933,12 +1022,21 @@ export function AiPanel({
                 )}
               </button>
             </div>
-            <button onClick={() => send()} disabled={!input.trim()} aria-label={streaming ? "Queue message" : "Send message"} title={streaming ? "Queue message (Enter)" : "Send (Enter)"}
-              style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: input.trim() ? "#fff" : "var(--fg-dim)", background: input.trim() ? "var(--accent)" : "var(--bg-elevated)", cursor: input.trim() ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
-              onMouseEnter={(e) => { if (input.trim()) e.currentTarget.style.filter = "brightness(1.08)"; }}
-              onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
-            </button>
+            {streaming ? (
+              <button onClick={stopCurrentStream} aria-label="Stop generation" title="Stop (Esc)"
+                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+              </button>
+            ) : (
+              <button onClick={() => send()} disabled={!input.trim()} aria-label="Send message" title="Send (Enter)"
+                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: input.trim() ? "#fff" : "var(--fg-dim)", background: input.trim() ? "var(--accent)" : "var(--bg-elevated)", cursor: input.trim() ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
+                onMouseEnter={(e) => { if (input.trim()) e.currentTarget.style.filter = "brightness(1.08)"; }}
+                onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -958,4 +1056,37 @@ export function AiPanel({
     )}
     </>
   );
+}
+
+function buildHandoffSummary(
+  msgs: Msg[],
+  projectContext: ProjectContextSnapshot | null | undefined
+): { title: string; body: string } {
+  const userTurns = msgs.filter((m): m is Extract<Msg, { role: "user" }> => m.role === "user");
+  const assistantTurns = msgs.filter((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant" && !m.delegateConsole);
+  const toolTurns = msgs.filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
+  const firstUser = userTurns[0]?.content.trim() || "Continue the current task.";
+  const lastUser = userTurns[userTurns.length - 1]?.content.trim() || firstUser;
+  const lastAssistant = assistantTurns[assistantTurns.length - 1]?.content.trim();
+  const contextItems = projectContext?.lens.slice(0, 8) ?? [];
+  const touched = [
+    ...new Set([
+      ...contextItems.map((item) => item.path),
+      ...userTurns.flatMap((turn) => turn.attachments?.map((attachment) => attachment.path) ?? []),
+    ].filter((path) => path && path !== "."))
+  ].slice(0, 10);
+  const toolNames = [...new Set(toolTurns.map((turn) => turn.toolName))].slice(0, 8);
+  const title = deriveTitle([{ role: "user", content: firstUser } as Msg]);
+  const body = [
+    `Goal: ${firstUser}`,
+    `Last user request: ${lastUser}`,
+    lastAssistant ? `Current state: ${lastAssistant.slice(0, 1200)}` : "Current state: no assistant summary yet.",
+    touched.length ? `Relevant files/areas:\n${touched.map((path) => `- ${path}`).join("\n")}` : "Relevant files/areas: none captured yet.",
+    contextItems.length
+      ? `Context lens:\n${contextItems.slice(0, 6).map((item) => `- ${item.label}: ${item.path} - ${item.detail.slice(0, 180)}`).join("\n")}`
+      : "Context lens: no active lens snapshot.",
+    toolNames.length ? `Tools used: ${toolNames.join(", ")}` : "Tools used: none.",
+    "Next pickup: read this handoff, inspect the relevant files, then continue from the last user request.",
+  ].join("\n\n");
+  return { title, body };
 }

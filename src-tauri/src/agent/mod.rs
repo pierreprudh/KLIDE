@@ -326,8 +326,27 @@ async fn run_agent_loop(
     let mut message_count = 1_u32;
     let mut completed = false;
     const MAX_TURNS: usize = 8;
+    const COMPACT_AFTER: usize = 14;
 
-    for _ in 0..MAX_TURNS {
+    for turn in 0..MAX_TURNS {
+        // Auto-compaction: trim verbose tool results from older turns
+        if messages.len() > COMPACT_AFTER {
+            let mut compacted = 0;
+            for msg in messages.iter_mut().skip(1) {
+                if compacted >= 5 { break; }
+                if msg.get("role").and_then(|v| v.as_str()) == Some("tool") {
+                    let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                    let content_len = msg.get("content").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+                    if content_len > 200 {
+                        msg["content"] = serde_json::Value::String(
+                            format!("[compacted: {name}]")
+                        );
+                        if let Some(obj) = msg.as_object_mut() { obj.remove("name"); }
+                        compacted += 1;
+                    }
+                }
+            }
+        }
         let assistant_id = message_id("assistant");
         let stream_run_id = id.clone();
         let stream_assistant_id = assistant_id.clone();
@@ -394,7 +413,16 @@ async fn run_agent_loop(
             }
         };
 
-        let tool_calls = parse_tool_calls(&response.tool_calls);
+        let mut tool_calls = parse_tool_calls(&response.tool_calls);
+        // Fallback ids ("tool_<idx>") are only unique within one response —
+        // stamp the turn so ids stay unique across the whole run (checkpoints
+        // and the frontend reducer key on them).
+        for call in tool_calls.iter_mut() {
+            if call.id.starts_with("tool_") {
+                call.id = format!("turn{turn}_{}", call.id);
+            }
+        }
+        let tool_calls = tool_calls;
         let raw_tool_calls = response.tool_calls.clone();
         messages.push(assistant_provider_message(
             &response.content,
@@ -542,18 +570,25 @@ async fn run_agent_loop(
                 if decision == "apply" {
                     match apply_write(root, &proposal) {
                         Ok(result) => {
-                            // Save checkpoint for rollback
+                            // Save checkpoint for rollback. Serialize through
+                            // CheckpointEntry so the saved shape always matches
+                            // what agent_list_checkpoints deserializes.
                             let checkpoint_dir = runs_dir.join(&id).join("checkpoints");
                             let _ = std::fs::create_dir_all(&checkpoint_dir);
-                            let checkpoint_file = checkpoint_dir.join(format!("{}.json", proposal.tool_call_id));
-                            let entry = serde_json::json!({
-                                "path": proposal.path,
-                                "old_content": proposal.old_content,
-                                "new_content": proposal.new_content,
-                                "is_create": proposal.is_create,
-                                "ts": now_ms(),
-                            });
-                            let _ = std::fs::write(&checkpoint_file, entry.to_string());
+                            let checkpoint_file =
+                                checkpoint_dir.join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
+                            let entry = CheckpointEntry {
+                                tool_call_id: proposal.tool_call_id.clone(),
+                                path: proposal.path.clone(),
+                                old_content: proposal.old_content.clone(),
+                                new_content: proposal.new_content.clone(),
+                                is_create: proposal.is_create,
+                                workspace_root: root.to_string(),
+                                ts: now_ms(),
+                            };
+                            if let Ok(json) = serde_json::to_string(&entry) {
+                                let _ = std::fs::write(&checkpoint_file, json);
+                            }
                             tool_result = result;
                             emit(AgentEvent::FileChanged {
                                 run_id: id.clone(),
@@ -723,7 +758,18 @@ pub(crate) struct CheckpointEntry {
     old_content: String,
     new_content: String,
     is_create: bool,
+    /// The workspace the edit was applied in — revert must resolve against
+    /// this, never the process cwd.
+    workspace_root: String,
     ts: i64,
+}
+
+/// Tool-call ids come from providers (or fallbacks) and may contain path
+/// separators — flatten them so they are safe as checkpoint file names.
+fn sanitize_file_id(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
 }
 
 #[tauri::command]
@@ -757,14 +803,19 @@ pub async fn agent_revert_checkpoint(
     tool_call_id: String,
 ) -> Result<(), String> {
     let runs_dir = app_runs_dir(&app)?;
-    let checkpoint_file = runs_dir.join(&run_id).join("checkpoints").join(format!("{tool_call_id}.json"));
+    let checkpoint_file = runs_dir
+        .join(&run_id)
+        .join("checkpoints")
+        .join(format!("{}.json", sanitize_file_id(&tool_call_id)));
     let content = std::fs::read_to_string(&checkpoint_file)
         .map_err(|_| format!("Checkpoint {tool_call_id} not found"))?;
     let entry: CheckpointEntry = serde_json::from_str(&content)
         .map_err(|e| format!("Invalid checkpoint: {e}"))?;
 
-    let workspace_root = std::env::current_dir().map_err(|e| e.to_string())?;
-    let full = workspace_root.join(&entry.path);
+    // Resolve against the workspace the edit was applied in, with the same
+    // containment guard as the write tools.
+    let workspace_root = Path::new(&entry.workspace_root);
+    let full = crate::agent::tools::resolve_new_path(workspace_root, &entry.path)?;
 
     if entry.is_create {
         std::fs::remove_file(&full).map_err(|e| format!("Cannot remove {}: {e}", entry.path))?;

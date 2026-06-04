@@ -111,7 +111,7 @@ export function DelegateTerminalSurface({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "color-mix(in srgb, var(--terminal-bg) 94%, var(--bg))" }}>
-      <div ref={ref} style={{ flex: 1, minHeight: 0, padding: 4 }} />
+      <div ref={ref} style={{ minHeight: 0, padding: 4, height: "min(100%, 480px)" }} />
     </div>
   );
 }

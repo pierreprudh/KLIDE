@@ -123,13 +123,17 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
     setSelectedIdx(0);
   }, [query]);
 
-  const execute = useCallback(() => {
+  // Clicks pass their row index explicitly: setSelectedIdx(i) hasn't
+  // re-rendered yet when the same tick calls execute(), so reading
+  // selectedIdxSafe here would act on the previous selection.
+  const execute = useCallback((idx?: number) => {
+    const at = idx ?? selectedIdxSafe;
     if (isCommandMode && filteredCommands.length > 0) {
-      filteredCommands[selectedIdxSafe].action();
+      filteredCommands[at]?.action();
     } else if (!isCommandMode) {
       const items = recentFiles.length > 0 && query.length === 0 ? recentFiles : filteredFiles;
       if (items.length > 0) {
-        const f = items[selectedIdxSafe];
+        const f = items[at] ?? items[0];
         saveRecentFile(f.path);
         void (async () => {
           try {
@@ -152,8 +156,8 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
         display: "flex",
         justifyContent: "center",
         paddingTop: "18vh",
-        background: "color-mix(in srgb, var(--bg) 72%, transparent)",
-        backdropFilter: "blur(2px)",
+        background: "color-mix(in srgb, var(--bg) 60%, transparent)",
+        backdropFilter: "blur(2px) saturate(1.4)",
       }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) {
@@ -249,7 +253,7 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
                 <div
                   key={`recent-${f.path}`}
                   onMouseEnter={() => setSelectedIdx(i)}
-                  onClick={() => { setSelectedIdx(i); execute(); }}
+                  onClick={() => { setSelectedIdx(i); execute(i); }}
                   style={{
                     display: "flex", alignItems: "baseline", gap: 4, padding: "7px 12px",
                     borderRadius: "var(--radius-sm)", cursor: "pointer", overflow: "hidden",
@@ -273,7 +277,7 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
             <div
               key={cmd.id}
               onMouseEnter={() => setSelectedIdx(i)}
-              onClick={() => { setSelectedIdx(i); execute(); }}
+              onClick={() => { setSelectedIdx(i); execute(i); }}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
                 padding: "7px 12px", borderRadius: "var(--radius-sm)", cursor: "pointer",
@@ -294,7 +298,7 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
               <div
                 key={f.path}
                 onMouseEnter={() => setSelectedIdx(i)}
-                onClick={() => { setSelectedIdx(i); execute(); }}
+                onClick={() => { setSelectedIdx(i); execute(i); }}
                 style={{
                   display: "flex", alignItems: "baseline", gap: 4, padding: "7px 12px",
                   borderRadius: "var(--radius-sm)", cursor: "pointer", overflow: "hidden",

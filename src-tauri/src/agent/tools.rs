@@ -58,7 +58,7 @@ fn registry() -> Vec<ToolEntry> {
             schema: schema("read_file", "Read the full text contents of a file in the workspace.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative file path." } }),
                 &["path"]),
-            run_read: Some(|root, input| read_file(root, &string_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
+            run_read: Some(|root, input| read_file(root, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
         },
         ToolEntry {
@@ -66,7 +66,7 @@ fn registry() -> Vec<ToolEntry> {
             schema: schema("list_dir", "List entries in a workspace directory.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative directory path. Use . for the root." } }),
                 &["path"]),
-            run_read: Some(|root, input| list_dir(root, &string_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
+            run_read: Some(|root, input| list_dir(root, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
         },
         ToolEntry {
@@ -169,6 +169,19 @@ fn registry() -> Vec<ToolEntry> {
             run_read: None,
             run_write_preview: Some(|root, input, run_id| preview_create_file(root, input, run_id)),
         },
+        ToolEntry {
+            kind: ToolKind::Write,
+            schema: schema("create_skill", "Save a reusable skill to .agents/skills/<name>/SKILL.md. Use after solving a problem so it's never solved from scratch again.",
+                serde_json::json!({
+                    "name": { "type": "string", "description": "Folder name, e.g. 'react-hooks'." },
+                    "title": { "type": "string", "description": "Human title." },
+                    "description": { "type": "string", "description": "What it does." },
+                    "instructions": { "type": "string", "description": "Markdown instructions." }
+                }),
+                &["name", "title", "instructions"]),
+            run_read: None,
+            run_write_preview: Some(|root, input, run_id| preview_create_skill(root, input, run_id)),
+        },
     ]
 }
 
@@ -177,12 +190,17 @@ pub fn list_tools(mode: &AgentMode) -> Vec<serde_json::Value> {
     let kind_filter = match mode {
         AgentMode::Chat => return Vec::new(),
         AgentMode::Plan => Some(ToolKind::ReadOnly),
-        AgentMode::Goal => None, // all tools
+        AgentMode::Goal => None,
     };
-    reg.iter()
+    let mut tools: Vec<serde_json::Value> = reg.iter()
         .filter(|e| kind_filter.map_or(true, |k| e.kind == k))
         .map(|e| e.schema.clone())
-        .collect()
+        .collect();
+    // Dynamic tools always available in Plan/Goal
+    if mode != &AgentMode::Chat {
+        tools.extend(load_dynamic_tools(None));
+    }
+    tools
 }
 
 pub fn schemas_for_mode(mode: &AgentMode) -> Option<Vec<serde_json::Value>> {
@@ -203,22 +221,128 @@ fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
 }
 
 pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResult {
+    // Check dynamic tools first
+    if let Some(result) = execute_dynamic_tool(&call.name, &call.input, Some(root)) {
+        return result;
+    }
+    // Then built-in registry
     let entry = registry().into_iter().find(|e| schema_has_name(&e.schema, &call.name));
     match entry.and_then(|e| e.run_read) {
         Some(f) => f(root, &call.input),
-        None => err(format!("Unknown or non-read-only tool: {}", call.name)),
+        None => err(format!("Unknown tool: {}", call.name)),
     }
 }
 
 pub fn execute_write_tool_preview(root: &str, call: &NormalizedToolCall, run_id: &str) -> Result<DiffProposal, ToolResult> {
     let entry = registry().into_iter().find(|e| schema_has_name(&e.schema, &call.name));
     match entry.and_then(|e| e.run_write_preview) {
-        Some(f) => f(root, &call.input, run_id),
+        // Key the proposal to the tool call's id (unique per call), not the
+        // file path — two edits to the same file in one run must not collide.
+        Some(f) => f(root, &call.input, run_id).map(|mut proposal| {
+            proposal.tool_call_id = call.id.clone();
+            proposal.id = format!("diff_{}_{}", run_id, call.id);
+            proposal
+        }),
         None => Err(err(format!("Not a write tool: {}", call.name))),
     }
 }
 
-// ── Parser ──────────────────────────────────────────────────────────────
+// ── Dynamic tools from .agents/tools.json ───────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct DynamicToolDef {
+    name: String,
+    description: String,
+    command: String,
+    #[serde(default = "default_timeout")]
+    timeout_secs: u64,
+    #[serde(default)]
+    cwd: String,
+}
+
+fn default_timeout() -> u64 { 30 }
+
+#[derive(serde::Deserialize)]
+struct ToolsConfig {
+    tools: Vec<DynamicToolDef>,
+}
+
+fn load_tools_from(path: &Path) -> Vec<DynamicToolDef> {
+    let content = match std::fs::read_to_string(path) { Ok(c) => c, Err(_) => return Vec::new() };
+    let config: ToolsConfig = match serde_json::from_str(&content) { Ok(c) => c, Err(_) => return Vec::new() };
+    config.tools
+}
+
+pub fn load_dynamic_tools(workspace_root: Option<&str>) -> Vec<serde_json::Value> {
+    let mut tools = Vec::new();
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // Load global tools
+    let global_path = Path::new(&home).join(".agents/tools.json");
+    for def in load_tools_from(&global_path) {
+        tools.push(dynamic_tool_schema(&def));
+    }
+
+    // Load workspace tools
+    if let Some(root) = workspace_root {
+        let workspace_path = Path::new(root).join(".agents/tools.json");
+        for def in load_tools_from(&workspace_path) {
+            tools.push(dynamic_tool_schema(&def));
+        }
+    }
+
+    tools
+}
+
+fn dynamic_tool_schema(def: &DynamicToolDef) -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": def.name,
+            "description": def.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": { "type": "string", "description": "Optional arguments to pass to the command." }
+                }
+            }
+        }
+    })
+}
+
+pub fn execute_dynamic_tool(name: &str, input: &serde_json::Value, workspace_root: Option<&str>) -> Option<ToolResult> {
+    let mut all_defs = Vec::new();
+    let home = std::env::var("HOME").unwrap_or_default();
+    all_defs.extend(load_tools_from(&Path::new(&home).join(".agents/tools.json")));
+    if let Some(root) = workspace_root {
+        all_defs.extend(load_tools_from(&Path::new(root).join(".agents/tools.json")));
+    }
+    let def = all_defs.iter().find(|d| d.name == name)?;
+    let cwd = if def.cwd == "workspace" { workspace_root.unwrap_or(".") } else { "." };
+    let args_str = string_arg(input, "args").unwrap_or_default();
+    let full_command = if args_str.is_empty() { def.command.clone() } else { format!("{} {}", def.command, args_str) };
+
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&full_command)
+        .current_dir(cwd)
+        .output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => return Some(ToolResult { ok: false, content: format!("Failed to run {}: {e}", def.name), metadata: None }),
+    };
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut result = stdout.trim().to_string();
+        if !stderr.trim().is_empty() { result.push_str(&format!("\n\nstderr:\n{}", stderr.trim())); }
+        if result.is_empty() { result = "(command completed successfully)".to_string(); }
+        Some(ToolResult { ok: true, content: result.chars().take(4000).collect(), metadata: None })
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Some(ToolResult { ok: false, content: format!("{} failed: {}", def.name, stderr.trim()), metadata: None })
+    }
+}
 
 pub fn parse_tool_calls(raw: &[serde_json::Value]) -> Vec<NormalizedToolCall> {
     raw.iter()
@@ -254,7 +378,14 @@ fn err(content: String) -> ToolResult {
     ToolResult { ok: false, content, metadata: None }
 }
 
+/// Raw string argument — preserves whitespace exactly. Use for file contents
+/// and edit strings, where leading/trailing whitespace is significant.
 fn string_arg(input: &serde_json::Value, key: &str) -> Option<String> {
+    input.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+/// Trimmed, non-empty string argument — for paths, patterns, queries, URLs.
+fn trimmed_arg(input: &serde_json::Value, key: &str) -> Option<String> {
     input.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
@@ -286,6 +417,34 @@ fn resolve_existing_path(root: &Path, user_path: &str) -> Result<PathBuf, String
         return Err(format!("Path \"{user_path}\" is outside the workspace"));
     }
     Ok(real)
+}
+
+/// Resolve a path that may not exist yet (create_file, apply_write), verifying
+/// it stays inside the workspace. canonicalize() fails on non-existent paths,
+/// so instead we reject any `..`/absolute component outright, then canonicalize
+/// the deepest existing ancestor so a symlinked directory can't smuggle the
+/// write outside the root.
+pub(crate) fn resolve_new_path(root: &Path, user_path: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let root_real = root.canonicalize().map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
+    let cleaned = clean_user_path(user_path);
+    let rel = Path::new(&cleaned);
+    if rel.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return Err(format!("Path \"{user_path}\" is outside the workspace"));
+    }
+    let candidate = root_real.join(rel);
+    let mut ancestor = candidate.clone();
+    while !ancestor.exists() {
+        match ancestor.parent() {
+            Some(p) => ancestor = p.to_path_buf(),
+            None => return Err(format!("Path \"{user_path}\" is outside the workspace")),
+        }
+    }
+    let ancestor_real = ancestor.canonicalize().map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
+    if !ancestor_real.starts_with(&root_real) {
+        return Err(format!("Path \"{user_path}\" is outside the workspace"));
+    }
+    Ok(candidate)
 }
 
 // ── Read-only tools ─────────────────────────────────────────────────────
@@ -354,8 +513,8 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 }
 
 fn glob(root: &str, input: &serde_json::Value) -> ToolResult {
-    let pattern = match string_arg(input, "pattern") { Some(p) => p, None => return err("glob requires a string pattern".to_string()) };
-    let start_arg = string_arg(input, "path").unwrap_or_else(|| ".".to_string());
+    let pattern = match trimmed_arg(input, "pattern") { Some(p) => p, None => return err("glob requires a string pattern".to_string()) };
+    let start_arg = trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string());
     let root = Path::new(root);
     let start = match resolve_existing_path(root, &start_arg) { Ok(p) => p, Err(e) => return err(e) };
     let mut files = Vec::new();
@@ -372,9 +531,11 @@ fn glob(root: &str, input: &serde_json::Value) -> ToolResult {
 }
 
 fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
-    let pattern = match string_arg(input, "pattern") { Some(p) => p, None => return err("grep requires a string pattern".to_string()) };
+    // Grep patterns keep their whitespace (a leading space can be the point),
+    // but an empty pattern would match every line.
+    let pattern = match string_arg(input, "pattern").filter(|p| !p.is_empty()) { Some(p) => p, None => return err("grep requires a string pattern".to_string()) };
     let max = usize_arg(input, "maxResults", MAX_SEARCH_RESULTS).min(MAX_SEARCH_RESULTS);
-    let path_arg = string_arg(input, "path").unwrap_or_else(|| ".".to_string());
+    let path_arg = trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string());
     let root = Path::new(root);
     let start = match resolve_existing_path(root, &path_arg) { Ok(p) => p, Err(e) => return err(e) };
     let mut files = Vec::new();
@@ -407,7 +568,7 @@ fn get_git_status(root: &str) -> ToolResult {
 
 fn get_git_diff(root: &str, input: &serde_json::Value) -> ToolResult {
     let staged = bool_arg(input, "staged");
-    let path = string_arg(input, "path");
+    let path = trimmed_arg(input, "path");
     let mut args = vec!["diff"];
     if staged { args.push("--cached"); }
     if let Some(p) = path.as_deref() { args.push("--"); args.push(p); }
@@ -420,93 +581,62 @@ fn get_git_diff(root: &str, input: &serde_json::Value) -> ToolResult {
 // ── Web tools ───────────────────────────────────────────────────────────
 
 fn web_search(input: &serde_json::Value) -> ToolResult {
-    let query = match string_arg(input, "query") { Some(q) => q, None => return err("web_search requires a query".to_string()) };
+    let query = match trimmed_arg(input, "query") { Some(q) => q, None => return err("web_search requires a query".to_string()) };
     let url = format!("https://lite.duckduckgo.com/lite/?q={}", urlencoding(&query));
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Klide/1.0")
-        .build()
-        .map_err(|e| format!("Failed to build client: {e}"));
-    let Ok(client) = client else { return err(client.unwrap_err()); };
-    let resp = match client.get(&url).send() {
-        Ok(r) => r,
-        Err(e) => return err(format!("Search failed: {e}")),
-    };
-    let body = match resp.text() {
-        Ok(b) => b,
-        Err(e) => return err(format!("Failed to read response: {e}")),
+
+    let resp = match std::panic::catch_unwind(|| {
+        reqwest::blocking::Client::builder()
+            .user_agent("Klide/1.0")
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .ok()
+            .and_then(|c| c.get(&url).send().ok())
+            .and_then(|r| r.text().ok())
+    }) {
+        Ok(Some(body)) => body,
+        _ => return err("Web search timed out or failed. Try a more specific query.".to_string()),
     };
 
-    // Parse DuckDuckGo Lite HTML — each result is a row with link + snippet
     let mut results: Vec<String> = Vec::new();
-    let mut in_link = false;
-    let mut current_link = String::new();
-    let mut current_title = String::new();
-
-    for line in body.lines() {
+    for line in resp.lines() {
         let trimmed = line.trim();
-        if trimmed.contains("<a rel=\"nofollow\"") || trimmed.contains("class=\"result-link\"") {
-            in_link = true;
-            if let Some(href) = extract_href(trimmed) {
-                current_link = href;
-            }
-            current_title = strip_tags(trimmed);
-        } else if in_link && trimmed.contains("</a>") {
-            in_link = false;
-        } else if trimmed.contains("class=\"result-snippet\"") {
-            let snippet = strip_tags(trimmed);
-            if !current_title.is_empty() && !current_link.is_empty() && results.len() < 10 {
-                results.push(format!("{current_title}\n  {current_link}\n  {snippet}"));
-            }
-            current_link.clear();
-            current_title.clear();
-        }
-    }
-
-    if results.is_empty() {
-        // Fallback: try simpler parsing
-        for line in body.lines() {
-            let trimmed = line.trim();
-            if let Some(href) = extract_href(trimmed) {
-                if !href.starts_with("//") && href.starts_with("http") && results.len() < 10 {
-                    let title = strip_tags(trimmed);
-                    if !title.is_empty() && title.len() > 3 {
-                        results.push(format!("{title}\n  {href}"));
-                    }
+        if let Some(href) = extract_href(trimmed).and_then(|href| normalize_search_href(&href)) {
+            if results.len() < 8 {
+                let title = strip_tags(trimmed);
+                if !title.is_empty() && title.len() > 2 {
+                    results.push(format!("{title}\n  {href}"));
                 }
             }
         }
     }
 
     if results.is_empty() {
-        return ok(format!("No results found for '{query}'."));
+        return ok(format!("No results found for '{query}'. Try rephrasing."));
     }
-
-    ok(format!("Web search results for '{query}':\n\n{}", results.join("\n\n")))
+    ok(format!("Web results for '{query}':\n\n{}", results.join("\n\n")))
 }
 
 fn web_fetch(input: &serde_json::Value) -> ToolResult {
-    let url = match string_arg(input, "url") { Some(u) => u, None => return err("web_fetch requires a url".to_string()) };
+    let url = match trimmed_arg(input, "url") { Some(u) => u, None => return err("web_fetch requires a url".to_string()) };
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return err("URL must start with http:// or https://".to_string());
     }
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Klide/1.0")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build client: {e}"));
-    let Ok(client) = client else { return err(client.unwrap_err()); };
-    let resp = match client.get(&url).send() {
-        Ok(r) => r,
-        Err(e) => return err(format!("Fetch failed: {e}")),
-    };
-    let body = match resp.text() {
-        Ok(b) => b,
-        Err(e) => return err(format!("Failed to read response: {e}")),
+    let body = match std::panic::catch_unwind(|| {
+        reqwest::blocking::Client::builder()
+            .user_agent("Klide/1.0")
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .ok()
+            .and_then(|c| c.get(&url).send().ok())
+            .and_then(|r| r.text().ok())
+    }) {
+        Ok(Some(b)) => b,
+        _ => return err("Web fetch timed out. The page may be too large or unreachable.".to_string()),
     };
 
     let text = strip_html(&body);
-    let truncated: String = text.chars().take(8000).collect();
-    let note = if text.len() > 8000 { "\n\n…(truncated)" } else { "" };
+    let truncated: String = text.chars().take(6000).collect();
+    let note = if text.chars().count() > 6000 { "\n\n…(truncated)" } else { "" };
     ok(format!("Content of {url}:\n\n{truncated}{note}"))
 }
 
@@ -514,8 +644,84 @@ fn extract_href(line: &str) -> Option<String> {
     let start = line.find("href=\"")?;
     let rest = &line[start + 6..];
     let end = rest.find('"')?;
-    let href = rest[..end].to_string();
+    let href = decode_html_entities(&rest[..end]);
     if href.is_empty() { None } else { Some(href) }
+}
+
+fn normalize_search_href(href: &str) -> Option<String> {
+    let decoded = decode_html_entities(href);
+    if let Some(uddg) = query_param(&decoded, "uddg").and_then(|value| percent_decode(&value)) {
+        if uddg.starts_with("http://") || uddg.starts_with("https://") {
+            return Some(uddg);
+        }
+    }
+    if decoded.starts_with("//duckduckgo.com/l/?") || decoded.starts_with("/l/?") {
+        return None;
+    }
+    if decoded.starts_with("http://") || decoded.starts_with("https://") {
+        if decoded.contains("duckduckgo.com") {
+            None
+        } else {
+            Some(decoded)
+        }
+    } else {
+        None
+    }
+}
+
+fn query_param(url: &str, key: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    for part in query.split('&') {
+        let (name, value) = part.split_once('=').unwrap_or((part, ""));
+        if name == key {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = hex_value(bytes[i + 1])?;
+                let lo = hex_value(bytes[i + 2])?;
+                out.push((hi << 4) | lo);
+                i += 3;
+            }
+            b'%' => return None,
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_html_entities(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
 }
 
 fn strip_tags(text: &str) -> String {
@@ -526,7 +732,7 @@ fn strip_tags(text: &str) -> String {
         if c == '>' { in_tag = false; continue; }
         if !in_tag { out.push(c); }
     }
-    out.trim().to_string()
+    decode_html_entities(out.trim())
 }
 
 fn strip_html(input: &str) -> String {
@@ -589,24 +795,93 @@ fn hash_content(content: &str) -> String {
     format!("{:x}", h.finish())
 }
 
+/// Positional line diff for the changed middle of a file. LCS keeps the diff
+/// minimal; above MAX_LCS lines per side we fall back to "all removed, all
+/// added" (still correct, just not minimal) to bound the O(n*m) table.
+fn diff_ops<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str)> {
+    const MAX_LCS: usize = 1500;
+    if old.len() > MAX_LCS || new.len() > MAX_LCS {
+        return old.iter().map(|l| ('-', *l)).chain(new.iter().map(|l| ('+', *l))).collect();
+    }
+    let (n, m) = (old.len(), new.len());
+    let width = m + 1;
+    let mut table = vec![0u32; (n + 1) * width];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            table[i * width + j] = if old[i] == new[j] {
+                table[(i + 1) * width + j + 1] + 1
+            } else {
+                table[(i + 1) * width + j].max(table[i * width + j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut ops = Vec::new();
+    while i < n && j < m {
+        if old[i] == new[j] {
+            ops.push((' ', old[i]));
+            i += 1;
+            j += 1;
+        } else if table[(i + 1) * width + j] >= table[i * width + j + 1] {
+            ops.push(('-', old[i]));
+            i += 1;
+        } else {
+            ops.push(('+', new[j]));
+            j += 1;
+        }
+    }
+    ops.extend(old[i..].iter().map(|l| ('-', *l)));
+    ops.extend(new[j..].iter().map(|l| ('+', *l)));
+    ops
+}
+
+/// Unified diff with real line numbers: trim the common prefix/suffix, run a
+/// positional diff on the middle, emit one hunk with 3 lines of context.
 fn unified_diff_lines(old: &str, new: &str) -> String {
+    if old == new { return String::new(); }
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
-    let mut diff = String::new();
-    diff.push_str(&format!("@@ -{},{} +{},{} @@\n", old.len(), old_lines.len(), new.len(), new_lines.len()));
-    for line in &old_lines {
-        if !new_lines.contains(line) { diff.push_str(&format!("-{}\n", line)); }
-        else { diff.push_str(&format!(" {}\n", line)); }
+
+    let mut prefix = 0;
+    let max_prefix = old_lines.len().min(new_lines.len());
+    while prefix < max_prefix && old_lines[prefix] == new_lines[prefix] { prefix += 1; }
+    let mut suffix = 0;
+    let max_suffix = max_prefix - prefix;
+    while suffix < max_suffix
+        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix] { suffix += 1; }
+
+    let ops = diff_ops(
+        &old_lines[prefix..old_lines.len() - suffix],
+        &new_lines[prefix..new_lines.len() - suffix],
+    );
+
+    const CONTEXT: usize = 3;
+    let ctx_start = prefix.saturating_sub(CONTEXT);
+    let lead = old_lines[ctx_start..prefix].iter().map(|l| (' ', *l));
+    let tail_end = (old_lines.len() - suffix + CONTEXT).min(old_lines.len());
+    let tail = old_lines[old_lines.len() - suffix..tail_end].iter().map(|l| (' ', *l));
+    let hunk: Vec<(char, &str)> = lead.chain(ops).chain(tail).collect();
+
+    let old_count = hunk.iter().filter(|(c, _)| *c != '+').count();
+    let new_count = hunk.iter().filter(|(c, _)| *c != '-').count();
+    let mut out = format!(
+        "@@ -{},{} +{},{} @@\n",
+        if old_count == 0 { ctx_start } else { ctx_start + 1 }, old_count,
+        if new_count == 0 { ctx_start } else { ctx_start + 1 }, new_count,
+    );
+    for (c, l) in &hunk {
+        out.push(*c);
+        out.push_str(l);
+        out.push('\n');
     }
-    for line in &new_lines {
-        if !old_lines.contains(line) { diff.push_str(&format!("+{}\n", line)); }
-    }
-    diff.trim().to_string()
+    out.trim_end().to_string()
 }
 
 fn preview_write_file(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult> {
-    let path = string_arg(input, "path").ok_or_else(|| err("write_file requires a string path".to_string()))?;
-    let old_str = string_arg(input, "old_str").ok_or_else(|| err("write_file requires old_str".to_string()))?;
+    let path = trimmed_arg(input, "path").ok_or_else(|| err("write_file requires a string path".to_string()))?;
+    // old_str/new_str must keep their whitespace verbatim — indentation and
+    // trailing newlines are part of the match and the replacement.
+    let old_str = string_arg(input, "old_str").filter(|s| !s.is_empty()).ok_or_else(|| err("write_file requires old_str".to_string()))?;
     let new_str = string_arg(input, "new_str").unwrap_or_default();
     let root = Path::new(root);
     let full = resolve_existing_path(root, &path).map_err(|e| err(e))?;
@@ -628,12 +903,12 @@ fn preview_write_file(root: &str, input: &serde_json::Value, run_id: &str) -> Re
 }
 
 fn preview_create_file(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult> {
-    let path = string_arg(input, "path").ok_or_else(|| err("create_file requires a string path".to_string()))?;
+    let path = trimmed_arg(input, "path").ok_or_else(|| err("create_file requires a string path".to_string()))?;
+    // Contents are raw (may legitimately be empty or whitespace-only).
     let contents = string_arg(input, "contents").ok_or_else(|| err("create_file requires string contents".to_string()))?;
     let root = Path::new(root);
-    let cleaned = clean_user_path(&path);
-    let candidate = if cleaned == "." { root.to_path_buf() } else { root.join(&cleaned) };
-    let rel = candidate.strip_prefix(root).ok().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
+    let candidate = resolve_new_path(root, &path).map_err(err)?;
+    let rel = clean_user_path(&path);
     if candidate.exists() { return Err(err(format!("{rel} already exists. Use write_file to modify an existing file."))); }
     if contents.len() as u64 > MAX_WRITE_BYTES { return Err(err(format!("Contents too large"))); }
     Ok(DiffProposal {
@@ -646,9 +921,40 @@ fn preview_create_file(root: &str, input: &serde_json::Value, run_id: &str) -> R
     })
 }
 
+fn preview_create_skill(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult> {
+    let name = string_arg(input, "name").ok_or_else(|| err("create_skill requires a name".to_string()))?;
+    let title = string_arg(input, "title").unwrap_or_else(|| name.clone());
+    let description = string_arg(input, "description").unwrap_or_default();
+    let instructions = string_arg(input, "instructions").ok_or_else(|| err("create_skill requires instructions".to_string()))?;
+    let safe_name = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-').to_string();
+    let rel = format!(".agents/skills/{safe_name}/SKILL.md");
+    let root_path = Path::new(root);
+    let full = root_path.join(&rel);
+    if full.exists() {
+        return Err(err(format!("{rel} already exists. Use write_file to edit it.")));
+    }
+    let content = format!(
+        "---\nname: {title}\ndescription: {description}\n---\n\n{instructions}\n"
+    );
+    Ok(DiffProposal {
+        id: format!("diff_{}_{}", run_id, safe_name),
+        run_id: run_id.to_string(),
+        tool_call_id: format!("skill_{}", safe_name),
+        path: rel,
+        old_content: String::new(),
+        new_content: content.clone(),
+        old_hash: hash_content(""),
+        new_hash: hash_content(&content),
+        unified_diff: format!("@@ -0,0 +1,{} @@\n{}", content.lines().count(), content.lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n")),
+        is_create: true,
+        reason: Some(format!("New skill: {title}")),
+    })
+}
+
 pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolResult> {
     let root_path = Path::new(root);
-    let full = root_path.join(&diff.path);
+    // Re-validate at apply time: never trust a proposal path blindly.
+    let full = resolve_new_path(root_path, &diff.path).map_err(err)?;
     if let Some(parent) = full.parent() { std::fs::create_dir_all(parent).map_err(|e| err(format!("Cannot create directory: {e}")))?; }
     std::fs::write(&full, &diff.new_content).map_err(|e| err(format!("Cannot write {}: {e}", diff.path)))?;
     let rel = display_path(root_path, &full);
@@ -667,5 +973,58 @@ pub fn clean_context_ids(tool_call_ids: &[String], messages: &mut Vec<serde_json
                 obj.remove("name");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_arg_preserves_whitespace() {
+        let input = serde_json::json!({ "old_str": "    return x;\n" });
+        assert_eq!(string_arg(&input, "old_str").as_deref(), Some("    return x;\n"));
+    }
+
+    #[test]
+    fn trimmed_arg_trims_and_rejects_empty() {
+        let input = serde_json::json!({ "path": "  src/main.rs  ", "blank": "   " });
+        assert_eq!(trimmed_arg(&input, "path").as_deref(), Some("src/main.rs"));
+        assert_eq!(trimmed_arg(&input, "blank"), None);
+    }
+
+    #[test]
+    fn resolve_new_path_rejects_traversal() {
+        let root = std::env::temp_dir();
+        assert!(resolve_new_path(&root, "../escape.txt").is_err());
+        assert!(resolve_new_path(&root, "a/../../escape.txt").is_err());
+        assert!(resolve_new_path(&root, "/etc/passwd").is_ok()); // leading '/' is stripped → etc/passwd inside root
+        assert!(resolve_new_path(&root, "sub/dir/new.txt").is_ok());
+    }
+
+    #[test]
+    fn unified_diff_reports_real_positions() {
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let new = "a\nb\nc\nd\nX\nf\ng\nh\n";
+        let diff = unified_diff_lines(old, new);
+        // Change is on line 5; with 3 context lines the hunk starts at line 2.
+        assert!(diff.starts_with("@@ -2,7 +2,7 @@"), "got: {diff}");
+        assert!(diff.contains("-e\n+X"), "got: {diff}");
+    }
+
+    #[test]
+    fn unified_diff_handles_repeated_lines() {
+        // A removed blank line that also appears elsewhere must show as removed.
+        let old = "a\n\nb\n\nc\n";
+        let new = "a\n\nb\nc\n";
+        let diff = unified_diff_lines(old, new);
+        assert_eq!(diff.matches("\n-").count(), 1, "got: {diff}");
+        // No added lines (the hunk header's "+1,4" doesn't count).
+        assert_eq!(diff.matches("\n+").count(), 0, "got: {diff}");
+    }
+
+    #[test]
+    fn unified_diff_identical_inputs_is_empty() {
+        assert_eq!(unified_diff_lines("same\n", "same\n"), "");
     }
 }

@@ -22,6 +22,7 @@ type SectionId =
   | "appearance"
   | "layout"
   | "ai"
+  | "local-ai"
   | "api"
   | "subscription"
   | "editor"
@@ -114,6 +115,7 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "appearance", label: "Appearance", icon: <SunIcon /> },
   { id: "layout", label: "Layout", icon: <GridIcon /> },
   { id: "ai", label: "AI Assistant", icon: <SparkIcon /> },
+  { id: "local-ai", label: "Local AI", icon: <ServerIcon /> },
   { id: "api", label: "API", icon: <KeyIcon /> },
   { id: "subscription", label: "Subscription", icon: <CloudIcon /> },
   { id: "editor", label: "Editor", icon: <CodeIcon /> },
@@ -724,6 +726,91 @@ function ApiKeyRow({
   );
 }
 
+function LocalServerRow({
+  provider,
+  title,
+  defaultModel,
+}: {
+  provider: string;
+  title: string;
+  defaultModel: string;
+}) {
+  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval>;
+    async function check() {
+      try {
+        const ok = await invoke<boolean>("ai_local_server_status", { provider });
+        setRunning(ok);
+      } catch {
+        setRunning(false);
+      }
+    }
+    check();
+    timer = setInterval(check, 4000);
+    return () => clearInterval(timer);
+  }, [provider]);
+
+  async function toggle() {
+    if (starting) return;
+    setError(null);
+    setStarting(true);
+    try {
+      if (running) {
+        await invoke("ai_local_server_stop", { provider });
+        setRunning(false);
+      } else {
+        const started = await invoke<boolean>("ai_local_server_start", { provider, model: defaultModel });
+        setRunning(started);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const pill = running ? (
+    <StatusPill tone="ok">Running</StatusPill>
+  ) : (
+    <StatusPill tone="idle">Stopped</StatusPill>
+  );
+
+  return (
+    <Row
+      title={title}
+      description={error ? error : running ? "Server is reachable on localhost." : "Server is not running. Start it to enable chat."}
+      control={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {pill}
+          <button
+            onClick={() => void toggle()}
+            disabled={starting}
+            style={{
+              height: 28,
+              padding: "0 12px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border-strong)",
+              background: running ? "var(--bg-hover)" : "var(--accent)",
+              color: running ? "var(--fg-strong)" : "#FFFFFF",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: starting ? "default" : "pointer",
+              opacity: starting ? 0.6 : 1,
+              transition: "opacity var(--motion-fast) var(--ease-out)",
+            }}
+          >
+            {starting ? "..." : running ? "Stop" : "Start"}
+          </button>
+        </div>
+      }
+    />
+  );
+}
+
 function RegionEditor({
   title,
   axisHint,
@@ -1327,15 +1414,15 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-              <SettingBlock title="Harness Prompts">
+              <SettingBlock title="Harness">
                 <Panel>
-                  <p style={{ margin: 0, color: "var(--fg-subtle)", fontSize: 12 }}>
-                    Override the system prompt the agent receives per mode. Leave blank to use the default.
+                  <p style={{ margin: "0 0 10px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
+                    Override the system prompt per mode. Leave blank to use the built-in defaults.
                   </p>
                   {(["chat", "plan", "goal"] as const).map((mode) => (
-                    <div key={mode} style={{ marginTop: 10 }}>
-                      <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 4, textTransform: "capitalize" }}>
-                        {mode} mode prompt
+                    <div key={mode} style={{ marginBottom: 14 }}>
+                      <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 5 }}>
+                        {mode.charAt(0).toUpperCase() + mode.slice(1)} mode prompt
                       </label>
                       <textarea
                         value={harnessSettings?.[`${mode}Prompt` as keyof typeof harnessSettings] ?? ""}
@@ -1343,8 +1430,8 @@ export function SettingsPanel({
                           const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
                           onHarnessSettingsChange?.(next);
                         }}
-                        placeholder={`Default ${mode} prompt...`}
-                        rows={mode === "chat" ? 2 : 4}
+                        placeholder={`Use default ${mode} prompt`}
+                        rows={3}
                         style={{
                           width: "100%",
                           resize: "vertical",
@@ -1352,11 +1439,12 @@ export function SettingsPanel({
                           color: "var(--fg-strong)",
                           border: "1px solid var(--border-strong)",
                           borderRadius: "var(--radius-sm)",
-                          fontSize: 11,
+                          fontSize: 11.5,
                           fontFamily: "var(--font-mono)",
-                          padding: "6px 8px",
+                          padding: "7px 9px",
                           outline: "none",
-                          lineHeight: 1.45,
+                          lineHeight: 1.5,
+                          minHeight: 60,
                         }}
                       />
                     </div>
@@ -1382,6 +1470,31 @@ export function SettingsPanel({
                         Open Subscription
                       </LinkButton>
                     }
+                  />
+                </Panel>
+              </SettingBlock>
+            </>
+          )}
+
+          {activeSection === "local-ai" && (
+            <>
+              <SettingBlock title="Local Servers">
+                <Panel>
+                  <LocalServerRow provider="ollama" title="Ollama" defaultModel="llama3.1:8b" />
+                  <LocalServerRow provider="mlx" title="MLX" defaultModel="gemma-4-4b-it" />
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Notes">
+                <Panel>
+                  <Row
+                    title="Managed by Klide"
+                    description="Klide can start and stop the server process. If the server is already running externally, it will be detected and left alone."
+                    control={<CodePill>Process</CodePill>}
+                  />
+                  <Row
+                    title="MLX default model"
+                    description="The Start button uses the default model. Change the active model in the AI panel dropdown after the server is running."
+                    control={<CodePill>Model</CodePill>}
                   />
                 </Panel>
               </SettingBlock>
@@ -1717,6 +1830,17 @@ function TerminalIcon() {
       <path d="M4 6.5h16v11H4z" />
       <path d="M7 10l2 2-2 2" />
       <path d="M12 14h4" />
+    </IconBase>
+  );
+}
+
+function ServerIcon() {
+  return (
+    <IconBase>
+      <rect x="3.5" y="4.5" width="17" height="5" rx="1.2" />
+      <rect x="3.5" y="14.5" width="17" height="5" rx="1.2" />
+      <circle cx="7" cy="7" r="1" />
+      <circle cx="7" cy="17" r="1" />
     </IconBase>
   );
 }
