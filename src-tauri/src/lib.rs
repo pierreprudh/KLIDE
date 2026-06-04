@@ -6,9 +6,11 @@ use pty::{
 };
 use std::process::Command;
 use std::process::Stdio;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::ipc::Channel;
+use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
@@ -100,16 +102,6 @@ pub(crate) struct StreamChunk {
     pub(crate) thinking: String,
 }
 
-// Accumulates one OpenAI streamed tool call. The API splits a single call
-// across many deltas: `id`/`name` arrive once, `arguments` as JSON fragments
-// that must be concatenated before parsing.
-#[derive(Default)]
-struct ToolAcc {
-    id: String,
-    name: String,
-    args: String,
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AiConnectionStatus {
@@ -178,7 +170,7 @@ fn env_fallback(provider: &str) -> Option<String> {
 
 fn provider_key(provider: &str) -> Result<Option<String>, String> {
     match provider {
-        "ollama" => Ok(None),
+        "ollama" | "mlx" => Ok(None),
         "openai" | "mistral" | "xai" | "anthropic" => {
             match keyring_lookup(provider).or_else(|| env_fallback(provider)) {
                 Some(key) => Ok(Some(key)),
@@ -259,6 +251,7 @@ fn provider_chat_url(provider: &str) -> Result<&'static str, String> {
         "openai" => Ok("https://api.openai.com/v1/chat/completions"),
         "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
         "xai" => Ok("https://api.x.ai/v1/chat/completions"),
+        "mlx" => Ok("http://localhost:8080/v1/chat/completions"),
         _ => Err(format!(
             "Provider \"{provider}\" has no chat-completions endpoint"
         )),
@@ -270,6 +263,7 @@ fn provider_models_url(provider: &str) -> Result<&'static str, String> {
         "openai" => Ok("https://api.openai.com/v1/models"),
         "mistral" => Ok("https://api.mistral.ai/v1/models"),
         "xai" => Ok("https://api.x.ai/v1/models"),
+        "mlx" => Ok("http://localhost:8080/v1/models"),
         _ => Err(format!("Provider \"{provider}\" has no models endpoint")),
     }
 }
@@ -345,6 +339,19 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
         return Ok(normalize_model_ids(&value));
     }
 
+    if provider == "mlx" {
+        let res = reqwest::get("http://localhost:8080/v1/models")
+            .await
+            .map_err(|e| format!("Unable to reach MLX: {e}"))?;
+        let status = res.status();
+        let body = res.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(response_error("MLX", status, &body));
+        }
+        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        return Ok(normalize_model_ids(&value));
+    }
+
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
     let url = provider_models_url(&provider)?;
     let res = reqwest::Client::new()
@@ -381,11 +388,30 @@ fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
                 "gpt-5.2".to_string(),
             ]
         }),
-        "opencode" => vec!["opencode".to_string()],
+        "opencode" => opencode_cached_models()
+            .unwrap_or_else(|| vec!["opencode".to_string()]),
         "gemini-cli" => vec!["gemini-2.5-pro".to_string(), "gemini-2.5-flash".to_string()],
         _ => return Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     };
     Ok(models)
+}
+
+fn opencode_cached_models() -> Option<Vec<String>> {
+    let cli = resolve_command("opencode").ok()?;
+    let output = std::process::Command::new(cli).arg("models").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let models: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
+    }
 }
 
 fn claude_cached_models() -> Option<Vec<String>> {
@@ -531,6 +557,8 @@ fn fallback_context_window(provider: &str, model: &str) -> usize {
         128_000
     } else if lower.contains("grok") {
         256_000
+    } else if provider == "mlx" || lower.contains("gemma") {
+        128_000
     } else {
         128_000
     }
@@ -589,6 +617,10 @@ async fn ai_context_window(provider: String, model: String) -> Result<usize, Str
         return Ok(
             find_context_window(&value).unwrap_or_else(|| fallback_context_window("ollama", ""))
         );
+    }
+
+    if provider == "mlx" {
+        return Ok(fallback_context_window("mlx", &model));
     }
 
     Ok(fallback_context_window(&provider, &model))
@@ -704,29 +736,146 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
 #[tauri::command]
 async fn ai_model_supports_tools(provider: String, model: String) -> Result<bool, String> {
     if is_subscription_provider(&provider) {
-        return Ok(false);
+        return Ok(true);
     }
 
-    if provider != "ollama" {
-        return Ok(matches!(provider.as_str(), "openai" | "mistral" | "xai"));
+    if provider == "ollama" {
+        let res = reqwest::Client::new()
+            .post(format!("{OLLAMA_URL}/api/show"))
+            .json(&serde_json::json!({ "model": model }))
+            .send()
+            .await
+            .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
+        let status = res.status();
+        let body = res.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(response_error("Ollama", status, &body));
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
+        let details = value.get("details");
+        let family = details.and_then(|d| d.get("family")).and_then(|v| v.as_str());
+        if family == Some("deepseek") || family == Some("qwen2") {
+            return Ok(true);
+        }
+        let has_tools = details
+            .and_then(|d| d.get("capabilities"))
+            .and_then(|c| c.get("tools"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        return Ok(has_tools);
     }
 
-    let res = reqwest::Client::new()
-        .post(format!("{OLLAMA_URL}/api/show"))
-        .json(&serde_json::json!({ "model": model }))
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-    let status = res.status();
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(response_error("Ollama", status, &body));
+    if provider == "mlx" {
+        return Ok(true);
     }
-    let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    Ok(value
-        .get("capabilities")
-        .and_then(|caps| caps.as_array())
-        .is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some("tools"))))
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
+    let mode = match mode.as_str() {
+        "plan" => agent::types::AgentMode::Plan,
+        "goal" => agent::types::AgentMode::Goal,
+        _ => agent::types::AgentMode::Chat,
+    };
+    agent::tools::list_tools(&mode)
+}
+
+// ── Find in files ───────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchMatch {
+    file: String,
+    line: usize,
+    column: usize,
+    content: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResult {
+    matches: Vec<SearchMatch>,
+    file_count: usize,
+    capped: bool,
+}
+
+#[tauri::command]
+fn search_in_files(
+    workspace_root: String,
+    pattern: String,
+    include: Option<String>,
+) -> Result<SearchResult, String> {
+    if pattern.trim().is_empty() {
+        return Err("Pattern cannot be empty".to_string());
+    }
+    let root = std::path::Path::new(&workspace_root);
+    if !root.is_dir() {
+        return Err("Workspace root is not a directory".to_string());
+    }
+
+    const CAP: usize = 500;
+    let mut matches: Vec<SearchMatch> = Vec::new();
+    let mut file_count = 0_u32;
+    let mut capped = false;
+
+    let include_filter = include
+        .as_ref()
+        .filter(|s| !s.trim().is_empty() && s.as_str() != "*")
+        .map(|s| {
+            let s = s.trim();
+            if s.starts_with('*') { &s[1..] } else { s }
+        })
+        .map(|s| s.to_lowercase());
+
+    let mut pending: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            if matches.len() >= CAP { capped = true; break; }
+            let path = entry.path();
+            let ft = match entry.file_type() { Ok(t) => t, Err(_) => continue };
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if ft.is_dir() {
+                if !matches!(
+                    name.as_str(),
+                    ".git" | "node_modules" | "target" | "dist" | ".next" | ".cache" | ".venv" | "__pycache__"
+                ) {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if ft.is_file() {
+                if let Some(ref filter) = include_filter {
+                    if !name.ends_with(filter) { continue; }
+                }
+                if path.metadata().map(|m| m.len() > 500_000).unwrap_or(true) { continue; }
+                let content = match std::fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
+                let rel = path.strip_prefix(root).ok().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
+                let mut found_in_file = false;
+                for (idx, line) in content.lines().enumerate() {
+                    if matches.len() >= CAP { capped = true; break; }
+                    if let Some(col) = line.find(&pattern) {
+                        if !found_in_file { file_count += 1; found_in_file = true; }
+                        matches.push(SearchMatch {
+                            file: rel.clone(),
+                            line: idx + 1,
+                            column: col + 1,
+                            content: line.chars().take(300).collect(),
+                        });
+                    }
+                }
+            }
+        }
+        if capped { break; }
+    }
+
+    Ok(SearchResult { matches, file_count: file_count as usize, capped })
 }
 
 #[tauri::command]
@@ -746,6 +895,9 @@ async fn ai_chat(
     }
     if provider == "anthropic" {
         return anthropic_chat(model, messages, tools, &on_chunk).await;
+    }
+    if provider == "mlx" {
+        return mlx_chat(model, messages, tools, &on_chunk).await;
     }
     openai_compatible_chat(provider, model, messages, tools, &on_chunk).await
 }
@@ -771,7 +923,10 @@ fn resolve_command(command: &str) -> Result<String, String> {
             "/Applications/Codex.app/Contents/Resources/codex".to_string(),
         ],
         "gemini" => vec![format!("{home}/.local/bin/gemini")],
-        "opencode" => vec![format!("{home}/.local/bin/opencode")],
+        "opencode" => vec![
+            format!("{home}/.opencode/bin/opencode"),
+            format!("{home}/.local/bin/opencode"),
+        ],
         _ => Vec::new(),
     };
     candidates
@@ -963,8 +1118,7 @@ async fn subscription_cli_chat(
             run_cli_with_stdin(command, prompt, "Codex", on_chunk).await?
         }
         "gemini-cli" => {
-            ensure_command_available("gemini")?;
-            return Err("Gemini CLI command shape is not wired yet".to_string());
+            return Err("Gemini CLI delegate is not wired yet. Coming in a future release.".to_string());
         }
         "opencode" => {
             ensure_command_available("opencode")?;
@@ -980,94 +1134,248 @@ async fn subscription_cli_chat(
     })
 }
 
+// ── Provider streaming trait + shared loop ──────────────────────────────
+
+trait StreamingProvider {
+    type ToolAccumulator: Default;
+
+    fn name(&self) -> &str;
+
+    fn build_request(
+        &self,
+        client: &reqwest::Client,
+    ) -> Result<reqwest::RequestBuilder, String>;
+
+    /// Parse one streamed line. Err means the provider reported a fatal
+    /// mid-stream error (delivered over HTTP 200) — the whole request fails.
+    fn parse_line(
+        &mut self,
+        line: &str,
+        content: &mut String,
+        thinking: &mut String,
+        tools: &mut Self::ToolAccumulator,
+        on_chunk: &Channel<StreamChunk>,
+    ) -> Result<(), String>;
+
+    fn finalize_response(
+        content: String,
+        thinking: String,
+        tools: Self::ToolAccumulator,
+    ) -> AiChatResponse;
+}
+
+async fn stream_provider<S: StreamingProvider>(
+    provider: S,
+    on_chunk: &Channel<StreamChunk>,
+) -> Result<AiChatResponse, String> {
+    let client = reqwest::Client::new();
+    let res = provider
+        .build_request(&client)?
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach {}: {e}", provider.name()))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        return Err(response_error(provider.name(), status, &text));
+    }
+
+    let mut content = String::new();
+    let mut thinking = String::new();
+    let mut tools = S::ToolAccumulator::default();
+    // Buffer raw bytes and only decode complete lines: a multi-byte UTF-8
+    // char can be split across network chunks, and decoding each chunk
+    // separately would corrupt it into U+FFFD (and break the line's JSON).
+    let mut buf: Vec<u8> = Vec::new();
+
+    let mut stream = res;
+    let mut provider = provider;
+    while let Some(bytes) = stream.chunk().await.map_err(|e| e.to_string())? {
+        buf.extend_from_slice(&bytes);
+        while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
+            provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk)?;
+        }
+    }
+    if buf.iter().any(|b| !b.is_ascii_whitespace()) {
+        let line = String::from_utf8_lossy(&buf).to_string();
+        provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk)?;
+    }
+
+    Ok(S::finalize_response(content, thinking, tools))
+}
+
+// ── Ollama adapter ──
+
+struct OllamaAdapter {
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+}
+
+impl StreamingProvider for OllamaAdapter {
+    type ToolAccumulator = Vec<serde_json::Value>;
+
+    fn name(&self) -> &str { "Ollama" }
+
+    fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": self.messages,
+            "stream": true,
+        });
+        if let Some(tools) = &self.tools {
+            body["tools"] = serde_json::Value::Array(tools.clone());
+        }
+        Ok(client
+            .post(format!("{OLLAMA_URL}/api/chat"))
+            .json(&body))
+    }
+
+    fn parse_line(
+        &mut self,
+        line: &str,
+        content: &mut String,
+        thinking: &mut String,
+        tools: &mut Self::ToolAccumulator,
+        on_chunk: &Channel<StreamChunk>,
+    ) -> Result<(), String> {
+        let line = line.trim();
+        if line.is_empty() { return Ok(()); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { return Ok(()); };
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            return Err(format!("Ollama error: {error}"));
+        }
+        let Some(message) = value.get("message") else { return Ok(()); };
+        let c = message.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+        let t = message.get("thinking").and_then(|v| v.as_str()).unwrap_or_default();
+        if !c.is_empty() || !t.is_empty() {
+            content.push_str(c);
+            thinking.push_str(t);
+            let _ = on_chunk.send(StreamChunk { content: c.to_string(), thinking: t.to_string() });
+        }
+        if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+            tools.extend(calls.iter().cloned());
+        }
+        Ok(())
+    }
+
+    fn finalize_response(content: String, thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
+        AiChatResponse {
+            content,
+            thinking: if thinking.is_empty() { None } else { Some(thinking) },
+            tool_calls: tools,
+        }
+    }
+}
+
 async fn ollama_chat(
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": true
-    });
-    if let Some(tools) = tools {
-        body["tools"] = serde_json::Value::Array(tools);
+    let adapter = OllamaAdapter { model, messages, tools };
+    stream_provider(adapter, on_chunk).await
+}
+
+// ── OpenAI-compatible adapter ──
+
+#[derive(Default)]
+struct OpenAiToolAcc {
+    id: String,
+    name: String,
+    args: String,
+}
+
+struct OpenAiAdapter {
+    provider: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    key: Option<String>,
+}
+
+impl StreamingProvider for OpenAiAdapter {
+    type ToolAccumulator = Vec<OpenAiToolAcc>;
+
+    fn name(&self) -> &str { &self.provider }
+
+    fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": normalize_openai_messages(self.messages.clone()),
+            "stream": true,
+        });
+        if let Some(tools) = &self.tools {
+            body["tools"] = serde_json::Value::Array(tools.clone());
+            body["tool_choice"] = serde_json::json!("auto");
+        }
+        let mut req = client
+            .post(provider_chat_url(&self.provider)?)
+            .json(&body);
+        if let Some(key) = &self.key {
+            req = req.bearer_auth(key);
+        }
+        Ok(req)
     }
 
-    let mut res = reqwest::Client::new()
-        .post(format!("{OLLAMA_URL}/api/chat"))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-    let status = res.status();
-    if !status.is_success() {
-        let text = res.text().await.unwrap_or_default();
-        return Err(response_error("Ollama", status, &text));
+    fn parse_line(
+        &mut self,
+        line: &str,
+        content: &mut String,
+        _thinking: &mut String,
+        tools: &mut Self::ToolAccumulator,
+        on_chunk: &Channel<StreamChunk>,
+    ) -> Result<(), String> {
+        let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" { return Ok(()); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return Ok(()); };
+        if let Some(error) = value.get("error") {
+            let message = error.get("message").and_then(|v| v.as_str()).unwrap_or("stream error");
+            return Err(format!("{} error: {message}", self.provider));
+        }
+        let Some(delta) = value
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|c| c.get("delta"))
+        else { return Ok(()); };
+        if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
+            if !c.is_empty() {
+                content.push_str(c);
+                let _ = on_chunk.send(StreamChunk { content: c.to_string(), thinking: String::new() });
+            }
+        }
+        if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+            for call in calls {
+                let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                while tools.len() <= index { tools.push(OpenAiToolAcc::default()); }
+                let acc = &mut tools[index];
+                if let Some(id) = call.get("id").and_then(|v| v.as_str()) { acc.id = id.to_string(); }
+                if let Some(function) = call.get("function") {
+                    if let Some(name) = function.get("name").and_then(|v| v.as_str()) { acc.name.push_str(name); }
+                    if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) { acc.args.push_str(args); }
+                }
+            }
+        }
+        Ok(())
     }
 
-    let mut content = String::new();
-    let mut thinking = String::new();
-    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-    let mut buf = String::new();
-
-    // Ollama streams one JSON object per line. Parse each completed line as it
-    // arrives, emit any content/thinking delta, and stash tool calls for the
-    // final return.
-    let mut handle_line = |line: &str, content: &mut String, thinking: &mut String| {
-        let line = line.trim();
-        if line.is_empty() {
-            return;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            return;
-        };
-        let Some(message) = value.get("message") else {
-            return;
-        };
-        let c = message
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let t = message
-            .get("thinking")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if !c.is_empty() || !t.is_empty() {
-            content.push_str(c);
-            thinking.push_str(t);
-            let _ = on_chunk.send(StreamChunk {
-                content: c.to_string(),
-                thinking: t.to_string(),
-            });
-        }
-        if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
-            tool_calls.extend(calls.iter().cloned());
-        }
-    };
-
-    while let Some(bytes) = res.chunk().await.map_err(|e| e.to_string())? {
-        buf.push_str(&String::from_utf8_lossy(&bytes));
-        while let Some(nl) = buf.find('\n') {
-            let line: String = buf.drain(..=nl).collect();
-            handle_line(&line, &mut content, &mut thinking);
-        }
+    fn finalize_response(content: String, _thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
+        let tool_calls: Vec<serde_json::Value> = tools
+            .into_iter()
+            .filter(|t| !t.name.is_empty())
+            .map(|t| serde_json::json!({
+                "id": t.id, "type": "function",
+                "function": { "name": t.name, "arguments": t.args },
+            }))
+            .collect();
+        AiChatResponse { content, thinking: None, tool_calls }
     }
-    if !buf.trim().is_empty() {
-        let line = std::mem::take(&mut buf);
-        handle_line(&line, &mut content, &mut thinking);
-    }
-
-    Ok(AiChatResponse {
-        content,
-        thinking: if thinking.is_empty() {
-            None
-        } else {
-            Some(thinking)
-        },
-        tool_calls,
-    })
 }
 
 async fn openai_compatible_chat(
@@ -1078,118 +1386,18 @@ async fn openai_compatible_chat(
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": normalize_openai_messages(messages),
-        "stream": true,
-    });
-    if let Some(tools) = tools {
-        body["tools"] = serde_json::Value::Array(tools);
-        body["tool_choice"] = serde_json::json!("auto");
-    }
+    let adapter = OpenAiAdapter { provider, model, messages, tools, key: Some(key) };
+    stream_provider(adapter, on_chunk).await
+}
 
-    let mut res = reqwest::Client::new()
-        .post(provider_chat_url(&provider)?)
-        .bearer_auth(key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach {provider}: {e}"))?;
-    let status = res.status();
-    if !status.is_success() {
-        let text = res.text().await.unwrap_or_default();
-        return Err(response_error(&provider, status, &text));
-    }
-
-    let mut content = String::new();
-    let mut tool_acc: Vec<ToolAcc> = Vec::new();
-    let mut buf = String::new();
-
-    // OpenAI-compatible streams are Server-Sent Events: lines prefixed with
-    // `data:`, terminated by a blank line, ending with `data: [DONE]`. Content
-    // arrives as `delta.content`; tool calls as indexed `delta.tool_calls`
-    // fragments we reassemble in `tool_acc`.
-    let mut handle_line = |line: &str, content: &mut String| {
-        let Some(data) = line.trim().strip_prefix("data:") else {
-            return;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            return;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
-            return;
-        };
-        let Some(delta) = value
-            .get("choices")
-            .and_then(|c| c.as_array())
-            .and_then(|c| c.first())
-            .and_then(|choice| choice.get("delta"))
-        else {
-            return;
-        };
-        if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
-            if !c.is_empty() {
-                content.push_str(c);
-                let _ = on_chunk.send(StreamChunk {
-                    content: c.to_string(),
-                    thinking: String::new(),
-                });
-            }
-        }
-        if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-            for call in calls {
-                let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while tool_acc.len() <= index {
-                    tool_acc.push(ToolAcc::default());
-                }
-                let acc = &mut tool_acc[index];
-                if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-                    acc.id = id.to_string();
-                }
-                if let Some(function) = call.get("function") {
-                    if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                        acc.name.push_str(name);
-                    }
-                    if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) {
-                        acc.args.push_str(args);
-                    }
-                }
-            }
-        }
-    };
-
-    while let Some(bytes) = res.chunk().await.map_err(|e| e.to_string())? {
-        buf.push_str(&String::from_utf8_lossy(&bytes));
-        while let Some(nl) = buf.find('\n') {
-            let line: String = buf.drain(..=nl).collect();
-            handle_line(&line, &mut content);
-        }
-    }
-    if !buf.trim().is_empty() {
-        let line = std::mem::take(&mut buf);
-        handle_line(&line, &mut content);
-    }
-
-    // Re-emit tool calls in the same shape the non-streaming path produced, so
-    // the frontend parser and normalize_openai_messages stay unchanged.
-    let tool_calls: Vec<serde_json::Value> = tool_acc
-        .into_iter()
-        .filter(|t| !t.name.is_empty())
-        .map(|t| {
-            serde_json::json!({
-                "id": t.id,
-                "type": "function",
-                "function": { "name": t.name, "arguments": t.args },
-            })
-        })
-        .collect();
-
-    Ok(AiChatResponse {
-        content,
-        thinking: None,
-        tool_calls,
-    })
+async fn mlx_chat(
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    on_chunk: &Channel<StreamChunk>,
+) -> Result<AiChatResponse, String> {
+    let adapter = OpenAiAdapter { provider: "mlx".to_string(), model, messages, tools, key: None };
+    stream_provider(adapter, on_chunk).await
 }
 
 fn normalize_openai_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
@@ -1216,28 +1424,14 @@ fn normalize_openai_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json
         .collect()
 }
 
-// Accumulates one Anthropic streamed content block, keyed by its `index`. Text
-// blocks stream as `text_delta`; tool calls start with id+name then stream
-// their arguments as `input_json_delta` fragments we concatenate.
-#[derive(Default)]
-struct AnthropicBlock {
-    is_tool: bool,
-    id: String,
-    name: String,
-    args: String,
-}
+// ── Anthropic helpers ──
 
-// Append a turn's blocks, merging into the previous turn when the role matches.
-// Anthropic requires strictly alternating user/assistant turns, so consecutive
-// tool results (which we model as `user`) must collapse into one message.
 fn anthropic_push(
     turns: &mut Vec<(String, Vec<serde_json::Value>)>,
     role: &str,
     blocks: Vec<serde_json::Value>,
 ) {
-    if blocks.is_empty() {
-        return;
-    }
+    if blocks.is_empty() { return; }
     if let Some(last) = turns.last_mut() {
         if last.0 == role {
             last.1.extend(blocks);
@@ -1247,66 +1441,36 @@ fn anthropic_push(
     turns.push((role.to_string(), blocks));
 }
 
-// Convert OpenAI-shaped history into Anthropic's (system, messages) split.
-// System prompts become a top-level string; tool results become `tool_result`
-// blocks inside a user turn; assistant tool calls become `tool_use` blocks.
 fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_json::Value>) {
     let mut system_parts: Vec<String> = Vec::new();
     let mut turns: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
-
     for message in &messages {
-        let role = message
-            .get("role")
-            .and_then(|r| r.as_str())
-            .unwrap_or("user");
+        let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("user");
         match role {
             "system" => {
                 let text = text_from_message(message);
-                if !text.trim().is_empty() {
-                    system_parts.push(text);
-                }
+                if !text.trim().is_empty() { system_parts.push(text); }
             }
             "tool" => {
-                let id = message
-                    .get("tool_call_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let block = serde_json::json!({
-                    "type": "tool_result",
-                    "tool_use_id": id,
-                    "content": text_from_message(message),
-                });
+                let id = message.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or_default();
+                let block = serde_json::json!({ "type": "tool_result", "tool_use_id": id, "content": text_from_message(message) });
                 anthropic_push(&mut turns, "user", vec![block]);
             }
             "assistant" => {
                 let mut blocks = Vec::new();
                 let text = text_from_message(message);
-                if !text.trim().is_empty() {
-                    blocks.push(serde_json::json!({ "type": "text", "text": text }));
-                }
+                if !text.trim().is_empty() { blocks.push(serde_json::json!({ "type": "text", "text": text })); }
                 if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
                     for call in calls {
                         let id = call.get("id").and_then(|v| v.as_str()).unwrap_or_default();
                         let function = call.get("function");
-                        let name = function
-                            .and_then(|f| f.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default();
-                        // Arguments may be a JSON string (OpenAI shape) or already
-                        // an object; Anthropic wants a parsed object in `input`.
+                        let name = function.and_then(|f| f.get("name")).and_then(|v| v.as_str()).unwrap_or_default();
                         let input = match function.and_then(|f| f.get("arguments")) {
-                            Some(serde_json::Value::String(s)) => {
-                                serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({}))
-                            }
+                            Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({})),
                             Some(other) => other.clone(),
                             None => serde_json::json!({}),
                         };
-                        blocks.push(serde_json::json!({
-                            "type": "tool_use",
-                            "id": id,
-                            "name": name,
-                            "input": input,
-                        }));
+                        blocks.push(serde_json::json!({ "type": "tool_use", "id": id, "name": name, "input": input }));
                     }
                 }
                 anthropic_push(&mut turns, "assistant", blocks);
@@ -1314,42 +1478,146 @@ fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_js
             _ => {
                 let text = text_from_message(message);
                 if !text.trim().is_empty() {
-                    anthropic_push(
-                        &mut turns,
-                        "user",
-                        vec![serde_json::json!({ "type": "text", "text": text })],
-                    );
+                    anthropic_push(&mut turns, "user", vec![serde_json::json!({ "type": "text", "text": text })]);
                 }
             }
         }
     }
-
-    let out = turns
-        .into_iter()
-        .map(|(role, blocks)| serde_json::json!({ "role": role, "content": blocks }))
-        .collect();
+    let out = turns.into_iter().map(|(role, blocks)| serde_json::json!({ "role": role, "content": blocks })).collect();
     (system_parts.join("\n\n"), out)
 }
 
-// Convert OpenAI function-tool definitions into Anthropic's tool shape:
-// `{name, description, input_schema}` where input_schema is the JSON Schema.
 fn anthropic_tools(tools: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-    tools
-        .into_iter()
-        .filter_map(|t| {
-            let function = t.get("function")?;
-            let name = function.get("name")?.as_str()?;
-            let mut tool = serde_json::json!({ "name": name });
-            if let Some(description) = function.get("description") {
-                tool["description"] = description.clone();
+    tools.into_iter().filter_map(|t| {
+        let function = t.get("function")?;
+        let name = function.get("name")?.as_str()?;
+        let mut tool = serde_json::json!({ "name": name });
+        if let Some(desc) = function.get("description") { tool["description"] = desc.clone(); }
+        tool["input_schema"] = function.get("parameters").cloned().unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
+        Some(tool)
+    }).collect()
+}
+
+// ── Anthropic adapter ──
+
+#[derive(Default)]
+struct AnthropicToolAcc {
+    id: String,
+    name: String,
+    args: String,
+}
+
+struct AnthropicAdapter {
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    key: String,
+}
+
+impl StreamingProvider for AnthropicAdapter {
+    type ToolAccumulator = Vec<AnthropicToolAcc>;
+
+    fn name(&self) -> &str { "Anthropic" }
+
+    fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
+        let (system, msgs) = anthropic_messages(self.messages.clone());
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "max_tokens": 4096,
+            "stream": true,
+            "messages": msgs,
+        });
+        if !system.trim().is_empty() {
+            body["system"] = serde_json::Value::String(system);
+        }
+        if let Some(tools) = &self.tools {
+            let converted = anthropic_tools(tools.clone());
+            if !converted.is_empty() {
+                body["tools"] = serde_json::Value::Array(converted);
+                body["tool_choice"] = serde_json::json!({ "type": "auto" });
             }
-            tool["input_schema"] = function
-                .get("parameters")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
-            Some(tool)
-        })
-        .collect()
+        }
+        Ok(client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .json(&body))
+    }
+
+    fn parse_line(
+        &mut self,
+        line: &str,
+        content: &mut String,
+        _thinking: &mut String,
+        tools: &mut Self::ToolAccumulator,
+        on_chunk: &Channel<StreamChunk>,
+    ) -> Result<(), String> {
+        let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
+        let data = data.trim();
+        if data.is_empty() { return Ok(()); }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return Ok(()); };
+        match value.get("type").and_then(|v| v.as_str()).unwrap_or_default() {
+            // Anthropic delivers mid-stream failures as `error` events over
+            // HTTP 200 — they must fail the request, not vanish.
+            "error" => {
+                let message = value
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("stream error");
+                return Err(format!("Anthropic error: {message}"));
+            }
+            "content_block_start" => {
+                let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                while tools.len() <= index { tools.push(AnthropicToolAcc::default()); }
+                if let Some(cb) = value.get("content_block") {
+                    if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                        let acc = &mut tools[index];
+                        acc.id = cb.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                        acc.name = cb.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    }
+                }
+            }
+            "content_block_delta" => {
+                let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                while tools.len() <= index { tools.push(AnthropicToolAcc::default()); }
+                let Some(delta) = value.get("delta") else { return Ok(()); };
+                match delta.get("type").and_then(|v| v.as_str()) {
+                    Some("text_delta") => {
+                        if let Some(t) = delta.get("text").and_then(|v| v.as_str()) {
+                            if !t.is_empty() {
+                                content.push_str(t);
+                                let _ = on_chunk.send(StreamChunk { content: t.to_string(), thinking: String::new() });
+                            }
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(p) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                            tools[index].args.push_str(p);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn finalize_response(content: String, _thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
+        let tool_calls: Vec<serde_json::Value> = tools
+            .into_iter()
+            .filter(|b| !b.name.is_empty())
+            .map(|b| serde_json::json!({
+                "id": b.id, "type": "function",
+                "function": {
+                    "name": b.name,
+                    "arguments": if b.args.is_empty() { "{}".to_string() } else { b.args },
+                },
+            }))
+            .collect();
+        AiChatResponse { content, thinking: None, tool_calls }
+    }
 }
 
 async fn anthropic_chat(
@@ -1359,148 +1627,8 @@ async fn anthropic_chat(
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
-    let (system, msgs) = anthropic_messages(messages);
-    let mut body = serde_json::json!({
-        "model": model,
-        "max_tokens": 4096,
-        "stream": true,
-        "messages": msgs,
-    });
-    if !system.trim().is_empty() {
-        body["system"] = serde_json::Value::String(system);
-    }
-    if let Some(tools) = tools {
-        let converted = anthropic_tools(tools);
-        if !converted.is_empty() {
-            body["tools"] = serde_json::Value::Array(converted);
-            body["tool_choice"] = serde_json::json!({ "type": "auto" });
-        }
-    }
-
-    let mut res = reqwest::Client::new()
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach Anthropic: {e}"))?;
-    let status = res.status();
-    if !status.is_success() {
-        let text = res.text().await.unwrap_or_default();
-        return Err(response_error("Anthropic", status, &text));
-    }
-
-    let mut content = String::new();
-    let mut blocks: Vec<AnthropicBlock> = Vec::new();
-    let mut buf = String::new();
-
-    // Anthropic streams SSE: each `data:` line is a typed event. We only need
-    // content_block_start (to learn a block's kind/id/name) and
-    // content_block_delta (text or tool-arg fragments); other events are noise.
-    let mut handle_line = |line: &str, content: &mut String| {
-        let Some(data) = line.trim().strip_prefix("data:") else {
-            return;
-        };
-        let data = data.trim();
-        if data.is_empty() {
-            return;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
-            return;
-        };
-        match value
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-        {
-            "content_block_start" => {
-                let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while blocks.len() <= index {
-                    blocks.push(AnthropicBlock::default());
-                }
-                if let Some(cb) = value.get("content_block") {
-                    if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                        let acc = &mut blocks[index];
-                        acc.is_tool = true;
-                        acc.id = cb
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        acc.name = cb
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                    }
-                }
-            }
-            "content_block_delta" => {
-                let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while blocks.len() <= index {
-                    blocks.push(AnthropicBlock::default());
-                }
-                let Some(delta) = value.get("delta") else {
-                    return;
-                };
-                match delta.get("type").and_then(|v| v.as_str()) {
-                    Some("text_delta") => {
-                        if let Some(t) = delta.get("text").and_then(|v| v.as_str()) {
-                            if !t.is_empty() {
-                                content.push_str(t);
-                                let _ = on_chunk.send(StreamChunk {
-                                    content: t.to_string(),
-                                    thinking: String::new(),
-                                });
-                            }
-                        }
-                    }
-                    Some("input_json_delta") => {
-                        if let Some(p) = delta.get("partial_json").and_then(|v| v.as_str()) {
-                            blocks[index].args.push_str(p);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    };
-
-    while let Some(bytes) = res.chunk().await.map_err(|e| e.to_string())? {
-        buf.push_str(&String::from_utf8_lossy(&bytes));
-        while let Some(nl) = buf.find('\n') {
-            let line: String = buf.drain(..=nl).collect();
-            handle_line(&line, &mut content);
-        }
-    }
-    if !buf.trim().is_empty() {
-        let line = std::mem::take(&mut buf);
-        handle_line(&line, &mut content);
-    }
-
-    // Re-emit tool calls in the OpenAI shape the frontend parser expects.
-    let tool_calls: Vec<serde_json::Value> = blocks
-        .into_iter()
-        .filter(|b| b.is_tool && !b.name.is_empty())
-        .map(|b| {
-            serde_json::json!({
-                "id": b.id,
-                "type": "function",
-                "function": {
-                    "name": b.name,
-                    "arguments": if b.args.is_empty() { "{}".to_string() } else { b.args },
-                },
-            })
-        })
-        .collect();
-
-    Ok(AiChatResponse {
-        content,
-        thinking: None,
-        tool_calls,
-    })
+    let adapter = AnthropicAdapter { model, messages, tools, key };
+    stream_provider(adapter, on_chunk).await
 }
 
 #[tauri::command]
@@ -1693,6 +1821,95 @@ fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
         return Err("Commit message cannot be empty".to_string());
     }
     run_git(&workspace_root, &["commit", "-m", trimmed])
+}
+
+#[tauri::command]
+fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Result<String, String> {
+    // Create a branch from the current changes. Cap the name at 50 chars —
+    // truncate() takes a BYTE index and panics mid-char on non-ASCII titles
+    // (is_alphanumeric keeps accented/Unicode letters), so count chars instead.
+    let branch: String = format!("klide/{}", title.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-'))
+        .chars()
+        .take(50)
+        .collect();
+
+    // Check if gh CLI is available
+    let gh_check = Command::new("gh").arg("--version").output();
+    if gh_check.is_err() || !gh_check.unwrap().status.success() {
+        return Err("GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string());
+    }
+
+    // Stage all changes
+    run_git(&workspace_root, &["add", "-A"])?;
+
+    // Check if there's anything to commit
+    let status = Command::new("git")
+        .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
+        .status()
+        .map_err(|e| format!("Failed to check git status: {e}"))?;
+    if status.success() {
+        return Err("No changes to commit".to_string());
+    }
+
+    // Create and switch to new branch
+    run_git(&workspace_root, &["checkout", "-b", &branch])?;
+
+    // Commit the staged changes before pushing; otherwise the PR branch has no
+    // new commits for GitHub to compare against the base branch.
+    run_git(&workspace_root, &["commit", "-m", title.trim()])?;
+
+    let push = Command::new("git")
+        .args(["-C", &workspace_root, "push", "-u", "origin", branch.as_str()])
+        .output()
+        .map_err(|e| format!("Failed to push: {e}"))?;
+    if !push.status.success() {
+        let err = String::from_utf8_lossy(&push.stderr);
+        let _ = Command::new("git").args(["-C", &workspace_root, "checkout", "-"]).status();
+        let _ = Command::new("git").args(["-C", &workspace_root, "branch", "-D", branch.as_str()]).status();
+        return Err(format!("Push failed: {}", err.trim()));
+    }
+
+    let mut gh_args = vec!["pr", "create", "--title", &title, "--head", branch.as_str()];
+    let body_str;
+    if let Some(b) = &body {
+        body_str = b.clone();
+        gh_args.push("--body");
+        gh_args.push(&body_str);
+    }
+
+    let pr = Command::new("gh")
+        .args(gh_args)
+        .current_dir(&workspace_root)
+        .output()
+        .map_err(|e| format!("Failed to create PR: {e}"))?;
+
+    if pr.status.success() {
+        let url = String::from_utf8_lossy(&pr.stdout).trim().to_string();
+        Ok(if url.is_empty() { format!("PR created on branch '{branch}'") } else { url })
+    } else {
+        let err = String::from_utf8_lossy(&pr.stderr);
+        Err(format!("PR creation failed: {}", err.trim()))
+    }
+}
+
+#[tauri::command]
+fn create_worktree(workspace_root: String, name: String) -> Result<String, String> {
+    let safe = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-').to_string();
+    let branch = format!("feature/{safe}");
+    let worktree_path = format!("{}-{}", workspace_root.trim_end_matches('/'), safe);
+
+    run_git(&workspace_root, &["checkout", "-b", &branch])?;
+    let output = Command::new("git")
+        .args(["-C", &workspace_root, "worktree", "add", worktree_path.as_str(), &branch])
+        .output()
+        .map_err(|e| format!("Failed to create worktree: {e}"))?;
+
+    if !output.status.success() {
+        let _ = run_git(&workspace_root, &["checkout", "-"]);
+        let _ = run_git(&workspace_root, &["branch", "-D", &branch]);
+        return Err(format!("Worktree creation failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    Ok(worktree_path)
 }
 
 #[tauri::command]
@@ -1935,6 +2152,262 @@ struct AgentRun {
     updated_ms: i64,
     message_count: u32,
     status: String, // "running" (touched <2min ago) | "done"
+}
+
+// ── OpenCode session discovery ──────────────────────────────────────────
+// OpenCode stores its full history in SQLite (opencode.db) with three tables
+// we care about: `session` (one row per run), `message` (user/assistant turns),
+// and `part` (text/tool fragments per message). The CLI's `opencode session
+// list` only emits a text table with no timestamps, so we read the DB
+// directly. We open it SQLITE_OPEN_READ_ONLY — never write to it.
+//
+// On macOS opencode 1.15 stores its DB at ~/.local/share/opencode/opencode.db
+// (XDG-style). Older installs on Apple use ~/Library/Application Support.
+// We try the XDG path first, then fall back to the Apple path so both work.
+
+fn opencode_db_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        std::path::Path::new(&home).join(".local/share/opencode/opencode.db"),
+        std::path::Path::new(&home).join("Library/Application Support/opencode/opencode.db"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn opencode_connect() -> Option<rusqlite::Connection> {
+    let path = opencode_db_path()?;
+    rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+}
+
+// The `model` column on `session` is JSON: {"id":"minimax-m3","providerID":"opencode-go"}.
+// Flatten to "opencode-go/minimax-m3" so the user can tell the paid `opencode-go/*`
+// models apart from the free `opencode/*` ones on the board.
+fn opencode_model_label(raw: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let id = value.get("id").and_then(|v| v.as_str())?;
+    let provider = value.get("providerID").and_then(|v| v.as_str());
+    match provider {
+        Some(p) if !p.is_empty() => Some(format!("{p}/{id}")),
+        _ => Some(id.to_string()),
+    }
+}
+
+// One round-trip per row: pull everything the board needs, including the
+// message count via subquery so we don't fan out one extra query per session.
+fn parse_opencode_run(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Option<AgentRun> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.id, s.title, s.directory, s.model, s.time_updated, \
+                    (SELECT COUNT(*) FROM message WHERE session_id = s.id) AS message_count \
+             FROM session s WHERE s.id = ?1",
+        )
+        .ok()?;
+    let mut rows = stmt.query([session_id]).ok()?;
+    let row = match rows.next() {
+        Ok(Some(r)) => r,
+        _ => return None,
+    };
+    let id: String = row.get(0).ok()?;
+    let title: String = row.get(1).ok()?;
+    let cwd: Option<String> = row.get(2).ok()?;
+    let model_raw: Option<String> = row.get(3).ok()?;
+    let time_updated: i64 = row.get(4).ok()?;
+    let message_count: i64 = row.get(5).ok()?;
+
+    // Status is determined by the *role of the latest message*, not the
+    // recency of the session row. The opencode TUI/server touches the
+    // session row in the background (auto-save, etc.), so time_updated is
+    // a heartbeat signal that says nothing about whether the user is
+    // actively engaged. The latest message is what tells us:
+    //   • role == "user"      → user is waiting on the agent → "running"
+    //   • role == "assistant" → agent has finished its last turn → "done"
+    //   • no messages at all   → fresh/unused session → "done"
+    let status = {
+        let latest_role: Option<String> = (|| -> Option<String> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT data FROM message WHERE session_id = ?1 \
+                     ORDER BY time_created DESC LIMIT 1",
+                )
+                .ok()?;
+            let mut rows = stmt
+                .query_map([session_id], |row| {
+                    let raw: String = row.get(0)?;
+                    let value: serde_json::Value =
+                        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+                    Ok(value
+                        .get("role")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("")
+                        .to_string())
+                })
+                .ok()?;
+            rows.next().and_then(|r| r.ok())
+        })();
+        match latest_role.as_deref() {
+            Some("user") => "running".to_string(),
+            _ => "done".to_string(),
+        }
+    };
+
+    // Compute the branch inline (the helper that does this in `agent::mod`
+    // is private, and the opencode read path is the only caller here).
+    let branch: Option<String> = cwd
+        .as_deref()
+        .and_then(|cwd| {
+            std::process::Command::new("git")
+                .args(["-C", cwd, "branch", "--show-current"])
+                .output()
+                .ok()
+        })
+        .and_then(|out| {
+            if !out.status.success() {
+                return None;
+            }
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() { None } else { Some(s) }
+        });
+    let project = cwd.as_deref().and_then(project_name);
+
+    Some(AgentRun {
+        status,
+        project,
+        id,
+        // The session id is the only "path" an opencode run has — it's what
+        // the user types after `opencode export` to read the full transcript.
+        path: session_id.to_string(),
+        source: "opencode".to_string(),
+        title: {
+            let trimmed = title.trim();
+            if trimmed.is_empty() {
+                "Untitled session".to_string()
+            } else {
+                clean_title(trimmed)
+            }
+        },
+        model: model_raw.as_deref().and_then(opencode_model_label),
+        cwd,
+        git_branch: branch,
+        updated_ms: time_updated,
+        message_count: message_count as u32,
+    })
+}
+
+// Walk a message's parts into a single readable string. Mirrors
+// `claude_message_text` and `codex_message_text`: text parts concatenate, tool
+// parts collapse to a one-line "[tool: <name>]". Step/reasoning/control parts
+// are dropped — they're noise in a résumé view.
+fn opencode_message_text(parts: &[serde_json::Value]) -> Option<String> {
+    let mut buf = String::new();
+    for part in parts {
+        match part.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        if !buf.is_empty() {
+                            buf.push('\n');
+                        }
+                        buf.push_str(t);
+                    }
+                }
+            }
+            Some("tool") => {
+                let name = part.get("tool").and_then(|n| n.as_str()).unwrap_or("tool");
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(&format!("[tool: {name}]"));
+            }
+            _ => {}
+        }
+    }
+    let t = buf.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+#[tauri::command]
+fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String> {
+    let conn = opencode_connect()
+        .ok_or_else(|| "OpenCode session database is unavailable".to_string())?;
+
+    let mut msg_stmt = conn
+        .prepare(
+            "SELECT id, data FROM message WHERE session_id = ?1 \
+             ORDER BY time_created ASC, id ASC",
+        )
+        .map_err(|e| format!("Unable to query opencode messages: {e}"))?;
+    let messages: Vec<(String, serde_json::Value)> = msg_stmt
+        .query_map([&session_id], |row| {
+            let id: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            let data: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+            Ok((id, data))
+        })
+        .map_err(|e| format!("Unable to read opencode messages: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut part_stmt = conn
+        .prepare(
+            "SELECT message_id, data FROM part WHERE session_id = ?1 \
+             ORDER BY time_created ASC, id ASC",
+        )
+        .map_err(|e| format!("Unable to query opencode parts: {e}"))?;
+    let part_iter = part_stmt
+        .query_map([&session_id], |row| {
+            let msg_id: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            let data: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+            Ok((msg_id, data))
+        })
+        .map_err(|e| format!("Unable to read opencode parts: {e}"))?
+        .filter_map(|r| r.ok());
+    let mut parts_by_message: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for (msg_id, data) in part_iter {
+        parts_by_message.entry(msg_id).or_default().push(data);
+    }
+
+    let mut msgs: Vec<RunMessage> = Vec::new();
+    for (msg_id, data) in messages {
+        let role = data.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role != "user" && role != "assistant" {
+            continue;
+        }
+        let parts = parts_by_message.get(&msg_id);
+        if let Some(text) =
+            opencode_message_text(parts.map(|v| v.as_slice()).unwrap_or(&[]))
+        {
+            if role == "user" && text.starts_with('<') {
+                continue;
+            }
+            msgs.push(RunMessage {
+                role: role.to_string(),
+                text,
+            });
+        }
+    }
+
+    for m in msgs.iter_mut() {
+        if m.text.chars().count() > 4000 {
+            m.text = m.text.chars().take(4000).collect::<String>() + "…";
+        }
+    }
+    let len = msgs.len();
+    if len > 80 {
+        msgs.drain(0..len - 80);
+    }
+    Ok(msgs)
 }
 
 fn mtime_ms(path: &std::path::Path) -> i64 {
@@ -2196,20 +2669,43 @@ fn list_agent_runs(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<Ag
         candidates.push((p, "codex", m));
     }
 
+    // OpenCode: one candidate per session, mtime is the session's own
+    // `time_updated` (not the DB file's mtime — they diverge while the WAL
+    // is being flushed). The path slot holds the session id, not a real file
+    // path; parse_opencode_run reads it back as an id and looks the row up
+    // in the SQLite DB.
+    if let Some(conn) = opencode_connect() {
+        if let Ok(mut stmt) = conn.prepare("SELECT id, time_updated FROM session") {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            }) {
+                for row in rows.flatten() {
+                    candidates.push((std::path::PathBuf::from(row.0), "opencode", row.1));
+                }
+            }
+        }
+    }
+
     // Stat-and-sort is cheap; parse only the requested page (offset..offset+cap)
     // so big histories stay fast and the UI can lazily page in older runs.
     candidates.sort_by(|a, b| b.2.cmp(&a.2));
 
+    // Open the opencode DB once for the page's parse step — opening a SQLite
+    // file for every candidate would dominate the page time.
+    let opencode_conn = opencode_connect();
     let codex_index = load_codex_index(&home);
     let mut runs: Vec<AgentRun> = candidates
         .into_iter()
         .skip(off)
         .take(cap)
         .filter_map(|(path, source, _)| {
-            if source == "claude-code" {
-                parse_claude_run(&path)
-            } else {
-                parse_codex_run(&path, &codex_index)
+            match source {
+                "claude-code" => parse_claude_run(&path),
+                "codex" => parse_codex_run(&path, &codex_index),
+                "opencode" => opencode_conn
+                    .as_ref()
+                    .and_then(|c| parse_opencode_run(c, path.to_str().unwrap_or(""))),
+                _ => None,
             }
         })
         .collect();
@@ -2365,6 +2861,175 @@ fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, Strin
     Ok(msgs)
 }
 
+// ── Local server management (Ollama, MLX) ───────────────────────────────
+
+#[derive(Default)]
+struct LocalServerState {
+    processes: Mutex<HashMap<String, std::process::Child>>,
+}
+
+fn is_local_server_provider(provider: &str) -> bool {
+    matches!(provider, "ollama" | "mlx")
+}
+
+fn local_server_command(provider: &str, model: &str) -> Result<(String, Vec<String>), String> {
+    match provider {
+        "ollama" => Ok(("ollama".to_string(), vec!["serve".to_string()])),
+        "mlx" => {
+            let python = if std::env::consts::OS == "macos" {
+                "python3"
+            } else {
+                "python"
+            };
+            Ok((python.to_string(), vec![
+                "-m".to_string(),
+                "mlx_lm.server".to_string(),
+                "--model".to_string(),
+                model.to_string(),
+            ]))
+        }
+        _ => Err(format!("{provider} is not a local server provider")),
+    }
+}
+
+#[tauri::command]
+async fn ai_local_server_start(
+    provider: String,
+    model: String,
+    state: tauri::State<'_, LocalServerState>,
+) -> Result<bool, String> {
+    if !is_local_server_provider(&provider) {
+        return Err(format!("{provider} is not a local server provider"));
+    }
+
+    let url = match provider.as_str() {
+        "ollama" => format!("{OLLAMA_URL}/api/tags"),
+        "mlx" => "http://localhost:8080/v1/models".to_string(),
+        _ => return Ok(false),
+    };
+
+    // Already running externally or previously started
+    if let Ok(res) = reqwest::get(&url).await {
+        if res.status().is_success() {
+            return Ok(true);
+        }
+    }
+
+    {
+        let procs = state.processes.lock().map_err(|e| e.to_string())?;
+        if procs.contains_key(&provider) {
+            return Ok(true);
+        }
+    }
+
+    let (cmd, args) = local_server_command(&provider, &model)?;
+
+    let stderr_path = std::env::temp_dir().join(format!("klide-{provider}-stderr.log"));
+    let stderr_file = std::fs::File::create(&stderr_path)
+        .map_err(|e| format!("Failed to create stderr log: {e}"))?;
+
+    let mut child = Command::new(&cmd)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                format!("Command not found: {cmd}. Make sure {provider} is installed.")
+            } else {
+                format!("Failed to start {provider}: {e}")
+            }
+        })?;
+
+    // Quick check for immediate exit (wrong args, missing module, etc.)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    if let Ok(Some(status)) = child.try_wait() {
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        let msg = if stderr.trim().is_empty() {
+            format!("{provider} exited immediately with {status}")
+        } else {
+            format!("{provider} exited immediately: {stderr}")
+        };
+        return Err(msg);
+    }
+
+    // MLX model loading can take 10–20 s on first run; retry up to 20 s.
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+                let msg = if stderr.trim().is_empty() {
+                    format!("{provider} process exited before the HTTP port came up")
+                } else {
+                    format!("{provider} process exited: {stderr}")
+                };
+                return Err(msg);
+            }
+            Ok(None) => {}
+            Err(e) => return Err(format!("Failed to check {provider} status: {e}")),
+        }
+
+        if let Ok(res) = reqwest::get(&url).await {
+            if res.status().is_success() {
+                let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
+                procs.insert(provider, child);
+                return Ok(true);
+            }
+        }
+    }
+
+    // Timeout — clean up and show last stderr lines
+    let _ = child.kill();
+    let _ = child.wait();
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    if stderr.trim().is_empty() {
+        Ok(false)
+    } else {
+        Err(format!("{provider} timed out starting. Last stderr:\n{stderr}"))
+    }
+}
+
+#[tauri::command]
+fn ai_local_server_stop(
+    provider: String,
+    state: tauri::State<'_, LocalServerState>,
+) -> Result<bool, String> {
+    if !is_local_server_provider(&provider) {
+        return Err(format!("{provider} is not a local server provider"));
+    }
+
+    let child = {
+        let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
+        procs.remove(&provider)
+    };
+
+    if let Some(mut c) = child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+
+    Ok(false)
+}
+
+#[tauri::command]
+async fn ai_local_server_status(provider: String) -> Result<bool, String> {
+    if !is_local_server_provider(&provider) {
+        return Ok(false);
+    }
+    let url = match provider.as_str() {
+        "ollama" => format!("{OLLAMA_URL}/api/tags"),
+        "mlx" => "http://localhost:8080/v1/models".to_string(),
+        _ => return Ok(false),
+    };
+    match reqwest::get(&url).await {
+        Ok(res) => Ok(res.status().is_success()),
+        Err(_) => Ok(false),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2376,8 +3041,99 @@ pub fn run() {
             sessions: Mutex::new(std::collections::HashMap::new()),
         })
         .manage(agent::AgentSupervisorState::default())
+        .manage(LocalServerState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
+
+            let handle = app.handle();
+
+            let open_folder = MenuItemBuilder::with_id("open-folder", "Open Folder…")
+                .accelerator("CmdOrCtrl+O")
+                .build(handle)?;
+            let close_tab = MenuItemBuilder::with_id("close-tab", "Close Tab")
+                .accelerator("CmdOrCtrl+W")
+                .build(handle)?;
+            let close_window = MenuItemBuilder::with_id("close-window", "Close Window")
+                .accelerator("CmdOrCtrl+Shift+W")
+                .build(handle)?;
+
+            let file_menu = SubmenuBuilder::new(handle, "File")
+                .item(&open_folder)
+                .separator()
+                .item(&close_tab)
+                .item(&close_window)
+                .build()?;
+
+            let find_item = MenuItemBuilder::with_id("find-in-files", "Find in Files…")
+                .accelerator("CmdOrCtrl+Shift+F")
+                .build(handle)?;
+
+            let edit_menu = SubmenuBuilder::new(handle, "Edit")
+                .item(&PredefinedMenuItem::undo(handle, None)?)
+                .item(&PredefinedMenuItem::redo(handle, None)?)
+                .separator()
+                .item(&PredefinedMenuItem::cut(handle, None)?)
+                .item(&PredefinedMenuItem::copy(handle, None)?)
+                .item(&PredefinedMenuItem::paste(handle, None)?)
+                .item(&PredefinedMenuItem::select_all(handle, None)?)
+                .separator()
+                .item(&find_item)
+                .build()?;
+
+            let cmd_palette = MenuItemBuilder::with_id("command-palette", "Command Palette…")
+                .accelerator("CmdOrCtrl+Shift+P")
+                .build(handle)?;
+            let toggle_terminal = MenuItemBuilder::with_id("toggle-terminal", "Toggle Terminal")
+                .accelerator("CmdOrCtrl+`")
+                .build(handle)?;
+            let toggle_search = MenuItemBuilder::with_id("toggle-search", "Toggle Search Panel")
+                .accelerator("CmdOrCtrl+Shift+F")
+                .build(handle)?;
+
+            let view_menu = SubmenuBuilder::new(handle, "View")
+                .item(&cmd_palette)
+                .item(&toggle_terminal)
+                .item(&toggle_search)
+                .separator()
+                .item(&PredefinedMenuItem::fullscreen(handle, None)?)
+                .build()?;
+
+            let menu = MenuBuilder::new(handle)
+                .item(&SubmenuBuilder::new(handle, "Klide")
+                    .item(&MenuItemBuilder::with_id("settings", "Settings…").accelerator("CmdOrCtrl+,").build(handle)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::hide(handle, None)?)
+                    .item(&PredefinedMenuItem::hide_others(handle, None)?)
+                    .item(&PredefinedMenuItem::show_all(handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::quit(handle, None)?)
+                    .build()?)
+                .item(&file_menu)
+                .item(&edit_menu)
+                .item(&view_menu)
+                .build()?;
+
+            app.set_menu(menu)?;
+
+            app.on_menu_event(move |_app_handle, event| {
+                let id = event.id().as_ref();
+                match id {
+                    "command-palette" => { let _ = _app_handle.emit("menu:command-palette", ()); }
+                    "find-in-files" => { let _ = _app_handle.emit("menu:find-in-files", ()); }
+                    "toggle-terminal" => { let _ = _app_handle.emit("menu:toggle-terminal", ()); }
+                    "toggle-search" => { let _ = _app_handle.emit("menu:toggle-search", ()); }
+                    "settings" => { let _ = _app_handle.emit("menu:open-settings", ()); }
+                    "close-tab" => { let _ = _app_handle.emit("menu:close-tab", ()); }
+                    "close-window" => { let _ = _app_handle.emit("menu:close-window", ()); }
+                    "open-folder" => { let _ = _app_handle.emit("menu:open-folder", ()); }
+                    _ => {}
+                }
+            });
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
@@ -2399,21 +3155,31 @@ pub fn run() {
             project_graph,
             list_agent_runs,
             read_agent_run,
+            read_opencode_run,
             ai_provider_models,
             ai_subscription_status,
             ai_context_window,
             ai_model_supports_tools,
+            ai_list_tools,
+            search_in_files,
             ai_provider_key_status,
             ai_set_provider_key,
             ai_clear_provider_key,
             ai_chat,
+            ai_local_server_start,
+            ai_local_server_stop,
+            ai_local_server_status,
             agent::agent_start_run,
             agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
             agent::agent_resolve_diff,
             agent::agent_abort_run,
             agent::agent_list_runs,
-            agent::agent_read_run
+            agent::agent_read_run,
+            agent::agent_list_checkpoints,
+            agent::agent_revert_checkpoint,
+            create_pr,
+            create_worktree
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

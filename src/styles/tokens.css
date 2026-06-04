@@ -1,49 +1,65 @@
 :root {
-  /* Surfaces */
-  --bg:           #FBFBFA;
-  --bg-elevated:  #F4F4F2;
-  --bg-hover:     #ECEBE8;
-  --bg-selected:  #EDEFF7;
+  /* Surfaces — bone cream foundation. See DESIGN.md for the full spec. */
+  --bg:           #f7f4ed;
+  --bg-elevated:  #fcfbf8;
+  --bg-hover:     rgba(28, 28, 28, 0.04);
+  --bg-selected:  rgba(90, 123, 76, 0.12);
 
-  /* Text */
-  --fg-strong:    #242424;
-  --fg:           #555552;
-  --fg-subtle:    #7A7A76;
+  /* Text — every gray is charcoal at a different opacity. Tonal coherence. */
+  --fg-strong:    #1c1c1c;
+  --fg:           rgba(28, 28, 28, 0.82);
+  --fg-subtle:    #5f5f5d;
 
   /* Back-compat aliases (older components still use these) */
-  --fg-muted:     #7A7A76;
-  --fg-dim:       #A1A19B;
+  --fg-muted:     #5f5f5d;
+  --fg-dim:       rgba(28, 28, 28, 0.4);
 
-  /* Lines */
-  --border:        #E8E7E3;
-  --border-strong: #D9D8D2;
+  /* Lines — hairline borders replace drop-shadows for containment */
+  --border:        #eceae4;
+  --border-strong: rgba(28, 28, 28, 0.4);
 
-  /* Accent */
-  --accent:       #4263EB;
-  --accent-soft:  #E5E9FF;
+  /* Accent — soft sage green. Deliberately not blue. */
+  --accent:       #5A7B4C;
+  --accent-soft:  rgba(90, 123, 76, 0.12);
+  --accent-hover: #6B8E5A;
+
+  /* Focus ring (for accessibility on inputs/interactive elements) */
+  --focus-ring:   rgba(90, 123, 76, 0.32);
+
+  /* Status (muted, not saturated) */
+  --success:      #5A7B4C;
+  --warning:      #B5832E;
+  --danger:       #A8514A;
 
   /* Code syntax (theme-agnostic mid-tones; block surface uses --bg-elevated) */
   --code-keyword: #7A5AF5;
   --code-string:  #2F9E64;
   --code-number:  #C2772E;
-  --code-comment: #9B9B95;
+  --code-comment: rgba(28, 28, 28, 0.4);
 
-  /* Terminal */
-  --terminal-bg:      #F7F6F2;
-  --terminal-fg:      #343431;
-  --terminal-muted:   #74746F;
-  --terminal-border:  #DEDDD6;
-  --terminal-hover:   #EAE9E2;
-  --terminal-cursor:  #343431;
+  /* Terminal — same family as the canvas, slightly cooler for contrast */
+  --terminal-bg:      #f5f2e9;
+  --terminal-fg:      #1c1c1c;
+  --terminal-muted:   #5f5f5d;
+  --terminal-border:  #eceae4;
+  --terminal-hover:   rgba(28, 28, 28, 0.04);
+  --terminal-cursor:  #1c1c1c;
 
-  /* Floating panels */
+  /* Floating panels — soft border + inset highlight, no drop shadow on the
+     chrome itself. The deep shadow is reserved for the "elevate" tone
+     (modals, menus) that need to lift above other surfaces. */
   --panel-glass:      color-mix(in srgb, var(--bg-elevated) 78%, transparent);
-  --panel-border:     color-mix(in srgb, var(--border-strong) 70%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border) 80%, transparent);
   --panel-highlight:  rgba(255, 255, 255, 0.72);
   --panel-shadow:
-    0 1px 1px rgba(38, 38, 32, 0.025),
-    0 10px 34px rgba(38, 38, 32, 0.055),
-    0 32px 90px rgba(38, 38, 32, 0.040);
+    0 1px 1px rgba(28, 28, 28, 0.025),
+    0 10px 34px rgba(28, 28, 28, 0.055),
+    0 32px 90px rgba(28, 28, 28, 0.040);
+
+  /* Inset shadow signature for dark CTAs (button-primary) */
+  --inset-highlight: rgba(255, 255, 255, 0.20);
+  --inset-ring:      rgba(0, 0, 0, 0.20);
+  --inset-drop:      rgba(0, 0, 0, 0.05);
 
   /* Typography */
   --font-ui:   "Atkinson Hyperlegible", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", Inter, system-ui, sans-serif;
@@ -65,10 +81,10 @@
   --size-terminal:     220px;
 
   /* Shape + motion */
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-soft: cubic-bezier(0.32, 0.72, 0, 1);
   --motion-fast: 120ms;
@@ -319,7 +335,7 @@ input:focus-visible {
   z-index: 4;
   background: var(--panel-glass);
   border: 1px solid var(--panel-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   box-shadow:
     inset 0 1px 0 var(--panel-highlight),
     var(--panel-shadow);
@@ -443,7 +459,7 @@ input:focus-visible {
 }
 
 .workbench-main {
-  padding: 4px 0;
+  padding: 2px 0;
   transition:
     padding var(--motion-slow) var(--ease-soft),
     opacity var(--motion-med) var(--ease-out);
@@ -456,7 +472,7 @@ input:focus-visible {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   box-shadow: inset 0 1px 0 var(--panel-highlight);
   backdrop-filter: blur(10px);

@@ -5,13 +5,20 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-export type RunSource = "claude-code" | "codex" | "klide";
+export type RunSource = "claude-code" | "codex" | "opencode" | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "error";
+
+// What this row actually represents on the board. Tasks are Mission Control
+// todos (queued or dispatched to an external agent); convos are Klide's own
+// AI panel chat sessions; runs are on-disk sessions pulled from
+// ~/.claude, ~/.codex, or the opencode DB.
+export type RunKind = "task" | "convo" | "run";
 
 export type Run = {
   id: string;
   path: string;
   source: RunSource;
+  kind: RunKind;
   title: string;
   status: RunStatus;
   model: string | null;
@@ -70,6 +77,7 @@ export const STATUS_COLOR: Record<RunStatus, string> = {
 export const SOURCE_LABEL: Record<RunSource, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  opencode: "OpenCode",
   klide: "Klide",
 };
 
@@ -77,11 +85,15 @@ export const SOURCE_LABEL: Record<RunSource, string> = {
 export const SOURCE_COLOR: Record<RunSource, string> = {
   "claude-code": "#D97757",
   codex: "var(--fg-strong)",
+  // Matches the opencode brand mark's neutral graphite (the logo uses
+  // #211E1E on the outer square). Quieter than Claude/Codex so the paid
+  // `opencode-go/*` runs don't shout on the board.
+  opencode: "#3A3A3A",
   klide: "var(--accent)",
 };
 
 function toSource(raw: string): RunSource {
-  return raw === "claude-code" || raw === "codex" ? raw : "klide";
+  return raw === "claude-code" || raw === "codex" || raw === "opencode" ? raw : "klide";
 }
 
 function toStatus(raw: string): RunStatus {
@@ -93,6 +105,7 @@ function fromDto(a: AgentRunDto): Run {
     id: a.id,
     path: a.path,
     source: toSource(a.source),
+    kind: "run",
     title: a.title?.trim() || "Untitled session",
     status: toStatus(a.status),
     model: a.model ?? null,
@@ -148,6 +161,11 @@ export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
       })
       .filter((m) => m.text.trim());
   }
+  if (run.source === "opencode") {
+    // OpenCode stores its history in SQLite (opencode.db), so the read path
+    // takes the session id instead of a file path on disk.
+    return invoke<RunMessage[]>("read_opencode_run", { sessionId: run.id });
+  }
   return invoke<RunMessage[]>("read_agent_run", {
     path: run.path,
     source: run.source,
@@ -163,6 +181,7 @@ export function seedRuns(): Run[] {
       id: "seed-1",
       path: "seed://claude-code/1",
       source: "claude-code",
+      kind: "run",
       title: "Add a dark-mode toggle to the settings panel",
       status: "running",
       model: "claude-opus-4-8",
@@ -176,6 +195,7 @@ export function seedRuns(): Run[] {
       id: "seed-2",
       path: "seed://codex/2",
       source: "codex",
+      kind: "run",
       title: "Refactor the terminal panel resize handle",
       status: "done",
       model: "gpt-5.5",
@@ -184,6 +204,20 @@ export function seedRuns(): Run[] {
       branch: "main",
       messageCount: 11,
       updatedMs: now - 38 * min,
+    },
+    {
+      id: "ses_seed_3",
+      path: "ses_seed_3",
+      source: "opencode",
+      kind: "run",
+      title: "Tour the project and report current state",
+      status: "done",
+      model: "opencode-go/minimax-m3",
+      project: "KIDE",
+      cwd: "/Users/you/KIDE",
+      branch: "main",
+      messageCount: 8,
+      updatedMs: now - 90 * min,
     },
   ];
 }

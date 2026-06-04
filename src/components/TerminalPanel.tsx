@@ -50,9 +50,10 @@ export function TerminalPanel({
   useEffect(() => {
     if (!ref.current || !visible) return;
     const term = new Terminal({
-      fontSize: 12,
+      fontSize: 11.5,
+      lineHeight: 1.25,
       fontFamily:
-        "Monaspace Neon, Monaspace Argon, Monaspace, SF Mono, JetBrains Mono, ui-monospace, monospace",
+        "Monaspace Neon, Monaspace Argon, JetBrains Mono, SF Mono, Menlo, ui-monospace, monospace",
       theme: {
         background: cssVar("--terminal-bg"),
         foreground: cssVar("--terminal-fg"),
@@ -60,6 +61,7 @@ export function TerminalPanel({
       },
       cursorBlink: true,
       scrollback: 5000,
+      allowProposedApi: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);

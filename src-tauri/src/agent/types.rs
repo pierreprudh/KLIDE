@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentMode {
     Chat,
@@ -143,6 +143,22 @@ pub struct AgentError {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffProposal {
+    pub id: String,
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub path: String,
+    pub old_content: String,
+    pub new_content: String,
+    pub old_hash: String,
+    pub new_hash: String,
+    pub unified_diff: String,
+    pub is_create: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "snake_case",
@@ -202,16 +218,33 @@ pub enum AgentEvent {
         result: ToolResult,
         ts: i64,
     },
+    PermissionRequested {
+        run_id: String,
+        request: serde_json::Value,
+        ts: i64,
+    },
     PermissionResolved {
         run_id: String,
         request_id: String,
         decision: serde_json::Value,
         ts: i64,
     },
+    DiffProposed {
+        run_id: String,
+        proposal: DiffProposal,
+        ts: i64,
+    },
     DiffResolved {
         run_id: String,
         proposal_id: String,
         decision: serde_json::Value,
+        ts: i64,
+    },
+    FileChanged {
+        run_id: String,
+        path: String,
+        old_hash: String,
+        new_hash: String,
         ts: i64,
     },
     RunResult {

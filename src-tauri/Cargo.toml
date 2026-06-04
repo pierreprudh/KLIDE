@@ -22,7 +22,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13.3", features = ["json"] }
+reqwest = { version = "0.13.3", features = ["json", "blocking"] }
 tauri-plugin-fs = { version = "2.5.1", features = ["watch"] }
 tauri-plugin-dialog = "2.7.1"
 portable-pty = "0.9.0"
@@ -32,3 +32,9 @@ tokio-util = "0.7"
 # selects the macOS Keychain backend; add windows-native / sync-secret-service
 # when those platforms are targeted.
 keyring = { version = "3", features = ["apple-native"] }
+# Read OpenCode's session DB directly. OpenCode stores its history in SQLite
+# (opencode.db) and doesn't expose a JSON list API; shelling out to
+# `opencode session list` only returns a text table with no timestamps. The
+# `bundled` feature ships its own libsqlite3 so the user doesn't need a
+# separate system install.
+rusqlite = { version = "0.32", features = ["bundled"] }

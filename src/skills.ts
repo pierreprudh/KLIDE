@@ -9,13 +9,11 @@ export type Skill = {
   name: string;
   description: string;
   instructions: string;
-  /** Names of the AI tools this skill may use (subset of SKILL_TOOLS ids). */
   tools: string[];
   enabled: boolean;
-  /** Built-in skills ship with the app; the user can edit but not delete them. */
   builtin?: boolean;
-  /** Epoch ms of the last edit, for the detail view. */
   updatedAt?: number;
+  fromFile?: string;
 };
 
 // The tools the AI panel exposes — kept in sync with the TOOLS array in AiPanel.
@@ -95,11 +93,76 @@ export function enabledSkillsPrompt(skills: Skill[]): string {
   if (active.length === 0) return "";
   const blocks = active
     .map((s) => {
+      const source = s.builtin ? "" : s.fromFile ? ` (loaded from ${s.fromFile})` : "";
       const tools = s.tools.length
         ? `\nAllowed tools: ${s.tools.join(", ")}.`
         : "\nThis skill uses no tools — answer from context only.";
-      return `## Skill: ${s.name}\n${s.description}${tools}\n\n${s.instructions.trim()}`;
+      return `## Skill: ${s.name}${source}\n${s.description}${tools}\n\n${s.instructions.trim()}`;
     })
     .join("\n\n");
   return `\n\nThe user has enabled the following skills. Follow their instructions whenever relevant:\n\n${blocks}`;
+}
+
+export async function loadFilesystemSkills(workspaceRoot: string | null): Promise<Skill[]> {
+  const skills: Skill[] = [];
+  const { exists, readDir, readTextFile } = await import("@tauri-apps/plugin-fs");
+  const { homeDir } = await import("@tauri-apps/api/path");
+
+  const home = await homeDir();
+  const dirs: string[] = [];
+  if (workspaceRoot) dirs.push(`${workspaceRoot}/.agents/skills`);
+  dirs.push(`${home}/.agents/skills`);
+
+  for (const baseDir of dirs) {
+    try {
+      if (!(await exists(baseDir))) continue;
+      const entries = await readDir(baseDir);
+      for (const entry of entries) {
+        if (!entry.isDirectory) continue;
+        const skillDir = `${baseDir}/${entry.name}`;
+        const skillFile = `${skillDir}/SKILL.md`;
+        try {
+          if (!(await exists(skillFile))) continue;
+          const raw = await readTextFile(skillFile);
+          const { name, description, instructions } = parseSkillMd(raw, entry.name);
+          skills.push({
+            id: `file-${entry.name}`,
+            name,
+            description: description || `Skill from ${skillFile}`,
+            instructions,
+            tools: ["read_file", "list_dir", "write_file", "create_file", "glob", "grep"],
+            enabled: true,
+            fromFile: skillFile,
+          });
+        } catch { /* skip unreadable skill */ }
+      }
+    } catch { /* directory doesn't exist */ }
+  }
+
+  return skills;
+}
+
+function parseSkillMd(raw: string, folderName: string): { name: string; description: string; instructions: string } {
+  let name = folderName;
+  let description = "";
+  let instructions = raw;
+
+  // Parse YAML frontmatter if present
+  if (raw.startsWith("---\n")) {
+    const end = raw.indexOf("\n---\n", 4);
+    if (end > 0) {
+      const frontmatter = raw.slice(4, end);
+      for (const line of frontmatter.split("\n")) {
+        const colon = line.indexOf(":");
+        if (colon < 0) continue;
+        const key = line.slice(0, colon).trim();
+        const value = line.slice(colon + 1).trim();
+        if (key === "name") name = value;
+        if (key === "description") description = value;
+      }
+      instructions = raw.slice(end + 5).trim();
+    }
+  }
+
+  return { name, description, instructions };
 }
