@@ -18,6 +18,7 @@ type Props = {
   onOpenGrid: () => void;
   theme: ThemeId;
   onToggleTheme: () => void;
+  onResetLayout: () => void;
 };
 
 function TerminalIcon() {
@@ -82,6 +83,7 @@ export function StatusBar({
   onOpenGrid,
   theme,
   onToggleTheme,
+  onResetLayout,
 }: Props) {
   const display = relativePath(path, workspaceRoot);
   const filename = path?.split("/").pop() ?? null;
@@ -218,6 +220,28 @@ export function StatusBar({
         onExitGrid={onExitGrid}
         onOpenGrid={onOpenGrid}
       />
+      <button
+        onClick={onResetLayout}
+        title="Reset panel layout to default"
+        aria-label="Reset panel layout"
+        style={{
+          height: 18,
+          padding: "0 7px",
+          borderRadius: "var(--radius-sm)",
+          display: "flex",
+          alignItems: "center",
+          gap: 5,
+          fontSize: 11,
+          color: "var(--fg-subtle)",
+          background: "transparent",
+          transition:
+            "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out)",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        Reset
+      </button>
       <span>UTF-8</span>
       <span>LF</span>
     </footer>

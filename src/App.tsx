@@ -2,7 +2,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { type OnMount } from "@monaco-editor/react";
@@ -37,6 +36,16 @@ import {
 } from "./layouts";
 import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts";
 import { GridWorkbench } from "./components/GridWorkbench";
+import { FloatingPanel } from "./components/FloatingPanel";
+import {
+  defaultLayout as defaultPanelLayout,
+  loadLayout as loadPanelLayout,
+  saveLayout as savePanelLayout,
+  clearLayout as clearPanelLayout,
+  type Layout as PanelLayout,
+  type PanelRect,
+  type PanelId as PanelLayoutId,
+} from "./panelLayout";
 import type { ProjectContextSnapshot } from "./contextTray";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
@@ -68,44 +77,6 @@ function readBoolSetting(key: string, fallback: boolean): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function ResizeHandle({
-  direction,
-  label,
-  onMouseDown,
-}: {
-  direction: "vertical" | "horizontal";
-  label: string;
-  onMouseDown: (e: ReactMouseEvent<HTMLDivElement>) => void;
-}) {
-  const isVertical = direction === "vertical";
-  return (
-    <div
-      role="separator"
-      aria-label={label}
-      onMouseDown={onMouseDown}
-      style={{
-        width: isVertical ? 7 : "100%",
-        height: isVertical ? "100%" : 7,
-        flexShrink: 0,
-        cursor: isVertical ? "col-resize" : "row-resize",
-        position: "relative",
-        zIndex: 5,
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          inset: isVertical ? "0 3px" : "3px 0",
-          background: "transparent",
-          transition: "background var(--motion-med) var(--ease-out)",
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-soft)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      />
-    </div>
-  );
 }
 
 function detectLanguage(path: string): string {
@@ -177,15 +148,14 @@ function App() {
   const [terminalVisible, setTerminalVisible] = useState(
     () => localStorage.getItem("klide-terminal-visible") === "true"
   );
-  const [explorerWidth, setExplorerWidth] = useState(() =>
-    readNumberSetting("klide-left-width", 280, 220, 520)
-  );
-  const [gitWidth, setGitWidth] = useState(() =>
-    readNumberSetting("klide-git-width", 280, 220, 520)
-  );
-  const [graphWidth, setGraphWidth] = useState(() =>
-    readNumberSetting("klide-graph-width", 320, 260, 560)
-  );
+  // Bento layout — each panel is a free-floating rect in the workbench area.
+  // One Layout per workspace, persisted on every change.
+  const workbenchRef = useRef<HTMLDivElement | null>(null);
+  const [workbenchSize, setWorkbenchSize] = useState({ w: 0, h: 0 });
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => ({}));
+  // Bring-to-front z-index. Bumped when the user clicks a panel.
+  const [zCounter, setZCounter] = useState(10);
+  const [focusedPanel, setFocusedPanel] = useState<PanelLayoutId | null>(null);
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
 
   useEffect(() => {
@@ -202,6 +172,127 @@ function App() {
     })();
     return () => { cancelled = true; };
   }, [workspaceRoot]);
+
+  // Measure the workbench container so we can build a default layout on
+  // first paint, and re-clamp every panel rect when the window resizes.
+  useEffect(() => {
+    const el = workbenchRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      setWorkbenchSize({ w: Math.round(width), h: Math.round(height) });
+    });
+    ro.observe(el);
+    const rect = el.getBoundingClientRect();
+    setWorkbenchSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+    return () => ro.disconnect();
+  }, [view, workspaceRoot]);
+
+  // Load the saved layout for the current workspace (if any), otherwise
+  // build a default. Migrate from the legacy per-key localStorage entries
+  // on first run so users don't lose their existing widths.
+  const [layoutMigrated, setLayoutMigrated] = useState(false);
+  useEffect(() => {
+    if (!workspaceRoot || workbenchSize.w === 0 || workbenchSize.h === 0) return;
+    const saved = loadPanelLayout(workspaceRoot);
+    if (saved) {
+      setPanelLayout(saved);
+      return;
+    }
+    if (!layoutMigrated) {
+      setLayoutMigrated(true);
+      const migrated: PanelLayout = {
+        explorer: {
+          x: 0,
+          y: 0,
+          w: readNumberSetting("klide-left-width", 280, 220, 520),
+          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+        },
+        git: {
+          x: 0,
+          y: 0,
+          w: readNumberSetting("klide-git-width", 280, 220, 520),
+          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+        },
+        graph: {
+          x: 0,
+          y: 0,
+          w: readNumberSetting("klide-graph-width", 320, 260, 560),
+          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+        },
+        ai: [{
+          x: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620),
+          y: 0,
+          w: readNumberSetting("klide-ai-width", 380, 300, 620),
+          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+        }],
+        terminal: {
+          x: 0,
+          y: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+          w: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620) - 6,
+          h: readNumberSetting("klide-terminal-height", 240, 140, 460),
+        },
+      };
+      setPanelLayout(migrated);
+      savePanelLayout(workspaceRoot, migrated);
+      return;
+    }
+    const fresh = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
+    setPanelLayout(fresh);
+    savePanelLayout(workspaceRoot, fresh);
+  }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated]);
+
+  // Persist layout on change (debounced via the React batched updates).
+  useEffect(() => {
+    if (!workspaceRoot) return;
+    if (Object.keys(panelLayout).length === 0) return;
+    savePanelLayout(workspaceRoot, panelLayout);
+  }, [panelLayout, workspaceRoot]);
+
+  function resetPanelLayout() {
+    if (!workspaceRoot) return;
+    clearPanelLayout(workspaceRoot);
+    const fresh = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
+    setPanelLayout(fresh);
+    savePanelLayout(workspaceRoot, fresh);
+  }
+  void resetPanelLayout;
+
+  function updatePanelRect(panelId: PanelLayoutId, next: PanelRect) {
+    setPanelLayout((prev) => ({ ...prev, [panelId]: next }));
+  }
+
+  // Saved layouts can lack an `ai` rect (pre-panel-management saves, or a
+  // layout persisted while AI was hidden). Seed one so toggling AI on
+  // always has something to render.
+  function ensureAiRect() {
+    setPanelLayout((prev) => {
+      if (prev.ai && prev.ai.length > 0) return prev;
+      const w = 360;
+      const h = Math.max(240, workbenchSize.h - 246);
+      return {
+        ...prev,
+        ai: [{ x: Math.max(0, workbenchSize.w - w), y: 0, w, h }],
+      };
+    });
+  }
+
+  function updateAiRect(idx: number, next: PanelRect) {
+    setPanelLayout((prev) => {
+      const list = prev.ai ?? [];
+      if (idx >= list.length) return prev;
+      const copy = list.slice();
+      copy[idx] = next;
+      return { ...prev, ai: copy };
+    });
+  }
+
+  function focusPanel(panelId: PanelLayoutId) {
+    setFocusedPanel(panelId);
+    setZCounter((n) => n + 1);
+  }
   const [customLayouts, setCustomLayouts] = useState<LayoutPreset[]>(() =>
     loadCustomPresets()
   );
@@ -211,12 +302,6 @@ function App() {
   const [settingsInitial, setSettingsInitial] = useState<string | null>(null);
   const [activeGridId, setActiveGridId] = useState<string | null>(
     () => localStorage.getItem("klide-active-grid") || null
-  );
-  const [aiWidth, setAiWidth] = useState(() =>
-    readNumberSetting("klide-ai-width", 380, 300, 620)
-  );
-  const [terminalHeight, setTerminalHeight] = useState(() =>
-    readNumberSetting("klide-terminal-height", 240, 140, 460)
   );
   const [theme, setTheme] = useState<ThemeId>(() =>
     normalizeThemeId(localStorage.getItem("klide-theme"))
@@ -302,6 +387,7 @@ function App() {
     }
     setView("workbench");
     if (panel === "ai") {
+      if (!aiVisible) ensureAiRect();
       setAiVisible((cur) => !cur);
       return;
     }
@@ -327,17 +413,12 @@ function App() {
     explorer: boolean;
     terminal: boolean;
     ai: boolean;
-    explorerWidth?: number;
-    aiWidth?: number;
-    terminalHeight?: number;
   }) {
     setView("workbench");
     setExplorerVisible(layout.explorer);
     setTerminalVisible(layout.terminal);
+    if (layout.ai) ensureAiRect();
     setAiVisible(layout.ai);
-    if (layout.explorerWidth !== undefined) setExplorerWidth(layout.explorerWidth);
-    if (layout.aiWidth !== undefined) setAiWidth(layout.aiWidth);
-    if (layout.terminalHeight !== undefined) setTerminalHeight(layout.terminalHeight);
   }
 
   function updateCustomLayouts(next: LayoutPreset[]) {
@@ -399,7 +480,7 @@ function App() {
             key={key}
             fill
             visible
-            width={explorerWidth}
+            width={panelLayout.explorer?.w ?? 280}
             workspaceRoot={workspaceRoot}
             onOpen={openFile}
             onRootChange={setWorkspaceRoot}
@@ -414,7 +495,7 @@ function App() {
             key={key}
             fill
             visible
-            width={gitWidth}
+            width={panelLayout.git?.w ?? 280}
             workspaceRoot={workspaceRoot}
             gitStatus={gitStatus}
             onRefreshGitStatus={() =>
@@ -428,7 +509,7 @@ function App() {
             key={key}
             fill
             visible
-            width={graphWidth}
+            width={panelLayout.graph?.w ?? 320}
             workspaceRoot={workspaceRoot}
             activePath={active?.path ?? null}
             onContextChange={setProjectContext}
@@ -441,7 +522,7 @@ function App() {
             fill
             visible
             theme={theme}
-            height={terminalHeight}
+            height={panelLayout.terminal?.h ?? 240}
             workspaceRoot={workspaceRoot}
             onToggle={() => {}}
           />
@@ -452,7 +533,7 @@ function App() {
             key={key}
             fill
             visible
-            width={aiWidth}
+            width={panelLayout.ai?.[0]?.w ?? 360}
             workspaceRoot={workspaceRoot}
             onFileWritten={onAgentWrote}
             onWorkspaceChanged={() =>
@@ -489,50 +570,6 @@ function App() {
           </div>
         );
     }
-  }
-
-  function beginResize(
-    e: ReactMouseEvent<HTMLDivElement>,
-    config:
-      | {
-          axis: "x";
-          startValue: number;
-          min: number;
-          max: number;
-          reverse?: boolean;
-          setValue: (v: number) => void;
-        }
-      | {
-          axis: "y";
-          startValue: number;
-          min: number;
-          max: number;
-          reverse?: boolean;
-          setValue: (v: number) => void;
-        }
-  ) {
-    e.preventDefault();
-    const start = config.axis === "x" ? e.clientX : e.clientY;
-    const previousCursor = document.body.style.cursor;
-    const previousSelect = document.body.style.userSelect;
-    document.body.style.cursor = config.axis === "x" ? "col-resize" : "row-resize";
-    document.body.style.userSelect = "none";
-
-    function onMove(ev: MouseEvent) {
-      const current = config.axis === "x" ? ev.clientX : ev.clientY;
-      const delta = config.reverse ? start - current : current - start;
-      config.setValue(clamp(config.startValue + delta, config.min, config.max));
-    }
-
-    function onUp() {
-      document.body.style.cursor = previousCursor;
-      document.body.style.userSelect = previousSelect;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    }
-
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
   }
 
   function openFile(
@@ -689,14 +726,41 @@ function App() {
   }
 
   function duplicateAiPanel() {
-    setAiPanelIds((ids) => [
-      ...ids,
-      `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-    ]);
+    const newId = `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    setAiPanelIds((ids) => [...ids, newId]);
+    // Add a fresh rect for the new panel. Offset from the last one so
+    // the user can see both, but clamp inside the workbench.
+    setPanelLayout((prev) => {
+      const list = prev.ai ?? [];
+      const last = list[list.length - 1];
+      const baseW = last?.w ?? 360;
+      const baseH = last?.h ?? Math.max(0, workbenchSize.h - 246);
+      const offset = 20;
+      const newRect: PanelRect = {
+        x: Math.max(0, Math.min(workbenchSize.w - baseW, (last?.x ?? workbenchSize.w - baseW) - offset)),
+        y: Math.max(0, Math.min(workbenchSize.h - baseH, (last?.y ?? 0) + offset)),
+        w: baseW,
+        h: baseH,
+      };
+      return { ...prev, ai: [...list, newRect] };
+    });
   }
 
   function closeAiPanel(id: string) {
-    setAiPanelIds((ids) => (ids.length > 1 ? ids.filter((x) => x !== id) : ids));
+    setAiPanelIds((ids) => {
+      const idx = ids.indexOf(id);
+      if (idx === -1 || ids.length <= 1) return ids;
+      const next = ids.filter((x) => x !== id);
+      // Drop the rect that belonged to the closed panel. Index 0 is
+      // always the first AI panel, so the index in `ai` matches the
+      // index in `ids`.
+      setPanelLayout((prev) => {
+        const list = prev.ai ?? [];
+        if (idx >= list.length) return prev;
+        return { ...prev, ai: list.filter((_, i) => i !== idx) };
+      });
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -740,31 +804,11 @@ function App() {
     localStorage.setItem("klide-terminal-visible", String(terminalVisible));
   }, [terminalVisible]);
 
-  useEffect(() => {
-    localStorage.setItem("klide-left-width", String(explorerWidth));
-  }, [explorerWidth]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-git-width", String(gitWidth));
-  }, [gitWidth]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-graph-width", String(graphWidth));
-  }, [graphWidth]);
-
   function updateSkills(next: Skill[]) {
     saveSkills(next);
     setSkills(next);
   }
   void updateSkills;
-
-  useEffect(() => {
-    localStorage.setItem("klide-ai-width", String(aiWidth));
-  }, [aiWidth]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-terminal-height", String(terminalHeight));
-  }, [terminalHeight]);
 
   useEffect(() => {
     localStorage.setItem("klide-editor-font-size", String(editorFontSize));
@@ -1074,12 +1118,19 @@ function App() {
             onAiVisibleChange={setAiVisible}
             terminalVisible={terminalVisible}
             onTerminalVisibleChange={setTerminalVisible}
-            leftPanelWidth={explorerWidth}
-            onLeftPanelWidthChange={setExplorerWidth}
-            aiWidth={aiWidth}
-            onAiWidthChange={setAiWidth}
-            terminalHeight={terminalHeight}
-            onTerminalHeightChange={setTerminalHeight}
+            panelLayout={panelLayout}
+            onPanelWidthChange={(panel, w) => {
+              if (panel === "explorer" && panelLayout.explorer) {
+                updatePanelRect("explorer", { ...panelLayout.explorer, w });
+              } else if (panel === "ai" && panelLayout.ai?.[0]) {
+                updateAiRect(0, { ...panelLayout.ai[0], w });
+              }
+            }}
+            onPanelHeightChange={(panel, h) => {
+              if (panel === "terminal" && panelLayout.terminal) {
+                updatePanelRect("terminal", { ...panelLayout.terminal, h });
+              }
+            }}
             editorFontSize={editorFontSize}
             onEditorFontSizeChange={setEditorFontSize}
             editorLineNumbers={editorLineNumbers}
@@ -1112,182 +1163,198 @@ function App() {
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : (
-              <>
-            <Sidebar
-              onOpen={openFile}
-              onRootChange={setWorkspaceRoot}
-              onOpenGitDiff={openGitDiff}
-              onEntryRenamed={onEntryRenamed}
-              onEntryDeleted={onEntryDeleted}
-              visible={explorerVisible}
-              width={explorerWidth}
-              workspaceRoot={workspaceRoot}
-            />
-            {explorerVisible && (
-              <ResizeHandle
-                direction="vertical"
-                label="Resize explorer panel"
-                onMouseDown={(e) =>
-                  beginResize(e, {
-                    axis: "x",
-                    startValue: explorerWidth,
-                    min: 220,
-                    max: 520,
-                    setValue: setExplorerWidth,
-                  })
-                }
-              />
-            )}
-            <GitPanel
-              visible={gitVisible}
-              width={gitWidth}
-              workspaceRoot={workspaceRoot}
-              gitStatus={gitStatus}
-              onRefreshGitStatus={() =>
-                workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-              }
-            />
-            {gitVisible && (
-              <ResizeHandle
-                direction="vertical"
-                label="Resize git panel"
-                onMouseDown={(e) =>
-                  beginResize(e, {
-                    axis: "x",
-                    startValue: gitWidth,
-                    min: 220,
-                    max: 520,
-                    setValue: setGitWidth,
-                  })
-                }
-              />
-            )}
-            <ProjectGraphPanel
-              visible={graphVisible}
-              width={graphWidth}
-              workspaceRoot={workspaceRoot}
-              activePath={active?.path ?? null}
-              onContextChange={setProjectContext}
-            />
-            {graphVisible && (
-              <ResizeHandle
-                direction="vertical"
-                label="Resize project graph panel"
-                onMouseDown={(e) =>
-                  beginResize(e, {
-                    axis: "x",
-                    startValue: graphWidth,
-                    min: 260,
-                    max: 560,
-                    setValue: setGraphWidth,
-                  })
-                }
-              />
-            )}
-            <main
-              className="workbench-main"
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                minWidth: 0,
-                position: "relative",
-              }}
-            >
-              <div className="editor-frame">
-                <TabBar
-                  tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
-                  activeIdx={activeIdx}
-                  onSelect={setActiveIdx}
-                  onClose={closeTab}
-                  workspaceRoot={workspaceRoot}
-                />
-                <SearchPanel
-                  workspaceRoot={workspaceRoot}
-                  visible={searchVisible}
-                  onClose={() => setSearchVisible(false)}
-                  onOpenFile={openFile}
-                />
-                <EditorArea
-                  code={active?.code ?? ""}
-                  onChange={updateActiveCode}
-                  language={language ?? "plaintext"}
-                  hasFile={active !== null}
-                  theme={theme}
-                  fontSize={editorFontSize}
-                  lineNumbers={editorLineNumbers}
-                  wordWrap={editorWordWrap}
-                  minimap={editorMinimap}
-                  onEditorMount={(editor) => { editorRef.current = editor; }}
-                />
+              <div
+                ref={workbenchRef}
+                className="workbench-main"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  minHeight: 0,
+                  position: "relative",
+                  // No padding: FloatingPanels are absolutely positioned
+                  // from the workbench's padding box edge, and their
+                  // negative-offset resize handles need a few px of room
+                  // past the panel edge. The editor carries its own
+                  // 6px inset so the visual margin is preserved.
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 6,
+                      display: "flex",
+                      flexDirection: "column",
+                      minWidth: 0,
+                      minHeight: 0,
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid color-mix(in srgb, var(--border) 82%, transparent)",
+                      background: "color-mix(in srgb, var(--bg) 92%, transparent)",
+                      boxShadow: "inset 0 1px 0 var(--panel-highlight)",
+                      backdropFilter: "blur(10px)",
+                      WebkitBackdropFilter: "blur(10px)",
+                      overflow: "hidden",
+                      zIndex: 1,
+                    }}
+                  >
+                    <TabBar
+                      tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+                      activeIdx={activeIdx}
+                      onSelect={setActiveIdx}
+                      onClose={closeTab}
+                      workspaceRoot={workspaceRoot}
+                    />
+                    <SearchPanel
+                      workspaceRoot={workspaceRoot}
+                      visible={searchVisible}
+                      onClose={() => setSearchVisible(false)}
+                      onOpenFile={openFile}
+                    />
+                    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                      <EditorArea
+                        code={active?.code ?? ""}
+                        onChange={updateActiveCode}
+                        language={language ?? "plaintext"}
+                        hasFile={active !== null}
+                        theme={theme}
+                        fontSize={editorFontSize}
+                        lineNumbers={editorLineNumbers}
+                        wordWrap={editorWordWrap}
+                        minimap={editorMinimap}
+                        onEditorMount={(editor) => { editorRef.current = editor; }}
+                      />
+                    </div>
+                  </div>
+                {explorerVisible && panelLayout.explorer && (
+                  <FloatingPanel
+                    panelId="explorer"
+                    rect={panelLayout.explorer}
+                    workbenchW={workbenchSize.w}
+                    workbenchH={workbenchSize.h}
+                    zIndex={focusedPanel === "explorer" ? 10 + zCounter : 10}
+                    onFocus={() => focusPanel("explorer")}
+                    onResize={(next) => updatePanelRect("explorer", next)}
+                    onMove={(next) => updatePanelRect("explorer", next)}
+                  >
+                    <Sidebar
+                      fill
+                      visible
+                      width={panelLayout.explorer.w}
+                      workspaceRoot={workspaceRoot}
+                      onOpen={openFile}
+                      onRootChange={setWorkspaceRoot}
+                      onOpenGitDiff={openGitDiff}
+                      onEntryRenamed={onEntryRenamed}
+                      onEntryDeleted={onEntryDeleted}
+                    />
+                  </FloatingPanel>
+                )}
+                {gitVisible && panelLayout.git && (
+                  <FloatingPanel
+                    panelId="git"
+                    rect={panelLayout.git}
+                    workbenchW={workbenchSize.w}
+                    workbenchH={workbenchSize.h}
+                    zIndex={focusedPanel === "git" ? 10 + zCounter : 10}
+                    onFocus={() => focusPanel("git")}
+                    onResize={(next) => updatePanelRect("git", next)}
+                    onMove={(next) => updatePanelRect("git", next)}
+                  >
+                    <GitPanel
+                      fill
+                      visible
+                      width={panelLayout.git.w}
+                      workspaceRoot={workspaceRoot}
+                      gitStatus={gitStatus}
+                      onRefreshGitStatus={() =>
+                        workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+                      }
+                    />
+                  </FloatingPanel>
+                )}
+                {graphVisible && panelLayout.graph && (
+                  <FloatingPanel
+                    panelId="graph"
+                    rect={panelLayout.graph}
+                    workbenchW={workbenchSize.w}
+                    workbenchH={workbenchSize.h}
+                    zIndex={focusedPanel === "graph" ? 10 + zCounter : 10}
+                    onFocus={() => focusPanel("graph")}
+                    onResize={(next) => updatePanelRect("graph", next)}
+                    onMove={(next) => updatePanelRect("graph", next)}
+                  >
+                    <ProjectGraphPanel
+                      fill
+                      visible
+                      width={panelLayout.graph.w}
+                      workspaceRoot={workspaceRoot}
+                      activePath={active?.path ?? null}
+                      onContextChange={setProjectContext}
+                    />
+                  </FloatingPanel>
+                )}
+                {terminalVisible && panelLayout.terminal && (
+                  <FloatingPanel
+                    panelId="terminal"
+                    rect={panelLayout.terminal}
+                    workbenchW={workbenchSize.w}
+                    workbenchH={workbenchSize.h}
+                    zIndex={focusedPanel === "terminal" ? 10 + zCounter : 10}
+                    onFocus={() => focusPanel("terminal")}
+                    onResize={(next) => updatePanelRect("terminal", next)}
+                    onMove={(next) => updatePanelRect("terminal", next)}
+                  >
+                    <TerminalPanel
+                      fill
+                      visible
+                      theme={theme}
+                      height={panelLayout.terminal.h}
+                      workspaceRoot={workspaceRoot}
+                      onToggle={() => setTerminalVisible((v) => !v)}
+                    />
+                  </FloatingPanel>
+                )}
+                {aiVisible && panelLayout.ai && panelLayout.ai.map((rect, idx) => {
+                  const id = aiPanelIds[idx] ?? `ai-orphan-${idx}`;
+                  return (
+                    <FloatingPanel
+                      key={id}
+                      panelId="ai"
+                      rect={rect}
+                      workbenchW={workbenchSize.w}
+                      workbenchH={workbenchSize.h}
+                      zIndex={focusedPanel === "ai" ? 10 + zCounter + idx : 10 + idx}
+                      onFocus={() => focusPanel("ai")}
+                      onResize={(next) => updateAiRect(idx, next)}
+                      onMove={(next) => updateAiRect(idx, next)}
+                    >
+                      <AiPanel
+                        fill
+                        visible
+                        width={rect.w}
+                        workspaceRoot={workspaceRoot}
+                        onFileWritten={onAgentWrote}
+                        onWorkspaceChanged={() =>
+                          workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+                        }
+                        model={aiModel}
+                        onModelChange={setAiModel}
+                        availableModels={ollamaModels}
+                        onAvailableModelsChange={setOllamaModels}
+                        apiKeyVersion={apiKeyVersion}
+                        requireDiffReview={requireDiffReview}
+                        stopAfterRejection={stopAfterRejection}
+                        skills={skills}
+                        projectContext={projectContext}
+                        harnessSettings={harnessSettings}
+                        onDuplicate={duplicateAiPanel}
+                        onClose={
+                          aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
+                        }
+                      />
+                    </FloatingPanel>
+                  );
+                })}
               </div>
-              {terminalVisible && (
-                <ResizeHandle
-                  direction="horizontal"
-                  label="Resize terminal"
-                  onMouseDown={(e) =>
-                    beginResize(e, {
-                      axis: "y",
-                      startValue: terminalHeight,
-                      min: 140,
-                      max: 460,
-                      reverse: true,
-                      setValue: setTerminalHeight,
-                    })
-                  }
-                />
-              )}
-              <TerminalPanel
-                visible={terminalVisible}
-                onToggle={() => setTerminalVisible((v) => !v)}
-                theme={theme}
-                height={terminalHeight}
-                workspaceRoot={workspaceRoot}
-              />
-            </main>
-            {aiVisible && (
-              <ResizeHandle
-                direction="vertical"
-                label="Resize AI panel"
-                onMouseDown={(e) =>
-                  beginResize(e, {
-                    axis: "x",
-                    startValue: aiWidth,
-                    min: 300,
-                    max: 620,
-                    reverse: true,
-                    setValue: setAiWidth,
-                  })
-                }
-              />
-            )}
-            {aiPanelIds.map((id) => (
-              <AiPanel
-                key={id}
-                workspaceRoot={workspaceRoot}
-                onFileWritten={onAgentWrote}
-                onWorkspaceChanged={() =>
-                  workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-                }
-                visible={aiVisible}
-                width={aiWidth}
-                model={aiModel}
-                onModelChange={setAiModel}
-                availableModels={ollamaModels}
-                onAvailableModelsChange={setOllamaModels}
-                apiKeyVersion={apiKeyVersion}
-                requireDiffReview={requireDiffReview}
-                stopAfterRejection={stopAfterRejection}
-                skills={skills}
-                projectContext={projectContext}
-                harnessSettings={harnessSettings}
-                onDuplicate={duplicateAiPanel}
-                onClose={
-                  aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
-                }
-              />
-            ))}
-              </>
             )}
           </>
         )}
@@ -1307,6 +1374,7 @@ function App() {
         onOpenGrid={openGridSettings}
         theme={theme}
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
+        onResetLayout={resetPanelLayout}
       />
       {activeGitDiff && (
         <GitDiffWindow diff={activeGitDiff} onClose={() => setActiveGitDiff(null)} />

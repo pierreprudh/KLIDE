@@ -8,8 +8,6 @@ import { exists, readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { DiffModal } from "./DiffModal";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
-import type { Skill } from "../skills";
-import { appendProjectMemoryEntry } from "../projectMemory";
 import {
   estimateProjectContextTokens,
   lensItemsForPrompt,
@@ -32,6 +30,7 @@ import type {
   ProviderId,
   DiffProposal,
 } from "../agent/types";
+import type { Skill } from "../skills";
 
 import { ProviderLogo, AssistantPlaceholderLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
@@ -135,10 +134,9 @@ export function AiPanel({
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
   const [connected, setConnected] = useState(false);
-  const [serverRunning, setServerRunning] = useState(false);
-  const [serverStarting, setServerStarting] = useState(false);
-  const [serverError, setServerError] = useState<string | null>(null);
-  const [serverRefresh, setServerRefresh] = useState(0);
+  const [, setServerRunning] = useState(false);
+  const [serverError] = useState<string | null>(null);
+  const [serverRefresh] = useState(0);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
   );
@@ -229,11 +227,6 @@ export function AiPanel({
       return;
     }
     const handoff = buildHandoffSummary(msgsRef.current, projectContext);
-    appendProjectMemoryEntry(workspaceRoot, {
-      source: "handoff",
-      title: handoff.title,
-      body: handoff.body,
-    });
     setInput("");
     const msg: Msg = {
       role: "assistant",
@@ -452,36 +445,6 @@ export function AiPanel({
     return () => clearInterval(timer);
   }, [provider]);
 
-  async function toggleLocalServer() {
-    if (serverStarting) return;
-    setServerError(null);
-    if (serverRunning) {
-      setServerStarting(true);
-      try {
-        await invoke("ai_local_server_stop", { provider });
-        setServerRunning(false);
-        setConnected(false);
-      } catch (e) {
-        setServerError(String(e));
-      } finally {
-        setServerStarting(false);
-      }
-    } else {
-      setServerStarting(true);
-      try {
-        const started = await invoke<boolean>("ai_local_server_start", { provider, model });
-        setServerRunning(started);
-        if (started) {
-          setServerRefresh((n) => n + 1);
-        }
-      } catch (e) {
-        setServerError(String(e));
-      } finally {
-        setServerStarting(false);
-      }
-    }
-  }
-
   useEffect(() => {
     let cancelled = false;
     async function checkToolSupport() {
@@ -567,7 +530,20 @@ export function AiPanel({
           break;
         }
         case "assistant_message": {
-          if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; pendingDelta = { content: "", thinking: "" }; }
+          if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+          // Flush any pending delta before finalising
+          if (pendingDelta.content || pendingDelta.thinking) {
+            setMsgs((prev) => {
+              const next = [...prev];
+              if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
+              const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
+              const newContent = (existing.content || "") + pendingDelta.content;
+              const newThinking = [existing.thinking, pendingDelta.thinking].filter(Boolean).join("\n") || undefined;
+              next[nextAssistantIdx] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
+              return next;
+            });
+          }
+          pendingDelta = { content: "", thinking: "" };
           const text = event.content.filter((b) => b.type === "text").map((b) => b.text).join("");
           const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("\n").trim();
           const tcBlocks = event.content.filter((b) => b.type === "tool_call");
@@ -777,30 +753,6 @@ export function AiPanel({
             </div>
           )}
         </div>
-        {isLocalProvider && (
-          <button
-            onClick={toggleLocalServer}
-            title={serverRunning ? "Stop server" : "Start server"}
-            disabled={serverStarting}
-            style={{
-              width: 24, height: 24, display: "grid", placeItems: "center",
-              borderRadius: "var(--radius-sm)",
-              background: serverRunning ? "var(--accent-soft)" : "transparent",
-              color: serverRunning ? "var(--accent)" : "var(--fg-subtle)",
-              cursor: serverStarting ? "default" : "pointer",
-              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
-              opacity: serverStarting ? 0.5 : 1,
-            }}
-            onMouseEnter={(e) => { if (!serverStarting) { e.currentTarget.style.color = serverRunning ? "var(--accent)" : "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; } }}
-            onMouseLeave={(e) => { if (!serverStarting) { e.currentTarget.style.color = serverRunning ? "var(--accent)" : "var(--fg-subtle)"; e.currentTarget.style.background = serverRunning ? "var(--accent-soft)" : "transparent"; } }}
-          >
-            {serverRunning ? (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
-            ) : (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="8,5 19,12 8,19" /></svg>
-            )}
-          </button>
-        )}
         {isLocalProvider && serverError && (
           <div
             title={serverError}

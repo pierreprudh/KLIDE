@@ -428,6 +428,40 @@ input:focus-visible {
   }
 }
 
+/* Orbit loader — four dots rotating around a centre, each at a different
+   opacity so the rotation reads as motion. Used for the "speaking" /
+   generating state in the AI panel. */
+.ai-loader-orbit {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  display: inline-block;
+  color: var(--accent);
+  animation: ai-loader-orbit-r 1.4s linear infinite;
+}
+
+.ai-loader-orbit span {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  left: 50%;
+  top: 50%;
+  transform-origin: 0 0;
+}
+
+.ai-loader-orbit span:nth-child(1) { transform: translate(-50%, -50%) translate(0, -7px); opacity: 1; }
+.ai-loader-orbit span:nth-child(2) { transform: translate(-50%, -50%) translate(7px, 0); opacity: 0.55; }
+.ai-loader-orbit span:nth-child(3) { transform: translate(-50%, -50%) translate(0, 7px); opacity: 0.28; }
+.ai-loader-orbit span:nth-child(4) { transform: translate(-50%, -50%) translate(-7px, 0); opacity: 0.12; }
+
+@keyframes ai-loader-orbit-r {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .ai-user-bubble-queued {
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 18%, transparent);
   animation: ai-queue-pulse 2.2s var(--ease-soft) infinite;
@@ -561,7 +595,18 @@ input:focus-visible {
 :root[data-theme="dark"] .opencode-logo-light,
 :root[data-theme="vscode-dark"] .opencode-logo-light,
 :root[data-theme="solarized-dark"] .opencode-logo-light {
-  display: none !important;
+  display: none;
+}
+
+.provider-logo-img {
+  filter: none;
+}
+
+:root[data-theme="cursor-dark"] .provider-logo-img,
+:root[data-theme="dark"] .provider-logo-img,
+:root[data-theme="vscode-dark"] .provider-logo-img,
+:root[data-theme="solarized-dark"] .provider-logo-img {
+  filter: invert(1);
 }
 
 :root[data-theme="cursor-dark"] .opencode-logo-dark,
