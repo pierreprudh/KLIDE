@@ -1,20 +1,32 @@
 import { useMemo } from "react";
 
-type Props = {
+type Props<T extends { createdMs: number }> = {
   /** All runs (klide + external) to compute the heatmap from. */
-  runs: { createdMs: number }[];
+  runs: T[];
   /** Number of weeks to show (default 52). */
   weeks?: number;
+  /**
+   * How much a run contributes to its day's cell. Defaults to 1 — i.e. the
+   * grid counts runs. Pass e.g. `(r) => r.inputTokens + r.outputTokens` to
+   * color the grid by token volume instead.
+   */
+  weight?: (run: T) => number;
+  /** Noun for tooltips and the summary line (default "runs"). */
+  unit?: string;
+  /** Date key ("YYYY-MM-DD") of the selected cell, if any. */
+  selectedDay?: string | null;
+  /** Cell click handler — called with the day key, or null when re-clicking the selection. */
+  onSelectDay?: (key: string | null) => void;
 };
 
-// ── helpers ──────────────────────────────────────────────────────────
-function startOfDay(ms: number): number {
+// ── helpers (shared with the Settings stats section) ─────────────────
+export function startOfDay(ms: number): number {
   const d = new Date(ms);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
-function msToKey(ms: number): string {
+export function msToKey(ms: number): string {
   const d = new Date(ms);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -23,13 +35,21 @@ function msToKey(ms: number): string {
 }
 
 /** Return the Monday of the week containing `ms`. */
-function mondayOfWeek(ms: number): number {
+export function mondayOfWeek(ms: number): number {
   const d = new Date(ms);
   const day = d.getDay(); // 0=Sun … 6=Sat
   const diff = day === 0 ? -6 : 1 - day; // shift to Monday
   d.setDate(d.getDate() + diff);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+/** 1234567 → "1.2M", 45600 → "45.6k" — keeps tooltips readable for tokens. */
+export function formatCompact(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -51,13 +71,20 @@ function intensityStyle(count: number, max: number): string {
 }
 
 // ── component ────────────────────────────────────────────────────────
-export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
-  const { grid, maxCount, byDay, totalDays, totalRuns, longestStreak } = useMemo(() => {
-    // Bucket runs by day.
+export function ActivityHeatmap<T extends { createdMs: number }>({
+  runs,
+  weeks = 52,
+  weight,
+  unit = "runs",
+  selectedDay,
+  onSelectDay,
+}: Props<T>) {
+  const { grid, maxCount, byDay, totalDays, totalValue, longestStreak } = useMemo(() => {
+    // Bucket runs by day, summing each run's weight (1 per run by default).
     const byDay = new Map<string, number>();
     for (const r of runs) {
       const key = msToKey(r.createdMs);
-      byDay.set(key, (byDay.get(key) ?? 0) + 1);
+      byDay.set(key, (byDay.get(key) ?? 0) + (weight ? weight(r) : 1));
     }
 
     // Build the grid: 7 rows (days of week) × N columns (weeks).
@@ -86,7 +113,7 @@ export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
 
     // Stats.
     let totalDays = 0;
-    let totalRuns = 0;
+    let totalValue = 0;
     let streak = 0;
     let longestStreak = 0;
     // Walk backwards from today to count streak and active days.
@@ -94,7 +121,7 @@ export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
       const cellMs = today - d * 86_400_000;
       const key = msToKey(cellMs);
       const count = byDay.get(key) ?? 0;
-      totalRuns += count;
+      totalValue += count;
       if (count > 0) {
         totalDays++;
         streak++;
@@ -104,8 +131,8 @@ export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
       }
     }
 
-    return { grid, maxCount, byDay, totalDays, totalRuns, longestStreak };
-  }, [runs, weeks]);
+    return { grid, maxCount, byDay, totalDays, totalValue, longestStreak };
+  }, [runs, weeks, weight]);
 
   // Month labels: place a label at the first column where the month changes.
   const monthLabels = useMemo(() => {
@@ -205,7 +232,12 @@ export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
               {col.map((key, d) => (
                 <div
                   key={d}
-                  title={key ? `${key}: ${byDay.get(key) ?? 0} runs` : ""}
+                  title={key ? `${key}: ${formatCompact(byDay.get(key) ?? 0)} ${unit}` : ""}
+                  onClick={
+                    key && onSelectDay
+                      ? () => onSelectDay(key === selectedDay ? null : key)
+                      : undefined
+                  }
                   style={{
                     width: cellSize,
                     height: cellSize,
@@ -213,8 +245,17 @@ export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
                     background: key
                       ? intensityStyle(byDay.get(key) ?? 0, maxCount || 1)
                       : "transparent",
-                    border: key ? "1px solid var(--border)" : "none",
-                    cursor: key ? "default" : undefined,
+                    border: key
+                      ? key === selectedDay
+                        ? "1px solid var(--fg-strong)"
+                        : "1px solid var(--border)"
+                      : "none",
+                    // A quiet ring marks the selected day without resizing the cell.
+                    boxShadow:
+                      key && key === selectedDay
+                        ? "0 0 0 1px var(--fg-strong)"
+                        : "none",
+                    cursor: key && onSelectDay ? "pointer" : key ? "default" : undefined,
                   }}
                 />
               ))}
@@ -233,7 +274,7 @@ export function ActivityHeatmap({ runs, weeks = 52 }: Props) {
           fontSize: 11,
         }}
       >
-        <span>{totalRuns} runs</span>
+        <span>{formatCompact(totalValue)} {unit}</span>
         <span>{totalDays} active days</span>
         <span>{longestStreak} day streak</span>
       </div>

@@ -3,10 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
+import { PROVIDER_GROUPS } from "../agent/providers";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
-import { ActivityHeatmap } from "./ActivityHeatmap";
 import {
+  ActivityHeatmap,
+  formatCompact,
+  mondayOfWeek,
+  msToKey,
+  startOfDay,
+} from "./ActivityHeatmap";
+import { SOURCE_LABEL, type Run, type RunSource } from "../runs";
+import {
+
   BUILTIN_PRESETS,
   SIZE_OPTIONS,
   emptyDraft,
@@ -127,20 +136,25 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "stats", label: "Stats", icon: <BarChartIcon /> },
 ];
 
+function Section({ id, active, children }: { id: SectionId; active: SectionId; children: ReactNode }) {
+  return <div style={{ display: id === active ? "block" : "none" }}>{children}</div>;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
 function SettingBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section style={{ marginBottom: 34 }}>
+    <section style={{ marginBottom: 28 }}>
       <h2
         style={{
-          margin: "0 0 14px",
+          margin: "0 0 10px",
           color: "var(--fg-strong)",
-          fontSize: 16,
+          fontSize: 13,
           lineHeight: 1.25,
-          fontWeight: 700,
+          fontWeight: 600,
+          letterSpacing: "0.02em",
         }}
       >
         {title}
@@ -179,13 +193,14 @@ function Row({
   return (
     <div
       style={{
-        minHeight: 72,
-        padding: "16px 18px",
+        minHeight: 64,
+        padding: "14px 18px",
         borderBottom: "1px solid var(--border)",
         display: "grid",
         gridTemplateColumns: "minmax(0, 1fr) auto",
         alignItems: "center",
-        gap: 18,
+        gap: 16,
+        transition: "background 0.1s ease",
       }}
     >
       <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
@@ -195,10 +210,10 @@ function Row({
           </div>
         )}
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: "var(--fg-strong)", fontSize: 14, marginBottom: 5 }}>
+          <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, marginBottom: 3 }}>
             {title}
           </div>
-          <div style={{ color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.4 }}>
+          <div style={{ color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.4 }}>
             {description}
           </div>
         </div>
@@ -232,8 +247,11 @@ function Toggle({
         border: "1px solid var(--border-strong)",
         background: checked ? "var(--accent)" : "var(--bg-hover)",
         display: "flex",
-        justifyContent: checked ? "flex-end" : "flex-start",
+        alignItems: "center",
         flex: "0 0 auto",
+        cursor: "pointer",
+        transition: "background 0.1s ease",
+        willChange: "background",
       }}
     >
       <span
@@ -243,6 +261,9 @@ function Toggle({
           borderRadius: "50%",
           background: checked ? "#FFFFFF" : "var(--fg-subtle)",
           display: "block",
+          transform: `translateX(${checked ? 18 : 0}px)`,
+          transition: "transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.1s ease",
+          willChange: "transform",
         }}
       />
     </button>
@@ -266,15 +287,20 @@ function Select({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       style={{
-        minWidth: 220,
-        height: 34,
+        minWidth: 180,
+        height: 30,
         borderRadius: "var(--radius-sm)",
         border: "1px solid var(--border)",
         background: "var(--bg-hover)",
         color: "var(--fg-strong)",
         font: "inherit",
-        padding: "0 34px 0 12px",
+        fontSize: 12.5,
+        padding: "0 30px 0 10px",
+        cursor: "pointer",
+        transition: "border-color 0.1s ease",
       }}
+      onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+      onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
     >
       {options.map((option) => (
         <option key={option} value={option}>
@@ -903,6 +929,10 @@ export function SettingsPanel({
 }: Props) {
   const isSectionId = (value: string | null | undefined): value is SectionId =>
     sections.some((section) => section.id === value);
+  const [settingsProvider, setSettingsProvider] = useState<ProviderId>(
+    () => (localStorage.getItem("klide.provider") as ProviderId) || "ollama"
+  );
+
   const [activeSection, setActiveSection] = useState<SectionId>(
     isSectionId(initialSection) ? initialSection : "general"
   );
@@ -1049,7 +1079,7 @@ export function SettingsPanel({
           Back to app
         </button>
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {sections.map((section) => {
             const active = activeSection === section.id;
             return (
@@ -1057,20 +1087,26 @@ export function SettingsPanel({
                 key={section.id}
                 type="button"
                 onClick={() => setActiveSection(section.id)}
+                onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
                 style={{
-                  height: 36,
-                  padding: "0 12px",
+                  height: 32,
+                  padding: "0 10px",
                   display: "flex",
                   alignItems: "center",
-                  gap: 11,
-                  color: active ? "var(--fg-strong)" : "var(--fg)",
+                  gap: 10,
+                  color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
                   background: active ? "var(--bg-hover)" : "transparent",
                   borderRadius: "var(--radius-sm)",
                   justifyContent: "flex-start",
-                  fontSize: 14,
+                  fontSize: 13,
+                  fontWeight: active ? 500 : 400,
+                  border: "none",
+                  cursor: "pointer",
+                  transition: "background 0.08s ease, color 0.08s ease",
                 }}
               >
-                <span style={{ width: 18, height: 18, display: "grid", placeItems: "center" }}>
+                <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", flexShrink: 0 }}>
                   {section.icon}
                 </span>
                 {section.label}
@@ -1080,59 +1116,207 @@ export function SettingsPanel({
         </nav>
       </aside>
 
-      <div style={{ overflow: "auto", minWidth: 0 }}>
+      <div
+        style={{
+          overflow: "auto", minWidth: 0,
+        }}
+      >
         <div
           style={{
             width: "min(930px, calc(100vw - 360px))",
             margin: "0 auto",
-            padding: "44px 34px 72px",
+            padding: "32px 28px 64px",
           }}
         >
           <h1
             style={{
-              margin: "0 0 54px",
+              margin: "0 0 32px",
               color: "var(--fg-strong)",
-              fontSize: 24,
-              lineHeight: 1.15,
-              fontWeight: 700,
+              fontSize: 20,
+              lineHeight: 1.2,
+              fontWeight: 600,
             }}
           >
             {sectionTitle}
           </h1>
 
-          {activeSection === "general" && (
-            <>
-              <SettingBlock title="Panels">
-                <Panel>
-                  <Row
-                    title="Show AI panel"
-                    description="Display the assistant panel on the right side of the workbench."
-                    control={
-                      <Toggle
-                        checked={aiVisible}
-                        onChange={onAiVisibleChange}
-                        label="Show AI panel"
-                      />
-                    }
-                  />
-                  <Row
-                    title="Show terminal"
-                    description="Display the built-in terminal at the bottom of the workbench."
-                    control={
-                      <Toggle
-                        checked={terminalVisible}
-                        onChange={onTerminalVisibleChange}
-                        label="Show terminal"
-                      />
-                    }
-                  />
-                </Panel>
-              </SettingBlock>
-            </>
-          )}
+          <Section id="general" active={activeSection}>
+            <SettingBlock title="Panels">
+              <Panel>
+                <Row
+                  title="Show AI panel"
+                  description="Display the assistant panel on the right side of the workbench."
+                  control={
+                    <Toggle
+                      checked={aiVisible}
+                      onChange={onAiVisibleChange}
+                      label="Show AI panel"
+                    />
+                  }
+                />
+                <Row
+                  title="Show terminal"
+                  description="Display the built-in terminal at the bottom of the workbench."
+                  control={
+                    <Toggle
+                      checked={terminalVisible}
+                      onChange={onTerminalVisibleChange}
+                      label="Show terminal"
+                    />
+                  }
+                />
+              </Panel>
+            </SettingBlock>
 
-          {activeSection === "appearance" && (
-            <>
+            <SettingBlock title="AI Provider">
+              <Panel>
+                {PROVIDER_GROUPS.map((group) => (
+                  <div key={group.label} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <div style={{ padding: "10px 18px 4px", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--fg-dim)" }}>
+                      {group.label}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, padding: "4px 14px 12px" }}>
+                      {group.items.map((p) => {
+                        const isActive = settingsProvider === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            disabled={!p.available}
+                            onClick={() => {
+                              setSettingsProvider(p.id);
+                              localStorage.setItem("klide.provider", p.id);
+                            }}
+                            onMouseEnter={(e) => { if (!isActive && p.available) e.currentTarget.style.borderColor = "var(--fg-subtle)"; }}
+                            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.borderColor = "var(--border)"; }}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 7,
+                              padding: "7px 9px", borderRadius: "var(--radius-sm)",
+                              border: "1px solid var(--border)",
+                              background: isActive ? "var(--accent-soft)" : "transparent",
+                              color: isActive ? "var(--accent)" : !p.available ? "var(--fg-dim)" : "var(--fg-strong)",
+                              cursor: p.available ? "pointer" : "not-allowed",
+                              opacity: p.available ? 1 : 0.4,
+                              fontSize: 12.5, textAlign: "left",
+                              transition: "border-color 0.1s ease, background 0.1s ease",
+                              willChange: "border-color, background",
+                            }}
+                          >
+                            <ProviderLogo id={p.id} size={13} />
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {p.name}
+                            </span>
+                            {isActive && (
+                              <span style={{ marginLeft: "auto", width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </Panel>
+            </SettingBlock>
+
+            <SettingBlock title="Model">
+              <Panel>
+                <Row
+                  title="AI model"
+                  description="Model used by the active provider for chat and agent runs."
+                  control={
+                    <Select
+                      value={aiModel}
+                      onChange={onAiModelChange}
+                      options={availableAiModels.length > 0 ? availableAiModels : [aiModel]}
+                      label="AI model"
+                    />
+                  }
+                />
+              </Panel>
+            </SettingBlock>
+
+            <SettingBlock title="Harness">
+              <Panel>
+                <p style={{ margin: "10px 18px 6px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
+                  Toggle which tools each run mode can call.
+                </p>
+                {(["plan", "goal"] as const).map((mode) => (
+                  <div key={mode} style={{ margin: "0 18px 12px" }}>
+                    <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 11.5, fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>
+                      {mode.charAt(0).toUpperCase() + mode.slice(1)} mode tools
+                    </label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                      {(["read_file","list_dir","glob","grep","get_git_status","get_git_diff","clean_context","web_search","web_fetch","write_file","create_file","create_skill"] as const).map((tool) => {
+                        const key = `${mode}.${tool}`;
+                        const overrides = harnessSettings?.toolOverrides ?? {};
+                        const enabled = overrides[key] !== false;
+                        return (
+                          <label
+                            key={tool}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 3,
+                              fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer",
+                              padding: "2px 6px", borderRadius: "var(--radius-xs)",
+                              background: enabled ? "var(--bg-faint)" : "transparent",
+                              transition: "background 0.1s ease",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={enabled}
+                              onChange={(e) => {
+                                const next = { ...(harnessSettings?.toolOverrides ?? {}), [key]: e.target.checked ? true : false };
+                                onHarnessSettingsChange?.({ ...harnessSettings, toolOverrides: next });
+                              }}
+                              style={{ accentColor: "var(--accent)", margin: 0 }}
+                            />
+                            {tool}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <p style={{ margin: "6px 18px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
+                  Override the system prompt per mode.
+                </p>
+                {(["chat", "plan", "goal"] as const).map((mode) => (
+                  <div key={mode} style={{ margin: "0 18px 12px" }}>
+                    <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 11.5, fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>
+                      {mode.charAt(0).toUpperCase() + mode.slice(1)} mode prompt
+                    </label>
+                    <textarea
+                      value={(harnessSettings as any)?.[`${mode}Prompt`] ?? ""}
+                      onChange={(e) => {
+                        const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
+                        onHarnessSettingsChange?.(next);
+                      }}
+                      placeholder={`Use default ${mode} prompt`}
+                      rows={2}
+                      style={{
+                        width: "100%",
+                        resize: "vertical",
+                        background: "var(--bg)",
+                        color: "var(--fg-strong)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-sm)",
+                        fontSize: 11.5,
+                        fontFamily: "var(--font-mono)",
+                        padding: "6px 8px",
+                        outline: "none",
+                        lineHeight: 1.45,
+                        minHeight: 44,
+                        transition: "border-color 0.1s ease",
+                      }}
+                      onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+                      onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
+                    />
+                  </div>
+                ))}
+              </Panel>
+            </SettingBlock>
+          </Section>
+
+          <Section id="appearance" active={activeSection}>
               <SettingBlock title="Theme">
                 <Panel>
                   <Row
@@ -1241,11 +1425,9 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-            </>
-          )}
+          </Section>
 
-          {activeSection === "layout" && (
-            <>
+          <Section id="layout" active={activeSection}>
               <SettingBlock title="Presets">
                 <Panel>
                   {[...BUILTIN_PRESETS, ...customLayouts].map((preset) => {
@@ -1433,11 +1615,9 @@ export function SettingsPanel({
                   <GridLayoutBuilder />
                 </Panel>
               </SettingBlock>
-            </>
-          )}
+          </Section>
 
-          {activeSection === "ai" && (
-            <>
+          <Section id="ai" active={activeSection}>
               <SettingBlock title="Assistant">
                 <Panel>
                   <Row
@@ -1593,11 +1773,9 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-            </>
-          )}
+          </Section>
 
-          {activeSection === "local-ai" && (
-            <>
+          <Section id="local-ai" active={activeSection}>
               <SettingBlock title="Local Servers">
                 <Panel>
                   <LocalServerRow provider="ollama" title="Ollama" defaultModel="llama3.1:8b" />
@@ -1618,11 +1796,9 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-            </>
-          )}
+          </Section>
 
-          {activeSection === "api" && (
-            <>
+          <Section id="api" active={activeSection}>
               <SettingBlock title="API Keys">
                 <Panel>
                   {API_KEY_PROVIDERS.map((provider) => (
@@ -1651,11 +1827,9 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-            </>
-          )}
+          </Section>
 
-          {activeSection === "subscription" && (
-            <>
+          <Section id="subscription" active={activeSection}>
               <SettingBlock title="Subscription Connections">
                 <Panel>
                   {subscriptionProviders.map((provider) => {
@@ -1751,10 +1925,9 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-            </>
-          )}
+          </Section>
 
-          {activeSection === "editor" && (
+          <Section id="editor" active={activeSection}>
             <SettingBlock title="Editor">
               <Panel>
                 <Row
@@ -1806,9 +1979,9 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
-          )}
+          </Section>
 
-          {activeSection === "terminal" && (
+          <Section id="terminal" active={activeSection}>
             <SettingBlock title="Terminal">
               <Panel>
                 <Row
@@ -1838,78 +2011,679 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
-          )}
-          {activeSection === "stats" && (
+          </Section>
+          <Section id="stats" active={activeSection}>
             <StatsSection />
-          )}
+          </Section>
         </div>
       </div>
     </main>
   );
 }
 
+// ── Stats ────────────────────────────────────────────────────────────
+// Global usage stats across every agent source Klide knows about (its own
+// runs + Claude Code, Codex, OpenCode session logs on disk). Two graphs:
+// a GitHub-style activity heatmap and a provider/model breakdown, both
+// switchable between conversation counts and real token usage.
+
+type StatsMetric = "conversations" | "tokens";
+
+// Per-source brand tints for the breakdown bars. Flat hexes (not CSS vars)
+// so color-mix can fade them against the panel background.
+const STATS_SOURCE_COLOR: Record<RunSource, string> = {
+  "claude-code": "#D97757",
+  codex: "#7A7A7A",
+  opencode: "#3A3A3A",
+  klide: "var(--accent)",
+};
+
+// Opacity steps for model segments within one provider's bar — first model
+// wears the full tint, later ones fade toward the background.
+const SEGMENT_MIX = [100, 70, 48, 32, 20, 12];
+
+function runTokens(r: Run): number {
+  return (r.inputTokens ?? 0) + (r.outputTokens ?? 0);
+}
+
+function prettyProvider(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/**
+ * A number that reads compact ("1.2M") and flips to the exact amount
+ * ("1,234,567") on click. Hover shows the exact value either way.
+ */
+function PreciseNumber({ value, suffix }: { value: number; suffix?: string }) {
+  const [precise, setPrecise] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setPrecise((p) => !p)}
+      title={`${value.toLocaleString("en-US")}${suffix ? ` ${suffix}` : ""}`}
+      style={{
+        background: "none",
+        border: "none",
+        padding: 0,
+        margin: 0,
+        cursor: "pointer",
+        font: "inherit",
+        color: "inherit",
+      }}
+    >
+      {precise ? value.toLocaleString("en-US") : formatCompact(value)}
+      {suffix ? ` ${suffix}` : ""}
+    </button>
+  );
+}
+
+type ProviderGroup = {
+  key: string;
+  label: string;
+  color: string;
+  source: RunSource;
+  provider: string | null;
+  conversations: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  models: { name: string; conversations: number; tokens: number }[];
+};
+
+// The breakdown rows wear real brand marks: external CLIs use their tool's
+// logo id directly; Klide groups use the AI provider's (ollama, anthropic…).
+function GroupLogo({ group, size = 16 }: { group: ProviderGroup; size?: number }) {
+  const id = group.source === "klide" ? group.provider ?? "ollama" : group.source;
+  return <ProviderLogo id={id as ProviderId} size={size} />;
+}
+
+function MetricToggle({
+  value,
+  onChange,
+}: {
+  value: StatsMetric;
+  onChange: (m: StatsMetric) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Stats metric"
+      style={{
+        display: "inline-flex",
+        border: "1px solid var(--border-strong)",
+        borderRadius: 6,
+        overflow: "hidden",
+      }}
+    >
+      {(["conversations", "tokens"] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          role="tab"
+          aria-selected={value === m}
+          onClick={() => onChange(m)}
+          style={{
+            padding: "4px 10px",
+            fontSize: 11,
+            fontWeight: 500,
+            border: "none",
+            cursor: "pointer",
+            background: value === m ? "var(--bg-hover)" : "transparent",
+            color: value === m ? "var(--fg-strong)" : "var(--fg-subtle)",
+          }}
+        >
+          {m === "conversations" ? "Conversations" : "Tokens"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Weekly histogram of the last 26 weeks. In tokens mode each bar stacks
+// input (faded) under output (full accent); in conversations mode it's a
+// plain count. Clicking a bar pins its exact numbers below the chart.
+function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) {
+  const WEEKS = 26;
+  const WEEK_MS = 7 * 86_400_000;
+  const [selected, setSelected] = useState<number | null>(null);
+
+  const buckets = useMemo(() => {
+    const startMonday = mondayOfWeek(startOfDay(Date.now())) - (WEEKS - 1) * WEEK_MS;
+    const buckets = Array.from({ length: WEEKS }, (_, i) => ({
+      startMs: startMonday + i * WEEK_MS,
+      conversations: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    }));
+    for (const r of runs) {
+      const idx = Math.floor((mondayOfWeek(r.createdMs) - startMonday) / WEEK_MS);
+      if (idx < 0 || idx >= WEEKS) continue;
+      buckets[idx].conversations += 1;
+      buckets[idx].inputTokens += r.inputTokens ?? 0;
+      buckets[idx].outputTokens += r.outputTokens ?? 0;
+    }
+    return buckets;
+  }, [runs]);
+
+  const valueOf = (b: (typeof buckets)[number]) =>
+    metric === "tokens" ? b.inputTokens + b.outputTokens : b.conversations;
+  const max = Math.max(1, ...buckets.map(valueOf));
+  const sel = selected != null ? buckets[selected] : null;
+
+  // One label at each month change, positioned by week index.
+  const monthLabels = useMemo(() => {
+    const labels: { i: number; name: string }[] = [];
+    let last = -1;
+    buckets.forEach((b, i) => {
+      const month = new Date(b.startMs).getMonth();
+      if (month !== last) {
+        labels.push({ i, name: new Date(b.startMs).toLocaleDateString("en-US", { month: "short" }) });
+        last = month;
+      }
+    });
+    return labels;
+  }, [buckets]);
+
+  const weekLabel = (startMs: number) =>
+    `Week of ${new Date(startMs).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+
+  const chartHeight = 110;
+
+  return (
+    <div>
+      {/* Bars */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 3,
+          height: chartHeight,
+        }}
+      >
+        {buckets.map((b, i) => {
+          const total = valueOf(b);
+          const isSel = i === selected;
+          return (
+            <div
+              key={b.startMs}
+              title={`${weekLabel(b.startMs)}: ${b.conversations} conversations · ${formatCompact(
+                b.inputTokens + b.outputTokens,
+              )} tokens`}
+              onClick={() => setSelected(isSel ? null : i)}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "flex-end",
+                cursor: "pointer",
+                borderRadius: 3,
+                background: isSel ? "var(--bg-hover)" : "transparent",
+              }}
+            >
+              {total > 0 && metric === "tokens" ? (
+                <>
+                  {/* input above output — output (the model's work) anchors the bar */}
+                  <div
+                    style={{
+                      height: `${(b.inputTokens / max) * 100}%`,
+                      background: "color-mix(in srgb, var(--accent) 30%, var(--bg-elevated))",
+                      borderRadius: "2px 2px 0 0",
+                    }}
+                  />
+                  <div
+                    style={{
+                      height: `${(b.outputTokens / max) * 100}%`,
+                      minHeight: 2,
+                      background: "var(--accent)",
+                    }}
+                  />
+                </>
+              ) : total > 0 ? (
+                <div
+                  style={{
+                    height: `${(total / max) * 100}%`,
+                    minHeight: 2,
+                    background: "var(--accent)",
+                    borderRadius: "2px 2px 0 0",
+                  }}
+                />
+              ) : (
+                // Empty weeks still get a hairline so the axis reads continuously.
+                <div style={{ height: 2, background: "var(--bg)", borderRadius: 1 }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Month labels */}
+      <div style={{ position: "relative", height: 16, marginTop: 4 }}>
+        {monthLabels.map(({ i, name }) => (
+          <span
+            key={`${i}-${name}`}
+            style={{
+              position: "absolute",
+              left: `${(i / WEEKS) * 100}%`,
+              color: "var(--fg-subtle)",
+              fontSize: 10,
+              fontFamily: "var(--font-mono)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {name}
+          </span>
+        ))}
+      </div>
+
+      {/* Legend (tokens mode) */}
+      {metric === "tokens" && (
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            marginTop: 6,
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            color: "var(--fg-subtle)",
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span
+              aria-hidden
+              style={{ width: 8, height: 8, borderRadius: 2, background: "var(--accent)" }}
+            />
+            output
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span
+              aria-hidden
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 2,
+                background: "color-mix(in srgb, var(--accent) 30%, var(--bg-elevated))",
+              }}
+            />
+            input
+          </span>
+        </div>
+      )}
+
+      {/* Exact numbers for the clicked week */}
+      {sel && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "baseline",
+            gap: 14,
+            fontSize: 11.5,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
+            {weekLabel(sel.startMs)}
+          </span>
+          <span style={{ color: "var(--fg)" }}>
+            {sel.conversations.toLocaleString("en-US")} conversations
+          </span>
+          <span style={{ color: "var(--fg)" }}>
+            {sel.inputTokens.toLocaleString("en-US")} tokens in
+          </span>
+          <span style={{ color: "var(--fg)" }}>
+            {sel.outputTokens.toLocaleString("en-US")} tokens out
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={() => setSelected(null)}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: "var(--fg-subtle)",
+              fontSize: 11,
+            }}
+          >
+            clear
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatsSection() {
-  const [runs, setRuns] = useState<{ createdMs: number }[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
+  const [metric, setMetric] = useState<StatsMetric>("conversations");
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
+    let alive = true;
+    (async () => {
       try {
         const { fetchAgentRuns } = await import("../runs");
-        const all = await fetchAgentRuns(500, 0);
-        if (!cancelled) setRuns(all);
+        const all = await fetchAgentRuns(1000, 0);
+        if (alive) setRuns(all);
       } catch {
-        // Stats are non-critical; silently ignore.
+        // Outside Tauri (plain Vite) — leave the section empty.
       } finally {
-        if (!cancelled) setLoading(false);
+        if (alive) setLoading(false);
       }
-    }
-    void load();
-    return () => { cancelled = true; };
+    })();
+    return () => {
+      alive = false;
+    };
   }, []);
+
+  // Stable weight fn so the heatmap's useMemo doesn't recompute every render.
+  const tokenWeight = useCallback((r: Run) => runTokens(r), []);
+
+  const groups = useMemo<ProviderGroup[]>(() => {
+    const map = new Map<string, ProviderGroup & { byModel: Map<string, { conversations: number; tokens: number }> }>();
+    for (const r of runs) {
+      // Klide runs split by their AI provider (Ollama, Anthropic…);
+      // external CLIs are one group each.
+      const isKlide = r.source === "klide";
+      const key = isKlide ? `klide:${r.provider ?? ""}` : r.source;
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          key,
+          label: isKlide
+            ? r.provider
+              ? `Klide · ${prettyProvider(r.provider)}`
+              : "Klide"
+            : SOURCE_LABEL[r.source],
+          color: STATS_SOURCE_COLOR[r.source],
+          source: r.source,
+          provider: r.provider ?? null,
+          conversations: 0,
+          tokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          models: [],
+          byModel: new Map(),
+        };
+        map.set(key, g);
+      }
+      const tokens = runTokens(r);
+      g.conversations += 1;
+      g.tokens += tokens;
+      g.inputTokens += r.inputTokens ?? 0;
+      g.outputTokens += r.outputTokens ?? 0;
+      const model = r.model?.trim() || "unknown";
+      const m = g.byModel.get(model) ?? { conversations: 0, tokens: 0 };
+      m.conversations += 1;
+      m.tokens += tokens;
+      g.byModel.set(model, m);
+    }
+    const valueOf = (x: { conversations: number; tokens: number }) =>
+      metric === "tokens" ? x.tokens : x.conversations;
+    return [...map.values()]
+      .map(({ byModel, ...g }) => ({
+        ...g,
+        models: [...byModel.entries()]
+          .map(([name, v]) => ({ name, ...v }))
+          .sort((a, b) => valueOf(b) - valueOf(a)),
+      }))
+      .sort((a, b) => valueOf(b) - valueOf(a));
+  }, [runs, metric]);
+
+  const valueOf = (x: { conversations: number; tokens: number }) =>
+    metric === "tokens" ? x.tokens : x.conversations;
+  const maxGroupValue = Math.max(1, ...groups.map(valueOf));
+
+  // Exact numbers for the clicked heatmap day.
+  const dayDetail = useMemo(() => {
+    if (!selectedDay) return null;
+    let conversations = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const r of runs) {
+      if (msToKey(r.createdMs) !== selectedDay) continue;
+      conversations += 1;
+      inputTokens += r.inputTokens ?? 0;
+      outputTokens += r.outputTokens ?? 0;
+    }
+    return { conversations, inputTokens, outputTokens };
+  }, [runs, selectedDay]);
 
   return (
     <>
       <SettingBlock title="Activity">
         <Panel>
-          {loading ? (
-            <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: "8px 0" }}>
-              Loading activity data…
+          <div style={{ padding: "14px 18px" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 16,
+                marginBottom: 14,
+              }}
+            >
+              <div style={{ color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.4 }}>
+                Agent sessions across Klide, Claude Code, Codex and OpenCode over the last year.
+              </div>
+              <MetricToggle value={metric} onChange={setMetric} />
             </div>
-          ) : runs.length === 0 ? (
-            <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: "8px 0" }}>
-              No activity recorded yet. Start a chat or run an agent to see your heatmap fill up.
+            <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+              <ActivityHeatmap
+                runs={runs}
+                weeks={52}
+                weight={metric === "tokens" ? tokenWeight : undefined}
+                unit={metric}
+                selectedDay={selectedDay}
+                onSelectDay={setSelectedDay}
+              />
             </div>
-          ) : (
-            <ActivityHeatmap runs={runs} weeks={52} />
-          )}
+            {selectedDay && dayDetail && (
+              <div
+                style={{
+                  marginTop: 10,
+                  paddingTop: 10,
+                  borderTop: "1px solid var(--border)",
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 14,
+                  fontSize: 11.5,
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>
+                  {new Date(selectedDay + "T00:00:00").toLocaleDateString("en-US", {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </span>
+                <span style={{ color: "var(--fg)" }}>
+                  {dayDetail.conversations.toLocaleString("en-US")} conversations
+                </span>
+                <span style={{ color: "var(--fg)" }}>
+                  {dayDetail.inputTokens.toLocaleString("en-US")} tokens in
+                </span>
+                <span style={{ color: "var(--fg)" }}>
+                  {dayDetail.outputTokens.toLocaleString("en-US")} tokens out
+                </span>
+                <span style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  onClick={() => setSelectedDay(null)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: 0,
+                    cursor: "pointer",
+                    color: "var(--fg-subtle)",
+                    fontSize: 11,
+                  }}
+                >
+                  clear
+                </button>
+              </div>
+            )}
+          </div>
         </Panel>
       </SettingBlock>
-      <SettingBlock title="Summary">
+
+      <SettingBlock title="Usage over time">
         <Panel>
-          <Row
-            title="Total runs"
-            description={`${runs.length} agent sessions recorded.`}
-            control={<span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>{runs.length}</span>}
-          />
-          <Row
-            title="This week"
-            description={`${runs.filter((r) => {
-              const now = Date.now();
-              const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-              return r.createdMs >= weekAgo;
-            }).length} runs in the last 7 days.`}
-            control={
-              <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>
-                {runs.filter((r) => {
-                  const now = Date.now();
-                  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-                  return r.createdMs >= weekAgo;
-                }).length}
-              </span>
-            }
-          />
+          <div style={{ padding: "14px 18px" }}>
+            <UsageHistogram runs={runs} metric={metric} />
+          </div>
+        </Panel>
+      </SettingBlock>
+
+      <SettingBlock title="Providers & models">
+        <Panel>
+          {loading && (
+            <div style={{ padding: "14px 18px", color: "var(--fg-subtle)", fontSize: 12 }}>
+              Reading session logs…
+            </div>
+          )}
+          {!loading && groups.length === 0 && (
+            <div style={{ padding: "14px 18px", color: "var(--fg-subtle)", fontSize: 12 }}>
+              No agent sessions found yet. Run a conversation and come back.
+            </div>
+          )}
+          {groups.map((g, gi) => {
+            const groupValue = valueOf(g);
+            return (
+              <div
+                key={g.key}
+                style={{
+                  padding: "14px 18px",
+                  borderBottom: gi < groups.length - 1 ? "1px solid var(--border)" : "none",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    marginBottom: 8,
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <GroupLogo group={g} />
+                    <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 500 }}>
+                      {g.label}
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--fg-subtle)",
+                      fontSize: 11.5,
+                      fontFamily: "var(--font-mono)",
+                      whiteSpace: "nowrap",
+                      display: "inline-flex",
+                      gap: 10,
+                    }}
+                  >
+                    <PreciseNumber value={g.conversations} suffix="conversations" />
+                    {g.tokens > 0 && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <PreciseNumber value={g.inputTokens} suffix="in" />
+                        <span aria-hidden>·</span>
+                        <PreciseNumber value={g.outputTokens} suffix="out" />
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* Length = this provider's share of the top provider; segments = models. */}
+                <div
+                  style={{
+                    height: 6,
+                    borderRadius: 3,
+                    background: "var(--bg)",
+                    overflow: "hidden",
+                    marginBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      height: "100%",
+                      width: `${Math.max(1.5, (groupValue / maxGroupValue) * 100)}%`,
+                      borderRadius: 3,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {g.models.slice(0, SEGMENT_MIX.length).map((m, i) => (
+                      <div
+                        key={m.name}
+                        style={{
+                          width: `${(valueOf(m) / Math.max(1, groupValue)) * 100}%`,
+                          background: `color-mix(in srgb, ${g.color} ${SEGMENT_MIX[i]}%, var(--bg-elevated))`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {g.models.slice(0, SEGMENT_MIX.length).map((m, i) => (
+                    <div
+                      key={m.name}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: 11.5,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 2,
+                          flexShrink: 0,
+                          background: `color-mix(in srgb, ${g.color} ${SEGMENT_MIX[i]}%, var(--bg-elevated))`,
+                        }}
+                      />
+                      <span
+                        style={{
+                          color: "var(--fg)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {m.name}
+                      </span>
+                      <span style={{ flex: 1 }} />
+                      <span style={{ color: "var(--fg-subtle)", whiteSpace: "nowrap" }}>
+                        {metric === "tokens" ? (
+                          <PreciseNumber value={m.tokens} suffix="tokens" />
+                        ) : (
+                          <PreciseNumber value={m.conversations} suffix="conv" />
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                  {g.models.length > SEGMENT_MIX.length && (
+                    <div style={{ color: "var(--fg-subtle)", fontSize: 11, paddingLeft: 16 }}>
+                      +{g.models.length - SEGMENT_MIX.length} more models
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </Panel>
       </SettingBlock>
     </>
