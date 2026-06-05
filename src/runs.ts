@@ -27,6 +27,7 @@ export type Run = {
   branch: string | null;
   messageCount: number;
   updatedMs: number;
+  createdMs: number;
 };
 
 // One readable turn of a run's conversation (from `read_agent_run`).
@@ -43,6 +44,7 @@ type AgentRunDto = {
   cwd: string | null;
   project: string | null;
   gitBranch: string | null;
+  createdMs?: number;
   updatedMs: number;
   messageCount: number;
   status: string;
@@ -117,6 +119,7 @@ function fromDto(a: AgentRunDto): Run {
     branch: a.gitBranch ?? null,
     messageCount: a.messageCount ?? 0,
     updatedMs: a.updatedMs ?? 0,
+    createdMs: a.createdMs ?? a.updatedMs ?? 0,
   };
 }
 
@@ -193,6 +196,7 @@ export function seedRuns(): Run[] {
       branch: "main",
       messageCount: 24,
       updatedMs: now - 6_000,
+      createdMs: now - 6_000,
     },
     {
       id: "seed-2",
@@ -207,6 +211,7 @@ export function seedRuns(): Run[] {
       branch: "main",
       messageCount: 11,
       updatedMs: now - 38 * min,
+      createdMs: now - 38 * min,
     },
     {
       id: "ses_seed_3",
@@ -221,6 +226,7 @@ export function seedRuns(): Run[] {
       branch: "main",
       messageCount: 8,
       updatedMs: now - 90 * min,
+      createdMs: now - 90 * min,
     },
   ];
 }

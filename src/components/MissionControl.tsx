@@ -77,6 +77,7 @@ function taskToRun(t: TaskSession): Run {
     branch: null,
     messageCount: 0,
     updatedMs: t.startedMs,
+    createdMs: t.startedMs,
   };
 }
 
@@ -93,8 +94,9 @@ function convoToRun(c: KlideConvo): Run {
     project: c.cwd ? c.cwd.split("/").filter(Boolean).pop() ?? null : null,
     cwd: c.cwd,
     branch: null,
-    messageCount: c.messages.length,
+    messageCount: c.messages?.length ?? 0,
     updatedMs: c.updatedMs,
+    createdMs: c.updatedMs,
   };
 }
 

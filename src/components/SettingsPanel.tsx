@@ -5,6 +5,7 @@ import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
+import { ActivityHeatmap } from "./ActivityHeatmap";
 import {
   BUILTIN_PRESETS,
   SIZE_OPTIONS,
@@ -28,7 +29,8 @@ type SectionId =
   | "api"
   | "subscription"
   | "editor"
-  | "terminal";
+  | "terminal"
+  | "stats";
 
 type Props = {
   theme: ThemeId;
@@ -122,6 +124,7 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "subscription", label: "Subscription", icon: <CloudIcon /> },
   { id: "editor", label: "Editor", icon: <CodeIcon /> },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon /> },
+  { id: "stats", label: "Stats", icon: <BarChartIcon /> },
 ];
 
 function clamp(value: number, min: number, max: number): number {
@@ -1836,9 +1839,80 @@ export function SettingsPanel({
               </Panel>
             </SettingBlock>
           )}
+          {activeSection === "stats" && (
+            <StatsSection />
+          )}
         </div>
       </div>
     </main>
+  );
+}
+
+function StatsSection() {
+  const [runs, setRuns] = useState<{ createdMs: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const { fetchAgentRuns } = await import("../runs");
+        const all = await fetchAgentRuns(500, 0);
+        if (!cancelled) setRuns(all);
+      } catch {
+        // Stats are non-critical; silently ignore.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <>
+      <SettingBlock title="Activity">
+        <Panel>
+          {loading ? (
+            <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: "8px 0" }}>
+              Loading activity data…
+            </div>
+          ) : runs.length === 0 ? (
+            <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: "8px 0" }}>
+              No activity recorded yet. Start a chat or run an agent to see your heatmap fill up.
+            </div>
+          ) : (
+            <ActivityHeatmap runs={runs} weeks={52} />
+          )}
+        </Panel>
+      </SettingBlock>
+      <SettingBlock title="Summary">
+        <Panel>
+          <Row
+            title="Total runs"
+            description={`${runs.length} agent sessions recorded.`}
+            control={<span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>{runs.length}</span>}
+          />
+          <Row
+            title="This week"
+            description={`${runs.filter((r) => {
+              const now = Date.now();
+              const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+              return r.createdMs >= weekAgo;
+            }).length} runs in the last 7 days.`}
+            control={
+              <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>
+                {runs.filter((r) => {
+                  const now = Date.now();
+                  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+                  return r.createdMs >= weekAgo;
+                }).length}
+              </span>
+            }
+          />
+        </Panel>
+      </SettingBlock>
+    </>
   );
 }
 
@@ -1948,6 +2022,17 @@ function TerminalIcon() {
       <path d="M4 6.5h16v11H4z" />
       <path d="M7 10l2 2-2 2" />
       <path d="M12 14h4" />
+    </IconBase>
+  );
+}
+
+function BarChartIcon() {
+  return (
+    <IconBase>
+      <rect x="3.5" y="13" width="3" height="8" rx="0.8" />
+      <rect x="8.5" y="9" width="3" height="12" rx="0.8" />
+      <rect x="13.5" y="5" width="3" height="16" rx="0.8" />
+      <rect x="18.5" y="8" width="3" height="13" rx="0.8" />
     </IconBase>
   );
 }
