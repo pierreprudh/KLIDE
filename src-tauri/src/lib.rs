@@ -230,10 +230,7 @@ fn ai_clear_provider_key(provider: String) -> Result<(), String> {
 }
 
 fn is_subscription_provider(provider: &str) -> bool {
-    matches!(
-        provider,
-        "claude-code" | "codex" | "opencode" | "gemini-cli"
-    )
+    matches!(provider, "claude-code" | "codex" | "opencode")
 }
 
 fn subscription_command(provider: &str) -> Result<&'static str, String> {
@@ -241,7 +238,6 @@ fn subscription_command(provider: &str) -> Result<&'static str, String> {
         "claude-code" => Ok("claude"),
         "codex" => Ok("codex"),
         "opencode" => Ok("opencode"),
-        "gemini-cli" => Ok("gemini"),
         _ => Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     }
 }
@@ -252,6 +248,7 @@ fn provider_chat_url(provider: &str) -> Result<&'static str, String> {
         "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
         "xai" => Ok("https://api.x.ai/v1/chat/completions"),
         "mlx" => Ok("http://localhost:8080/v1/chat/completions"),
+        "openrouter" => Ok("https://openrouter.ai/api/v1/chat/completions"),
         _ => Err(format!("Provider \"{provider}\" has no chat-completions endpoint")),
     }
 }
@@ -262,6 +259,7 @@ fn provider_models_url(provider: &str) -> Result<&'static str, String> {
         "mistral" => Ok("https://api.mistral.ai/v1/models"),
         "xai" => Ok("https://api.x.ai/v1/models"),
         "mlx" => Ok("http://localhost:8080/v1/models"),
+        "openrouter" => Ok("https://openrouter.ai/api/v1/models"),
         _ => Err(format!("Provider \"{provider}\" has no models endpoint")),
     }
 }
@@ -388,7 +386,6 @@ fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
         }),
         "opencode" => opencode_cached_models()
             .unwrap_or_else(|| vec!["opencode".to_string()]),
-        "gemini-cli" => vec!["gemini-2.5-pro".to_string(), "gemini-2.5-flash".to_string()],
         _ => return Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     };
     Ok(models)
@@ -644,7 +641,6 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
             "codex login --with-api-key".to_string(),
             "codex login --with-access-token".to_string(),
         ],
-        "gemini-cli" => vec!["gemini auth login".to_string()],
         "opencode" => vec!["opencode".to_string()],
         _ => Vec::new(),
     };
@@ -710,10 +706,6 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
                 },
             )
         }
-        "gemini-cli" => (
-            false,
-            "Gemini CLI status check is not wired yet".to_string(),
-        ),
         "opencode" => (
             true,
             "OpenCode CLI is installed; authentication is handled by OpenCode.".to_string(),
@@ -778,7 +770,7 @@ fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
         "goal" => agent::types::AgentMode::Goal,
         _ => agent::types::AgentMode::Chat,
     };
-    agent::tools::list_tools(&mode)
+    agent::tools::list_tools(&mode, &[])
 }
 
 // ── Find in files ───────────────────────────────────────────────────────
@@ -920,7 +912,6 @@ fn resolve_command(command: &str) -> Result<String, String> {
             format!("{home}/.local/bin/codex"),
             "/Applications/Codex.app/Contents/Resources/codex".to_string(),
         ],
-        "gemini" => vec![format!("{home}/.local/bin/gemini")],
         "opencode" => vec![
             format!("{home}/.opencode/bin/opencode"),
             format!("{home}/.local/bin/opencode"),
@@ -1115,9 +1106,6 @@ async fn subscription_cli_chat(
                 .arg("-");
             run_cli_with_stdin(command, prompt, "Codex", on_chunk).await?
         }
-        "gemini-cli" => {
-            return Err("Gemini CLI delegate is not wired yet. Coming in a future release.".to_string());
-        }
         "opencode" => {
             ensure_command_available("opencode")?;
             return Err("OpenCode is available as an interactive PTY delegate.".to_string());
@@ -1146,13 +1134,15 @@ trait StreamingProvider {
 
     /// Parse one streamed line. Err means the provider reported a fatal
     /// mid-stream error (delivered over HTTP 200) — the whole request fails.
+    /// `on_chunk` is a closure so unit tests can record chunks without
+    /// spinning up a Tauri `Channel`.
     fn parse_line(
         &mut self,
         line: &str,
         content: &mut String,
         thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
-        on_chunk: &Channel<StreamChunk>,
+        on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String>;
 
     fn finalize_response(
@@ -1187,6 +1177,13 @@ async fn stream_provider<S: StreamingProvider>(
     // separately would corrupt it into U+FFFD (and break the line's JSON).
     let mut buf: Vec<u8> = Vec::new();
 
+    // Bridge the Tauri `Channel` (a one-shot sink) to the `&dyn Fn` sink the
+    // trait expects. `send` returns a Result we deliberately swallow: a
+    // dropped webview should fail the request, not the individual chunk.
+    let send = |chunk: StreamChunk| {
+        let _ = on_chunk.send(chunk);
+    };
+
     let mut stream = res;
     let mut provider = provider;
     while let Some(bytes) = stream.chunk().await.map_err(|e| e.to_string())? {
@@ -1194,12 +1191,12 @@ async fn stream_provider<S: StreamingProvider>(
         while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
             let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
             let line = String::from_utf8_lossy(&line_bytes);
-            provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk)?;
+            provider.parse_line(&line, &mut content, &mut thinking, &mut tools, &send)?;
         }
     }
     if buf.iter().any(|b| !b.is_ascii_whitespace()) {
         let line = String::from_utf8_lossy(&buf).to_string();
-        provider.parse_line(&line, &mut content, &mut thinking, &mut tools, on_chunk)?;
+        provider.parse_line(&line, &mut content, &mut thinking, &mut tools, &send)?;
     }
 
     Ok(S::finalize_response(content, thinking, tools))
@@ -1238,7 +1235,7 @@ impl StreamingProvider for OllamaAdapter {
         content: &mut String,
         thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
-        on_chunk: &Channel<StreamChunk>,
+        on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
         let line = line.trim();
         if line.is_empty() { return Ok(()); }
@@ -1252,7 +1249,7 @@ impl StreamingProvider for OllamaAdapter {
         if !c.is_empty() || !t.is_empty() {
             content.push_str(c);
             thinking.push_str(t);
-            let _ = on_chunk.send(StreamChunk { content: c.to_string(), thinking: t.to_string() });
+            on_chunk(StreamChunk { content: c.to_string(), thinking: t.to_string() });
         }
         if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
             tools.extend(calls.iter().cloned());
@@ -1326,7 +1323,7 @@ impl StreamingProvider for OpenAiAdapter {
         content: &mut String,
         _thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
-        on_chunk: &Channel<StreamChunk>,
+        on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
         let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
         let data = data.trim();
@@ -1345,7 +1342,7 @@ impl StreamingProvider for OpenAiAdapter {
         if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
             if !c.is_empty() {
                 content.push_str(c);
-                let _ = on_chunk.send(StreamChunk { content: c.to_string(), thinking: String::new() });
+                on_chunk(StreamChunk { content: c.to_string(), thinking: String::new() });
             }
         }
         if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -1548,7 +1545,7 @@ impl StreamingProvider for AnthropicAdapter {
         content: &mut String,
         _thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
-        on_chunk: &Channel<StreamChunk>,
+        on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
         let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
         let data = data.trim();
@@ -1585,7 +1582,7 @@ impl StreamingProvider for AnthropicAdapter {
                         if let Some(t) = delta.get("text").and_then(|v| v.as_str()) {
                             if !t.is_empty() {
                                 content.push_str(t);
-                                let _ = on_chunk.send(StreamChunk { content: t.to_string(), thinking: String::new() });
+                                on_chunk(StreamChunk { content: t.to_string(), thinking: String::new() });
                             }
                         }
                     }
@@ -3181,4 +3178,291 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the streaming adapter parsers.
+    //!
+    //! Each provider's `parse_line` is the choke point that turns raw
+    //! `data: …` lines into typed deltas — a regression here silently
+    //! corrupts every chat completion. These tests pin the contract using
+    //! fixture strings recorded from real provider responses, so we don't
+    //! need network access to lock the behaviour in.
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A chunk sink the test can introspect. Mirrors what
+    /// `tauri::ipc::Channel::send` would deliver to the frontend.
+    #[derive(Default)]
+    struct Recorder {
+        chunks: RefCell<Vec<StreamChunk>>,
+    }
+    impl Recorder {
+        fn record(&self) -> Vec<StreamChunk> {
+            self.chunks.borrow().iter().cloned().collect()
+        }
+        fn as_sink(&self) -> impl Fn(StreamChunk) + '_ {
+            |c| self.chunks.borrow_mut().push(c)
+        }
+    }
+
+    fn run_ollama(lines: &[&str]) -> (String, String, Vec<serde_json::Value>, Vec<StreamChunk>) {
+        let mut adapter = OllamaAdapter {
+            model: "test".to_string(),
+            messages: vec![],
+            tools: None,
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools: Vec<serde_json::Value> = Vec::new();
+        let rec = Recorder::default();
+        for line in lines {
+            adapter
+                .parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink())
+                .unwrap();
+        }
+        (content, thinking, tools, rec.record())
+    }
+
+    #[test]
+    fn ollama_accumulates_content_thinking_and_tool_calls() {
+        let lines = [
+            r#"{"message":{"content":"Hello","thinking":""},"done":false}"#,
+            r#"{"message":{"content":" world","thinking":"hmm"},"done":false}"#,
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"a.rs"}}}]},"done":false}"#,
+            r#"{"done":true}"#,
+        ];
+        let (content, thinking, tools, chunks) = run_ollama(&lines);
+        assert_eq!(content, "Hello world");
+        assert_eq!(thinking, "hmm");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "read_file");
+        // StreamChunk should carry only the latest deltas, not accumulated state.
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].content, "Hello");
+        assert_eq!(chunks[1].content, " world");
+        assert_eq!(chunks[1].thinking, "hmm");
+    }
+
+    #[test]
+    fn ollama_skips_empty_and_non_json_lines() {
+        let (content, _, tools, chunks) = run_ollama(&["", "not json", "   \n"]);
+        assert!(content.is_empty());
+        assert!(tools.is_empty());
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn ollama_surfaces_mid_stream_error() {
+        let mut adapter = OllamaAdapter {
+            model: "test".to_string(),
+            messages: vec![],
+            tools: None,
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools: Vec<serde_json::Value> = Vec::new();
+        let rec = Recorder::default();
+        let err = adapter
+            .parse_line(
+                r#"{"error":"model not found"}"#,
+                &mut content,
+                &mut thinking,
+                &mut tools,
+                &rec.as_sink(),
+            )
+            .unwrap_err();
+        assert!(err.contains("model not found"), "got: {err}");
+    }
+
+    fn run_openai(lines: &[&str]) -> (String, Vec<serde_json::Value>, Vec<StreamChunk>) {
+        let mut adapter = OpenAiAdapter {
+            provider: "openai".to_string(),
+            model: "gpt-4.1".to_string(),
+            messages: vec![],
+            tools: None,
+            key: Some("sk-test".to_string()),
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools: Vec<OpenAiToolAcc> = Vec::new();
+        let rec = Recorder::default();
+        for line in lines {
+            adapter
+                .parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink())
+                .unwrap();
+        }
+        let response = OpenAiAdapter::finalize_response(content, thinking, tools);
+        (response.content, response.tool_calls, rec.record())
+    }
+
+    #[test]
+    fn openai_accumulates_content_across_chunks() {
+        let lines = [
+            r#"data: {"choices":[{"index":0,"delta":{"content":"Hel"}}]}"#,
+            r#"data: {"choices":[{"index":0,"delta":{"content":"lo "}}]}"#,
+            r#"data: {"choices":[{"index":0,"delta":{"content":"there"}}]}"#,
+            r#"data: [DONE]"#,
+        ];
+        let (content, tools, chunks) = run_openai(&lines);
+        assert_eq!(content, "Hello there");
+        assert!(tools.is_empty());
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].content, "Hel");
+    }
+
+    #[test]
+    fn openai_stitches_streamed_tool_call_args() {
+        // Mimics what the OpenAI Chat Completions API sends when streaming
+        // a tool call: `index` ties the deltas together, `arguments` arrives
+        // as a sequence of JSON fragments that have to be concatenated
+        // before they're valid JSON.
+        let lines = [
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"pa"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x.rs\"}"}}]}}]}"#,
+            r#"data: [DONE]"#,
+        ];
+        let (content, tools, chunks) = run_openai(&lines);
+        assert!(content.is_empty());
+        assert!(chunks.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["id"], "call_1");
+        assert_eq!(tools[0]["function"]["name"], "read");
+        let args: serde_json::Value = serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["path"], "x.rs");
+    }
+
+    #[test]
+    fn openai_ignores_prefixless_and_done_lines() {
+        let (content, tools, chunks) = run_openai(&[
+            "event: ping",
+            ":heartbeat",
+            "data: [DONE]",
+            "",
+        ]);
+        assert!(content.is_empty());
+        assert!(tools.is_empty());
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn openai_surfaces_mid_stream_error() {
+        let mut adapter = OpenAiAdapter {
+            provider: "mistral".to_string(),
+            model: "mistral-large".to_string(),
+            messages: vec![],
+            tools: None,
+            key: Some("k".to_string()),
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools: Vec<OpenAiToolAcc> = Vec::new();
+        let rec = Recorder::default();
+        let err = adapter
+            .parse_line(
+                r#"data: {"error":{"message":"rate limited"}}"#,
+                &mut content,
+                &mut thinking,
+                &mut tools,
+                &rec.as_sink(),
+            )
+            .unwrap_err();
+        assert!(err.contains("mistral"), "provider tag missing: {err}");
+        assert!(err.contains("rate limited"), "got: {err}");
+    }
+
+    fn run_anthropic(lines: &[&str]) -> (String, Vec<serde_json::Value>, Vec<StreamChunk>) {
+        let mut adapter = AnthropicAdapter {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![],
+            tools: None,
+            key: "sk-ant-test".to_string(),
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools: Vec<AnthropicToolAcc> = Vec::new();
+        let rec = Recorder::default();
+        for line in lines {
+            adapter
+                .parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink())
+                .unwrap();
+        }
+        let response = AnthropicAdapter::finalize_response(content, thinking, tools);
+        (response.content, response.tool_calls, rec.record())
+    }
+
+    #[test]
+    fn anthropic_text_stream_round_trip() {
+        let lines = [
+            r#"data: {"type":"message_start","message":{"id":"m_1"}}"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" there"}}"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"data: {"type":"message_stop"}"#,
+        ];
+        let (content, tools, chunks) = run_anthropic(&lines);
+        assert_eq!(content, "Hello there");
+        assert!(tools.is_empty());
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].content, "Hello");
+        assert_eq!(chunks[1].content, " there");
+    }
+
+    #[test]
+    fn anthropic_tool_use_args_assembled_from_partial_json() {
+        let lines = [
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"write_file"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"a.rs\","}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"old_str\":"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"null}"}}"#,
+        ];
+        let (content, tools, chunks) = run_anthropic(&lines);
+        assert!(content.is_empty());
+        assert!(chunks.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["id"], "toolu_1");
+        assert_eq!(tools[0]["function"]["name"], "write_file");
+        let args: serde_json::Value = serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["path"], "a.rs");
+        assert!(args.get("old_str").is_some());
+    }
+
+    #[test]
+    fn anthropic_surfaces_mid_stream_error_event() {
+        let mut adapter = AnthropicAdapter {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![],
+            tools: None,
+            key: "k".to_string(),
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools: Vec<AnthropicToolAcc> = Vec::new();
+        let rec = Recorder::default();
+        let err = adapter
+            .parse_line(
+                r#"data: {"type":"error","error":{"type":"overloaded_error","message":"server is overloaded"}}"#,
+                &mut content,
+                &mut thinking,
+                &mut tools,
+                &rec.as_sink(),
+            )
+            .unwrap_err();
+        assert!(err.contains("Anthropic"), "got: {err}");
+        assert!(err.contains("overloaded"), "got: {err}");
+    }
+
+    #[test]
+    fn anthropic_finalize_skips_empty_tool_blocks() {
+        // A text-only response must not surface a phantom tool call.
+        let content = String::new();
+        let thinking = String::new();
+        let tools: Vec<AnthropicToolAcc> = vec![AnthropicToolAcc::default()];
+        let response = AnthropicAdapter::finalize_response(content, thinking, tools);
+        assert!(response.tool_calls.is_empty());
+    }
 }
