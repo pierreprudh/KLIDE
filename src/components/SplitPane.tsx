@@ -28,6 +28,28 @@ export function SplitPane({ top, bottom, defaultSplit, minPane = 80 }: Props) {
     }
   }, [defaultSplit, measured]);
 
+  // Re-clamp topHeight when the container is resized. Without this, a parent
+  // FloatingPanel shrinking below topHeight + minPane leaves the divider
+  // rendered off-screen and the user has no way to drag it back into view.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const clamp = () => {
+      const h = el.getBoundingClientRect().height;
+      if (h <= 0) return;
+      setTopHeight((cur) => {
+        // If the container is too small to give both panes their minimum,
+        // pin the top to whatever fits so the divider stays reachable.
+        if (h < minPane * 2) return Math.max(0, h - minPane);
+        return Math.min(cur, h - minPane);
+      });
+    };
+    clamp();
+    const ro = new ResizeObserver(clamp);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [minPane]);
+
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     dragging.current = true;
@@ -40,7 +62,7 @@ export function SplitPane({ top, bottom, defaultSplit, minPane = 80 }: Props) {
     const el = containerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const maxH = rect.height - minPane;
+    const maxH = Math.max(0, rect.height - minPane);
 
     const onMove = (e: MouseEvent) => {
       if (!dragging.current) return;
@@ -66,7 +88,7 @@ export function SplitPane({ top, bottom, defaultSplit, minPane = 80 }: Props) {
       ref={containerRef}
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, position: "relative" }}
     >
-      <div style={{ flex: "0 0 auto", height: topHeight || 100, minHeight: 0, overflow: "hidden" }}>
+      <div style={{ flex: "0 0 auto", height: topHeight || 100, minHeight: 0, overflow: "hidden", transition: "height var(--motion-med) var(--ease-soft)" }}>
         {top}
       </div>
       <div

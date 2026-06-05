@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   PANEL_CONSTRAINTS,
@@ -36,6 +36,17 @@ export function FloatingPanel({
   children,
 }: Props) {
   const constraints: PanelConstraints = PANEL_CONSTRAINTS[panelId];
+  // Disable the size/position transition while the user is actively dragging
+  // or resizing — otherwise the panel would visibly lag behind the cursor.
+  // The transition is on for *passive* rect changes (window resize, layout
+  // re-clamp) so the panel glides to its new bounds the way macOS does.
+  const [isInteracting, setIsInteracting] = useState(false);
+  const panelTransition = isInteracting
+    ? "none"
+    : "left var(--motion-med) var(--ease-soft), " +
+      "top var(--motion-med) var(--ease-soft), " +
+      "width var(--motion-med) var(--ease-soft), " +
+      "height var(--motion-med) var(--ease-soft)";
 
   function beginResize(
     e: ReactMouseEvent<HTMLDivElement>,
@@ -44,6 +55,7 @@ export function FloatingPanel({
     e.preventDefault();
     e.stopPropagation();
     onFocus();
+    setIsInteracting(true);
     const startX = e.clientX;
     const startY = e.clientY;
     const startRect = { ...rect };
@@ -71,6 +83,7 @@ export function FloatingPanel({
     function onUp() {
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousSelect;
+      setIsInteracting(false);
       window.removeEventListener("mousemove", onMoveResize);
       window.removeEventListener("mouseup", onUp);
     }
@@ -84,6 +97,7 @@ export function FloatingPanel({
     e.preventDefault();
     e.stopPropagation();
     onFocus();
+    setIsInteracting(true);
     const startX = e.clientX;
     const startY = e.clientY;
     const startRect = { ...rect };
@@ -109,6 +123,7 @@ export function FloatingPanel({
     function onUp() {
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousSelect;
+      setIsInteracting(false);
       window.removeEventListener("mousemove", onMoveDrag);
       window.removeEventListener("mouseup", onUp);
     }
@@ -131,6 +146,7 @@ export function FloatingPanel({
         flexDirection: "column",
         background: "transparent",
         pointerEvents: "auto",
+        transition: panelTransition,
       }}
     >
       {/* Drag grip — a small pill at the very top of the panel. It
