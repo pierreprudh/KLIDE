@@ -54,6 +54,8 @@ pub struct StartRunRequest {
     pub attachments: Vec<AgentAttachment>,
     pub context: Option<AgentContextSnapshot>,
     pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

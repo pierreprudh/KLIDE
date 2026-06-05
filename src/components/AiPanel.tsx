@@ -65,7 +65,7 @@ type Props = {
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string };
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> };
   onDuplicate?: () => void;
   onClose?: () => void;
 };
@@ -621,11 +621,14 @@ export function AiPanel({
 
     try {
       const toolsAvailable = turn.modelSupportsTools;
+      const overrides = harnessSettings?.toolOverrides;
+      const disabledTools = overrides ? Object.keys(overrides).filter((k) => overrides[k] === false) : undefined;
       const session = await startAgentRun({
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
         text: turn.text, attachments: turn.attachments,
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
         systemPrompt: buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings),
+        disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }

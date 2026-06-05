@@ -322,7 +322,7 @@ async fn run_agent_loop(
 
     let system = base_system_prompt(&request);
     let mut messages = provider_messages(&request, system);
-    let tools = schemas_for_mode(&request.mode);
+    let tools = schemas_for_mode(&request.mode, &request.disabled_tools);
     let mut message_count = 1_u32;
     let mut completed = false;
     const MAX_TURNS: usize = 8;

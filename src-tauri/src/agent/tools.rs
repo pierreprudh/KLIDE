@@ -185,7 +185,7 @@ fn registry() -> Vec<ToolEntry> {
     ]
 }
 
-pub fn list_tools(mode: &AgentMode) -> Vec<serde_json::Value> {
+pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Value> {
     let reg = registry();
     let kind_filter = match mode {
         AgentMode::Chat => return Vec::new(),
@@ -193,7 +193,12 @@ pub fn list_tools(mode: &AgentMode) -> Vec<serde_json::Value> {
         AgentMode::Goal => None,
     };
     let mut tools: Vec<serde_json::Value> = reg.iter()
-        .filter(|e| kind_filter.map_or(true, |k| e.kind == k))
+        .filter(|e| {
+            let kind_ok = kind_filter.map_or(true, |k| e.kind == k);
+            if !kind_ok { return false; }
+            let name = e.schema["function"]["name"].as_str().unwrap_or("");
+            !disabled.iter().any(|d| d == name)
+        })
         .map(|e| e.schema.clone())
         .collect();
     // Dynamic tools always available in Plan/Goal
@@ -203,8 +208,8 @@ pub fn list_tools(mode: &AgentMode) -> Vec<serde_json::Value> {
     tools
 }
 
-pub fn schemas_for_mode(mode: &AgentMode) -> Option<Vec<serde_json::Value>> {
-    let tools = list_tools(mode);
+pub fn schemas_for_mode(mode: &AgentMode, disabled: &[String]) -> Option<Vec<serde_json::Value>> {
+    let tools = list_tools(mode, disabled);
     if tools.is_empty() { None } else { Some(tools) }
 }
 
