@@ -46,6 +46,99 @@ struct GitDiff {
 }
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommit {
+    hash: String,
+    short_hash: String,
+    subject: String,
+    author: String,
+    author_email: String,
+    /// Seconds since unix epoch.
+    timestamp: i64,
+    refs: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitBranch {
+    name: String,
+    is_current: bool,
+    is_remote: bool,
+    /// Commits ahead of the upstream tracking branch (-).
+    ahead: i32,
+    /// Commits behind the upstream tracking branch (+).
+    behind: i32,
+    last_subject: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitLog {
+    branch: String,
+    upstream: Option<String>,
+    ahead: i32,
+    behind: i32,
+    /// ISO-8601 timestamp of the last `git fetch`.
+    last_fetch_ms: Option<i64>,
+    commits: Vec<GitCommit>,
+    branches: Vec<GitBranch>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStash {
+    index: u32,
+    branch: String,
+    message: String,
+    /// ISO-8601 timestamp.
+    timestamp: i64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PullRequest {
+    number: u32,
+    title: String,
+    state: String,
+    is_draft: bool,
+    author: String,
+    head_ref: String,
+    base_ref: String,
+    url: String,
+    additions: i64,
+    deletions: i64,
+    changed_files: i32,
+    /// ISO-8601 updated timestamp.
+    updated_at_ms: i64,
+    /// "open" | "merged" | "closed" | "draft" — derived for the badge.
+    badge: String,
+    /// True if this PR targets the current branch.
+    is_current_branch: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PullRequestDetails {
+    number: u32,
+    title: String,
+    body: String,
+    state: String,
+    is_draft: bool,
+    author: String,
+    head_ref: String,
+    base_ref: String,
+    url: String,
+    additions: i64,
+    deletions: i64,
+    changed_files: i32,
+    /// "open" | "merged" | "closed" | "draft" — derived for the badge.
+    badge: String,
+    mergeable: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+#[derive(serde::Serialize)]
 struct ProjectGraphGroup {
     name: String,
     file_count: usize,
@@ -1952,6 +2045,456 @@ fn git_diff(workspace_root: String, path: String, staged: bool) -> Result<GitDif
     })
 }
 
+// -----------------------------------------------------------------------------
+// Git Review — full-window view: history, branches, sync, stash, PRs.
+// -----------------------------------------------------------------------------
+
+fn parse_porcelain_timestamp(s: &str) -> i64 {
+    // `git log --format=%ct` returns a unix timestamp in seconds.
+    s.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String> {
+    // Branches — current, local, remote. We grab them with `for-each-ref` so
+    // we can pull ahead/behind and the subject of the tip commit in one shot.
+    let branch_out = git_output(
+        workspace_root,
+        &[
+            "for-each-ref",
+            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(ahead:integer)/%(behind:integer)%00%(subject)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )?;
+    let mut branches: Vec<GitBranch> = Vec::new();
+    for line in branch_out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let is_current = parts[0] == "*";
+        let name = parts[1].to_string();
+        // Skip the HEAD remote pointer (e.g. "origin/main" pointing to where
+        // origin/main currently is on the remote); the user wants real refs.
+        let is_remote = name.contains('/');
+        let (ahead, behind) = if parts[3] == "-" {
+            (0, 0)
+        } else {
+            let mut split = parts[3].split('/');
+            (
+                split.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+                split.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+            )
+        };
+        branches.push(GitBranch {
+            name,
+            is_current,
+            is_remote,
+            ahead,
+            behind,
+            last_subject: parts[4].to_string(),
+        });
+    }
+    // Local branches first, then remotes — but keep the current branch pinned
+    // at the very top of the local group.
+    branches.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
+
+    // Commits — use a custom format so we can pull refs (tags, branch tips) in
+    // the same pass.
+    let log_out = git_output(
+        workspace_root,
+        &[
+            "log",
+            &format!("-n{limit}"),
+            "--date=unix",
+            "--decorate=short",
+            "--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ct%x00%d",
+        ],
+    )?;
+    let mut commits: Vec<GitCommit> = Vec::new();
+    for line in log_out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        // The decorate field looks like " (HEAD -> main, origin/main, tag: v1)"
+        // — strip the parens and the leading "HEAD ->" marker, then split on
+        // commas and trim. Filter to refs that are real names.
+        let refs: Vec<String> = parts[6]
+            .trim()
+            .trim_matches('(')
+            .trim_matches(')')
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "HEAD")
+            .collect();
+        commits.push(GitCommit {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            subject: parts[2].to_string(),
+            author: parts[3].to_string(),
+            author_email: parts[4].to_string(),
+            timestamp: parse_porcelain_timestamp(parts[5]),
+            refs,
+        });
+    }
+
+    // Current branch + upstream.
+    let branch = git_output(workspace_root, &["branch", "--show-current"])?;
+    let branch = branch.trim().to_string();
+    let branch = if branch.is_empty() {
+        "HEAD".to_string()
+    } else {
+        branch
+    };
+    let upstream = git_output(workspace_root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok();
+    let upstream = upstream.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
+    // ahead/behind relative to upstream.
+    let (ahead, behind) = match &upstream {
+        Some(up) => {
+            let ab = git_output(workspace_root, &["rev-list", "--left-right", "--count", &format!("{up}...HEAD")]).unwrap_or_default();
+            let mut it = ab.split_whitespace();
+            (
+                it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+                it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+            )
+        }
+        None => (0, 0),
+    };
+
+    // Last fetch — use the mtime of .git/FETCH_HEAD. We never write that
+    // ourselves; it only ever gets touched by `git fetch`.
+    let last_fetch_ms = std::path::Path::new(workspace_root)
+        .join(".git")
+        .join("FETCH_HEAD")
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64);
+
+    Ok(GitLog {
+        branch,
+        upstream,
+        ahead,
+        behind,
+        last_fetch_ms,
+        commits,
+        branches,
+    })
+}
+
+#[tauri::command]
+fn git_log(workspace_root: String, limit: Option<usize>) -> Result<GitLog, String> {
+    let limit = limit.unwrap_or(60).clamp(5, 500);
+    resolve_git_log(&workspace_root, limit)
+}
+
+#[tauri::command]
+fn git_checkout_branch(workspace_root: String, branch: String) -> Result<(), String> {
+    if branch.is_empty() {
+        return Err("Branch name is required".to_string());
+    }
+    run_git(&workspace_root, &["checkout", &branch])
+}
+
+#[tauri::command]
+fn git_fetch(workspace_root: String, remote: Option<String>) -> Result<String, String> {
+    let remote = remote.unwrap_or_else(|| "--all".to_string());
+    run_git(&workspace_root, &["fetch", &remote])?;
+    Ok(format!("Fetched {remote}"))
+}
+
+#[tauri::command]
+fn git_pull(workspace_root: String) -> Result<String, String> {
+    run_git(&workspace_root, &["pull", "--ff-only"])?;
+    Ok("Pulled (fast-forward)".to_string())
+}
+
+#[tauri::command]
+fn git_push(workspace_root: String) -> Result<String, String> {
+    // `git push` follows the upstream if configured; if not, this errors and
+    // the UI surfaces a clear message. The user can set upstream via
+    // `git push -u origin <branch>` if needed.
+    run_git(&workspace_root, &["push"])?;
+    Ok("Pushed".to_string())
+}
+
+#[tauri::command]
+fn git_discard(workspace_root: String, path: String) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("Path is required".to_string());
+    }
+    // `git checkout -- <path>` restores the working tree to the index. For
+    // untracked files we just remove them.
+    if path == "." {
+        run_git(&workspace_root, &["checkout", "--", "."])?;
+        run_git(&workspace_root, &["clean", "-fd"])?;
+    } else {
+        run_git(&workspace_root, &["checkout", "--", &path])?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn git_stash(workspace_root: String, action: String, message: Option<String>) -> Result<String, String> {
+    match action.as_str() {
+        "push" => {
+            let msg = message.unwrap_or_else(|| "WIP".to_string());
+            run_git(&workspace_root, &["stash", "push", "-m", &msg])?;
+            Ok(format!("Stashed as '{msg}'"))
+        }
+        "pop" => {
+            run_git(&workspace_root, &["stash", "pop"])?;
+            Ok("Stash popped".to_string())
+        }
+        "apply" => {
+            run_git(&workspace_root, &["stash", "apply"])?;
+            Ok("Stash applied".to_string())
+        }
+        "drop" => {
+            run_git(&workspace_root, &["stash", "drop"])?;
+            Ok("Stash dropped".to_string())
+        }
+        "list" => git_output(&workspace_root, &["stash", "list"]),
+        _ => Err(format!("Unknown stash action: {action}")),
+    }
+}
+
+#[tauri::command]
+fn git_stash_list(workspace_root: String) -> Result<Vec<GitStash>, String> {
+    // Format: "stash@{0}|branch|message" — but messages can contain pipes, so
+    // we use a 0x1f separator (unit separator) which is never in a commit
+    // subject.
+    let out = git_output(&workspace_root, &["stash", "list", "--format=%gd|%s|%ct"])?;
+    let mut stashes: Vec<GitStash> = Vec::new();
+    for line in out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '|');
+        let ref_name = parts.next().unwrap_or("").to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        let ts = parts.next().unwrap_or("0");
+        let index = ref_name
+            .trim_start_matches("stash@{")
+            .trim_end_matches('}')
+            .parse::<u32>()
+            .unwrap_or(0);
+        // The "branch" half is everything before the first ":" in the
+        // default stash subject ("WIP on main: abc1234 subject").
+        let branch = subject
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .replace("WIP on ", "")
+            .replace("On ", "")
+            .trim()
+            .to_string();
+        stashes.push(GitStash {
+            index,
+            branch,
+            message: subject,
+            timestamp: ts.parse().unwrap_or(0),
+        });
+    }
+    Ok(stashes)
+}
+
+#[tauri::command]
+fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, String> {
+    let json = git_output(
+        &workspace_root,
+        &[
+            "pr",
+            "list",
+            "--json",
+            "number,title,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,updatedAt",
+        ],
+    )?;
+    let raw: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("Could not parse `gh pr list` output: {e}"))?;
+    let arr = raw.as_array().cloned().unwrap_or_default();
+    let current_branch = git_output(&workspace_root, &["branch", "--show-current"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let mut prs: Vec<PullRequest> = Vec::with_capacity(arr.len());
+    for v in arr {
+        let obj = match v.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let number = obj.get("number").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        let title = obj.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let state = obj.get("state").and_then(|x| x.as_str()).unwrap_or("OPEN").to_string();
+        let is_draft = obj.get("isDraft").and_then(|x| x.as_bool()).unwrap_or(false);
+        let author = obj
+            .get("author")
+            .and_then(|x| x.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let head_ref = obj.get("headRefName").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let base_ref = obj.get("baseRefName").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let url = obj.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let additions = obj.get("additions").and_then(|x| x.as_i64()).unwrap_or(0);
+        let deletions = obj.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0);
+        let changed_files = obj.get("changedFiles").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+        let updated_at_ms = obj
+            .get("updatedAt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0);
+        let badge = if is_draft {
+            "draft".to_string()
+        } else {
+            state.to_lowercase()
+        };
+        prs.push(PullRequest {
+            number,
+            title,
+            state,
+            is_draft,
+            author,
+            head_ref: head_ref.clone(),
+            base_ref,
+            url,
+            additions,
+            deletions,
+            changed_files,
+            updated_at_ms,
+            badge,
+            is_current_branch: !current_branch.is_empty() && head_ref == current_branch,
+        });
+    }
+    Ok(prs)
+}
+
+#[tauri::command]
+fn git_pr_view(workspace_root: String, number: u32) -> Result<PullRequestDetails, String> {
+    let json = git_output(
+        &workspace_root,
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,mergeable,createdAt,updatedAt",
+        ],
+    )?;
+    let obj: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("Could not parse `gh pr view` output: {e}"))?;
+    let obj = match obj.as_object() {
+        Some(o) => o,
+        None => return Err(format!("PR #{number} not found")),
+    };
+    let state = obj.get("state").and_then(|x| x.as_str()).unwrap_or("OPEN").to_string();
+    let is_draft = obj.get("isDraft").and_then(|x| x.as_bool()).unwrap_or(false);
+    let badge = if is_draft { "draft".to_string() } else { state.to_lowercase() };
+    Ok(PullRequestDetails {
+        number: obj.get("number").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        title: obj.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        body: obj.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        state,
+        is_draft,
+        author: obj
+            .get("author")
+            .and_then(|x| x.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        head_ref: obj.get("headRefName").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        base_ref: obj.get("baseRefName").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        url: obj.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        additions: obj.get("additions").and_then(|x| x.as_i64()).unwrap_or(0),
+        deletions: obj.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0),
+        changed_files: obj.get("changedFiles").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+        badge,
+        mergeable: obj.get("mergeable").and_then(|x| x.as_str()).unwrap_or("UNKNOWN").to_string(),
+        created_at_ms: obj
+            .get("createdAt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0),
+        updated_at_ms: obj
+            .get("updatedAt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0),
+    })
+}
+
+#[tauri::command]
+fn git_pr_checkout(workspace_root: String, number: u32) -> Result<String, String> {
+    let out = git_output(
+        &workspace_root,
+        &["pr", "checkout", &number.to_string()],
+    )?;
+    Ok(out.trim().to_string())
+}
+
+#[tauri::command]
+fn git_pr_merge(workspace_root: String, number: u32, method: Option<String>) -> Result<String, String> {
+    let method = method.unwrap_or_else(|| "merge".to_string());
+    let flag = match method.as_str() {
+        "merge" => "--merge",
+        "squash" => "--squash",
+        "rebase" => "--rebase",
+        other => return Err(format!("Unknown merge method: {other}")),
+    };
+    let out = git_output(
+        &workspace_root,
+        &["pr", "merge", &number.to_string(), flag, "--delete-branch"],
+    )?;
+    Ok(out.trim().to_string())
+}
+
+#[tauri::command]
+fn git_pr_open(workspace_root: String, number: u32) -> Result<String, String> {
+    // `gh pr view --web` opens the PR in the default browser; we return the
+    // resolved URL so the UI can show a toast.
+    let url = git_output(
+        &workspace_root,
+        &["pr", "view", &number.to_string(), "--json", "url", "-q", ".url"],
+    )?;
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err(format!("PR #{number} has no URL"));
+    }
+    Command::new("open")
+        .arg(&url)
+        .output()
+        .or_else(|_| Command::new("xdg-open").arg(&url).output())
+        .map_err(|e| format!("Failed to open browser: {e}"))?;
+    Ok(url)
+}
+
+#[tauri::command]
+fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool, String> {
+    // `gh pr view <n> --json merged -q .merged` is the cheapest signal.
+    let raw = git_output(
+        &workspace_root,
+        &["pr", "view", &number.to_string(), "--json", "merged", "-q", ".merged"],
+    )?;
+    Ok(raw.trim().eq_ignore_ascii_case("true"))
+}
+
 fn graph_group_name(path: &str) -> String {
     let first = path.split('/').next().unwrap_or(path);
     match first {
@@ -2561,7 +3104,7 @@ fn parse_claude_run(path: &std::path::Path) -> Option<AgentRun> {
         model,
         cwd,
         git_branch: branch,
-        created_ms: updated_ms, // fallback to mtime
+        created_ms,
         updated_ms,
         message_count: count,
         input_tokens,
@@ -2651,7 +3194,7 @@ fn parse_codex_run(
         model,
         cwd,
         git_branch: branch,
-        created_ms,
+        created_ms: updated_ms, // fallback to mtime
         updated_ms,
         message_count: count,
         input_tokens,
@@ -3251,7 +3794,21 @@ pub fn run() {
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,
             create_pr,
-            create_worktree
+            create_worktree,
+            git_log,
+            git_checkout_branch,
+            git_fetch,
+            git_pull,
+            git_push,
+            git_discard,
+            git_stash,
+            git_stash_list,
+            git_pr_list,
+            git_pr_view,
+            git_pr_checkout,
+            git_pr_merge,
+            git_pr_open,
+            git_pr_merged
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

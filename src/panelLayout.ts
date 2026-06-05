@@ -136,15 +136,32 @@ export function clearLayout(workspaceRoot: string): void {
 }
 
 // Clamp a panel rect to the workbench bounds and the panel's own min/max.
+// Both the *position* and the *size* are bounded so a panel that was sized
+// to fit a larger workbench shrinks (rather than overflowing) when the
+// window is resized down.
 export function clampRect(
   rect: PanelRect,
   workbenchW: number,
   workbenchH: number,
   constraints: PanelConstraints
 ): PanelRect {
-  const w = Math.min(constraints.maxW, Math.max(constraints.minW, rect.w));
-  const h = Math.min(constraints.maxH, Math.max(constraints.minH, rect.h));
-  const x = Math.min(Math.max(0, rect.x), Math.max(0, workbenchW - w));
-  const y = Math.min(Math.max(0, rect.y), Math.max(0, workbenchH - h));
+  // First pin the position inside the workbench. The rect may extend past
+  // the edge, so we allow x up to workbenchW and y up to workbenchH — the
+  // size clamp below takes care of the actual extent.
+  const x = Math.max(0, Math.min(rect.x, workbenchW));
+  const y = Math.max(0, Math.min(rect.y, workbenchH));
+  // Then clamp the size: not smaller than the panel's min, not larger than
+  // the panel's max, and not larger than the remaining workbench space at
+  // (x, y) so the rect actually fits when the window shrinks.
+  const maxWHere = Math.max(constraints.minW, workbenchW - x);
+  const maxHHere = Math.max(constraints.minH, workbenchH - y);
+  const w = Math.min(
+    constraints.maxW,
+    Math.max(constraints.minW, Math.min(rect.w, maxWHere))
+  );
+  const h = Math.min(
+    constraints.maxH,
+    Math.max(constraints.minH, Math.min(rect.h, maxHHere))
+  );
   return { x, y, w, h };
 }

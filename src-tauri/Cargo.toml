@@ -38,3 +38,4 @@ keyring = { version = "3", features = ["apple-native"] }
 # `bundled` feature ships its own libsqlite3 so the user doesn't need a
 # separate system install.
 rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

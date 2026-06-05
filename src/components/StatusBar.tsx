@@ -1,7 +1,7 @@
 import { getThemeMeta, type ThemeId } from "../theme";
 import { LayoutBento } from "./LayoutBento";
 import type { GridLayout } from "../gridLayouts";
-import type { GitStatus } from "./GitPanel";
+import type { GitStatus } from "../gitTypes";
 
 type Props = {
   path: string | null;

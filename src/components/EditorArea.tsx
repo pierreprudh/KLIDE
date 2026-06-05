@@ -1,4 +1,4 @@
-import Editor from "@monaco-editor/react";
+import Editor, { type OnMount } from "@monaco-editor/react";
 import {
   defineKlideMonacoThemes,
   getMonacoThemeId,
@@ -15,6 +15,8 @@ type Props = {
   lineNumbers: boolean;
   wordWrap: boolean;
   minimap: boolean;
+  /** App keeps a ref to the Monaco editor for goto-line / reveal commands. */
+  onEditorMount?: (editor: Parameters<OnMount>[0]) => void;
 };
 
 export function EditorArea({
@@ -27,6 +29,7 @@ export function EditorArea({
   lineNumbers,
   wordWrap,
   minimap,
+  onEditorMount,
 }: Props) {
   const editorTheme = getMonacoThemeId(theme);
 
@@ -79,6 +82,7 @@ export function EditorArea({
         language={language}
         theme={editorTheme}
         beforeMount={defineKlideMonacoThemes}
+        onMount={(editor) => onEditorMount?.(editor)}
         value={code}
         onChange={(v) => onChange(v ?? "")}
         options={{

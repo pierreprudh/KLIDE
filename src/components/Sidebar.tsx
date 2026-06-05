@@ -3,11 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { watch } from "@tauri-apps/plugin-fs";
 import { useEffect, useRef, useState } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
+import type { GitFile, GitStatus } from "../gitTypes";
 
 type Props = {
   onOpen: (path: string, content: string) => void;
   onRootChange: (root: string | null) => void;
-  onOpenGitDiff?: (path: string, staged: boolean) => void;
   onEntryRenamed?: (oldPath: string, newPath: string) => void;
   onEntryDeleted?: (path: string) => void;
   onFilePreview?: (path: string) => void;
@@ -21,17 +21,6 @@ type TreeEntry = {
   name: string;
   isDirectory: boolean;
   virtual?: boolean;
-};
-
-type GitFile = {
-  path: string;
-  status: string;
-  staged: boolean;
-};
-
-type GitStatus = {
-  branch: string;
-  files: GitFile[];
 };
 
 type GitDecoration = {
@@ -218,23 +207,6 @@ function gitDecoration(
   return child ? gitDecorationForLabel(gitLabel(child.status)) : null;
 }
 
-function gitFileForPath(
-  root: string,
-  path: string,
-  isDirectory: boolean,
-  gitFiles: GitFile[]
-): GitFile | null {
-  const rel = relativePath(root, path);
-  const exact = gitFiles.find((file) => file.path.replace(/\/$/, "") === rel);
-  if (exact) return exact;
-  if (isDirectory) return null;
-  return (
-    gitFiles.find(
-      (file) => file.status === "??" && file.path.endsWith("/") && rel.startsWith(file.path)
-    ) ?? null
-  );
-}
-
 function gitVirtualEntries(
   root: string,
   basePath: string,
@@ -350,7 +322,6 @@ function InlineNameInput({
 export function Sidebar({
   onOpen,
   onRootChange,
-  onOpenGitDiff,
   onEntryRenamed,
   onEntryDeleted,
   onFilePreview,
@@ -762,7 +733,6 @@ export function Sidebar({
         const decoration = root
           ? gitDecoration(root, path, isDir, gitFiles)
           : null;
-        const gitFile = root ? gitFileForPath(root, path, isDir, gitFiles) : null;
         const rowColor = decoration
           ? decoration.color
           : isDir
@@ -773,7 +743,6 @@ export function Sidebar({
             <div
               onClick={() => {
                 if (isDir) toggleFolder(path, isVirtual);
-                else if (isVirtual && gitFile) onOpenGitDiff?.(gitFile.path, gitFile.staged);
                 else if (!isVirtual) pick(path);
               }}
               onContextMenu={(event) => {
@@ -848,11 +817,6 @@ export function Sidebar({
               {decoration && (
                 <span
                   title={decoration.title}
-                  onClick={(event) => {
-                    if (!gitFile || isDir) return;
-                    event.stopPropagation();
-                    onOpenGitDiff?.(gitFile.path, gitFile.staged);
-                  }}
                   style={{
                     marginLeft: "auto",
                     flexShrink: 0,
@@ -861,7 +825,6 @@ export function Sidebar({
                     display: "grid",
                     placeItems: "center",
                     color: decoration.color,
-                    cursor: gitFile && !isDir ? "pointer" : "default",
                     fontSize: 10,
                     fontWeight: 700,
                     lineHeight: 1,

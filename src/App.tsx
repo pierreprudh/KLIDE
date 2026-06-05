@@ -21,12 +21,8 @@ import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
 import type { AgentEvent } from "./agent/types";
 import type { Conversation } from "./components/ai/types";
-import {
-  GitDiffWindow,
-  GitPanel,
-  type GitDiff,
-  type GitStatus,
-} from "./components/GitPanel";
+import type { GitStatus } from "./gitTypes";
+import { GitReview } from "./components/GitReview";
 import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
 import { FileViewerPanel } from "./components/FileViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
@@ -47,6 +43,8 @@ import {
   loadLayout as loadPanelLayout,
   saveLayout as savePanelLayout,
   clearLayout as clearPanelLayout,
+  clampRect,
+  PANEL_CONSTRAINTS,
   type Layout as PanelLayout,
   type PanelRect,
   type PanelId as PanelLayoutId,
@@ -110,12 +108,9 @@ function filename(path: string): string {
 }
 
 function App() {
-  const [view, setView] = useState<"workbench" | "runs" | "settings">("workbench");
+  const [view, setView] = useState<"workbench" | "runs" | "settings" | "git-review">("workbench");
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
-  );
-  const [gitVisible, setGitVisible] = useState(
-    () => localStorage.getItem("klide-git-visible") === "true"
   );
   const [graphVisible, setGraphVisible] = useState(
     () => localStorage.getItem("klide-graph-visible") === "true"
@@ -141,7 +136,6 @@ function App() {
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
-  const [activeGitDiff, setActiveGitDiff] = useState<GitDiff | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [recentFolders, setRecentFolders] = useState<string[]>(() => {
     try {
@@ -260,6 +254,57 @@ function App() {
     if (Object.keys(panelLayout).length === 0) return;
     savePanelLayout(workspaceRoot, panelLayout);
   }, [panelLayout, workspaceRoot]);
+
+  // Re-clamp every panel rect to the current workbench dimensions. Without
+  // this, a saved layout (or a manual drag) keeps its old coords when the
+  // window shrinks, so panels overflow the workbench or get pushed off-screen
+  // ("we lose the responsive panel" / "panels are bigger than the window").
+  useEffect(() => {
+    if (workbenchSize.w === 0 || workbenchSize.h === 0) return;
+    if (Object.keys(panelLayout).length === 0) return;
+    let dirty = false;
+    const next: PanelLayout = { ...panelLayout };
+    for (const id of ["explorer", "git", "graph", "memory", "terminal"] as const) {
+      const rect = panelLayout[id];
+      if (!rect) continue;
+      const clamped = clampRect(
+        rect,
+        workbenchSize.w,
+        workbenchSize.h,
+        PANEL_CONSTRAINTS[id]
+      );
+      if (
+        clamped.x !== rect.x ||
+        clamped.y !== rect.y ||
+        clamped.w !== rect.w ||
+        clamped.h !== rect.h
+      ) {
+        next[id] = clamped;
+        dirty = true;
+      }
+    }
+    if (panelLayout.ai) {
+      const clampedAi: PanelRect[] = [];
+      let aiDirty = false;
+      panelLayout.ai.forEach((rect) => {
+        const c = clampRect(rect, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
+        clampedAi.push(c);
+        if (
+          c.x !== rect.x ||
+          c.y !== rect.y ||
+          c.w !== rect.w ||
+          c.h !== rect.h
+        ) {
+          aiDirty = true;
+        }
+      });
+      if (aiDirty) {
+        next.ai = clampedAi;
+        dirty = true;
+      }
+    }
+    if (dirty) setPanelLayout(next);
+  }, [workbenchSize.w, workbenchSize.h, panelLayout]);
 
   function resetPanelLayout() {
     if (!workspaceRoot) return;
@@ -399,7 +444,7 @@ function App() {
       : null;
   const activityState: Record<Panel, boolean> = {
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
-    git: view === "workbench" && (gitVisible || sidebarSlot2 === "git"),
+    git: view === "git-review",
     graph: view === "workbench" && (graphVisible || sidebarSlot2 === "graph"),
     skills: view === "workbench" && (skillsVisible || sidebarSlot2 === "skills"),
     ai: view === "workbench" && aiVisible,
@@ -433,7 +478,7 @@ function App() {
       return;
     }
     // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
-    if (panel === "explorer" || panel === "git" || panel === "graph" || panel === "skills") {
+    if (panel === "explorer" || panel === "graph" || panel === "skills") {
       if (meta) {
         // ⌘+click toggles the secondary slot in the explorer panel.
         setSidebarSlot2((cur) => cur === panel ? null : panel);
@@ -441,15 +486,18 @@ function App() {
         // Plain click: collapse any other sidebar view, then toggle this one.
         if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
-        if (panel !== "git" && gitVisible) setGitVisible(false);
         if (panel !== "graph" && graphVisible) setGraphVisible(false);
         if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
         const setter = panel === "explorer" ? setExplorerVisible
-          : panel === "git" ? setGitVisible
           : panel === "graph" ? setGraphVisible
           : setSkillsVisible;
         setter((cur) => !cur);
       }
+      return;
+    }
+    // Git is a dedicated full-window view, not a sidebar panel.
+    if (panel === "git") {
+      setView((v) => (v === "git-review" ? "workbench" : "git-review"));
       return;
     }
   }
@@ -529,24 +577,9 @@ function App() {
             workspaceRoot={workspaceRoot}
             onOpen={openFile}
             onRootChange={setWorkspaceRoot}
-            onOpenGitDiff={openGitDiff}
             onEntryRenamed={onEntryRenamed}
             onEntryDeleted={onEntryDeleted}
             onFilePreview={setPreviewPath}
-          />
-        );
-      case "git":
-        return (
-          <GitPanel
-            key={key}
-            fill
-            visible
-            width={panelLayout.git?.w ?? 280}
-            workspaceRoot={workspaceRoot}
-            gitStatus={gitStatus}
-            onRefreshGitStatus={() =>
-              workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-            }
           />
         );
       case "graph":
@@ -759,20 +792,6 @@ function App() {
     }
   }
 
-  async function openGitDiff(path: string, staged: boolean) {
-    if (!workspaceRoot) return;
-    try {
-      const diff = await invoke<GitDiff>("git_diff", {
-        workspaceRoot,
-        path,
-        staged,
-      });
-      setActiveGitDiff(diff);
-    } catch (e) {
-      setFileNotice(e instanceof Error ? e.message : String(e));
-    }
-  }
-
   function eventsToTitle(events: AgentEvent[]): string {
     const first = events.find((e) => e.type === "user_message");
     if (first && first.type === "user_message") return first.text.slice(0, 120);
@@ -868,10 +887,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-explorer-visible", String(explorerVisible));
   }, [explorerVisible]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-git-visible", String(gitVisible));
-  }, [gitVisible]);
 
   useEffect(() => {
     localStorage.setItem("klide-graph-visible", String(graphVisible));
@@ -1079,6 +1094,11 @@ function App() {
         setView("workbench");
         return;
       }
+      if (mod && e.shiftKey && e.key === "G") {
+        e.preventDefault();
+        setView((v) => (v === "git-review" ? "workbench" : "git-review"));
+        return;
+      }
       // Tab navigation
       if (mod && !e.shiftKey && e.key === "Tab" && tabs.length > 1) {
         e.preventDefault();
@@ -1154,6 +1174,7 @@ function App() {
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
+    { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
     { id: "worktree", label: "Git: New Worktree…", action: () => { setPaletteOpen(false); const name = prompt("Worktree name:"); if (name && workspaceRoot) { void (async () => { try { const path = await invoke<string>("create_worktree", { workspaceRoot, name }); setFileNotice(`Worktree: ${path}`); } catch(e) { setFileNotice(`Failed: ${e}`); } })(); } } },
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
@@ -1250,7 +1271,15 @@ function App() {
         ) : (
           <>
             <ActivityBar active={activityState} onToggle={togglePanel} />
-            {view === "runs" ? (
+            {view === "git-review" ? (
+              <GitReview
+                workspaceRoot={workspaceRoot}
+                gitStatus={gitStatus}
+                onRefreshGitStatus={() => workspaceRoot ? refreshGitStatus(workspaceRoot) : Promise.resolve()}
+                onBack={() => setView("workbench")}
+                theme={theme}
+              />
+            ) : view === "runs" ? (
               <MissionControl workspaceRoot={workspaceRoot} theme={theme} onResumeKlideRun={resumeKlideRun} />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
@@ -1337,25 +1366,13 @@ function App() {
                             workspaceRoot={workspaceRoot}
                             onOpen={openFile}
                             onRootChange={setWorkspaceRoot}
-                            onOpenGitDiff={openGitDiff}
                             onEntryRenamed={onEntryRenamed}
                             onEntryDeleted={onEntryDeleted}
                             onFilePreview={setPreviewPath}
                           />
                         }
                         bottom={
-                          sidebarSlot2 === "git" ? (
-                            <GitPanel
-                              fill
-                              visible
-                              width={panelLayout.explorer.w}
-                              workspaceRoot={workspaceRoot}
-                              gitStatus={gitStatus}
-                              onRefreshGitStatus={() =>
-                                workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-                              }
-                            />
-                          ) : sidebarSlot2 === "graph" ? (
+                          sidebarSlot2 === "graph" ? (
                             <ProjectGraphPanel
                               fill
                               visible
@@ -1384,35 +1401,11 @@ function App() {
                         workspaceRoot={workspaceRoot}
                         onOpen={openFile}
                         onRootChange={setWorkspaceRoot}
-                        onOpenGitDiff={openGitDiff}
                         onEntryRenamed={onEntryRenamed}
                         onEntryDeleted={onEntryDeleted}
                         onFilePreview={setPreviewPath}
                       />
                     )}
-                  </FloatingPanel>
-                )}
-                {gitVisible && sidebarSlot2 !== "git" && panelLayout.git && (
-                  <FloatingPanel
-                    panelId="git"
-                    rect={panelLayout.git}
-                    workbenchW={workbenchSize.w}
-                    workbenchH={workbenchSize.h}
-                    zIndex={focusedPanel === "git" ? 10 + zCounter : 10}
-                    onFocus={() => focusPanel("git")}
-                    onResize={(next) => updatePanelRect("git", next)}
-                    onMove={(next) => updatePanelRect("git", next)}
-                  >
-                    <GitPanel
-                      fill
-                      visible
-                      width={panelLayout.git.w}
-                      workspaceRoot={workspaceRoot}
-                      gitStatus={gitStatus}
-                      onRefreshGitStatus={() =>
-                        workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-                      }
-                    />
                   </FloatingPanel>
                 )}
                 {graphVisible && sidebarSlot2 !== "graph" && panelLayout.graph && (
@@ -1547,9 +1540,6 @@ function App() {
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
         onResetLayout={resetPanelLayout}
       />
-      {activeGitDiff && (
-        <GitDiffWindow diff={activeGitDiff} onClose={() => setActiveGitDiff(null)} />
-      )}
       <SkillsModal
         open={skillsVisible && sidebarSlot2 !== "skills"}
         skills={skills}
