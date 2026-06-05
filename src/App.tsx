@@ -17,6 +17,7 @@ import { EditorArea } from "./components/EditorArea";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
+import { ClaudeCodePanel } from "./components/ClaudeCodePanel";
 import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
 import type { AgentEvent } from "./agent/types";
@@ -355,6 +356,9 @@ function App() {
       localStorage.getItem("klide-ollama-model") ||
       DEFAULT_AI_MODEL
   );
+  const [aiPanelView, setAiPanelView] = useState<"classic" | "claude-code">(
+    () => (localStorage.getItem("klide-ai-panel-view") as "classic" | "claude-code") || "classic"
+  );
   const [ollamaModels, setOllamaModels] = useState<string[]>([aiModel]);
   const [requireDiffReview, setRequireDiffReview] = useState(() =>
     readBoolSetting("klide-confirm-agent-edits", true)
@@ -574,7 +578,25 @@ function App() {
           />
         );
       case "ai":
-        return (
+        return aiPanelView === "claude-code" ? (
+          <ClaudeCodePanel
+            key={key}
+            fill
+            width={panelLayout.ai?.[0]?.w ?? 360}
+            workspaceRoot={workspaceRoot}
+            model={aiModel}
+            onModelChange={setAiModel}
+            availableModels={ollamaModels}
+            onAvailableModelsChange={setOllamaModels}
+            apiKeyVersion={apiKeyVersion}
+            requireDiffReview={requireDiffReview}
+            stopAfterRejection={stopAfterRejection}
+            projectContext={projectContext}
+            harnessSettings={harnessSettings}
+            resumeConversation={resumeConversation}
+            onResumeConsumed={() => setResumeConversation(null)}
+          />
+        ) : (
           <AiPanel
             key={key}
             fill
@@ -1233,6 +1255,11 @@ function App() {
             onEditorMinimapChange={setEditorMinimap}
             aiModel={aiModel}
             onAiModelChange={setAiModel}
+            aiPanelView={aiPanelView}
+            onAiPanelViewChange={(view) => {
+              setAiPanelView(view);
+              localStorage.setItem("klide-ai-panel-view", view);
+            }}
             availableAiModels={ollamaModels}
             requireDiffReview={requireDiffReview}
             onRequireDiffReviewChange={setRequireDiffReview}
@@ -1496,32 +1523,55 @@ function App() {
                       onResize={(next) => updateAiRect(idx, next)}
                       onMove={(next) => updateAiRect(idx, next)}
                     >
-                      <AiPanel
-                        fill
-                        visible
-                        width={rect.w}
-                        workspaceRoot={workspaceRoot}
-                        onFileWritten={onAgentWrote}
-                        onWorkspaceChanged={() =>
-                          workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-                        }
-                        model={aiModel}
-                        onModelChange={setAiModel}
-                        availableModels={ollamaModels}
-                        onAvailableModelsChange={setOllamaModels}
-                        apiKeyVersion={apiKeyVersion}
-                        requireDiffReview={requireDiffReview}
-                        stopAfterRejection={stopAfterRejection}
-                        skills={skills}
-                        projectContext={projectContext}
-                        harnessSettings={harnessSettings}
-                        onDuplicate={duplicateAiPanel}
-                        onClose={
-                          aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
-                        }
-                        resumeConversation={resumeConversation}
-                        onResumeConsumed={() => setResumeConversation(null)}
-                      />
+                      {aiPanelView === "claude-code" ? (
+                        <ClaudeCodePanel
+                          fill
+                          width={rect.w}
+                          workspaceRoot={workspaceRoot}
+                          model={aiModel}
+                          onModelChange={setAiModel}
+                          availableModels={ollamaModels}
+                          onAvailableModelsChange={setOllamaModels}
+                          apiKeyVersion={apiKeyVersion}
+                          requireDiffReview={requireDiffReview}
+                          stopAfterRejection={stopAfterRejection}
+                          projectContext={projectContext}
+                          harnessSettings={harnessSettings}
+                          onDuplicate={duplicateAiPanel}
+                          onClose={
+                            aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
+                          }
+                          resumeConversation={resumeConversation}
+                          onResumeConsumed={() => setResumeConversation(null)}
+                        />
+                      ) : (
+                        <AiPanel
+                          fill
+                          visible
+                          width={rect.w}
+                          workspaceRoot={workspaceRoot}
+                          onFileWritten={onAgentWrote}
+                          onWorkspaceChanged={() =>
+                            workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+                          }
+                          model={aiModel}
+                          onModelChange={setAiModel}
+                          availableModels={ollamaModels}
+                          onAvailableModelsChange={setOllamaModels}
+                          apiKeyVersion={apiKeyVersion}
+                          requireDiffReview={requireDiffReview}
+                          stopAfterRejection={stopAfterRejection}
+                          skills={skills}
+                          projectContext={projectContext}
+                          harnessSettings={harnessSettings}
+                          onDuplicate={duplicateAiPanel}
+                          onClose={
+                            aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
+                          }
+                          resumeConversation={resumeConversation}
+                          onResumeConsumed={() => setResumeConversation(null)}
+                        />
+                      )}
                     </FloatingPanel>
                   );
                 })}
