@@ -18,6 +18,9 @@ import { WelcomeScreen } from "./components/WelcomeScreen";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
+import { eventsToConversation } from "./components/ai/eventsToMsgs";
+import type { AgentEvent } from "./agent/types";
+import type { Conversation } from "./components/ai/types";
 import {
   GitDiffWindow,
   GitPanel,
@@ -128,6 +131,7 @@ function App() {
     () => localStorage.getItem("klide-sidebar-slot2") as Panel | null
   );
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
+  const [resumeConversation, setResumeConversation] = useState<Conversation | null>(null);
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -415,8 +419,17 @@ function App() {
     }
     setView("workbench");
     if (panel === "ai") {
-      if (!aiVisible) ensureAiRect();
-      setAiVisible((cur) => !cur);
+      // From a non-workbench view (Mission Control, Settings) the AI icon
+      // should always *show* the panel — toggling would hide it (the
+      // closure still sees aiVisible=true from when the user left) and
+      // the user has to click twice to make it reappear.
+      if (view !== "workbench") {
+        setAiVisible(true);
+        if (!panelLayout.ai || panelLayout.ai.length === 0) ensureAiRect();
+      } else {
+        if (!aiVisible) ensureAiRect();
+        setAiVisible((cur) => !cur);
+      }
       return;
     }
     // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
@@ -582,6 +595,7 @@ function App() {
             skills={skills}
             projectContext={projectContext}
             harnessSettings={harnessSettings}
+            resumeConversation={resumeConversation}
           />
         );
       default:
@@ -753,6 +767,23 @@ function App() {
         staged,
       });
       setActiveGitDiff(diff);
+    } catch (e) {
+      setFileNotice(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function eventsToTitle(events: AgentEvent[]): string {
+    const first = events.find((e) => e.type === "user_message");
+    if (first && first.type === "user_message") return first.text.slice(0, 120);
+    return "Resumed run";
+  }
+
+  async function resumeKlideRun(runId: string) {
+    try {
+      const events = await invoke<AgentEvent[]>("agent_read_run", { runId });
+      const convo = eventsToConversation(events, runId, eventsToTitle(events));
+      setResumeConversation(convo);
+      togglePanel("ai");
     } catch (e) {
       setFileNotice(e instanceof Error ? e.message : String(e));
     }
@@ -1219,7 +1250,7 @@ function App() {
           <>
             <ActivityBar active={activityState} onToggle={togglePanel} />
             {view === "runs" ? (
-              <MissionControl workspaceRoot={workspaceRoot} theme={theme} />
+              <MissionControl workspaceRoot={workspaceRoot} theme={theme} onResumeKlideRun={resumeKlideRun} />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : (
@@ -1487,6 +1518,7 @@ function App() {
                         onClose={
                           aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
                         }
+                        resumeConversation={resumeConversation}
                       />
                     </FloatingPanel>
                   );
