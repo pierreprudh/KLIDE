@@ -25,6 +25,7 @@ import {
   type GitStatus,
 } from "./components/GitPanel";
 import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
+import { FileViewerPanel } from "./components/FileViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
@@ -121,6 +122,7 @@ function App() {
   const [skillsVisible, setSkillsVisible] = useState(
     () => localStorage.getItem("klide-skills-visible") === "true"
   );
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
@@ -397,7 +399,7 @@ function App() {
     settings: view === "settings",
   };
 
-  function togglePanel(panel: Panel) {
+  function togglePanel(panel: Panel, meta?: boolean) {
     if (panel === "settings") {
       setSettingsInitial(null);
       setView("settings");
@@ -413,20 +415,30 @@ function App() {
       setAiVisible((cur) => !cur);
       return;
     }
-    if (panel === "explorer") {
-      setExplorerVisible((cur) => !cur);
-      return;
-    }
-    if (panel === "git") {
-      setGitVisible((cur) => !cur);
-      return;
-    }
-    if (panel === "graph") {
-      setGraphVisible((cur) => !cur);
-      return;
-    }
-    if (panel === "skills") {
-      setSkillsVisible((cur) => !cur);
+    // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
+    if (panel === "explorer" || panel === "git" || panel === "graph" || panel === "skills") {
+      const setter = panel === "explorer" ? setExplorerVisible
+        : panel === "git" ? setGitVisible
+        : panel === "graph" ? setGraphVisible
+        : setSkillsVisible;
+      const isVisible = panel === "explorer" ? explorerVisible
+        : panel === "git" ? gitVisible
+        : panel === "graph" ? graphVisible
+        : skillsVisible;
+      if (meta) {
+        const willShow = !isVisible;
+        setter(willShow);
+        if (willShow && panel !== "explorer" && panel !== "skills" && panelLayout.explorer) {
+          const e = panelLayout.explorer;
+          updatePanelRect(panel as PanelLayoutId, { x: e.x, y: e.y + e.h + 6, w: e.w, h: Math.min(e.h * 0.45, 320) });
+        }
+      } else {
+        if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
+        if (panel !== "git" && gitVisible) setGitVisible(false);
+        if (panel !== "graph" && graphVisible) setGraphVisible(false);
+        if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
+        setter((cur) => !cur);
+      }
       return;
     }
   }
@@ -509,6 +521,7 @@ function App() {
             onOpenGitDiff={openGitDiff}
             onEntryRenamed={onEntryRenamed}
             onEntryDeleted={onEntryDeleted}
+            onFilePreview={setPreviewPath}
           />
         );
       case "git":
@@ -1290,6 +1303,7 @@ function App() {
                       onOpenGitDiff={openGitDiff}
                       onEntryRenamed={onEntryRenamed}
                       onEntryDeleted={onEntryDeleted}
+                      onFilePreview={setPreviewPath}
                     />
                   </FloatingPanel>
                 )}
@@ -1336,6 +1350,31 @@ function App() {
                       onContextChange={setProjectContext}
                     />
                   </FloatingPanel>
+                )}
+                {previewPath && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      top: 8,
+                      width: 440,
+                      maxHeight: "calc(100% - 16px)",
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--panel-border)",
+                      borderRadius: "var(--radius-md)",
+                      boxShadow: "var(--panel-shadow)",
+                      zIndex: 20,
+                      display: "flex",
+                      flexDirection: "column",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <FileViewerPanel
+                      key={previewPath}
+                      filePath={previewPath}
+                      onClose={() => setPreviewPath(null)}
+                    />
+                  </div>
                 )}
                 {terminalVisible && panelLayout.terminal && (
                   <FloatingPanel

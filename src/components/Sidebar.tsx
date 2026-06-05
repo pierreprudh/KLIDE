@@ -10,6 +10,7 @@ type Props = {
   onOpenGitDiff?: (path: string, staged: boolean) => void;
   onEntryRenamed?: (oldPath: string, newPath: string) => void;
   onEntryDeleted?: (path: string) => void;
+  onFilePreview?: (path: string) => void;
   visible: boolean;
   width: number;
   workspaceRoot: string | null;
@@ -352,6 +353,7 @@ export function Sidebar({
   onOpenGitDiff,
   onEntryRenamed,
   onEntryDeleted,
+  onFilePreview,
   visible,
   width,
   workspaceRoot,
@@ -676,6 +678,14 @@ export function Sidebar({
         );
       },
     });
+
+    if (!isDirectory && onFilePreview) {
+      items.push({
+        type: "item",
+        label: "Quick View",
+        onSelect: () => onFilePreview(path),
+      });
+    }
 
     if (!isRoot) {
       items.push(
