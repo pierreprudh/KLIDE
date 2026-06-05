@@ -176,9 +176,13 @@ export function agentReducer(state: AgentState, event: AgentEvent): AgentState {
       run = { ...current, status: event.result.status === "cancelled" ? "cancelled" : "done" };
       break;
     case "run_error":
+      // The harness emits a RunError with `code: "aborted"` when the user
+      // hits Stop. That's a clean user action, not a system failure, so
+      // the run should land on the board as "cancelled" — not "Failed".
+      // The error object is still kept around for diagnostics.
       run = {
         ...current,
-        status: "error",
+        status: event.error.code === "aborted" ? "cancelled" : "error",
         error: event.error,
         timeline: [...current.timeline, { type: "error", error: event.error }],
       };

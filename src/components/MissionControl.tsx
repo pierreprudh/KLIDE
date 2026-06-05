@@ -2041,6 +2041,7 @@ export function MissionControl({
       waiting: [],
       queued: [],
       done: [],
+      cancelled: [],
       error: [],
     };
     for (const r of filtered) by[r.status].push(r);

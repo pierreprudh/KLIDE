@@ -611,7 +611,13 @@ export function AiPanel({
           break;
         }
         case "run_error": {
-          harnessError = new Error(event.error.message);
+          // A user-initiated Stop is delivered as a RunError with
+          // `code: "aborted"`. It's not a harness failure — the partial
+          // answer should stay on screen with no error banner, and the
+          // connection-suggestion copy in the catch block would be wrong.
+          if (event.error.code !== "aborted") {
+            harnessError = new Error(event.error.message);
+          }
           break;
         }
       }

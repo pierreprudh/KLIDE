@@ -6,7 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type RunSource = "claude-code" | "codex" | "opencode" | "klide";
-export type RunStatus = "running" | "waiting" | "queued" | "done" | "error";
+export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
 
 // What this row actually represents on the board. Tasks are Mission Control
 // todos (queued or dispatched to an external agent); convos are Klide's own
@@ -53,6 +53,7 @@ export const STATUS_ORDER: RunStatus[] = [
   "waiting",
   "queued",
   "done",
+  "cancelled",
   "error",
 ];
 
@@ -61,6 +62,7 @@ export const STATUS_LABEL: Record<RunStatus, string> = {
   waiting: "Needs you",
   queued: "Queued",
   done: "Done",
+  cancelled: "Stopped",
   error: "Failed",
 };
 
@@ -71,6 +73,7 @@ export const STATUS_COLOR: Record<RunStatus, string> = {
   waiting: "#A15C00",
   queued: "var(--fg-subtle)",
   done: "#3E7C5A",
+  cancelled: "var(--fg-subtle)",
   error: "var(--danger, #B42318)",
 };
 
