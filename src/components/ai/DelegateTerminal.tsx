@@ -56,11 +56,13 @@ export function DelegateTerminalSurface({
   providerId,
   provider,
   workspaceRoot,
+  parentRunId,
 }: {
   sessionId: string;
   providerId: ProviderId;
   provider: string;
   workspaceRoot: string | null;
+  parentRunId?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -88,7 +90,7 @@ export function DelegateTerminalSurface({
       void invoke("delegate_pty_resize", { sessionId, rows: term.rows, cols: term.cols });
     };
 
-    void invoke("delegate_pty_spawn", { sessionId, provider: providerId, workspaceRoot })
+    void invoke("delegate_pty_spawn", { sessionId, provider: providerId, workspaceRoot, parentRunId })
       .then(() => { syncSize(); })
       .catch((err) => {
         term.writeln(`Failed to start ${provider}: ${err instanceof Error ? err.message : String(err)}`);

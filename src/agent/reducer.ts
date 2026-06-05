@@ -44,7 +44,7 @@ function upsertAssistantDelta(messages: AgentMessageView[], messageId: string, t
   }
   return messages.map((m, i) =>
     i === index
-      ? { ...m, text: `${m.text}${text}`, thinking: [m.thinking, thinking].filter(Boolean).join("\n") || undefined }
+      ? { ...m, text: `${m.text}${text}`, thinking: [m.thinking, thinking].filter(Boolean).join("") || undefined }
       : m
   );
 }

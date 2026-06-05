@@ -22,12 +22,19 @@ export type Run = {
   title: string;
   status: RunStatus;
   model: string | null;
+  /** Klide runs carry their AI provider id (ollama, anthropic…); external CLIs don't. */
+  provider?: string | null;
   project: string | null;
   cwd: string | null;
   branch: string | null;
   messageCount: number;
+  /** Real token usage summed from the session log; absent when the source doesn't record it. */
+  inputTokens?: number;
+  outputTokens?: number;
   updatedMs: number;
   createdMs: number;
+  /** When this run was spawned by another run (e.g. @explore sub-agent). */
+  parentId?: string;
 };
 
 // One readable turn of a run's conversation (from `read_agent_run`).
@@ -47,7 +54,10 @@ type AgentRunDto = {
   createdMs?: number;
   updatedMs: number;
   messageCount: number;
+  inputTokens?: number;
+  outputTokens?: number;
   status: string;
+  parentId?: string;
 };
 
 export const STATUS_ORDER: RunStatus[] = [
@@ -114,12 +124,16 @@ function fromDto(a: AgentRunDto): Run {
     title: a.title?.trim() || "Untitled session",
     status: toStatus(a.status),
     model: a.model ?? null,
+    provider: a.provider ?? null,
     project: a.project ?? null,
     cwd: a.cwd ?? null,
     branch: a.gitBranch ?? null,
     messageCount: a.messageCount ?? 0,
+    inputTokens: a.inputTokens ?? 0,
+    outputTokens: a.outputTokens ?? 0,
     updatedMs: a.updatedMs ?? 0,
     createdMs: a.createdMs ?? a.updatedMs ?? 0,
+    parentId: a.parentId,
   };
 }
 
@@ -184,19 +198,82 @@ export function seedRuns(): Run[] {
   const min = 60_000;
   return [
     {
-      id: "seed-1",
-      path: "seed://claude-code/1",
-      source: "claude-code",
+      id: "seed-klide-1",
+      path: "seed://klide/1",
+      source: "klide",
+      kind: "run",
+      title: "Tour the project and report current state",
+      status: "done",
+      model: "llama3.1:8b",
+      project: "KIDE",
+      cwd: "/Users/you/KIDE",
+      branch: "main",
+      messageCount: 6,
+      updatedMs: now - 4 * min,
+      createdMs: now - 30 * min,
+    },
+    {
+      id: "ses_seed_3",
+      path: "ses_seed_3",
+      source: "opencode",
+      kind: "run",
+      title: "Explore codebase architecture",
+      status: "done",
+      model: "opencode-go/minimax-m3",
+      project: "KIDE",
+      cwd: "/Users/you/KIDE",
+      branch: "main",
+      messageCount: 8,
+      updatedMs: now - 8 * min,
+      createdMs: now - 30 * min,
+      parentId: "seed-klide-1",
+    },
+    {
+      id: "seed-klide-2",
+      path: "seed://klide/2",
+      source: "klide",
       kind: "run",
       title: "Add a dark-mode toggle to the settings panel",
       status: "running",
-      model: "claude-opus-4-8",
+      model: "llama3.1:8b",
       project: "KIDE",
       cwd: "/Users/you/KIDE",
       branch: "main",
       messageCount: 24,
       updatedMs: now - 6_000,
-      createdMs: now - 6_000,
+      createdMs: now - 12 * min,
+    },
+    {
+      id: "seed-claude-1",
+      path: "seed://claude-code/1",
+      source: "claude-code",
+      kind: "run",
+      title: "Implement the color scheme tokens",
+      status: "done",
+      model: "claude-opus-4-8",
+      project: "KIDE",
+      cwd: "/Users/you/KIDE",
+      branch: "main",
+      messageCount: 14,
+      updatedMs: now - 2 * min,
+      createdMs: now - 12 * min,
+      parentId: "seed-klide-2",
+    },
+    {
+      id: "seed-opencode-1",
+      path: "seed://opencode/1",
+      source: "opencode",
+      kind: "run",
+      title: "Find CSS variable usage across components",
+      status: "done",
+      model: "opencode-go/minimax-m3",
+      project: "KIDE",
+      cwd: "/Users/you/KIDE",
+      branch: "main",
+      messageCount: 5,
+      updatedMs: now - 5 * min,
+      createdMs: now - 12 * min,
+      parentId: "seed-klide-2",
     },
     {
       id: "seed-2",
@@ -212,21 +289,6 @@ export function seedRuns(): Run[] {
       messageCount: 11,
       updatedMs: now - 38 * min,
       createdMs: now - 38 * min,
-    },
-    {
-      id: "ses_seed_3",
-      path: "ses_seed_3",
-      source: "opencode",
-      kind: "run",
-      title: "Tour the project and report current state",
-      status: "done",
-      model: "opencode-go/minimax-m3",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
-      branch: "main",
-      messageCount: 8,
-      updatedMs: now - 90 * min,
-      createdMs: now - 90 * min,
     },
   ];
 }

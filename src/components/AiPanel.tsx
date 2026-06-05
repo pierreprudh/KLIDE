@@ -529,7 +529,7 @@ export function AiPanel({
             if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
             const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
             const newContent = (existing.content || "") + c;
-            const newThinking = [existing.thinking, t].filter(Boolean).join("\n") || undefined;
+            const newThinking = [existing.thinking, t].filter(Boolean).join("") || undefined;
             next[nextAssistantIdx] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
             return next;
           });
@@ -557,14 +557,14 @@ export function AiPanel({
               if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
               const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
               const newContent = (existing.content || "") + pendingDelta.content;
-              const newThinking = [existing.thinking, pendingDelta.thinking].filter(Boolean).join("\n") || undefined;
+              const newThinking = [existing.thinking, pendingDelta.thinking].filter(Boolean).join("") || undefined;
               next[nextAssistantIdx] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
               return next;
             });
           }
           pendingDelta = { content: "", thinking: "" };
           const text = event.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-          const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("\n").trim();
+          const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("").trim();
           const tcBlocks = event.content.filter((b) => b.type === "tool_call");
           const tcCalls = tcBlocks.map((b) => ({ id: ("toolCallId" in b ? b.toolCallId : "") as string, name: "name" in b ? b.name as string : "", args: "input" in b ? b.input : {} }));
           const msgContent = text || (cur[nextAssistantIdx] as Msg & { role: "assistant" })?.content || "";
@@ -824,7 +824,7 @@ export function AiPanel({
       <TodoStrip workspaceRoot={workspaceRoot} />
       <div ref={scrollRef} style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0 }}>
         {providerDelegatesWork ? (
-          <DelegateTerminalSurface sessionId={`${currentId}:${provider}`} providerId={provider} provider={providerName(provider)} workspaceRoot={workspaceRoot} />
+          <DelegateTerminalSurface sessionId={`${currentId}:${provider}`} providerId={provider} provider={providerName(provider)} workspaceRoot={workspaceRoot} parentRunId={activeHarnessRunRef.current ?? currentId} />
         ) : (
           <>
         {msgs.length === 0 && (

@@ -159,6 +159,7 @@ export async function dispatchTask(
       workspaceRoot: task.cwd,
       task: task.title,
       model: model && model.trim() ? model.trim() : null,
+      parentRunId: id, // task is its own parent (task spawns delegate with same session id)
     });
   } catch (err) {
     patch(id, { status: "error" });

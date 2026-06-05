@@ -158,8 +158,98 @@ function ModelProviderBadge({ model }: { model: string | null }) {
   );
 }
 
-// Official brand marks (Simple Icons, single-path, currentColor → theme- and
-// hover-aware), so each run wears its tool's real logo instead of a flat color.
+// Official brand marks served from /public, so each run wears its tool's real
+// logo instead of a flat color. Used for model badges in the RunRow subtitle
+// and for source avatars (Claude Code, Codex).
+function DeepSeekLogo({ size = 13 }: { size?: number }) {
+  return (
+    <img
+      src="/deepseek-logo.png"
+      alt=""
+      aria-hidden="true"
+      style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+    />
+  );
+}
+function MiniMaxLogo({ size = 13 }: { size?: number }) {
+  return (
+    <img
+      src="/minimax-logo.png"
+      alt=""
+      aria-hidden="true"
+      style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+    />
+  );
+}
+// Kimi's K mark ships as two single-color variants (white for dark themes,
+// black for light). Reuse the opencode-logo theme-swap classes from tokens.css
+// — they stack both <img>s and show only the right one per theme.
+function KimiLogo({ size = 13 }: { size?: number }) {
+  return (
+    <span className="opencode-logo" style={{ width: size, height: size, flexShrink: 0 }} aria-hidden="true">
+      <img className="opencode-logo-light" src="/kimi-logo-light.svg" alt="" />
+      <img className="opencode-logo-dark" src="/kimi-logo-dark.svg" alt="" />
+    </span>
+  );
+}
+function ClaudeCodeLogo({ size = 13 }: { size?: number }) {
+  return (
+    <img
+      src="/claude-code-logo.png"
+      alt=""
+      aria-hidden="true"
+      style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+    />
+  );
+}
+// Codex and Z.AI marks are white-on-transparent — invert them on light themes
+// via the white-logo-img rule in tokens.css so they stay visible everywhere.
+function CodexLogo({ size = 13 }: { size?: number }) {
+  return (
+    <img
+      className="white-logo-img"
+      src="/codex-logo.png"
+      alt=""
+      aria-hidden="true"
+      style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+    />
+  );
+}
+function ZaiLogo({ size = 13 }: { size?: number }) {
+  return (
+    <img
+      className="white-logo-img"
+      src="/zai-logo.png"
+      alt=""
+      aria-hidden="true"
+      style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+    />
+  );
+}
+
+type LogoComp = typeof DeepSeekLogo;
+
+// Regex-based model → logo mapping. Keys are tested as RegExp against the model name.
+// The first match wins, so order matters (more specific patterns first).
+const MODEL_LOGO_RULES: { pattern: RegExp; Comp: LogoComp }[] = [
+  { pattern: /deepseek/i, Comp: DeepSeekLogo },
+  { pattern: /minimax/i, Comp: MiniMaxLogo },
+  { pattern: /kimi/i, Comp: KimiLogo },
+  { pattern: /claude/i, Comp: ClaudeCodeLogo },
+  { pattern: /gpt-|codex/i, Comp: CodexLogo },
+  { pattern: /glm|z-?ai/i, Comp: ZaiLogo },
+];
+
+function ModelBadge({ model, size = 13 }: { model: string; size?: number }) {
+  const rule = MODEL_LOGO_RULES.find((r) => r.pattern.test(model));
+  if (!rule) return null;
+  const Logo = rule.Comp;
+  return <Logo size={size} />;
+}
+
+// Company marks for the main run avatar (Simple Icons, single-path,
+// currentColor): the avatar wears the company (Anthropic, OpenAI), while the
+// model badge in the subtitle wears the tool (Claude Code, Codex).
 const BRAND_PATH: Partial<Record<RunSource, string>> = {
   "claude-code":
     "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z",
@@ -251,32 +341,14 @@ function SourceLogo({
 function RunAvatar({
   source,
   kind,
-  size = 26,
+  size = 22,
 }: {
   source: RunSource;
   kind?: RunKind;
   size?: number;
 }) {
-  // Tasks use the accent (Klide's brand color) so they read as first-class
-  // objects on the board, not as a third-party run that's been misclassified.
-  const tint =
-    kind === "task" ? "var(--accent)" : SOURCE_COLOR[source];
   return (
-    <span
-      style={{
-        width: size,
-        height: size,
-        flexShrink: 0,
-        display: "grid",
-        placeItems: "center",
-        borderRadius: "var(--radius-sm)",
-        background: `color-mix(in srgb, ${tint} 12%, var(--bg-elevated))`,
-        border: `1px solid color-mix(in srgb, ${tint} 28%, var(--border))`,
-        color: tint,
-      }}
-    >
-      <SourceLogo source={source} kind={kind} size={Math.round(size * 0.56)} />
-    </span>
+    <SourceLogo source={source} kind={kind} size={size} />
   );
 }
 
@@ -285,13 +357,13 @@ function RunRow({
   selected,
   onSelect,
   action,
+  compact,
 }: {
   run: Run;
   selected: boolean;
   onSelect: () => void;
-  // Hover-revealed control (e.g. quick-send on a todo) — swaps in where the
-  // status dot sits so rows stay quiet until you reach for them.
   action?: React.ReactNode;
+  compact?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -302,10 +374,10 @@ function RunRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
+        gap: compact ? 6 : 10,
         width: "100%",
         textAlign: "left",
-        padding: "8px 10px",
+        padding: compact ? "6px 10px" : "8px 10px",
         borderRadius: "var(--radius-sm)",
         background: selected
           ? "var(--bg-selected)"
@@ -315,7 +387,7 @@ function RunRow({
         transition: "background var(--motion-fast) var(--ease-out)",
       }}
     >
-      <RunAvatar source={run.source} kind={run.kind} />
+      {!compact && <RunAvatar source={run.source} kind={run.kind} />}
       <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
         <span
           style={{
@@ -358,26 +430,36 @@ function RunRow({
             {run.title}
           </span>
         </span>
-        <span
-          style={{
-            fontSize: 11,
-            color: "var(--fg-subtle)",
-            fontFamily: "var(--font-mono)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <ProviderLogo id={run.source as any} size={11} />
-          {" "}
-          {SOURCE_LABEL[run.source]}
-          {run.model ? (
-            <> · {run.model}</>
-          ) : null}
-          {run.branch ? ` · ${run.branch}` : ""}
-          {" · "}
-          {relativeTime(run.updatedMs)}
-        </span>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--fg-subtle)",
+              fontFamily: "var(--font-mono)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            {run.model ? (
+              <ModelBadge model={run.model} size={13} />
+            ) : run.source === "claude-code" ? (
+              <ClaudeCodeLogo size={13} />
+            ) : run.source === "codex" ? (
+              <CodexLogo size={13} />
+            ) : (
+              <ProviderLogo id={run.source as any} size={11} />
+            )}
+            {SOURCE_LABEL[run.source]}
+            {run.model ? (
+              <> · {run.model}</>
+            ) : null}
+            {run.branch ? ` · ${run.branch}` : ""}
+            {" · "}
+            {relativeTime(run.updatedMs)}
+          </span>
       </span>
       {action && hovered ? action : <StatusDot status={run.status} />}
     </button>
@@ -2075,6 +2157,30 @@ export function MissionControl({
     [tasks, convos, runs]
   );
 
+  // Heuristic: link delegate runs (opencode/claude-code/codex) to a parent
+  // Klide run/conversation by matching project + time proximity. Sub-agents
+  // are detected by title pattern (@explore, @general, etc.) and get a wider
+  // 30-minute window to find their parent.
+  const linkedRuns = useMemo(() => {
+    const klideParents = allRuns.filter((r) => r.source === "klide" && r.createdMs > 0);
+    return allRuns.map((r) => {
+      if (r.parentId || r.source === "klide" || r.kind !== "run" || !r.project) {
+        return r;
+      }
+      // Sub-agents have titles like "(@explore subagent)" — use wider window
+      const isSubagent = /\(@[^)]+\)/.test(r.title);
+      const windowMs = isSubagent ? 1_800_000 : 600_000;
+      const runStart = r.createdMs > 0 ? r.createdMs : r.updatedMs;
+      const parent = klideParents.find(
+        (k) =>
+          k.project === r.project &&
+          k.createdMs <= runStart &&
+          runStart - k.createdMs < windowMs,
+      );
+      return parent ? { ...r, parentId: parent.id } : r;
+    });
+  }, [allRuns]);
+
   // Which source chips to show — only sources actually present.
   const presentSources = useMemo(() => {
     const set = new Set<RunSource>();
@@ -2083,10 +2189,12 @@ export function MissionControl({
   }, [allRuns]);
 
   const filtered = useMemo(() => {
-    if (sourceFilter === "all") return allRuns;
-    if (sourceFilter === "subagent") return allRuns.filter((r) => r.source === "claude-code" || r.source === "codex" || r.source === "opencode");
-    return allRuns.filter((r) => r.source === sourceFilter);
-  }, [allRuns, sourceFilter]);
+    const base = sourceFilter === "all" ? linkedRuns : linkedRuns.filter((r) => {
+      if (sourceFilter === "subagent") return r.source === "claude-code" || r.source === "codex" || r.source === "opencode";
+      return r.source === sourceFilter;
+    });
+    return base;
+  }, [linkedRuns, sourceFilter]);
 
   const grouped = useMemo(() => {
     const by: Record<RunStatus, Run[]> = {
@@ -2217,66 +2325,147 @@ export function MissionControl({
               local machine. Start or refresh an agent session, then come back here.
             </div>
           )}
-          {STATUS_ORDER.map((status) => {
-            const list = grouped[status];
-            if (list.length === 0) return null;
-            return (
-              <div key={status} style={{ marginBottom: 14 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "4px 10px",
-                    fontSize: 10,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    color: "var(--fg-subtle)",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  {STATUS_LABEL[status]}
-                  <span style={{ opacity: 0.7 }}>{list.length}</span>
+          {(() => {
+            // Build parent → children map from ALL linked runs (not filtered).
+            // This ensures children know their parent exists even when the parent
+            // is hidden by the source filter (e.g. showing only "subagent").
+            const childrenByParent = new Map<string, Run[]>();
+            const parentIds = new Set<string>();
+            for (const r of linkedRuns) {
+              parentIds.add(r.id);
+              if (r.parentId) {
+                const kids = childrenByParent.get(r.parentId) ?? [];
+                kids.push(r);
+                childrenByParent.set(r.parentId, kids);
+              }
+            }
+            const hasChildren = (id: string) => (childrenByParent.get(id)?.length ?? 0) > 0;
+            return STATUS_ORDER.map((status) => {
+              const list = grouped[status];
+              if (list.length === 0) return null;
+              // Hide children whose parent is in the visible list (they render nested).
+              // Keep children whose parent is filtered out as flat items so
+              // they don't vanish in subagent-only view.
+              const visible = list.filter((r) => !r.parentId || !parentIds.has(r.parentId));
+              if (visible.length === 0) return null;
+              return (
+                <div key={status} style={{ marginBottom: 14 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "4px 10px",
+                      fontSize: 10,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: "var(--fg-subtle)",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {STATUS_LABEL[status]}
+                    <span style={{ opacity: 0.7 }}>{visible.length}</span>
+                  </div>
+                  {visible.map((run) => {
+                    const task = tasks.find((t) => t.id === run.id);
+                    const sendable =
+                      task && (task.status === "queued" || task.status === "error");
+                    const resumable =
+                      run.source === "klide" &&
+                      run.kind === "run" &&
+                      run.status !== "running" &&
+                      onResumeKlideRun;
+                    const children = (childrenByParent.get(run.id) ?? [])
+                      .slice()
+                      .sort((a, b) => a.createdMs - b.createdMs);
+                    const parentSelected = run.id === selectedId;
+                    return (
+                      <div key={run.id} style={{ position: "relative", margin: "0 8px 10px" }}>
+                        {/* Main conversation card — top of the stack. */}
+                        <div
+                          style={{
+                            position: "relative",
+                            zIndex: children.length + 1,
+                            border: "1px solid var(--border)",
+                            borderRadius: "var(--radius-md)",
+                            background: "var(--bg-elevated)",
+                            overflow: "hidden",
+                          }}
+                        >
+                          <RunRow
+                            run={run}
+                            selected={parentSelected}
+                            onSelect={() => selectRun(run)}
+                            action={
+                              sendable ? (
+                                <QuickSend
+                                  taskId={run.id}
+                                  onSent={() => setSelectedId(run.id)}
+                                />
+                              ) : resumable ? (
+                                <ResumeKlide
+                                  runId={run.id}
+                                  onResume={(id) => onResumeKlideRun?.(id)}
+                                />
+                              ) : hasChildren(run.id) ? (
+                                <span title={`${children.length} sub-agent${children.length > 1 ? "s" : ""}`} style={{
+                                  fontSize: 10, fontFamily: "var(--font-mono)",
+                                  color: "var(--fg-subtle)", padding: "2px 5px",
+                                  background: "var(--bg-hover)", borderRadius: "var(--radius-xs)",
+                                }}>
+                                  {children.length}
+                                </span>
+                              ) : undefined
+                            }
+                          />
+                        </div>
+                        {/* Reverse pyramid: each sub-agent card tucks under the
+                            one above and steps in on both sides, so the stack
+                            reads "spawned by the conversation on top". */}
+                        {children.map((child, i) => {
+                          const childSelected = child.id === selectedId;
+                          const childTask = tasks.find((t) => t.id === child.id);
+                          const childSendable =
+                            childTask && (childTask.status === "queued" || childTask.status === "error");
+                          const inset = 14 * Math.min(i + 1, 3);
+                          return (
+                            <div
+                              key={child.id}
+                              style={{
+                                position: "relative",
+                                zIndex: children.length - i,
+                                margin: `-6px ${inset}px 0`,
+                                paddingTop: 6,
+                                border: "1px solid var(--border)",
+                                borderRadius: "var(--radius-md)",
+                                background: "var(--bg-elevated)",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <RunRow
+                                run={child}
+                                selected={childSelected}
+                                compact
+                                onSelect={() => selectRun(child)}
+                                action={
+                                  childSendable ? (
+                                    <QuickSend
+                                      taskId={child.id}
+                                      onSent={() => setSelectedId(child.id)}
+                                    />
+                                  ) : undefined
+                                }
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
                 </div>
-                {list.map((run) => {
-                  // Todos (and failed dispatches) get the one-click send.
-                  const task = tasks.find((t) => t.id === run.id);
-                  const sendable =
-                    task && (task.status === "queued" || task.status === "error");
-                  // Klide on-disk runs (kind === "run") get the one-click
-                  // resume — re-opens the AI panel with the prior transcript.
-                  // Skip live runs: nothing to resume yet, and the user can
-                  // just watch them on the board.
-                  const resumable =
-                    run.source === "klide" &&
-                    run.kind === "run" &&
-                    run.status !== "running" &&
-                    onResumeKlideRun;
-                  return (
-                    <RunRow
-                      key={run.id}
-                      run={run}
-                      selected={run.id === selectedId}
-                      onSelect={() => selectRun(run)}
-                      action={
-                        sendable ? (
-                          <QuickSend
-                            taskId={run.id}
-                            onSent={() => setSelectedId(run.id)}
-                          />
-                        ) : resumable ? (
-                          <ResumeKlide
-                            runId={run.id}
-                            onResume={(id) => onResumeKlideRun?.(id)}
-                          />
-                        ) : undefined
-                      }
-                    />
-                  );
-                })}
-              </div>
-            );
-          })}
+              );
+            });
+          })()}
           {hasMore && (
             <button
               onClick={() => void loadMore()}

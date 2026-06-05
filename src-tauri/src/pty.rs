@@ -107,6 +107,7 @@ pub fn delegate_pty_spawn(
     task: Option<String>,
     model: Option<String>,
     resume_session_id: Option<String>,
+    parent_run_id: Option<String>,
 ) -> Result<(), String> {
     let cwd = workspace_root
         .filter(|path| !path.trim().is_empty())
@@ -119,6 +120,11 @@ pub fn delegate_pty_spawn(
             }
         })
         .transpose()?;
+
+    // Record parent → child mapping so Mission Control can build the tree
+    if let Some(parent_id) = parent_run_id.as_ref() {
+        let _ = record_delegate_parent(&app, &session_id, parent_id, &provider);
+    }
 
     if let Some(session) = state.sessions.lock().unwrap().get_mut(&session_id) {
         if session.cwd != cwd {
@@ -224,11 +230,20 @@ pub fn delegate_pty_spawn(
         // buffer, so the next (large) read drains them as one event. Caps
         // traffic at ~60 events/s per session; nothing is ever left stuck.
         let mut buf = [0u8; 65536];
+        let mut matched_external_id = false;
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 {
                 break;
             }
             let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+            // Try to detect OpenCode's session ID from startup output.
+            // OpenCode outputs "Using session: <id>" or similar when it starts.
+            if !matched_external_id {
+                if let Some(capt) = extract_opencode_session(&chunk) {
+                    let _ = set_delegate_external_id(&app, &session_id, &capt);
+                    matched_external_id = true;
+                }
+            }
             let _ = app.emit(
                 "delegate-pty:data",
                 DelegatePtyChunk {
@@ -319,4 +334,137 @@ fn delegate_command(provider: &str) -> Result<&'static str, String> {
         "opencode" => Ok("opencode"),
         _ => Err(format!("No delegate PTY command for provider: {provider}")),
     }
+}
+
+// ── Delegate session parent tracking ──────────────────────────────────────────
+// Records delegate session → parent run ID mappings so Mission Control can
+// build the sub-agent tree. The mapping is stored in a JSON file in the app
+// data directory.
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct DelegateSessionMapping {
+    pub delegate_id: String,
+    pub parent_id: String,
+    pub provider: String,
+    pub created_at_ms: i64,
+    /// Once we learn the external session ID (e.g. OpenCode's actual session ID),
+    /// we store it here so lookups work both by Klide's internal ID and the
+    /// external tool's session ID.
+    pub external_id: Option<String>,
+}
+
+fn delegate_sessions_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("delegate_sessions.json")
+}
+
+pub fn read_delegate_sessions(app: &tauri::AppHandle) -> HashMap<String, DelegateSessionMapping> {
+    let path = delegate_sessions_path(app);
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(mappings) = serde_json::from_str::<Vec<DelegateSessionMapping>>(&content) {
+            return mappings.into_iter().map(|m| (m.delegate_id.clone(), m)).collect();
+        }
+    }
+    HashMap::new()
+}
+
+/// Read sessions into TWO maps: one keyed by delegate_id, one by external_id.
+/// This lets us look up parent_id by either Klide's session ID or the external
+/// session ID that OpenCode/Claude Code/Codex creates internally.
+pub fn read_delegate_sessions_by_id(app: &tauri::AppHandle) -> (HashMap<String, DelegateSessionMapping>, HashMap<String, DelegateSessionMapping>) {
+    let path = delegate_sessions_path(app);
+    let mut by_delegate = HashMap::new();
+    let mut by_external = HashMap::new();
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(mappings) = serde_json::from_str::<Vec<DelegateSessionMapping>>(&content) {
+            for m in mappings {
+                by_delegate.insert(m.delegate_id.clone(), m.clone());
+                if let Some(ref ext) = m.external_id {
+                    by_external.insert(ext.clone(), m);
+                }
+            }
+        }
+    }
+    (by_delegate, by_external)
+}
+
+fn write_delegate_sessions(app: &tauri::AppHandle, mappings: &HashMap<String, DelegateSessionMapping>) -> Result<(), String> {
+    let path = delegate_sessions_path(app);
+    // Deduplicate by delegate_id before writing
+    let mut seen = HashMap::new();
+    for m in mappings.values() {
+        seen.insert(m.delegate_id.clone(), m.clone());
+    }
+    let vec: Vec<DelegateSessionMapping> = seen.into_values().collect();
+    let content = serde_json::to_string_pretty(&vec).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+pub fn record_delegate_parent(
+    app: &tauri::AppHandle,
+    delegate_id: &str,
+    parent_id: &str,
+    provider: &str,
+) -> Result<(), String> {
+    let mut mappings = read_delegate_sessions(app);
+    mappings.insert(delegate_id.to_string(), DelegateSessionMapping {
+        delegate_id: delegate_id.to_string(),
+        parent_id: parent_id.to_string(),
+        provider: provider.to_string(),
+        created_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+        external_id: None,
+    });
+    write_delegate_sessions(app, &mappings)
+}
+
+/// Record the external session ID (OpenCode's actual session ID) so lookups
+/// work by both Klide's internal ID and the external tool's session ID.
+pub fn set_delegate_external_id(
+    app: &tauri::AppHandle,
+    delegate_id: &str,
+    external_id: &str,
+) -> Result<(), String> {
+    let mut mappings = read_delegate_sessions(app);
+    if let Some(m) = mappings.get_mut(delegate_id) {
+        m.external_id = Some(external_id.to_string());
+    }
+    write_delegate_sessions(app, &mappings)
+}
+
+#[allow(dead_code)]
+pub fn get_delegate_parent(app: &tauri::AppHandle, delegate_id: &str) -> Option<String> {
+    read_delegate_sessions(app).get(delegate_id).map(|m| m.parent_id.clone())
+}
+
+/// Try to extract OpenCode's session ID from PTY output. OpenCode outputs
+/// "Using session: <id>" when starting a new session run.
+fn extract_opencode_session(output: &str) -> Option<String> {
+    // Pattern: "Using session: <id>" where id might be "oss-..." or similar
+    for line in output.lines() {
+        let line = line.trim();
+        if line.contains("Using session:") || line.contains("Session ID:") || line.contains("session:") {
+            // Extract the ID after the colon
+            if let Some(colon_pos) = line.rfind(':') {
+                let after = line[colon_pos + 1..].trim();
+                // Session IDs are typically alphanumeric with dashes
+                if after.len() > 3 && after.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                    return Some(after.to_string());
+                }
+            }
+            // Try to find "oss-" prefix which is common in OpenCode
+            if let Some(pos) = line.find("oss-") {
+                let candidate = &line[pos..];
+                let end = candidate.find(|c: char| !c.is_alphanumeric() && c != '-').unwrap_or(candidate.len());
+                if end > 3 {
+                    return Some(candidate[..end].to_string());
+                }
+            }
+        }
+    }
+    None
 }

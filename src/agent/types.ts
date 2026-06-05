@@ -228,5 +228,7 @@ export type StartAgentRunInput = {
   context?: AgentContextSnapshot;
   systemPrompt?: string;
   disabledTools?: string[];
+  /** When this run is a spawned sub-agent, the parent run's id. */
+  parentId?: string;
 };
 

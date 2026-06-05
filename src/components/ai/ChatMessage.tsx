@@ -8,6 +8,10 @@ import { renderMarkdown } from "./markdown";
 // blocks inside the reasoning render properly. Open by default while the
 // message is still streaming (no content yet), collapsed once the answer
 // arrives — matches Claude Code's "thought process" disclosure.
+function normalizeThinking(text: string): string {
+  return text.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
+}
+
 function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }) {
   return (
     <details
@@ -86,7 +90,7 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
           background: "color-mix(in srgb, var(--bg) 70%, transparent)",
         }}
       >
-        {renderMarkdown(text)}
+        {renderMarkdown(normalizeThinking(text))}
       </div>
     </details>
   );

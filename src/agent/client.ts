@@ -19,6 +19,7 @@ type StartRunRequest = {
   context?: StartAgentRunInput["context"];
   systemPrompt?: string;
   disabledTools?: string[];
+  parentId?: string;
 };
 
 type StartRunResponse = {
@@ -58,6 +59,7 @@ export async function startAgentRun(
       context: input.context,
       systemPrompt: input.systemPrompt,
       disabledTools: input.disabledTools,
+      parentId: input.parentId,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
   });

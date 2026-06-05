@@ -2144,9 +2144,16 @@ struct AgentRun {
     cwd: Option<String>,
     project: Option<String>, // last path segment of cwd
     git_branch: Option<String>,
+    created_ms: i64, // 0 if unknown (external tools may not store creation time)
     updated_ms: i64,
     message_count: u32,
+    // Real token usage summed from the session log (0 when the source doesn't
+    // record usage). Input excludes cache reads — they'd dwarf everything else.
+    input_tokens: i64,
+    output_tokens: i64,
     status: String, // "running" (touched <2min ago) | "done"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_id: Option<String>, // set when we can infer parent from spawn mapping
 }
 
 // ── OpenCode session discovery ──────────────────────────────────────────
@@ -2196,7 +2203,12 @@ fn parse_opencode_run(
     let mut stmt = conn
         .prepare(
             "SELECT s.id, s.title, s.directory, s.model, s.time_updated, \
-                    (SELECT COUNT(*) FROM message WHERE session_id = s.id) AS message_count \
+                    (SELECT COUNT(*) FROM message WHERE session_id = s.id) AS message_count, \
+                    s.parent_id, s.time_created, \
+                    (SELECT COALESCE(SUM(json_extract(data, '$.tokens.input')), 0) \
+                       FROM message WHERE session_id = s.id) AS input_tokens, \
+                    (SELECT COALESCE(SUM(json_extract(data, '$.tokens.output')), 0) \
+                       FROM message WHERE session_id = s.id) AS output_tokens \
              FROM session s WHERE s.id = ?1",
         )
         .ok()?;
@@ -2211,6 +2223,12 @@ fn parse_opencode_run(
     let model_raw: Option<String> = row.get(3).ok()?;
     let time_updated: i64 = row.get(4).ok()?;
     let message_count: i64 = row.get(5).ok()?;
+    // Sub-agent sessions ("(@explore subagent)" etc.) carry the spawning
+    // session's id in parent_id — the board nests them under that run.
+    let parent_id: Option<String> = row.get(6).ok().flatten();
+    let time_created: i64 = row.get(7).unwrap_or(time_updated);
+    let input_tokens: i64 = row.get(8).unwrap_or(0);
+    let output_tokens: i64 = row.get(9).unwrap_or(0);
 
     // Status is determined by the *role of the latest message*, not the
     // recency of the session row. The opencode TUI/server touches the
@@ -2286,8 +2304,12 @@ fn parse_opencode_run(
         model: model_raw.as_deref().and_then(opencode_model_label),
         cwd,
         git_branch: branch,
+        created_ms: time_created,
         updated_ms: time_updated,
         message_count: message_count as u32,
+        input_tokens,
+        output_tokens,
+        parent_id,
     })
 }
 
@@ -2472,11 +2494,19 @@ fn parse_claude_run(path: &std::path::Path) -> Option<AgentRun> {
     let id = path.file_stem()?.to_string_lossy().to_string();
     let (mut title, mut model, mut cwd, mut branch) = (None, None, None, None);
     let mut count: u32 = 0;
+    let mut created_ms: i64 = 0;
+    let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => continue,
         };
+        // Capture first timestamp as creation time
+        if created_ms == 0 {
+            if let Some(ts) = v.get("ts").and_then(|t| t.as_i64()) {
+                created_ms = ts;
+            }
+        }
         if cwd.is_none() {
             cwd = v.get("cwd").and_then(|c| c.as_str()).map(str::to_string);
         }
@@ -2505,11 +2535,22 @@ fn parse_claude_run(path: &std::path::Path) -> Option<AgentRun> {
                         .and_then(|m| m.as_str())
                         .map(str::to_string);
                 }
+                // Each assistant line carries that turn's usage. Cache *reads*
+                // are excluded (re-reads of the same prefix); cache *creation*
+                // is genuine new input so it counts.
+                if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
+                    let n = |key: &str| u.get(key).and_then(|x| x.as_i64()).unwrap_or(0);
+                    input_tokens += n("input_tokens") + n("cache_creation_input_tokens");
+                    output_tokens += n("output_tokens");
+                }
             }
             _ => {}
         }
     }
     let updated_ms = mtime_ms(path);
+    if created_ms == 0 {
+        created_ms = updated_ms;
+    }
     Some(AgentRun {
         status: recency_status(updated_ms),
         project: cwd.as_deref().and_then(project_name),
@@ -2520,8 +2561,12 @@ fn parse_claude_run(path: &std::path::Path) -> Option<AgentRun> {
         model,
         cwd,
         git_branch: branch,
+        created_ms: updated_ms, // fallback to mtime
         updated_ms,
         message_count: count,
+        input_tokens,
+        output_tokens,
+        parent_id: None,
     })
 }
 
@@ -2532,6 +2577,7 @@ fn parse_codex_run(
     let content = std::fs::read_to_string(path).ok()?;
     let (mut id, mut cwd, mut branch, mut model) = (None, None, None, None);
     let mut count: u32 = 0;
+    let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -2569,6 +2615,20 @@ fn parse_codex_run(
                 }
             }
             Some("response_item") => count += 1,
+            Some("event_msg") => {
+                // `token_count` events carry a *cumulative* total for the
+                // session — keep overwriting so the last one wins. Cached
+                // input is subtracted to mirror the Claude parser.
+                if let Some(total) = payload
+                    .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("token_count"))
+                    .and_then(|p| p.get("info"))
+                    .and_then(|i| i.get("total_token_usage"))
+                {
+                    let n = |key: &str| total.get(key).and_then(|x| x.as_i64()).unwrap_or(0);
+                    input_tokens = (n("input_tokens") - n("cached_input_tokens")).max(0);
+                    output_tokens = n("output_tokens");
+                }
+            }
             _ => {}
         }
     }
@@ -2591,8 +2651,12 @@ fn parse_codex_run(
         model,
         cwd,
         git_branch: branch,
+        created_ms,
         updated_ms,
         message_count: count,
+        input_tokens,
+        output_tokens,
+        parent_id: None,
     })
 }
 
@@ -2630,10 +2694,13 @@ fn collect_codex_rollouts(dir: &std::path::Path, out: &mut Vec<std::path::PathBu
 }
 
 #[tauri::command]
-fn list_agent_runs(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<AgentRun>, String> {
+fn list_agent_runs(app: tauri::AppHandle, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<AgentRun>, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let cap = limit.unwrap_or(10);
     let off = offset.unwrap_or(0);
+
+    // Load delegate session → parent mappings (both by Klide's ID and external ID)
+    let (by_delegate, by_external) = crate::pty::read_delegate_sessions_by_id(&app);
 
     // (path, source, mtime) for every candidate session, newest first.
     let mut candidates: Vec<(std::path::PathBuf, &'static str, i64)> = Vec::new();
@@ -2694,14 +2761,24 @@ fn list_agent_runs(limit: Option<usize>, offset: Option<usize>) -> Result<Vec<Ag
         .skip(off)
         .take(cap)
         .filter_map(|(path, source, _)| {
-            match source {
-                "claude-code" => parse_claude_run(&path),
-                "codex" => parse_codex_run(&path, &codex_index),
-                "opencode" => opencode_conn
-                    .as_ref()
-                    .and_then(|c| parse_opencode_run(c, path.to_str().unwrap_or(""))),
-                _ => None,
+            let mut run = match source {
+                "claude-code" => parse_claude_run(&path)?,
+                "codex" => parse_codex_run(&path, &codex_index)?,
+                "opencode" => opencode_conn.as_ref().and_then(|c| parse_opencode_run(c, path.to_str().unwrap_or("")))?,
+                _ => return None,
+            };
+            // Inject parent_id from spawn mapping if available.
+            // Try by Klide's internal ID first, then by external session ID
+            // (for cases where OpenCode created its own session ID different
+            // from the session_id we passed to delegate_pty_spawn).
+            if run.parent_id.is_none() {
+                let parent = by_delegate.get(&run.id)
+                    .or_else(|| by_external.get(&run.id));
+                if let Some(mapping) = parent {
+                    run.parent_id = Some(mapping.parent_id.clone());
+                }
             }
+            Some(run)
         })
         .collect();
     runs.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
