@@ -38,6 +38,7 @@ import {
 import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts";
 import { GridWorkbench } from "./components/GridWorkbench";
 import { FloatingPanel } from "./components/FloatingPanel";
+import { SplitPane } from "./components/SplitPane";
 import {
   defaultLayout as defaultPanelLayout,
   loadLayout as loadPanelLayout,
@@ -123,6 +124,9 @@ function App() {
     () => localStorage.getItem("klide-skills-visible") === "true"
   );
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [sidebarSlot2, setSidebarSlot2] = useState<Panel | null>(
+    () => localStorage.getItem("klide-sidebar-slot2") as Panel | null
+  );
   const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
@@ -390,10 +394,10 @@ function App() {
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
       : null;
   const activityState: Record<Panel, boolean> = {
-    explorer: view === "workbench" && explorerVisible,
-    git: view === "workbench" && gitVisible,
-    graph: view === "workbench" && graphVisible,
-    skills: view === "workbench" && skillsVisible,
+    explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
+    git: view === "workbench" && (gitVisible || sidebarSlot2 === "git"),
+    graph: view === "workbench" && (graphVisible || sidebarSlot2 === "graph"),
+    skills: view === "workbench" && (skillsVisible || sidebarSlot2 === "skills"),
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
     settings: view === "settings",
@@ -417,26 +421,20 @@ function App() {
     }
     // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
     if (panel === "explorer" || panel === "git" || panel === "graph" || panel === "skills") {
-      const setter = panel === "explorer" ? setExplorerVisible
-        : panel === "git" ? setGitVisible
-        : panel === "graph" ? setGraphVisible
-        : setSkillsVisible;
-      const isVisible = panel === "explorer" ? explorerVisible
-        : panel === "git" ? gitVisible
-        : panel === "graph" ? graphVisible
-        : skillsVisible;
       if (meta) {
-        const willShow = !isVisible;
-        setter(willShow);
-        if (willShow && panel !== "explorer" && panel !== "skills" && panelLayout.explorer) {
-          const e = panelLayout.explorer;
-          updatePanelRect(panel as PanelLayoutId, { x: e.x, y: e.y + e.h + 6, w: e.w, h: Math.min(e.h * 0.45, 320) });
-        }
+        // ⌘+click toggles the secondary slot in the explorer panel.
+        setSidebarSlot2((cur) => cur === panel ? null : panel);
       } else {
+        // Plain click: collapse any other sidebar view, then toggle this one.
+        if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
         if (panel !== "git" && gitVisible) setGitVisible(false);
         if (panel !== "graph" && graphVisible) setGraphVisible(false);
         if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
+        const setter = panel === "explorer" ? setExplorerVisible
+          : panel === "git" ? setGitVisible
+          : panel === "graph" ? setGraphVisible
+          : setSkillsVisible;
         setter((cur) => !cur);
       }
       return;
@@ -847,6 +845,10 @@ function App() {
     localStorage.setItem("klide-graph-visible", String(graphVisible));
   }, [graphVisible]);
 
+  useEffect(() => {
+    if (sidebarSlot2) localStorage.setItem("klide-sidebar-slot2", sidebarSlot2);
+    else localStorage.removeItem("klide-sidebar-slot2");
+  }, [sidebarSlot2]);
 
   useEffect(() => {
     localStorage.setItem("klide-ai-visible", String(aiVisible));
@@ -1293,21 +1295,72 @@ function App() {
                     onResize={(next) => updatePanelRect("explorer", next)}
                     onMove={(next) => updatePanelRect("explorer", next)}
                   >
-                    <Sidebar
-                      fill
-                      visible
-                      width={panelLayout.explorer.w}
-                      workspaceRoot={workspaceRoot}
-                      onOpen={openFile}
-                      onRootChange={setWorkspaceRoot}
-                      onOpenGitDiff={openGitDiff}
-                      onEntryRenamed={onEntryRenamed}
-                      onEntryDeleted={onEntryDeleted}
-                      onFilePreview={setPreviewPath}
-                    />
+                    {sidebarSlot2 ? (
+                      <SplitPane
+                        top={
+                          <Sidebar
+                            fill
+                            visible
+                            width={panelLayout.explorer.w}
+                            workspaceRoot={workspaceRoot}
+                            onOpen={openFile}
+                            onRootChange={setWorkspaceRoot}
+                            onOpenGitDiff={openGitDiff}
+                            onEntryRenamed={onEntryRenamed}
+                            onEntryDeleted={onEntryDeleted}
+                            onFilePreview={setPreviewPath}
+                          />
+                        }
+                        bottom={
+                          sidebarSlot2 === "git" ? (
+                            <GitPanel
+                              fill
+                              visible
+                              width={panelLayout.explorer.w}
+                              workspaceRoot={workspaceRoot}
+                              gitStatus={gitStatus}
+                              onRefreshGitStatus={() =>
+                                workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+                              }
+                            />
+                          ) : sidebarSlot2 === "graph" ? (
+                            <ProjectGraphPanel
+                              fill
+                              visible
+                              width={panelLayout.explorer.w}
+                              workspaceRoot={workspaceRoot}
+                              activePath={active?.path ?? null}
+                              onContextChange={setProjectContext}
+                            />
+                          ) : sidebarSlot2 === "skills" ? (
+                            <SkillsModal
+                              open
+                              skills={skills}
+                              onChange={setSkills}
+                              onClose={() => setSidebarSlot2(null)}
+                            />
+                          ) : null
+                        }
+                        defaultSplit={panelLayout.explorer.h * 0.45}
+                        minPane={80}
+                      />
+                    ) : (
+                      <Sidebar
+                        fill
+                        visible
+                        width={panelLayout.explorer.w}
+                        workspaceRoot={workspaceRoot}
+                        onOpen={openFile}
+                        onRootChange={setWorkspaceRoot}
+                        onOpenGitDiff={openGitDiff}
+                        onEntryRenamed={onEntryRenamed}
+                        onEntryDeleted={onEntryDeleted}
+                        onFilePreview={setPreviewPath}
+                      />
+                    )}
                   </FloatingPanel>
                 )}
-                {gitVisible && panelLayout.git && (
+                {gitVisible && sidebarSlot2 !== "git" && panelLayout.git && (
                   <FloatingPanel
                     panelId="git"
                     rect={panelLayout.git}
@@ -1330,7 +1383,7 @@ function App() {
                     />
                   </FloatingPanel>
                 )}
-                {graphVisible && panelLayout.graph && (
+                {graphVisible && sidebarSlot2 !== "graph" && panelLayout.graph && (
                   <FloatingPanel
                     panelId="graph"
                     rect={panelLayout.graph}
@@ -1464,7 +1517,7 @@ function App() {
         <GitDiffWindow diff={activeGitDiff} onClose={() => setActiveGitDiff(null)} />
       )}
       <SkillsModal
-        open={skillsVisible}
+        open={skillsVisible && sidebarSlot2 !== "skills"}
         skills={skills}
         onChange={updateSkills}
         onClose={() => setSkillsVisible(false)}

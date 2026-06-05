@@ -1,5 +1,5 @@
 type View = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
-type Props = { active: Record<View, boolean>; onToggle: (v: View) => void };
+type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
 
 function FolderIcon() {
   return (
@@ -174,8 +174,8 @@ export function ActivityBar({ active, onToggle }: Props) {
         return (
           <button
             key={id}
-            onClick={() => onToggle(id)}
-            title={label}
+            onClick={(e) => onToggle(id, e.metaKey || e.ctrlKey)}
+            title={id === "ai" ? label : `${label}  (⌘+click to stack)`}
             aria-label={label}
             aria-pressed={isActive}
             style={{
