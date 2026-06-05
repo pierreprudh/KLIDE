@@ -306,6 +306,27 @@ function App() {
   const [theme, setTheme] = useState<ThemeId>(() =>
     normalizeThemeId(localStorage.getItem("klide-theme"))
   );
+  const [autoTheme, setAutoTheme] = useState(() => {
+    // Default ON for first-run users so Klide matches their OS theme out of
+    // the box. Users can disable the toggle in Settings → Appearance.
+    const stored = localStorage.getItem("klide-auto-theme");
+    return stored === null ? true : stored === "true";
+  });
+  const [lightTheme, setLightTheme] = useState<ThemeId>(() =>
+    normalizeThemeId(localStorage.getItem("klide-light-theme") || "klide-light")
+  );
+  const [darkTheme, setDarkTheme] = useState<ThemeId>(() =>
+    normalizeThemeId(localStorage.getItem("klide-dark-theme") || "cursor-dark")
+  );
+  // Listen for system color-scheme changes and auto-switch if enabled.
+  useEffect(() => {
+    if (!autoTheme) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => setTheme(mq.matches ? darkTheme : lightTheme);
+    handler();
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [autoTheme, lightTheme, darkTheme]);
   const [editorFontSize, setEditorFontSize] = useState(() =>
     readNumberSetting("klide-editor-font-size", 13, 11, 20)
   );
@@ -335,6 +356,7 @@ function App() {
     chatPrompt?: string;
     planPrompt?: string;
     goalPrompt?: string;
+    toolOverrides?: Record<string, boolean>;
   };
   const [harnessSettings, setHarnessSettings] = useState<HarnessSettings>(() => {
     try {
@@ -766,7 +788,24 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("klide-theme", theme);
-  }, [theme]);
+    // When auto-theme is on and user picks a theme, update the preferred
+    // light or dark theme for this system mode.
+    if (autoTheme) {
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (isDark && theme !== darkTheme) setDarkTheme(theme);
+      if (!isDark && theme !== lightTheme) setLightTheme(theme);
+    }
+  }, [theme, autoTheme]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-auto-theme", String(autoTheme));
+  }, [autoTheme]);
+  useEffect(() => {
+    localStorage.setItem("klide-light-theme", lightTheme);
+  }, [lightTheme]);
+  useEffect(() => {
+    localStorage.setItem("klide-dark-theme", darkTheme);
+  }, [darkTheme]);
 
   // Grids are edited in Settings; refresh App's copy when returning to the
   // workbench so the status-bar Layout picker shows the latest.
@@ -1114,6 +1153,12 @@ function App() {
             initialSection={settingsInitial}
             theme={theme}
             onThemeChange={setTheme}
+            autoTheme={autoTheme}
+            onAutoThemeChange={setAutoTheme}
+            lightTheme={lightTheme}
+            onLightThemeChange={setLightTheme}
+            darkTheme={darkTheme}
+            onDarkThemeChange={setDarkTheme}
             aiVisible={aiVisible}
             onAiVisibleChange={setAiVisible}
             terminalVisible={terminalVisible}
