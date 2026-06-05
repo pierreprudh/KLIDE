@@ -15,6 +15,7 @@ import {
   type ProjectContextSnapshot,
 } from "../contextTray";
 import { startAgentRun, stopAgentRun, resolveDiff } from "../agent/client";
+import { TodoStrip } from "./TodoStrip";
 import {
   DEFAULT_MODELS,
   MODE_OPTIONS,
@@ -68,6 +69,8 @@ type Props = {
   harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> };
   onDuplicate?: () => void;
   onClose?: () => void;
+  resumeConversation?: Conversation | null;
+  onResumeConsumed?: () => void;
 };
 
 export function AiPanel({
@@ -89,6 +92,8 @@ export function AiPanel({
   harnessSettings,
   onDuplicate,
   onClose,
+  resumeConversation,
+  onResumeConsumed,
 }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -377,6 +382,20 @@ export function AiPanel({
   }
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [msgs]);
+
+  // Load a resumed conversation from Mission Control. After loading, ping
+  // the parent so it can clear `resumeConversation` — otherwise re-clicking
+  // the same run from Mission Control is a no-op (the effect would bail
+  // on the same id).
+  const prevResumeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (resumeConversation && resumeConversation.id !== prevResumeRef.current) {
+      prevResumeRef.current = resumeConversation.id;
+      loadConversation(resumeConversation);
+      onResumeConsumed?.();
+    }
+    if (!resumeConversation) prevResumeRef.current = null;
+  }, [resumeConversation, onResumeConsumed]);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -802,6 +821,7 @@ export function AiPanel({
         </div>
       </header>
 
+      <TodoStrip workspaceRoot={workspaceRoot} />
       <div ref={scrollRef} style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0 }}>
         {providerDelegatesWork ? (
           <DelegateTerminalSurface sessionId={`${currentId}:${provider}`} providerId={provider} provider={providerName(provider)} workspaceRoot={workspaceRoot} />

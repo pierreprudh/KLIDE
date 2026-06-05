@@ -596,6 +596,7 @@ function App() {
             projectContext={projectContext}
             harnessSettings={harnessSettings}
             resumeConversation={resumeConversation}
+            onResumeConsumed={() => setResumeConversation(null)}
           />
         );
       default:
@@ -1519,6 +1520,7 @@ function App() {
                           aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
                         }
                         resumeConversation={resumeConversation}
+                        onResumeConsumed={() => setResumeConversation(null)}
                       />
                     </FloatingPanel>
                   );

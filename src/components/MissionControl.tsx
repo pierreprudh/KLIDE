@@ -40,6 +40,7 @@ import {
   type RunStatus,
 } from "../runs";
 import { CheckpointPanel } from "./CheckpointPanel";
+import { ProviderLogo } from "./ai/icons";
 
 // Mission Control — KIDE's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
@@ -365,15 +366,10 @@ function RunRow({
             whiteSpace: "nowrap",
           }}
         >
+          <ProviderLogo id={run.source as any} size={11} />
+          {" "}
           {SOURCE_LABEL[run.source]}
-          {run.source === "opencode" && run.model ? (
-            <>
-              {" · "}
-              <ModelProviderBadge model={run.model} />
-              {" "}
-              {modelShortName(run.model)}
-            </>
-          ) : run.model ? (
+          {run.model ? (
             <> · {run.model}</>
           ) : null}
           {run.branch ? ` · ${run.branch}` : ""}
@@ -401,6 +397,54 @@ function SendIcon() {
     >
       <path d="M5 12h14" />
       <path d="m13 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+// One-click resume for a Klide on-disk run: re-opens the AI panel with the
+// prior transcript loaded. Same hover-revealed slot as QuickSend so the row
+// stays quiet until the user reaches for it.
+function ResumeKlide({ runId, onResume }: { runId: string; onResume: (id: string) => void }) {
+  return (
+    <span
+      role="button"
+      aria-label="Resume in Klide"
+      title="Resume in Klide"
+      onClick={(e) => {
+        e.stopPropagation();
+        onResume(runId);
+      }}
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: "var(--accent)",
+        background: "var(--accent-soft)",
+      }}
+    >
+      <ResumeIcon />
+    </span>
+  );
+}
+
+function ResumeIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 3v18l15-9z" fill="currentColor" />
     </svg>
   );
 }
@@ -1687,7 +1731,7 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
   );
 }
 
-function RunDetail({ run, messages, theme }: { run: Run; messages?: RunMessage[]; theme: ThemeId }) {
+function RunDetail({ run, messages, theme, onResumeKlide }: { run: Run; messages?: RunMessage[]; theme: ThemeId; onResumeKlide?: (runId: string) => void; }) {
   // Resume mode: spawning a new PTY that continues the previous run's
   // session. The sessionId is locally generated (so the TaskTerminal can
   // subscribe to it); the opencode session id is passed as
@@ -1770,6 +1814,9 @@ function RunDetail({ run, messages, theme }: { run: Run; messages?: RunMessage[]
         )}
         {resumable && resumedSessionId && (
           <ActionButton label="Stop & return to log" onClick={() => void stopResume()} />
+        )}
+        {run.source === "klide" && onResumeKlide && (
+          <ActionButton label="Resume in Klide" onClick={() => onResumeKlide(run.id)} />
         )}
       </div>
 
@@ -1875,9 +1922,10 @@ function RunDetail({ run, messages, theme }: { run: Run; messages?: RunMessage[]
               <ModelProviderBadge model={run.model} />
               {modelShortName(run.model)}
             </>
-          ) : (
-            run.model ?? "—"
-          )}
+          ) : run.model ? (
+            <ProviderLogo id={run.source as any} size={13} />
+          ) : null}
+          {run.model ?? "—"}
         </dd>
         <MetaRow label="Project" value={run.project ?? "—"} />
         <MetaRow label="Branch" value={run.branch ?? "—"} />
@@ -1958,9 +2006,11 @@ const PAGE = 10;
 export function MissionControl({
   workspaceRoot,
   theme,
+  onResumeKlideRun,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
+  onResumeKlideRun?: (runId: string) => void;
 }) {
   const tasks = useSyncExternalStore(subscribeTasks, getTaskSessions);
   const convos = useSyncExternalStore(subscribeKlideConvos, getKlideConvos);
@@ -1971,7 +2021,8 @@ export function MissionControl({
   const [nextOffset, setNextOffset] = useState(0);
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [sourceFilter, setSourceFilter] = useState<RunSource | "all">("all");
+  const [sourceFilter, setSourceFilter] = useState<RunSource | "all" | "subagent">("all");
+  const [pinnedId, setPinnedId] = useState<string | null>(null);
 
   // Initial load (and refresh) — just the most-recent page.
   async function load() {
@@ -2029,11 +2080,11 @@ export function MissionControl({
     return Array.from(set);
   }, [allRuns]);
 
-  const filtered = useMemo(
-    () =>
-      sourceFilter === "all" ? allRuns : allRuns.filter((r) => r.source === sourceFilter),
-    [allRuns, sourceFilter]
-  );
+  const filtered = useMemo(() => {
+    if (sourceFilter === "all") return allRuns;
+    if (sourceFilter === "subagent") return allRuns.filter((r) => r.source === "claude-code" || r.source === "codex" || r.source === "opencode");
+    return allRuns.filter((r) => r.source === sourceFilter);
+  }, [allRuns, sourceFilter]);
 
   const grouped = useMemo(() => {
     const by: Record<RunStatus, Run[]> = {
@@ -2048,14 +2099,15 @@ export function MissionControl({
     return by;
   }, [filtered]);
 
-  // Keep a valid selection as the filter/data changes.
+  // Keep a valid selection as the filter/data changes — unless pinned.
   useEffect(() => {
+    if (pinnedId && allRuns.some((r) => r.id === pinnedId)) return;
     if (filtered.length === 0) {
       setSelectedId(null);
     } else if (!filtered.some((r) => r.id === selectedId)) {
       setSelectedId(filtered[0].id);
     }
-  }, [filtered, selectedId]);
+  }, [filtered, selectedId, pinnedId, allRuns]);
 
   const selectedTask = tasks.find((t) => t.id === selectedId) ?? null;
   const selectedConvo = selectedTask
@@ -2065,6 +2117,16 @@ export function MissionControl({
     selectedTask || selectedConvo
       ? null
       : allRuns.find((r) => r.id === selectedId) ?? null;
+
+  function selectRun(run: Run) {
+    setSelectedId(run.id);
+    if (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") {
+      setPinnedId(run.id);
+    } else {
+      setPinnedId(null);
+    }
+  }
+
   const activeCount =
     grouped.running.length + grouped.waiting.length + grouped.queued.length;
 
@@ -2099,20 +2161,24 @@ export function MissionControl({
               {loading ? "loading…" : `${activeCount} active · ${runs.length} loaded`}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <FilterChip
-              label="All"
-              active={sourceFilter === "all"}
-              onClick={() => setSourceFilter("all")}
-            />
-            {presentSources.map((s) => (
-              <FilterChip
-                key={s}
-                label={SOURCE_LABEL[s]}
-                active={sourceFilter === s}
-                onClick={() => setSourceFilter(s)}
-              />
-            ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)}
+              aria-label="Filter runs"
+              style={{
+                fontSize: 11, padding: "3px 20px 3px 9px", borderRadius: 999,
+                border: "1px solid var(--border)", color: "var(--fg-strong)",
+                background: "var(--bg)", minWidth: 0, flex: 1, cursor: "pointer",
+                fontFamily: "inherit", appearance: "auto",
+              }}
+            >
+              <option value="all">All runs</option>
+              <option value="subagent">Subagent</option>
+              {presentSources.map((s) => (
+                <option key={s} value={s}>{SOURCE_LABEL[s]}</option>
+              ))}
+            </select>
             <button
               onClick={() => void load()}
               title="Refresh"
@@ -2175,17 +2241,31 @@ export function MissionControl({
                   const task = tasks.find((t) => t.id === run.id);
                   const sendable =
                     task && (task.status === "queued" || task.status === "error");
+                  // Klide on-disk runs (kind === "run") get the one-click
+                  // resume — re-opens the AI panel with the prior transcript.
+                  // Skip live runs: nothing to resume yet, and the user can
+                  // just watch them on the board.
+                  const resumable =
+                    run.source === "klide" &&
+                    run.kind === "run" &&
+                    run.status !== "running" &&
+                    onResumeKlideRun;
                   return (
                     <RunRow
                       key={run.id}
                       run={run}
                       selected={run.id === selectedId}
-                      onSelect={() => setSelectedId(run.id)}
+                      onSelect={() => selectRun(run)}
                       action={
                         sendable ? (
                           <QuickSend
                             taskId={run.id}
                             onSent={() => setSelectedId(run.id)}
+                          />
+                        ) : resumable ? (
+                          <ResumeKlide
+                            runId={run.id}
+                            onResume={(id) => onResumeKlideRun?.(id)}
                           />
                         ) : undefined
                       }
@@ -2247,7 +2327,7 @@ export function MissionControl({
             theme={theme}
           />
         ) : selected ? (
-          <RunDetail run={selected} theme={theme} />
+          <RunDetail run={selected} theme={theme} onResumeKlide={onResumeKlideRun} />
         ) : (
           <div
             style={{
