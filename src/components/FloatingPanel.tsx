@@ -5,7 +5,6 @@ import {
   type PanelConstraints,
   type PanelId,
   type PanelRect,
-  clampRect,
 } from "../panelLayout";
 
 type Props = {
@@ -57,10 +56,16 @@ export function FloatingPanel({
     function onMoveResize(ev: MouseEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      const next: PanelRect = { ...startRect };
-      if (axis === "x" || axis === "xy") next.w = startRect.w + dx;
-      if (axis === "y" || axis === "xy") next.h = startRect.h + dy;
-      onResize(clampRect(next, workbenchW, workbenchH, constraints));
+      const next: PanelRect = { x: startRect.x, y: startRect.y, w: startRect.w, h: startRect.h };
+      if (axis === "x" || axis === "xy") {
+        next.w = Math.min(constraints.maxW, Math.max(constraints.minW, startRect.w + dx));
+        next.w = Math.min(next.w, Math.max(constraints.minW, workbenchW - startRect.x));
+      }
+      if (axis === "y" || axis === "xy") {
+        next.h = Math.min(constraints.maxH, Math.max(constraints.minH, startRect.h + dy));
+        next.h = Math.min(next.h, Math.max(constraints.minH, workbenchH - startRect.y));
+      }
+      onResize(next);
     }
 
     function onUp() {
