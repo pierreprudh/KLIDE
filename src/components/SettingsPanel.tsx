@@ -61,8 +61,6 @@ type Props = {
   onEditorMinimapChange: (enabled: boolean) => void;
   aiModel: string;
   onAiModelChange: (model: string) => void;
-  aiPanelView: "classic" | "claude-code";
-  onAiPanelViewChange: (view: "classic" | "claude-code") => void;
   availableAiModels: string[];
   requireDiffReview: boolean;
   onRequireDiffReviewChange: (enabled: boolean) => void;
@@ -888,8 +886,6 @@ export function SettingsPanel({
   onEditorMinimapChange,
   aiModel,
   onAiModelChange,
-  aiPanelView,
-  onAiPanelViewChange,
   availableAiModels,
   requireDiffReview,
   onRequireDiffReviewChange,
@@ -1453,32 +1449,6 @@ export function SettingsPanel({
                         onChange={onAiVisibleChange}
                         label="Show assistant panel"
                       />
-                    }
-                  />
-                  <Row
-                    title="Panel style"
-                    description="Choose between the classic Klide AI panel or the Claude Code interface."
-                    control={
-                      <select
-                        value={aiPanelView}
-                          onChange={(e) => {
-                            const val = e.target.value as "classic" | "claude-code";
-                            onAiPanelViewChange(val);
-                            localStorage.setItem("klide-ai-panel-view", val);
-                          }}
-                        style={{
-                          background: "var(--bg)",
-                          color: "var(--fg-strong)",
-                          border: "1px solid var(--border-strong)",
-                          borderRadius: "var(--radius-sm)",
-                          padding: "4px 8px",
-                          fontSize: 12,
-                          outline: "none",
-                        }}
-                      >
-                        <option value="classic">Classic</option>
-                        <option value="claude-code">Claude Code</option>
-                      </select>
                     }
                   />
                   <Row
