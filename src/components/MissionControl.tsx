@@ -39,6 +39,7 @@ import {
   type RunSource,
   type RunStatus,
 } from "../runs";
+import { CheckpointPanel } from "./CheckpointPanel";
 
 // Mission Control — KIDE's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
@@ -567,8 +568,34 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
   if (error) return <div style={muted}>Couldn't read this session.</div>;
   if (messages.length === 0) return <div style={muted}>No readable messages.</div>;
 
+  function copyAsMarkdown() {
+    const parts = messages.map((m) => {
+      const role = m.role === "user" ? "**You**" : `**${SOURCE_LABEL[run.source]}**`;
+      return `${role}\n\n${m.text}`;
+    });
+    navigator.clipboard.writeText(parts.join("\n\n---\n\n")).catch(() => {});
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={copyAsMarkdown}
+          title="Copy conversation as Markdown"
+          style={{
+            background: "none",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--fg-subtle)",
+            fontSize: 10,
+            padding: "3px 8px",
+            cursor: "pointer",
+            letterSpacing: "0.04em",
+          }}
+        >
+          Copy as MD
+        </button>
+      </div>
       {messages.map((m, i) => (
         <div key={i}>
           <div
@@ -1859,6 +1886,15 @@ function RunDetail({ run, messages, theme }: { run: Run; messages?: RunMessage[]
         {run.path && <MetaRow label="Log" value={run.path} />}
         {run.cwd && <MetaRow label="Directory" value={run.cwd} />}
       </dl>
+
+      {run.source === "klide" && (
+        <>
+          <DetailLabel>Checkpoints</DetailLabel>
+          <div style={{ marginBottom: 22 }}>
+            <CheckpointPanel runId={run.id} />
+          </div>
+        </>
+      )}
 
       <DetailLabel>Conversation</DetailLabel>
       <ConversationView run={run} preloaded={messages} />

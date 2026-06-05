@@ -22,7 +22,6 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
       { id: "claude-code", name: "Claude Code", available: true },
       { id: "codex", name: "Codex", available: true },
       { id: "opencode", name: "OpenCode", available: true },
-      { id: "gemini-cli", name: "Gemini CLI", available: false },
     ],
   },
   {
@@ -33,6 +32,7 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
       { id: "gemini", name: "Google Gemini", available: false },
       { id: "mistral", name: "Mistral", available: true },
       { id: "xai", name: "xAI Grok", available: true },
+      { id: "openrouter", name: "OpenRouter", available: true },
     ],
   },
 ];
@@ -48,12 +48,12 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
   "claude-code": "claude-sonnet-4-6",
   codex: "gpt-5",
   opencode: "opencode",
-  "gemini-cli": "gemini-cli",
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-4.1",
   gemini: "gemini-2.5-pro",
   mistral: "mistral-large-latest",
   xai: "grok-4",
+  openrouter: "openai/gpt-4o",
 };
 
 export const MODE_OPTIONS: { id: AgentMode; label: string; title: string }[] = [
@@ -67,7 +67,7 @@ export function providerName(id: ProviderId): string {
 }
 
 export function isDelegateProvider(id: ProviderId): boolean {
-  return id === "claude-code" || id === "codex" || id === "opencode" || id === "gemini-cli";
+  return id === "claude-code" || id === "codex" || id === "opencode";
 }
 
 export function normalizeAgentMode(value: string | null): AgentMode {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
+import { ProviderLogo } from "./ai/icons";
+import type { ProviderId } from "../agent/types";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
 import {
@@ -31,6 +33,12 @@ type SectionId =
 type Props = {
   theme: ThemeId;
   onThemeChange: (theme: ThemeId) => void;
+  autoTheme: boolean;
+  onAutoThemeChange: (enabled: boolean) => void;
+  lightTheme: ThemeId;
+  onLightThemeChange: (theme: ThemeId) => void;
+  darkTheme: ThemeId;
+  onDarkThemeChange: (theme: ThemeId) => void;
   aiVisible: boolean;
   onAiVisibleChange: (visible: boolean) => void;
   terminalVisible: boolean;
@@ -56,8 +64,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -67,7 +75,7 @@ type Props = {
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "gemini-cli";
+type SubscriptionProviderId = "claude-code" | "codex" | "opencode";
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -101,12 +109,6 @@ const subscriptionProviders: {
     title: "OpenCode",
     command: "opencode",
     description: "Interactive OpenCode CLI, launched as a real delegate terminal.",
-  },
-  {
-    id: "gemini-cli",
-    title: "Gemini CLI",
-    command: "gemini",
-    description: "Staged until the Gemini CLI is installed and its command shape is wired.",
   },
 ];
 
@@ -164,10 +166,12 @@ function Row({
   title,
   description,
   control,
+  leading,
 }: {
   title: string;
   description: string;
   control: ReactNode;
+  leading?: ReactNode;
 }) {
   return (
     <div
@@ -181,12 +185,19 @@ function Row({
         gap: 18,
       }}
     >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ color: "var(--fg-strong)", fontSize: 14, marginBottom: 5 }}>
-          {title}
-        </div>
-        <div style={{ color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.4 }}>
-          {description}
+      <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
+        {leading && (
+          <div style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
+            {leading}
+          </div>
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: "var(--fg-strong)", fontSize: 14, marginBottom: 5 }}>
+            {title}
+          </div>
+          <div style={{ color: "var(--fg-subtle)", fontSize: 13, lineHeight: 1.4 }}>
+            {description}
+          </div>
         </div>
       </div>
       {control}
@@ -849,6 +860,12 @@ function RegionEditor({
 export function SettingsPanel({
   theme,
   onThemeChange,
+  autoTheme,
+  onAutoThemeChange,
+  lightTheme,
+  onLightThemeChange,
+  darkTheme,
+  onDarkThemeChange,
   aiVisible,
   onAiVisibleChange,
   terminalVisible,
@@ -1114,16 +1131,80 @@ export function SettingsPanel({
           {activeSection === "appearance" && (
             <>
               <SettingBlock title="Theme">
-                <ChoiceCards
-                  value={theme}
-                  onChange={onThemeChange}
-                  options={THEMES.map((themeOption) => ({
-                    value: themeOption.id,
-                    title: themeOption.name,
-                    description: themeOption.description,
-                    icon: <ThemeSwatch colors={themeOption.swatches} />,
-                  }))}
-                />
+                <Panel>
+                  <Row
+                    title="Auto theme"
+                    description="Follow your system's light/dark mode preference."
+                    control={
+                      <Toggle
+                        checked={autoTheme}
+                        onChange={onAutoThemeChange}
+                        label="Auto theme"
+                      />
+                    }
+                  />
+                  {autoTheme ? (
+                    <>
+                      <Row
+                        title="Light theme"
+                        description="Theme used when your system is in light mode."
+                        control={
+                          <select
+                            value={lightTheme}
+                            onChange={(e) => onLightThemeChange(e.target.value as ThemeId)}
+                            style={{
+                              background: "var(--bg)",
+                              color: "var(--fg-strong)",
+                              border: "1px solid var(--border-strong)",
+                              borderRadius: "var(--radius-sm)",
+                              padding: "4px 8px",
+                              fontSize: 12,
+                              outline: "none",
+                            }}
+                          >
+                            {THEMES.filter((t) => !t.isDark).map((t) => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        }
+                      />
+                      <Row
+                        title="Dark theme"
+                        description="Theme used when your system is in dark mode."
+                        control={
+                          <select
+                            value={darkTheme}
+                            onChange={(e) => onDarkThemeChange(e.target.value as ThemeId)}
+                            style={{
+                              background: "var(--bg)",
+                              color: "var(--fg-strong)",
+                              border: "1px solid var(--border-strong)",
+                              borderRadius: "var(--radius-sm)",
+                              padding: "4px 8px",
+                              fontSize: 12,
+                              outline: "none",
+                            }}
+                          >
+                            {THEMES.filter((t) => t.isDark).map((t) => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        }
+                      />
+                    </>
+                  ) : (
+                    <ChoiceCards
+                      value={theme}
+                      onChange={onThemeChange}
+                      options={THEMES.map((themeOption) => ({
+                        value: themeOption.id,
+                        title: themeOption.name,
+                        description: themeOption.description,
+                        icon: <ThemeSwatch colors={themeOption.swatches} />,
+                      }))}
+                    />
+                  )}
+                </Panel>
               </SettingBlock>
               <SettingBlock title="Layout">
                 <Panel>
@@ -1414,6 +1495,45 @@ export function SettingsPanel({
               <SettingBlock title="Harness">
                 <Panel>
                   <p style={{ margin: "0 0 10px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
+                    Toggle which tools each run mode can call. Disabled tools are hidden from the model entirely.
+                  </p>
+                  {(["plan", "goal"] as const).map((mode) => (
+                    <div key={mode} style={{ marginBottom: 14 }}>
+                      <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 5 }}>
+                        {mode.charAt(0).toUpperCase() + mode.slice(1)} mode tools
+                      </label>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {(["read_file","list_dir","glob","grep","get_git_status","get_git_diff","clean_context","web_search","web_fetch","write_file","create_file","create_skill"] as const).map((tool) => {
+                          const key = `${mode}.${tool}`;
+                          const overrides = harnessSettings?.toolOverrides ?? {};
+                          const enabled = overrides[key] !== false;
+                          return (
+                            <label
+                              key={tool}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 4,
+                                fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer",
+                                padding: "3px 7px", borderRadius: "var(--radius-sm)",
+                                background: enabled ? "var(--bg-faint)" : "transparent",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={enabled}
+                                onChange={(e) => {
+                                  const next = { ...(harnessSettings?.toolOverrides ?? {}), [key]: e.target.checked ? true : false };
+                                  onHarnessSettingsChange?.({ ...harnessSettings, toolOverrides: next });
+                                }}
+                                style={{ accentColor: "var(--accent)" }}
+                              />
+                              {tool}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  <p style={{ margin: "10px 0", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
                     Override the system prompt per mode. Leave blank to use the built-in defaults.
                   </p>
                   {(["chat", "plan", "goal"] as const).map((mode) => (
@@ -1422,7 +1542,7 @@ export function SettingsPanel({
                         {mode.charAt(0).toUpperCase() + mode.slice(1)} mode prompt
                       </label>
                       <textarea
-                        value={harnessSettings?.[`${mode}Prompt` as keyof typeof harnessSettings] ?? ""}
+                        value={(harnessSettings as any)?.[`${mode}Prompt`] ?? ""}
                         onChange={(e) => {
                           const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
                           onHarnessSettingsChange?.(next);
@@ -1553,6 +1673,7 @@ export function SettingsPanel({
                         title={provider.title}
                         description={status?.detail || provider.description}
                         control={<StatusPill tone={tone}>{label}</StatusPill>}
+                        leading={<ProviderLogo id={provider.id as ProviderId} />}
                       />
                     );
                   })}
@@ -1575,6 +1696,7 @@ export function SettingsPanel({
                             : provider.description
                         }
                         control={<ModelChips models={options} />}
+                        leading={<ProviderLogo id={provider.id as ProviderId} />}
                       />
                     );
                   })}
@@ -1593,9 +1715,7 @@ export function SettingsPanel({
                             ? "Loaded from Claude Code's local model usage cache."
                             : provider.id === "codex"
                             ? "Loaded from the current Codex model cache when available."
-                            : provider.id === "opencode"
-                            ? "OpenCode chooses models inside its own interactive CLI."
-                            : "Shown for when Gemini CLI support is enabled."
+                            : "OpenCode chooses models inside its own interactive CLI."
                         }
                         control={
                           models.length > 0 ? (
@@ -1604,6 +1724,7 @@ export function SettingsPanel({
                             <StatusPill tone="idle">Unavailable</StatusPill>
                           )
                         }
+                        leading={<ProviderLogo id={provider.id as ProviderId} />}
                       />
                     );
                   })}

@@ -21,12 +21,12 @@ export type ProviderId =
   | "claude-code"
   | "codex"
   | "opencode"
-  | "gemini-cli"
   | "anthropic"
   | "openai"
   | "gemini"
   | "mistral"
-  | "xai";
+  | "xai"
+  | "openrouter";
 
 export type AgentAttachment = {
   path: string;
@@ -208,6 +208,16 @@ export type AgentState = {
   activeRunId: string | null;
 };
 
+export type CheckpointEntry = {
+  toolCallId: string;
+  path: string;
+  oldContent: string;
+  newContent: string;
+  isCreate: boolean;
+  workspaceRoot: string;
+  ts: number;
+};
+
 export type StartAgentRunInput = {
   workspaceRoot: string | null;
   mode: AgentMode;
@@ -217,5 +227,6 @@ export type StartAgentRunInput = {
   attachments: AgentAttachment[];
   context?: AgentContextSnapshot;
   systemPrompt?: string;
+  disabledTools?: string[];
 };
 

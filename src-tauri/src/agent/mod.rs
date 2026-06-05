@@ -772,19 +772,30 @@ fn sanitize_file_id(id: &str) -> String {
         .collect()
 }
 
-#[tauri::command]
-pub async fn agent_list_checkpoints(
-    app: tauri::AppHandle,
-    run_id: String,
+fn checkpoint_file(runs_dir: &Path, run_id: &str, tool_call_id: &str) -> PathBuf {
+    runs_dir
+        .join(run_id)
+        .join("checkpoints")
+        .join(format!("{}.json", sanitize_file_id(tool_call_id)))
+}
+
+fn checkpoint_dir(runs_dir: &Path, run_id: &str) -> PathBuf {
+    runs_dir.join(run_id).join("checkpoints")
+}
+
+/// Read all checkpoints for `run_id`, newest first. Pure function over the
+/// runs directory — the Tauri command is a thin wrapper.
+pub(crate) fn list_checkpoints_at(
+    runs_dir: &Path,
+    run_id: &str,
 ) -> Result<Vec<CheckpointEntry>, String> {
-    let runs_dir = app_runs_dir(&app)?;
-    let checkpoint_dir = runs_dir.join(&run_id).join("checkpoints");
-    if !checkpoint_dir.exists() {
+    let dir = checkpoint_dir(runs_dir, run_id);
+    if !dir.exists() {
         return Ok(Vec::new());
     }
     let mut entries: Vec<CheckpointEntry> = Vec::new();
-    if let Ok(dir) = std::fs::read_dir(&checkpoint_dir) {
-        for file in dir.flatten() {
+    if let Ok(read_dir) = std::fs::read_dir(&dir) {
+        for file in read_dir.flatten() {
             if let Ok(content) = std::fs::read_to_string(file.path()) {
                 if let Ok(entry) = serde_json::from_str::<CheckpointEntry>(&content) {
                     entries.push(entry);
@@ -796,18 +807,16 @@ pub async fn agent_list_checkpoints(
     Ok(entries)
 }
 
-#[tauri::command]
-pub async fn agent_revert_checkpoint(
-    app: tauri::AppHandle,
-    run_id: String,
-    tool_call_id: String,
+/// Revert one checkpoint: restore `old_content` for an edit, or remove the
+/// file for a create. Consumes the checkpoint file so it cannot be reverted
+/// twice. Pure function — the Tauri command is a thin wrapper.
+pub(crate) fn revert_checkpoint_at(
+    runs_dir: &Path,
+    run_id: &str,
+    tool_call_id: &str,
 ) -> Result<(), String> {
-    let runs_dir = app_runs_dir(&app)?;
-    let checkpoint_file = runs_dir
-        .join(&run_id)
-        .join("checkpoints")
-        .join(format!("{}.json", sanitize_file_id(&tool_call_id)));
-    let content = std::fs::read_to_string(&checkpoint_file)
+    let file = checkpoint_file(runs_dir, run_id, tool_call_id);
+    let content = std::fs::read_to_string(&file)
         .map_err(|_| format!("Checkpoint {tool_call_id} not found"))?;
     let entry: CheckpointEntry = serde_json::from_str(&content)
         .map_err(|e| format!("Invalid checkpoint: {e}"))?;
@@ -828,6 +837,230 @@ pub async fn agent_revert_checkpoint(
     }
 
     // Remove the checkpoint file so it can't be reverted twice
-    let _ = std::fs::remove_file(&checkpoint_file);
+    let _ = std::fs::remove_file(&file);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn agent_list_checkpoints(
+    app: tauri::AppHandle,
+    run_id: String,
+) -> Result<Vec<CheckpointEntry>, String> {
+    let runs_dir = app_runs_dir(&app)?;
+    list_checkpoints_at(&runs_dir, &run_id)
+}
+
+#[tauri::command]
+pub async fn agent_revert_checkpoint(
+    app: tauri::AppHandle,
+    run_id: String,
+    tool_call_id: String,
+) -> Result<(), String> {
+    let runs_dir = app_runs_dir(&app)?;
+    revert_checkpoint_at(&runs_dir, &run_id, &tool_call_id)
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    //! Round-trip + revert tests for the checkpoint store.
+    //!
+    //! These exercise the pure helpers (`list_checkpoints_at` and
+    //! `revert_checkpoint_at`) against a real temp directory so we can
+    //! catch regressions in the on-disk format without spinning up Tauri.
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Build a fresh sandbox: a real workspace root + a `runs` dir underneath.
+    /// Returns `(runs_dir, workspace_root)`.
+    fn make_sandbox(label: &str) -> (PathBuf, PathBuf) {
+        let stamp = format!(
+            "klide-checkpoint-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(stamp);
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let runs = root.join("runs");
+        std::fs::create_dir_all(&runs).expect("create runs");
+        (runs, workspace)
+    }
+
+    fn write_checkpoint(runs_dir: &Path, run_id: &str, tool_call_id: &str, json: &str) -> PathBuf {
+        let dir = checkpoint_dir(runs_dir, run_id);
+        std::fs::create_dir_all(&dir).expect("create checkpoint dir");
+        let file = checkpoint_file(runs_dir, run_id, tool_call_id);
+        std::fs::write(&file, json).expect("write checkpoint json");
+        file
+    }
+
+    fn checkpoint_json(
+        tool_call_id: &str,
+        path: &str,
+        old_content: &str,
+        new_content: &str,
+        is_create: bool,
+        workspace_root: &str,
+        ts: i64,
+    ) -> String {
+        serde_json::json!({
+            "toolCallId": tool_call_id,
+            "path": path,
+            "oldContent": old_content,
+            "newContent": new_content,
+            "isCreate": is_create,
+            "workspaceRoot": workspace_root,
+            "ts": ts,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn sanitize_file_id_flattens_path_separators() {
+        assert_eq!(sanitize_file_id("turn1/file1"), "turn1_file1");
+        assert_eq!(sanitize_file_id("a\\b:c"), "a_b_c");
+        assert_eq!(sanitize_file_id("call_42"), "call_42");
+    }
+
+    #[test]
+    fn list_empty_run_returns_empty_vec() {
+        let (runs, _ws) = make_sandbox("list-empty");
+        let entries = list_checkpoints_at(&runs, "no-such-run").expect("list");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn list_sorts_newest_first() {
+        let (runs, _ws) = make_sandbox("list-sort");
+        let run = "run_42";
+        for (id, ts) in [("call_a", 100_i64), ("call_b", 300), ("call_c", 200)] {
+            let json = checkpoint_json(id, "x.rs", "", "", false, "/tmp", ts);
+            write_checkpoint(&runs, run, id, &json);
+        }
+        let entries = list_checkpoints_at(&runs, run).expect("list");
+        let ids: Vec<&str> = entries.iter().map(|e| e.tool_call_id.as_str()).collect();
+        assert_eq!(ids, ["call_b", "call_c", "call_a"]);
+    }
+
+    #[test]
+    fn revert_restores_old_content_for_edit() {
+        let (runs, ws) = make_sandbox("revert-edit");
+        let run = "run_edit";
+        let rel = "src/example.txt";
+        let abs = ws.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, "original content").unwrap();
+
+        // Snapshot what the file looked like before the proposed edit.
+        let json = checkpoint_json(
+            "edit_1",
+            rel,
+            "original content",
+            "new content",
+            false,
+            ws.to_str().unwrap(),
+            1_000,
+        );
+        let cp = write_checkpoint(&runs, run, "edit_1", &json);
+
+        // Simulate the harness applying the edit.
+        std::fs::write(&abs, "new content").unwrap();
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "new content");
+
+        // Revert and confirm the file is back to the snapshot.
+        revert_checkpoint_at(&runs, run, "edit_1").expect("revert");
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "original content");
+        assert!(!cp.exists(), "checkpoint file should be consumed");
+    }
+
+    #[test]
+    fn revert_removes_file_for_create() {
+        let (runs, ws) = make_sandbox("revert-create");
+        let run = "run_create";
+        let rel = "src/created.txt";
+        let abs = ws.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, "freshly created body").unwrap();
+
+        let json = checkpoint_json(
+            "create_1",
+            rel,
+            "",
+            "freshly created body",
+            true,
+            ws.to_str().unwrap(),
+            2_000,
+        );
+        let cp = write_checkpoint(&runs, run, "create_1", &json);
+
+        revert_checkpoint_at(&runs, run, "create_1").expect("revert");
+        assert!(!abs.exists(), "create revert should delete the file");
+        assert!(!cp.exists(), "checkpoint file should be consumed");
+    }
+
+    #[test]
+    fn revert_cannot_be_replayed() {
+        let (runs, ws) = make_sandbox("revert-twice");
+        let run = "run_x";
+        let rel = "note.md";
+        let abs = ws.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, "v1").unwrap();
+
+        let json = checkpoint_json(
+            "edit_x",
+            rel,
+            "v1",
+            "v2",
+            false,
+            ws.to_str().unwrap(),
+            0,
+        );
+        write_checkpoint(&runs, run, "edit_x", &json);
+        std::fs::write(&abs, "v2").unwrap();
+
+        revert_checkpoint_at(&runs, run, "edit_x").expect("first revert");
+        // The file is back at v1, but the checkpoint file is gone.
+        let second = revert_checkpoint_at(&runs, run, "edit_x");
+        assert!(second.is_err(), "second revert should fail: {second:?}");
+        assert!(second.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn revert_unknown_checkpoint_returns_error() {
+        let (runs, _ws) = make_sandbox("revert-missing");
+        let err = revert_checkpoint_at(&runs, "any_run", "ghost_id").unwrap_err();
+        assert!(err.contains("ghost_id"), "got: {err}");
+        assert!(err.contains("not found"), "got: {err}");
+    }
+
+    #[test]
+    fn revert_rejects_path_outside_workspace() {
+        // The checkpoint's `workspaceRoot` points outside the actual
+        // workspace; resolve_new_path must refuse to write there. The
+        // containment guard is exercised separately in `tools::tests`, so
+        // here we just confirm revert can't be tricked by a bogus root —
+        // whatever the specific error, the file must not be written.
+        let (runs, _ws) = make_sandbox("revert-traversal");
+        let run = "run_evil";
+        let json = checkpoint_json(
+            "edit_evil",
+            "evil.rs",
+            "old",
+            "new",
+            false,
+            "/this/does/not/exist/anywhere",
+            0,
+        );
+        write_checkpoint(&runs, run, "edit_evil", &json);
+        let result = revert_checkpoint_at(&runs, run, "edit_evil");
+        assert!(result.is_err(), "revert must refuse a non-existent workspace root");
+        // The checkpoint file should still be present — the revert never
+        // got far enough to consume it, so the user can try again after
+        // fixing the workspace path.
+        assert!(checkpoint_file(&runs, run, "edit_evil").exists());
+    }
 }

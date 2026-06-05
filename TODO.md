@@ -28,8 +28,8 @@ them.
 
 ## Next Product Moves
 
-- [ ] Editable harness settings: mode prompts, tool toggles, and tool descriptions.
-- [ ] Checkpoint rollback: preview files changed since a turn and revert selected files.
+- [x] Editable harness settings: mode prompts, tool toggles, and tool descriptions (tool descriptions TBD).
+- [x] Checkpoint rollback: preview files changed since a turn and revert selected files.
 - [ ] Settings depth without adding persistent chrome.
 - [ ] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
 - [ ] Context Lens v2: use real imports, Tauri invokes, and edited-file history instead of mostly heuristics.
@@ -40,7 +40,7 @@ them.
 - [x] Let Claude Code / Codex run as delegate agents in Goal mode; Klide surfaces resulting workspace diffs.
 - [x] Show delegate PTY launch/live/error state in the terminal header.
 - [x] Make Mission Control useful as a read-only transcript/log inspector.
-- [ ] Finish or shelve `gemini-cli`.
+- [x] Shelve `gemini-cli` — dead stubs removed.
 
 ## Parking Lot
 

@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AgentEvent,
   AgentMode,
+  CheckpointEntry,
   DiffDecision,
   PermissionDecision,
   ProviderId,
@@ -17,6 +18,7 @@ type StartRunRequest = {
   attachments: StartAgentRunInput["attachments"];
   context?: StartAgentRunInput["context"];
   systemPrompt?: string;
+  disabledTools?: string[];
 };
 
 type StartRunResponse = {
@@ -55,6 +57,7 @@ export async function startAgentRun(
       attachments: input.attachments,
       context: input.context,
       systemPrompt: input.systemPrompt,
+      disabledTools: input.disabledTools,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
   });
@@ -91,5 +94,13 @@ export async function resolveDiff(input: {
 
 export async function readAgentRunEvents(runId: string): Promise<AgentEvent[]> {
   return invoke<AgentEvent[]>("agent_read_run", { runId });
+}
+
+export async function listCheckpoints(runId: string): Promise<CheckpointEntry[]> {
+  return invoke<CheckpointEntry[]>("agent_list_checkpoints", { runId });
+}
+
+export async function revertCheckpoint(runId: string, toolCallId: string): Promise<void> {
+  await invoke("agent_revert_checkpoint", { runId, toolCallId });
 }
 
