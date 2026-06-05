@@ -1,3 +1,4 @@
+pub mod todo;
 pub mod tools;
 pub mod transcripts;
 pub mod types;
@@ -128,10 +129,20 @@ fn provider_messages(request: &StartRunRequest, system: String) -> Vec<serde_jso
         user_text.push_str("\n\n[Files attached for context]\n");
         user_text.push_str(&attachments);
     }
-    vec![
+    let mut messages = vec![
         serde_json::json!({ "role": "system", "content": system }),
-        serde_json::json!({ "role": "user", "content": user_text }),
-    ]
+    ];
+    // Inject initial todo list as context
+    if let Some(cwd) = &request.workspace_root {
+        if let Some(todo_text) = todo::list_todos_text(cwd) {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": format!("[TODO list]\n{}", todo_text)
+            }));
+        }
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": user_text }));
+    messages
 }
 
 fn assistant_provider_message(
@@ -296,6 +307,7 @@ async fn run_agent_loop(
         created_ms,
         updated_ms: created_ms,
         message_count: 1,
+        parent_id: request.parent_id.clone(),
     };
     write_summary(&runs_dir, &summary)?;
 
@@ -367,6 +379,25 @@ async fn run_agent_loop(
             }
             Ok(())
         });
+
+        // Refresh the TODO list context before every turn so the model always
+        // sees the latest task state (tools may have modified it).
+        if let Some(cwd) = &request.workspace_root {
+            let todo_text = todo::list_todos_text(cwd);
+            for msg in messages.iter_mut() {
+                if msg.get("role").and_then(|v| v.as_str()) == Some("system")
+                    && msg.get("content").and_then(|v| v.as_str()).map(|c| c.starts_with("[TODO list]")).unwrap_or(false)
+                {
+                    msg["content"] = serde_json::Value::String(
+                        match &todo_text {
+                            Some(t) => format!("[TODO list]\n{t}"),
+                            None => "[TODO list]\nNo todos.".to_string(),
+                        }
+                    );
+                    break;
+                }
+            }
+        }
 
         // Race the provider stream against user cancellation so abort takes
         // effect mid-request, not only between turns.

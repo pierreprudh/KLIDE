@@ -1,3 +1,4 @@
+use super::todo;
 use super::types::{AgentMode, DiffProposal, ToolResult};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -147,6 +148,86 @@ fn registry() -> Vec<ToolEntry> {
             run_write_preview: None,
         },
         ToolEntry {
+            kind: ToolKind::ReadOnly,
+            schema: schema("get_todo_list", "Read the current TODO list. Each item has an id (e.g. T1, T2) and a done/pending status. Returns empty if no todos exist.",
+                serde_json::json!({}), &[]),
+            run_read: Some(|root, _input| {
+                match todo::list_todos_text(root) {
+                    Some(text) => ok(format!("TODO list:\n{text}")),
+                    None => ok("No todos yet. Use update_todo_list to add one.".to_string()),
+                }
+            }),
+            run_write_preview: None,
+        },
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
+            schema: schema("update_todo_list", "Add, complete, uncomplete, edit, remove, or clear todos. This directly modifies the project's task list for multi-session continuity. Returns the updated list.",
+                serde_json::json!({
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "complete", "uncomplete", "edit", "remove", "clear_done"],
+                        "description": "add=create new, complete=mark done, uncomplete=mark pending, edit=change text, remove=delete by id, clear_done=remove all completed."
+                    },
+                    "id": { "type": "string", "description": "Item id (e.g. T1). Required for complete/uncomplete/edit/remove." },
+                    "text": { "type": "string", "description": "Task text. Required for add and edit." }
+                }),
+                &["action"]),
+            run_read: Some(|root, input| {
+                let action = match input.get("action").and_then(|v| v.as_str()) {
+                    Some(a) => a,
+                    None => return err("update_todo_list requires an action.".to_string()),
+                };
+                let result = match action {
+                    "add" => {
+                        let text = match input.get("text").and_then(|v| v.as_str()) {
+                            Some(t) => t.to_string(),
+                            None => return err("add action requires text.".to_string()),
+                        };
+                        todo::add_todo(root, text)
+                    }
+                    "complete" | "uncomplete" => {
+                        let id = match input.get("id").and_then(|v| v.as_str()) {
+                            Some(i) => i,
+                            None => return err("{action} action requires an id.".to_string()),
+                        };
+                        // Toggle the status; if already in the requested state,
+                        // the result still reports the current state.
+                        todo::toggle_todo(root, id)
+                    }
+                    "edit" => {
+                        let id = match input.get("id").and_then(|v| v.as_str()) {
+                            Some(i) => i,
+                            None => return err("edit action requires an id.".to_string()),
+                        };
+                        let text = match input.get("text").and_then(|v| v.as_str()) {
+                            Some(t) => t.to_string(),
+                            None => return err("edit action requires text.".to_string()),
+                        };
+                        todo::update_text(root, id, text)
+                    }
+                    "remove" => {
+                        let id = match input.get("id").and_then(|v| v.as_str()) {
+                            Some(i) => i,
+                            None => return err("remove action requires an id.".to_string()),
+                        };
+                        todo::remove_todo(root, id)
+                    }
+                    "clear_done" => todo::clear_done(root),
+                    _ => return err(format!("Unknown action: {action}")),
+                };
+                match result {
+                    Ok(msg) => {
+                        let list = todo::list_todos_text(root)
+                            .map(|t| format!("\n\nCurrent todos:\n{t}"))
+                            .unwrap_or_default();
+                        ok(format!("{msg}{list}"))
+                    }
+                    Err(e) => err(e),
+                }
+            }),
+            run_write_preview: None,
+        },
+        ToolEntry {
             kind: ToolKind::Write,
             schema: schema("write_file", "Propose a search-and-replace edit to an existing file. The user reviews the diff and approves or rejects it.",
                 serde_json::json!({
@@ -259,8 +340,8 @@ struct DynamicToolDef {
     name: String,
     description: String,
     command: String,
-    #[serde(default = "default_timeout")]
-    timeout_secs: u64,
+    #[serde(default = "default_timeout", alias = "timeout_secs")]
+    _timeout_secs: u64,
     #[serde(default)]
     cwd: String,
 }

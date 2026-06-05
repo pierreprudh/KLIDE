@@ -56,6 +56,8 @@ pub struct StartRunRequest {
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -105,6 +107,8 @@ pub struct AgentRunSummary {
     pub created_ms: i64,
     pub updated_ms: i64,
     pub message_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
