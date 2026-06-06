@@ -57,6 +57,14 @@ type Props = {
   visible: boolean;
   width: number;
   fill?: boolean;
+  /**
+   * Stable identity for this panel. When the workbench view is unmounted
+   * (user switches to Settings / Mission Control) the AiPanel component
+   * unmounts with it; passing a stable `panelId` lets us re-attach to the
+   * same conversation history on the next mount, so the user does not lose
+   * their in-flight thread when they come back. Defaults to a fresh id.
+   */
+  panelId?: string;
   model: string;
   onModelChange: (model: string) => void;
   availableModels: string[];
@@ -80,6 +88,7 @@ export function AiPanel({
   visible,
   width,
   fill,
+  panelId,
   model,
   onModelChange,
   availableModels,
@@ -179,7 +188,13 @@ export function AiPanel({
   const [mentionIdx, setMentionIdx] = useState(0);
   const mentionMatches = mention !== null ? fuzzyFiles(fileList, mention.query) : [];
 
-  const [provider, setProvider] = useState<ProviderId>(() => (localStorage.getItem("klide.provider") as ProviderId) || "ollama");
+  const [provider, setProvider] = useState<ProviderId>(() => {
+    if (panelId) {
+      const perPanel = localStorage.getItem(`klide.provider.${panelId}`) as ProviderId | null;
+      if (perPanel) return perPanel;
+    }
+    return (localStorage.getItem("klide.provider") as ProviderId) || "ollama";
+  });
   const providerDelegatesWork = isDelegateProvider(provider);
   const isLocalProvider = provider === "ollama" || provider === "mlx";
   const [providerOpen, setProviderOpen] = useState(false);
@@ -192,6 +207,7 @@ export function AiPanel({
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
     setProvider(id);
+    if (panelId) localStorage.setItem(`klide.provider.${panelId}`, id);
     localStorage.setItem("klide.provider", id);
     const stored = localStorage.getItem(`klide.model.${id}`);
     onModelChange(stored || DEFAULT_MODELS[id]);
@@ -316,7 +332,7 @@ export function AiPanel({
   const contextTone = contextRatio > 0.85 ? "var(--danger, #B42318)" : contextRatio > 0.65 ? "#A15C00" : "var(--accent)";
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
-  const [currentId, setCurrentId] = useState<string>(() => genId());
+  const [currentId, setCurrentId] = useState<string>(() => panelId ?? genId());
   const [historyOpen, setHistoryOpen] = useState(false);
   const msgsRef = useRef<Msg[]>([]);
   const queueRef = useRef<QueuedTurn[]>([]);
@@ -348,6 +364,26 @@ export function AiPanel({
 
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
+  useEffect(() => {
+    if (!panelId) return;
+    const conv = loadConversations<Conversation>().find((c) => c.id === panelId);
+    if (!conv) return;
+    if (conv.msgs.length === 0) return;
+    abortActiveHarnessRun();
+    setMsgs(conv.msgs);
+    msgsRef.current = conv.msgs;
+    queueRef.current = [];
+    queueGenerationRef.current += 1;
+    setQueuedTurns([]);
+    setConversations((prev) => {
+      if (prev.some((c) => c.id === conv.id)) return prev;
+      return [conv, ...prev];
+    });
+    // Run only on mount — we want to re-attach to the panel's prior thread,
+    // not re-run on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function newConversation() {
     if (providerDelegatesWork) { void invoke("delegate_pty_stop", { sessionId: `${currentId}:${provider}` }); }
     setHistoryOpen(false);
@@ -361,7 +397,7 @@ export function AiPanel({
     setStreaming(false);
     setActivity(null);
     setInput("");
-    setCurrentId(genId());
+    setCurrentId(panelId ?? genId());
   }
 
   function loadConversation(c: Conversation) {
@@ -616,6 +652,11 @@ export function AiPanel({
               } catch { /* file may not exist yet */ }
             })();
           }
+          // Refresh git status (sidebar decorations, project graph) so the
+          // edit shows up in the workbench the moment the harness writes it —
+          // the watcher would catch it eventually but with a 250ms delay and
+          // only on file events, not for create/delete-then-recreate.
+          onWorkspaceChanged?.();
           break;
         }
         case "run_result": {

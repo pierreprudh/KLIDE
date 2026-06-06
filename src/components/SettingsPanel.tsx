@@ -573,6 +573,61 @@ function CodePill({ children }: { children: ReactNode }) {
   );
 }
 
+function CenteredLoader({ label }: { label?: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 14,
+        padding: "96px 20px",
+        color: "var(--fg-subtle)",
+      }}
+    >
+      <svg
+        width="36"
+        height="10"
+        viewBox="0 0 36 10"
+        fill="currentColor"
+        aria-hidden
+      >
+        <circle cx="5" cy="5" r="4">
+          <animate
+            attributeName="opacity"
+            values="0.25;1;0.25"
+            dur="1.2s"
+            begin="0s"
+            repeatCount="indefinite"
+          />
+        </circle>
+        <circle cx="18" cy="5" r="4">
+          <animate
+            attributeName="opacity"
+            values="0.25;1;0.25"
+            dur="1.2s"
+            begin="0.4s"
+            repeatCount="indefinite"
+          />
+        </circle>
+        <circle cx="31" cy="5" r="4">
+          <animate
+            attributeName="opacity"
+            values="0.25;1;0.25"
+            dur="1.2s"
+            begin="0.8s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      </svg>
+      {label && (
+        <span style={{ fontSize: 12.5, letterSpacing: "0.02em" }}>{label}</span>
+      )}
+    </div>
+  );
+}
+
 function StatusPill({
   tone,
   children,
@@ -1037,8 +1092,8 @@ export function SettingsPanel({
   }
 
   useEffect(() => {
-    void refreshSubscriptionConnections();
-  }, []);
+    if (activeSection === "subscription") void refreshSubscriptionConnections();
+  }, [activeSection]);
 
   return (
     <main
@@ -1830,6 +1885,10 @@ export function SettingsPanel({
           </Section>
 
           <Section id="subscription" active={activeSection}>
+            {connectionLoading && Object.keys(subscriptionStatuses).length === 0 ? (
+              <CenteredLoader label="Checking subscriptions…" />
+            ) : (
+              <>
               <SettingBlock title="Subscription Connections">
                 <Panel>
                   {subscriptionProviders.map((provider) => {
@@ -1925,6 +1984,8 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              </>
+            )}
           </Section>
 
           <Section id="editor" active={activeSection}>
@@ -2012,9 +2073,11 @@ export function SettingsPanel({
               </Panel>
             </SettingBlock>
           </Section>
-          <Section id="stats" active={activeSection}>
-            <StatsSection />
-          </Section>
+          {activeSection === "stats" && (
+            <Section id="stats" active={activeSection}>
+              <StatsSection />
+            </Section>
+          )}
         </div>
       </div>
     </main>
@@ -2366,6 +2429,11 @@ function StatsSection() {
 
   useEffect(() => {
     let alive = true;
+    // Hold the loader for at least this long so the user can actually see
+    // it — a warm-cache fetch can complete in well under 200ms, which
+    // reads as a freeze rather than a wait.
+    const minDisplayMs = 400;
+    const start = performance.now();
     (async () => {
       try {
         const { fetchAgentRuns } = await import("../runs");
@@ -2374,7 +2442,15 @@ function StatsSection() {
       } catch {
         // Outside Tauri (plain Vite) — leave the section empty.
       } finally {
-        if (alive) setLoading(false);
+        if (!alive) return;
+        const remaining = Math.max(0, minDisplayMs - (performance.now() - start));
+        if (remaining > 0) {
+          setTimeout(() => {
+            if (alive) setLoading(false);
+          }, remaining);
+        } else {
+          setLoading(false);
+        }
       }
     })();
     return () => {
@@ -2454,6 +2530,10 @@ function StatsSection() {
     }
     return { conversations, inputTokens, outputTokens };
   }, [runs, selectedDay]);
+
+  if (loading && runs.length === 0) {
+    return <CenteredLoader label="Reading session logs…" />;
+  }
 
   return (
     <>
@@ -2545,11 +2625,6 @@ function StatsSection() {
 
       <SettingBlock title="Providers & models">
         <Panel>
-          {loading && (
-            <div style={{ padding: "14px 18px", color: "var(--fg-subtle)", fontSize: 12 }}>
-              Reading session logs…
-            </div>
-          )}
           {!loading && groups.length === 0 && (
             <div style={{ padding: "14px 18px", color: "var(--fg-subtle)", fontSize: 12 }}>
               No agent sessions found yet. Run a conversation and come back.

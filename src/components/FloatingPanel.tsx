@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   PANEL_CONSTRAINTS,
+  clampRect,
   type PanelConstraints,
   type PanelId,
   type PanelRect,
@@ -70,14 +71,12 @@ export function FloatingPanel({
       const dy = ev.clientY - startY;
       const next: PanelRect = { x: startRect.x, y: startRect.y, w: startRect.w, h: startRect.h };
       if (axis === "x" || axis === "xy") {
-        next.w = Math.min(constraints.maxW, Math.max(constraints.minW, startRect.w + dx));
-        next.w = Math.min(next.w, Math.max(constraints.minW, workbenchW - startRect.x));
+        next.w = startRect.w + dx;
       }
       if (axis === "y" || axis === "xy") {
-        next.h = Math.min(constraints.maxH, Math.max(constraints.minH, startRect.h + dy));
-        next.h = Math.min(next.h, Math.max(constraints.minH, workbenchH - startRect.y));
+        next.h = startRect.h + dy;
       }
-      onResize(next);
+      onResize(clampRect(next, workbenchW, workbenchH, constraints));
     }
 
     function onUp() {
@@ -115,9 +114,7 @@ export function FloatingPanel({
         w: startRect.w,
         h: startRect.h,
       };
-      next.x = Math.max(0, Math.min(workbenchW - next.w, next.x));
-      next.y = Math.max(0, Math.min(workbenchH - next.h, next.y));
-      onMove(next);
+      onMove(clampRect(next, workbenchW, workbenchH, constraints));
     }
 
     function onUp() {

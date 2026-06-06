@@ -64,6 +64,10 @@ type Tab = {
   // whether a watch event is a real external edit or just noise (rename, save).
   diskCode?: string;
 };
+type AiPanelInstance = {
+  id: string;
+  rect: PanelRect;
+};
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
 function readNumberSetting(key: string, fallback: number, min: number, max: number): number {
@@ -76,6 +80,10 @@ function readNumberSetting(key: string, fallback: number, min: number, max: numb
 function readBoolSetting(key: string, fallback: boolean): boolean {
   const stored = localStorage.getItem(key);
   return stored === null ? fallback : stored === "true";
+}
+
+function newAiPanelId(): string {
+  return `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -125,7 +133,6 @@ function App() {
   const [sidebarSlot2, setSidebarSlot2] = useState<Panel | null>(
     () => localStorage.getItem("klide-sidebar-slot2") as Panel | null
   );
-  const [aiPanelIds, setAiPanelIds] = useState<string[]>(["ai-main"]);
   const [resumeConversation, setResumeConversation] = useState<Conversation | null>(null);
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
@@ -157,6 +164,9 @@ function App() {
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const [workbenchSize, setWorkbenchSize] = useState({ w: 0, h: 0 });
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => ({}));
+  const [aiPanels, setAiPanels] = useState<AiPanelInstance[]>(() => [
+    { id: "ai-main", rect: { x: 0, y: 0, w: 360, h: 360 } },
+  ]);
   // Bring-to-front z-index. Bumped when the user clicks a panel.
   const [zCounter, setZCounter] = useState(10);
   const [focusedPanel, setFocusedPanel] = useState<PanelLayoutId | null>(null);
@@ -198,11 +208,41 @@ function App() {
   // build a default. Migrate from the legacy per-key localStorage entries
   // on first run so users don't lose their existing widths.
   const [layoutMigrated, setLayoutMigrated] = useState(false);
+  function fallbackAiRect(): PanelRect {
+    const w = Math.min(360, Math.max(1, workbenchSize.w));
+    const h = Math.min(
+      Math.max(240, workbenchSize.h - 246),
+      Math.max(1, workbenchSize.h)
+    );
+    return clampRect(
+      { x: Math.max(0, workbenchSize.w - w), y: 0, w, h },
+      workbenchSize.w,
+      workbenchSize.h,
+      PANEL_CONSTRAINTS.ai
+    );
+  }
+
+  function aiPanelsFromRects(
+    rects: PanelRect[] | undefined,
+    previous: AiPanelInstance[]
+  ): AiPanelInstance[] {
+    const source = rects && rects.length > 0 ? rects : [fallbackAiRect()];
+    return source.map((rect, idx) => ({
+      id: previous[idx]?.id ?? (idx === 0 ? "ai-main" : newAiPanelId()),
+      rect,
+    }));
+  }
+
+  function syncAiPanelsFromRects(rects: PanelRect[] | undefined) {
+    setAiPanels((previous) => aiPanelsFromRects(rects, previous));
+  }
+
   useEffect(() => {
     if (!workspaceRoot || workbenchSize.w === 0 || workbenchSize.h === 0) return;
     const saved = loadPanelLayout(workspaceRoot);
     if (saved) {
       setPanelLayout(saved);
+      syncAiPanelsFromRects(saved.ai);
       return;
     }
     if (!layoutMigrated) {
@@ -240,11 +280,13 @@ function App() {
         },
       };
       setPanelLayout(migrated);
+      syncAiPanelsFromRects(migrated.ai);
       savePanelLayout(workspaceRoot, migrated);
       return;
     }
     const fresh = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
     setPanelLayout(fresh);
+    syncAiPanelsFromRects(fresh.ai);
     savePanelLayout(workspaceRoot, fresh);
   }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated]);
 
@@ -300,6 +342,7 @@ function App() {
       });
       if (aiDirty) {
         next.ai = clampedAi;
+        syncAiPanelsFromRects(clampedAi);
         dirty = true;
       }
     }
@@ -311,6 +354,7 @@ function App() {
     clearPanelLayout(workspaceRoot);
     const fresh = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
     setPanelLayout(fresh);
+    syncAiPanelsFromRects(fresh.ai);
     savePanelLayout(workspaceRoot, fresh);
   }
   void resetPanelLayout;
@@ -323,25 +367,32 @@ function App() {
   // layout persisted while AI was hidden). Seed one so toggling AI on
   // always has something to render.
   function ensureAiRect() {
-    setPanelLayout((prev) => {
-      if (prev.ai && prev.ai.length > 0) return prev;
-      const w = 360;
-      const h = Math.max(240, workbenchSize.h - 246);
-      return {
-        ...prev,
-        ai: [{ x: Math.max(0, workbenchSize.w - w), y: 0, w, h }],
-      };
-    });
+    const panels =
+      aiPanels.length > 0
+        ? aiPanels
+        : [{ id: "ai-main", rect: fallbackAiRect() }];
+    if (aiPanels.length === 0) setAiPanels(panels);
+    setPanelLayout((prev) =>
+      prev.ai && prev.ai.length > 0
+        ? prev
+        : { ...prev, ai: panels.map((panel) => panel.rect) }
+    );
   }
 
   function updateAiRect(idx: number, next: PanelRect) {
-    setPanelLayout((prev) => {
-      const list = prev.ai ?? [];
-      if (idx >= list.length) return prev;
-      const copy = list.slice();
-      copy[idx] = next;
-      return { ...prev, ai: copy };
+    const rect = clampRect(next, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
+    setAiPanels((prev) => {
+      if (idx >= prev.length) return prev;
+      return prev.map((panel, panelIdx) =>
+        panelIdx === idx ? { ...panel, rect } : panel
+      );
     });
+    setPanelLayout((prev) => ({
+      ...prev,
+      ai: (prev.ai ?? aiPanels.map((panel) => panel.rect)).map((oldRect, panelIdx) =>
+        panelIdx === idx ? rect : oldRect
+      ),
+    }));
   }
 
   function focusPanel(panelId: PanelLayoutId) {
@@ -612,7 +663,8 @@ function App() {
             key={key}
             fill
             visible
-            width={panelLayout.ai?.[0]?.w ?? 360}
+            width={aiPanels[0]?.rect.w ?? 360}
+            panelId={aiPanels[0]?.id}
             workspaceRoot={workspaceRoot}
             onFileWritten={onAgentWrote}
             onWorkspaceChanged={() =>
@@ -810,38 +862,40 @@ function App() {
   }
 
   function duplicateAiPanel() {
-    const newId = `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    setAiPanelIds((ids) => [...ids, newId]);
     // Add a fresh rect for the new panel. Offset from the last one so
     // the user can see both, but clamp inside the workbench.
-    setPanelLayout((prev) => {
-      const list = prev.ai ?? [];
-      const last = list[list.length - 1];
-      const baseW = last?.w ?? 360;
-      const baseH = last?.h ?? Math.max(0, workbenchSize.h - 246);
+    setAiPanels((prevPanels) => {
+      const last = prevPanels[prevPanels.length - 1]?.rect;
+      const baseW = last?.w ?? Math.min(360, Math.max(1, workbenchSize.w));
+      const baseH = last?.h ?? Math.min(Math.max(240, workbenchSize.h - 246), Math.max(1, workbenchSize.h));
       const offset = 20;
-      const newRect: PanelRect = {
-        x: Math.max(0, Math.min(workbenchSize.w - baseW, (last?.x ?? workbenchSize.w - baseW) - offset)),
-        y: Math.max(0, Math.min(workbenchSize.h - baseH, (last?.y ?? 0) + offset)),
-        w: baseW,
-        h: baseH,
-      };
-      return { ...prev, ai: [...list, newRect] };
+      const rect = clampRect(
+        {
+          x: (last?.x ?? workbenchSize.w - baseW) - offset,
+          y: (last?.y ?? 0) + offset,
+          w: baseW,
+          h: baseH,
+        },
+        workbenchSize.w,
+        workbenchSize.h,
+        PANEL_CONSTRAINTS.ai
+      );
+      const nextPanels = [...prevPanels, { id: newAiPanelId(), rect }];
+      setPanelLayout((prevLayout) => ({
+        ...prevLayout,
+        ai: nextPanels.map((panel) => panel.rect),
+      }));
+      return nextPanels;
     });
   }
 
   function closeAiPanel(id: string) {
-    setAiPanelIds((ids) => {
-      const idx = ids.indexOf(id);
-      if (idx === -1 || ids.length <= 1) return ids;
-      const next = ids.filter((x) => x !== id);
-      // Drop the rect that belonged to the closed panel. Index 0 is
-      // always the first AI panel, so the index in `ai` matches the
-      // index in `ids`.
+    setAiPanels((panels) => {
+      if (panels.length <= 1) return panels;
+      const next = panels.filter((panel) => panel.id !== id);
+      if (next.length === panels.length) return panels;
       setPanelLayout((prev) => {
-        const list = prev.ai ?? [];
-        if (idx >= list.length) return prev;
-        return { ...prev, ai: list.filter((_, i) => i !== idx) };
+        return { ...prev, ai: next.map((panel) => panel.rect) };
       });
       return next;
     });
@@ -982,6 +1036,21 @@ function App() {
     };
   }, [workspaceRoot]);
 
+  // Interactive delegate PTY (Claude Code / Codex / OpenCode) edits files
+  // outside the harness's FileChanged event stream, so the file watcher is
+  // the only other path that refreshes git status. Refresh explicitly on
+  // session exit so the sidebar decorations update the moment the user
+  // finishes an interactive run.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    if (workspaceRoot) {
+      void listen("delegate-pty:exit", () => {
+        if (workspaceRoot) refreshGitStatus(workspaceRoot);
+      }).then((u) => { unlisten = u; });
+    }
+    return () => { unlisten?.(); };
+  }, [workspaceRoot]);
+
   useEffect(() => {
     const openPaths = Array.from(new Set(tabs.map((t) => t.path)));
     if (openPaths.length === 0) return;
@@ -1110,15 +1179,20 @@ function App() {
         setActiveIdx((i) => (i - 1 + tabs.length) % tabs.length);
         return;
       }
-      // Escape — close palette or search panel
+      // Escape — close palette, search, or return to workbench from a top-level view
       if (e.key === "Escape") {
         if (paletteOpen) { setPaletteOpen(false); return; }
         if (searchVisible) { setSearchVisible(false); return; }
+        if (view === "runs" || view === "git-review" || view === "settings") {
+          e.preventDefault();
+          setView("workbench");
+          return;
+        }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible]);
+  }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible, view]);
 
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
@@ -1174,6 +1248,7 @@ function App() {
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
+    { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { setView("workbench"); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
     { id: "worktree", label: "Git: New Worktree…", action: () => { setPaletteOpen(false); const name = prompt("Worktree name:"); if (name && workspaceRoot) { void (async () => { try { const path = await invoke<string>("create_worktree", { workspaceRoot, name }); setFileNotice(`Worktree: ${path}`); } catch(e) { setFileNotice(`Failed: ${e}`); } })(); } } },
@@ -1235,8 +1310,8 @@ function App() {
             onPanelWidthChange={(panel, w) => {
               if (panel === "explorer" && panelLayout.explorer) {
                 updatePanelRect("explorer", { ...panelLayout.explorer, w });
-              } else if (panel === "ai" && panelLayout.ai?.[0]) {
-                updateAiRect(0, { ...panelLayout.ai[0], w });
+              } else if (panel === "ai" && aiPanels[0]) {
+                updateAiRect(0, { ...aiPanels[0].rect, w });
               }
             }}
             onPanelHeightChange={(panel, h) => {
@@ -1280,7 +1355,12 @@ function App() {
                 theme={theme}
               />
             ) : view === "runs" ? (
-              <MissionControl workspaceRoot={workspaceRoot} theme={theme} onResumeKlideRun={resumeKlideRun} />
+              <MissionControl
+                workspaceRoot={workspaceRoot}
+                theme={theme}
+                onResumeKlideRun={resumeKlideRun}
+                onBack={() => setView("workbench")}
+              />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : (
@@ -1475,13 +1555,12 @@ function App() {
                     />
                   </FloatingPanel>
                 )}
-                {aiVisible && panelLayout.ai && panelLayout.ai.map((rect, idx) => {
-                  const id = aiPanelIds[idx] ?? `ai-orphan-${idx}`;
+                {aiVisible && aiPanels.map((panel, idx) => {
                   return (
                     <FloatingPanel
-                      key={id}
+                      key={panel.id}
                       panelId="ai"
-                      rect={rect}
+                      rect={panel.rect}
                       workbenchW={workbenchSize.w}
                       workbenchH={workbenchSize.h}
                       zIndex={focusedPanel === "ai" ? 10 + zCounter + idx : 10 + idx}
@@ -1492,7 +1571,8 @@ function App() {
                       <AiPanel
                         fill
                         visible
-                        width={rect.w}
+                        width={panel.rect.w}
+                        panelId={panel.id}
                         workspaceRoot={workspaceRoot}
                         onFileWritten={onAgentWrote}
                         onWorkspaceChanged={() =>
@@ -1510,7 +1590,7 @@ function App() {
                         harnessSettings={harnessSettings}
                         onDuplicate={duplicateAiPanel}
                         onClose={
-                          aiPanelIds.length > 1 ? () => closeAiPanel(id) : undefined
+                          aiPanels.length > 1 ? () => closeAiPanel(panel.id) : undefined
                         }
                         resumeConversation={resumeConversation}
                         onResumeConsumed={() => setResumeConversation(null)}

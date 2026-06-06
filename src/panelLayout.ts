@@ -61,9 +61,9 @@ export const PANEL_GAP = 6;
 export function defaultLayout(workbenchW: number, workbenchH: number): Layout {
   const w = Math.max(0, workbenchW);
   const h = Math.max(0, workbenchH);
-  const terminalH = Math.min(220, Math.max(140, Math.floor(h * 0.28)));
-  const aiW = 360;
-  const mainH = h - terminalH;
+  const terminalH = Math.min(220, Math.max(120, Math.floor(h * 0.28)));
+  const aiW = Math.min(360, Math.max(1, w));
+  const mainH = Math.max(1, h - terminalH - PANEL_GAP);
   // Side column panels — explorer, git, graph side-by-side, all full main height.
   const explorerW = 280;
   const gitW = 280;
@@ -73,8 +73,8 @@ export function defaultLayout(workbenchW: number, workbenchH: number): Layout {
     git:      { x: explorerW + PANEL_GAP, y: 0, w: gitW, h: mainH },
     graph:    { x: explorerW + PANEL_GAP + gitW + PANEL_GAP, y: 0, w: graphW, h: mainH },
     memory:   { x: explorerW + PANEL_GAP + gitW + PANEL_GAP + graphW + PANEL_GAP, y: 0, w: 320, h: mainH },
-    ai:       [{ x: w - aiW, y: 0, w: aiW, h: mainH }],
-    terminal: { x: 0, y: mainH + PANEL_GAP, w: w - aiW - PANEL_GAP, h: terminalH },
+    ai:       [{ x: Math.max(0, w - aiW), y: 0, w: aiW, h: mainH }],
+    terminal: { x: 0, y: mainH + PANEL_GAP, w: Math.max(1, w - aiW - PANEL_GAP), h: terminalH },
   };
 }
 
@@ -145,23 +145,20 @@ export function clampRect(
   workbenchH: number,
   constraints: PanelConstraints
 ): PanelRect {
-  // First pin the position inside the workbench. The rect may extend past
-  // the edge, so we allow x up to workbenchW and y up to workbenchH — the
-  // size clamp below takes care of the actual extent.
-  const x = Math.max(0, Math.min(rect.x, workbenchW));
-  const y = Math.max(0, Math.min(rect.y, workbenchH));
-  // Then clamp the size: not smaller than the panel's min, not larger than
-  // the panel's max, and not larger than the remaining workbench space at
-  // (x, y) so the rect actually fits when the window shrinks.
-  const maxWHere = Math.max(constraints.minW, workbenchW - x);
-  const maxHHere = Math.max(constraints.minH, workbenchH - y);
-  const w = Math.min(
-    constraints.maxW,
-    Math.max(constraints.minW, Math.min(rect.w, maxWHere))
-  );
-  const h = Math.min(
-    constraints.maxH,
-    Math.max(constraints.minH, Math.min(rect.h, maxHHere))
-  );
+  const boundsW = Math.max(1, workbenchW);
+  const boundsH = Math.max(1, workbenchH);
+  const x = Math.max(0, Math.min(rect.x, boundsW - 1));
+  const y = Math.max(0, Math.min(rect.y, boundsH - 1));
+  const availableW = Math.max(1, boundsW - x);
+  const availableH = Math.max(1, boundsH - y);
+  // Normal panel minimums are ergonomic constraints, not layout invariants.
+  // When the window is smaller than a panel's min size, shrink below the min
+  // so the whole rect remains reachable inside the workbench.
+  const minW = Math.min(constraints.minW, availableW);
+  const minH = Math.min(constraints.minH, availableH);
+  const maxW = Math.min(constraints.maxW, availableW);
+  const maxH = Math.min(constraints.maxH, availableH);
+  const w = Math.min(maxW, Math.max(minW, rect.w));
+  const h = Math.min(maxH, Math.max(minH, rect.h));
   return { x, y, w, h };
 }

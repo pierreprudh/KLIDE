@@ -452,10 +452,16 @@ function RunRow({
             ) : (
               <ProviderLogo id={run.source as any} size={11} />
             )}
-            {SOURCE_LABEL[run.source]}
-            {run.model ? (
-              <> · {run.model}</>
-            ) : null}
+            {run.source === "opencode" && run.model ? (
+              <>
+                {modelProvider(run.model)} . {modelShortName(run.model)}
+              </>
+            ) : (
+              <>
+                {SOURCE_LABEL[run.source]}
+                {run.model ? <> · {run.model}</> : null}
+              </>
+            )}
             {run.branch ? ` · ${run.branch}` : ""}
             {" · "}
             {relativeTime(run.updatedMs)}
@@ -2004,12 +2010,14 @@ function RunDetail({ run, messages, theme, onResumeKlide }: { run: Run; messages
           {run.source === "opencode" && run.model ? (
             <>
               <ModelProviderBadge model={run.model} />
-              {modelShortName(run.model)}
+              {modelProvider(run.model)} . {modelShortName(run.model)}
             </>
           ) : run.model ? (
-            <ProviderLogo id={run.source as any} size={13} />
+            <>
+              <ProviderLogo id={run.source as any} size={13} />
+              {run.model}
+            </>
           ) : null}
-          {run.model ?? "—"}
         </dd>
         <MetaRow label="Project" value={run.project ?? "—"} />
         <MetaRow label="Branch" value={run.branch ?? "—"} />
@@ -2091,10 +2099,12 @@ export function MissionControl({
   workspaceRoot,
   theme,
   onResumeKlideRun,
+  onBack,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
   onResumeKlideRun?: (runId: string) => void;
+  onBack?: () => void;
 }) {
   const tasks = useSyncExternalStore(subscribeTasks, getTaskSessions);
   const convos = useSyncExternalStore(subscribeKlideConvos, getKlideConvos);
@@ -2257,16 +2267,35 @@ export function MissionControl({
           <div
             style={{
               display: "flex",
-              alignItems: "baseline",
-              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
               marginBottom: 12,
             }}
           >
+            {onBack && (
+              <button
+                onClick={onBack}
+                title="Back to workbench"
+                aria-label="Back to workbench"
+                style={{
+                  width: 24, height: 24, display: "grid", placeItems: "center",
+                  borderRadius: "var(--radius-xs)", border: "none", background: "transparent",
+                  color: "var(--fg-subtle)", cursor: "pointer", flexShrink: 0,
+                  transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 6l-6 6 6 6" />
+                </svg>
+              </button>
+            )}
             <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0 }}>
               Mission Control
             </h1>
             <span
-              style={{ fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}
+              style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}
             >
               {loading ? "loading…" : `${activeCount} active · ${runs.length} loaded`}
             </span>
