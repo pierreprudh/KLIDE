@@ -1,4 +1,4 @@
-type View = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
+type View = "explorer" | "git" | "graph" | "memory" | "skills" | "ai" | "runs" | "settings";
 type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
 
 function FolderIcon() {
@@ -99,6 +99,28 @@ function SkillsIcon() {
   );
 }
 
+function MemoryIcon() {
+  // A small notebook with a bookmark ribbon — the "memory" sidebar view
+  // (durable handoff notes in .klide/memory/).
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 3.5h11.5a1 1 0 0 1 1 1V20l-3-1.5L11.5 20l-3-1.5L5 20V3.5z" />
+      <path d="M8 8h6" />
+      <path d="M8 12h6" />
+      <path d="M8 16h4" />
+    </svg>
+  );
+}
+
 function MissionIcon() {
   // Central agent + satellites on an orbit — "many runs, one control panel".
   return (
@@ -149,7 +171,8 @@ export function ActivityBar({ active, onToggle }: Props) {
   const items = [
     { id: "explorer" as const, label: "Files", Icon: FolderIcon },
     { id: "git" as const, label: "Git", Icon: GitIcon },
-    { id: "graph" as const, label: "Project Graph", Icon: GraphIcon },
+    { id: "graph" as const, label: "Project", Icon: GraphIcon },
+    { id: "memory" as const, label: "Memory", Icon: MemoryIcon },
     { id: "skills" as const, label: "Skills", Icon: SkillsIcon },
     { id: "ai" as const, label: "AI", Icon: SparkIcon },
     { id: "runs" as const, label: "Mission Control", Icon: MissionIcon },

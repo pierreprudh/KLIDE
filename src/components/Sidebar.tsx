@@ -556,6 +556,20 @@ export function Sidebar({
         path: target,
         isDirectory,
       });
+      // Optimistically add the node — the plugin-fs watcher can't refresh us
+      // (no fs:scope), so insert into local state ourselves. Render sorts.
+      const newEntry: TreeEntry = { name, isDirectory };
+      if (parent === root) {
+        setEntries((cur) =>
+          cur.some((e) => e.name === name) ? cur : [...cur, newEntry]
+        );
+      } else {
+        setChildren((cur) => {
+          const list = cur[parent];
+          if (!list || list.some((e) => e.name === name)) return cur;
+          return { ...cur, [parent]: [...list, newEntry] };
+        });
+      }
       if (!isDirectory) pick(target); // open the fresh file right away
     } catch (e) {
       reportFsError("Create failed", e);
@@ -572,6 +586,32 @@ export function Sidebar({
     if (target === path) return;
     try {
       await invoke("rename_entry", { workspaceRoot: root, from: path, to: target });
+      // Optimistically rename the node in local state (the plugin-fs watcher
+      // can't refresh us — no fs:scope). Re-key any loaded child listings that
+      // lived under the old path so expanded folders survive the rename.
+      const parent = path.slice(0, path.lastIndexOf("/"));
+      const oldName = path.split("/").pop() ?? path;
+      if (parent === root) {
+        setEntries((cur) =>
+          cur.map((e) => (e.name === oldName ? { ...e, name } : e))
+        );
+      }
+      setChildren((cur) => {
+        const next: Record<string, TreeEntry[]> = {};
+        for (const [dir, list] of Object.entries(cur)) {
+          const key =
+            dir === path
+              ? target
+              : dir.startsWith(`${path}/`)
+                ? target + dir.slice(path.length)
+                : dir;
+          next[key] =
+            dir === parent
+              ? list.map((e) => (e.name === oldName ? { ...e, name } : e))
+              : list;
+        }
+        return next;
+      });
       // Keep renamed folders (and anything expanded inside them) open.
       setExpanded((cur) => {
         const next = new Set<string>();
@@ -600,6 +640,26 @@ export function Sidebar({
     if (!ok) return;
     try {
       await invoke("delete_entry", { workspaceRoot: root, path });
+      // Optimistically prune the tree. We can't rely on the plugin-fs watcher
+      // to refresh (it has no fs:scope, so watch() silently fails) — so splice
+      // the node out of local state ourselves, the way commitRename does.
+      const parent = path.slice(0, path.lastIndexOf("/"));
+      if (parent === root) {
+        setEntries((cur) => cur.filter((e) => joinPath(root, e.name) !== path));
+      }
+      setChildren((cur) => {
+        const next: Record<string, TreeEntry[]> = {};
+        for (const [dir, list] of Object.entries(cur)) {
+          // Drop any loaded listings for the deleted folder and its descendants.
+          if (dir === path || dir.startsWith(`${path}/`)) continue;
+          // Remove the deleted node from its parent's listing.
+          next[dir] =
+            dir === parent
+              ? list.filter((e) => joinPath(dir, e.name) !== path)
+              : list;
+        }
+        return next;
+      });
       // Drop stale expanded entries so they don't linger in localStorage.
       setExpanded(
         (cur) =>

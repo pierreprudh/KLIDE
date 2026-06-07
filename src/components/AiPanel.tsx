@@ -38,6 +38,7 @@ import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { renderMessageBody } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { buildSystemPrompt } from "./ai/system-prompt";
+import { summarizeAndHandoff } from "./ai/summarize";
 import {
   genId,
   deriveTitle,
@@ -79,6 +80,23 @@ type Props = {
   onClose?: () => void;
   resumeConversation?: Conversation | null;
   onResumeConsumed?: () => void;
+  /** When set on first mount, the panel starts pinned to this delegate
+   *  provider (claude-code / codex / opencode). Used by Mission Control's
+   *  "Resume in {CLI}" / "Open in {CLI}" handoffs to land the user in a
+   *  TUI surface that's the natural home for an agent session. */
+  initialProvider?: ProviderId;
+  /** Pass-through to DelegateTerminalSurface so the TUI continues the
+   *  named session instead of starting a fresh one. */
+  initialResumeSessionId?: string | null;
+  /** First prompt pre-baked into the TUI's spawn — used for Klide handoff. */
+  initialTask?: string | null;
+  /** Called once after the panel has consumed the initial* props (typically
+   *  the App-level spawn queue entry). */
+  onInitialConsumed?: () => void;
+  /** Called when a memory entry is written from this panel (via the
+   *  "Summarize" header action). The host uses it to bump the sidebar's
+   *  refresh key + show a notice. */
+  onMemoryWritten?: (entry: { relPath: string; title: string }) => void;
 };
 
 export function AiPanel({
@@ -103,6 +121,11 @@ export function AiPanel({
   onClose,
   resumeConversation,
   onResumeConsumed,
+  initialProvider,
+  initialResumeSessionId,
+  initialTask,
+  onInitialConsumed,
+  onMemoryWritten,
 }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -112,6 +135,7 @@ export function AiPanel({
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
 
   const convoIdRef = useRef<string | null>(null);
   const lastPublishRef = useRef({ count: -1, streaming: false });
@@ -189,6 +213,7 @@ export function AiPanel({
   const mentionMatches = mention !== null ? fuzzyFiles(fileList, mention.query) : [];
 
   const [provider, setProvider] = useState<ProviderId>(() => {
+    if (initialProvider) return initialProvider;
     if (panelId) {
       const perPanel = localStorage.getItem(`klide.provider.${panelId}`) as ProviderId | null;
       if (perPanel) return perPanel;
@@ -211,7 +236,6 @@ export function AiPanel({
     localStorage.setItem("klide.provider", id);
     const stored = localStorage.getItem(`klide.model.${id}`);
     onModelChange(stored || DEFAULT_MODELS[id]);
-    onAvailableModelsChange([stored || DEFAULT_MODELS[id]]);
     setProviderOpen(false);
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
@@ -400,6 +424,35 @@ export function AiPanel({
     setCurrentId(panelId ?? genId());
   }
 
+  // Write a structured memory note to .klide/memory/. Delegates to
+  // summarizeAndHandoff so the prompt + parsing live in one place; we
+  // just feed it the conversation + show the user a transient state.
+  async function runSummarize() {
+    if (!workspaceRoot || summarizing || msgs.length === 0) return;
+    setSummarizing(true);
+    try {
+      const entry = await summarizeAndHandoff({
+        workspaceRoot,
+        provider,
+        model,
+        mode: normalizeAgentMode(agentMode),
+        msgs,
+        runId: null,
+        status: null,
+      });
+      onMemoryWritten?.({ relPath: entry.relPath, title: entry.title });
+    } catch (err) {
+      // The Summarize button sits in the header with no slot for an
+      // inline error — log to the console for the curious user and let
+      // the icon's title attribute carry a one-line message on hover.
+      // (A toast/notice system would be the right place for this, but
+      // it's not in scope for v1.)
+      console.error("Summarize failed:", err);
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
   function loadConversation(c: Conversation) {
     setHistoryOpen(false);
     abortActiveHarnessRun();
@@ -432,6 +485,19 @@ export function AiPanel({
     }
     if (!resumeConversation) prevResumeRef.current = null;
   }, [resumeConversation, onResumeConsumed]);
+
+  // Drain the App-level "spawn me a new panel" queue entry on mount, after
+  // the initial provider + resume/task have been wired through. Fires once.
+  const initialDrainedRef = useRef(false);
+  useEffect(() => {
+    if (initialDrainedRef.current) return;
+    if (!initialProvider) return;
+    initialDrainedRef.current = true;
+    onInitialConsumed?.();
+    // Intentional: only the *presence* of initialProvider matters. Subsequent
+    // edits should not re-fire the consume callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProvider]);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -479,7 +545,7 @@ export function AiPanel({
     }
     void loadProviderModels();
     return () => { cancelled = true; };
-  }, [provider, model, apiKeyVersion, serverRefresh, onAvailableModelsChange, onModelChange]);
+  }, [provider, apiKeyVersion, serverRefresh, onAvailableModelsChange, onModelChange]);
 
   useEffect(() => {
     if (!isLocalProvider) {
@@ -846,6 +912,48 @@ export function AiPanel({
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" /></svg>
             </button>
           )}
+          {/* "Summarize and hand off" — write a structured memory note to
+              .klide/memory/ so a future agent (or future you) can pick up
+              where this session stopped. Disabled when the panel is empty
+              or the workspace isn't open. */}
+          {workspaceRoot && onMemoryWritten && (
+            <button
+              onClick={() => void runSummarize()}
+              disabled={summarizing || msgs.length === 0}
+              title={
+                msgs.length === 0
+                  ? "Start a conversation first"
+                  : "Summarize and write to .klide/memory/"
+              }
+              aria-label="Summarize and hand off"
+              style={{
+                width: 26,
+                height: 22,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: "var(--radius-sm)",
+                color: summarizing ? "var(--accent)" : "var(--fg-subtle)",
+                background: "transparent",
+                opacity: msgs.length === 0 ? 0.4 : 1,
+                cursor: msgs.length === 0 ? "default" : "pointer",
+              }}
+              onMouseEnter={(e) => {
+                if (msgs.length === 0) return;
+                e.currentTarget.style.color = "var(--fg-strong)";
+                e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = summarizing ? "var(--accent)" : "var(--fg-subtle)";
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+                <path d="M9 8h6" />
+                <path d="M9 12h4" />
+              </svg>
+            </button>
+          )}
           <ConversationHistory conversations={conversations} currentId={currentId} historyOpen={historyOpen} setHistoryOpen={setHistoryOpen} onSelect={loadConversation} onDelete={deleteConversation} />
           <button onClick={newConversation} title="New conversation" aria-label="New conversation" style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: "var(--fg-subtle)", background: "transparent" }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -865,7 +973,15 @@ export function AiPanel({
       <TodoStrip workspaceRoot={workspaceRoot} />
       <div ref={scrollRef} style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0 }}>
         {providerDelegatesWork ? (
-          <DelegateTerminalSurface sessionId={`${currentId}:${provider}`} providerId={provider} provider={providerName(provider)} workspaceRoot={workspaceRoot} parentRunId={activeHarnessRunRef.current ?? currentId} />
+          <DelegateTerminalSurface
+            sessionId={`${currentId}:${provider}`}
+            providerId={provider}
+            provider={providerName(provider)}
+            workspaceRoot={workspaceRoot}
+            parentRunId={activeHarnessRunRef.current ?? currentId}
+            resumeSessionId={initialResumeSessionId ?? null}
+            task={initialTask ?? null}
+          />
         ) : (
           <>
         {msgs.length === 0 && (

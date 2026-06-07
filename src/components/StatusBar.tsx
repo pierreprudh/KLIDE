@@ -17,6 +17,7 @@ type Props = {
   onExitGrid: () => void;
   onOpenGrid: () => void;
   theme: ThemeId;
+  autoTheme: boolean;
   onToggleTheme: () => void;
   onResetLayout: () => void;
 };
@@ -82,6 +83,7 @@ export function StatusBar({
   onExitGrid,
   onOpenGrid,
   theme,
+  autoTheme,
   onToggleTheme,
   onResetLayout,
 }: Props) {
@@ -164,26 +166,30 @@ export function StatusBar({
       )}
       <button
         onClick={onToggleTheme}
-        title="Cycle theme"
+        title={autoTheme ? "Cycle theme preference (auto theme is on)" : "Cycle theme"}
         aria-label="Toggle theme"
         aria-pressed={themeMeta.isDark}
+        className="klide-button klide-button-subtle"
         style={{
           marginLeft: "auto",
           height: 18,
           padding: "0 7px",
-          borderRadius: "var(--radius-sm)",
-          display: "flex",
-          alignItems: "center",
           fontSize: 11,
-          color: "var(--fg-subtle)",
-          background: "transparent",
-          transition:
-            "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out)",
+          minHeight: 18,
+          gap: 5,
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       >
-        Theme: {themeMeta.name}
+        <span
+          aria-hidden
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: themeMeta.swatches[2],
+            boxShadow: "0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent)",
+          }}
+        />
+        {autoTheme ? "Auto" : "Theme"} · {themeMeta.name}
       </button>
       <button
         onClick={onToggleTerminal}

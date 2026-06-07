@@ -100,7 +100,21 @@ function convoToRun(c: KlideConvo): Run {
   };
 }
 
-function StatusDot({ status, size = 7 }: { status: RunStatus; size?: number }) {
+// The dot is reserved for "needs your attention" states — running, waiting
+// on you, or errored. Done / cancelled / queued runs wear no dot; their
+// group header and the row's own affordances (resume button, etc.) already
+// tell the user the state. The board was lit up with green dots for every
+// finished run, which was pure noise.
+function StatusDot({
+  status,
+  size = 7,
+}: {
+  status: RunStatus;
+  size?: number;
+}) {
+  if (status !== "running" && status !== "waiting" && status !== "error") {
+    return null;
+  }
   const color = STATUS_COLOR[status];
   return (
     <span
@@ -503,6 +517,42 @@ function ResumeKlide({ runId, onResume }: { runId: string; onResume: (id: string
       onClick={(e) => {
         e.stopPropagation();
         onResume(runId);
+      }}
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: "var(--accent)",
+        background: "var(--accent-soft)",
+      }}
+    >
+      <ResumeIcon />
+    </span>
+  );
+}
+
+// One-click resume for a CLI run (claude-code, codex, opencode): spawns the
+// same delegate TUI with --resume <run-id> and selects the row so the live
+// terminal lands in the detail pane. Same visual treatment as ResumeKlide.
+function ResumeCli({
+  source,
+  onResume,
+}: {
+  source: RunSource;
+  onResume: () => void;
+}) {
+  return (
+    <span
+      role="button"
+      aria-label={`Resume in ${SOURCE_LABEL[source]}`}
+      title={`Resume in ${SOURCE_LABEL[source]}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onResume();
       }}
       style={{
         width: 22,
@@ -1821,48 +1871,37 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
   );
 }
 
-function RunDetail({ run, messages, theme, onResumeKlide }: { run: Run; messages?: RunMessage[]; theme: ThemeId; onResumeKlide?: (runId: string) => void; }) {
-  // Resume mode: spawning a new PTY that continues the previous run's
-  // session. The sessionId is locally generated (so the TaskTerminal can
-  // subscribe to it); the opencode session id is passed as
-  // `resumeSessionId` to delegate_pty_spawn.
-  const [resumedSessionId, setResumedSessionId] = useState<string | null>(null);
-  const [resumeError, setResumeError] = useState<string | null>(null);
-  const resumedRef = useRef<HTMLDivElement>(null);
-
-  // Opencode TUI is the only provider we can usefully "pick up" for —
-  // Claude/Codex have resume flags too, but their TUIs are interactive in
-  // a way that's awkward in Klide's terminal pane. Opencode's `-s <id>`
-  // keeps the same model + workspace and loads the prior transcript.
-  const resumable = run.source === "opencode";
-
-  async function resume() {
-    setResumeError(null);
-    const sessionId = crypto.randomUUID();
-    try {
-      await invoke("delegate_pty_spawn", {
-        sessionId,
-        provider: "opencode",
-        workspaceRoot: run.cwd,
-        task: null,
-        model: run.model,
-        resumeSessionId: run.id,
-      });
-      setResumedSessionId(sessionId);
-    } catch (err) {
-      setResumeError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function stopResume() {
-    if (!resumedSessionId) return;
-    try {
-      await invoke("delegate_pty_stop", { sessionId: resumedSessionId });
-    } catch {
-      // Best-effort — the PTY may already be gone.
-    }
-    setResumedSessionId(null);
-  }
+function RunDetail({
+  run,
+  messages,
+  firstUserMessage,
+  onOpenInAiPanel,
+  onResumeKlide,
+}: {
+  run: Run;
+  messages?: RunMessage[];
+  /** First user message of a Klide run — used as the task prompt when
+   *  handing the run off to an external CLI. */
+  firstUserMessage: string | null;
+  /** Land the user in a new AI panel pinned to the chosen delegate provider. */
+  onOpenInAiPanel?: (opts: {
+    provider: TaskSource;
+    workspaceRoot: string | null;
+    resumeSessionId?: string;
+    initialTask?: string;
+  }) => void;
+  onResumeKlide?: (runId: string) => void;
+}) {
+  // All 3 external CLIs support resume flags today: `claude --resume <id>`,
+  // `codex resume <id>`, and `opencode -s <id>`. The Rust seam builds the
+  // right command for each, so the UI just needs to be honest about it.
+  const resumable =
+    run.source === "claude-code" ||
+    run.source === "codex" ||
+    run.source === "opencode";
+  // The full set of CLI sources we can offer as "Open in {source}". Klide
+  // runs hand off to one of these with the first user message as the task.
+  const cliSources: TaskSource[] = ["claude-code", "codex", "opencode"];
 
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
@@ -1899,77 +1938,51 @@ function RunDetail({ run, messages, theme, onResumeKlide }: { run: Run; messages
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <CopyButton value={run.path || null} label="Copy log path" />
         <CopyButton value={run.cwd} label="Copy cwd" />
-        {resumable && !resumedSessionId && (
-          <ActionButton label="Resume in OpenCode" onClick={() => void resume()} />
-        )}
-        {resumable && resumedSessionId && (
-          <ActionButton label="Stop & return to log" onClick={() => void stopResume()} />
+        {resumable && onOpenInAiPanel && (
+          <ActionButton
+            label={`Resume in ${SOURCE_LABEL[run.source]}`}
+            primary
+            onClick={() =>
+              onOpenInAiPanel({
+                provider: run.source as TaskSource,
+                workspaceRoot: run.cwd,
+                resumeSessionId: run.id,
+              })
+            }
+          />
         )}
         {run.source === "klide" && onResumeKlide && (
-          <ActionButton label="Resume in Klide" onClick={() => onResumeKlide(run.id)} />
+          <ActionButton
+            label="Resume in Klide"
+            primary
+            onClick={() => onResumeKlide(run.id)}
+          />
         )}
+        {/* "Open in {other CLI}" — hands the run off to a fresh delegate
+            TUI in a new AI panel. Klide runs pass the first user message
+            as the task prompt so the new session starts with context. */}
+        {onOpenInAiPanel &&
+          cliSources
+            .filter((s) => s !== run.source)
+            .map((s) => (
+              <ActionButton
+                key={s}
+                label={`Open in ${SOURCE_LABEL[s]}`}
+                onClick={() =>
+                  onOpenInAiPanel({
+                    provider: s,
+                    workspaceRoot: run.cwd,
+                    initialTask:
+                      run.source === "klide" && firstUserMessage
+                        ? firstUserMessage
+                        : undefined,
+                  })
+                }
+              />
+            ))}
       </div>
 
-      {resumable && resumedSessionId && (
-        <div
-          ref={resumedRef}
-          style={{
-            height: 320,
-            marginBottom: 18,
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-md)",
-            overflow: "hidden",
-            display: "flex",
-            flexDirection: "column",
-            background: "color-mix(in srgb, var(--terminal-bg) 96%, var(--bg))",
-          }}
-        >
-          <div
-            style={{
-              padding: "6px 10px",
-              fontSize: 10,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              color: "var(--fg-subtle)",
-              fontFamily: "var(--font-mono)",
-              borderBottom: "1px solid var(--terminal-border)",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <span
-              className="opencode-logo"
-              style={{ width: 12, height: 12, display: "inline-block" }}
-              aria-hidden="true"
-            >
-              <img className="opencode-logo-light" src="/opencode-logo-light.svg" alt="" style={{ width: 12, height: 12 }} />
-              <img className="opencode-logo-dark" src="/opencode-logo-dark.svg" alt="" style={{ width: 12, height: 12 }} />
-            </span>
-            Resumed · {run.id}
-          </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <TaskTerminal sessionId={resumedSessionId} theme={theme} />
-          </div>
-        </div>
-      )}
-
-      {resumeError && (
-        <div
-          style={{
-            marginBottom: 18,
-            padding: "8px 10px",
-            borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--danger, #B42318)",
-            color: "var(--danger, #B42318)",
-            fontSize: 11,
-          }}
-        >
-          Resume failed: {resumeError}
-        </div>
-      )}
-
-      {!messages && !resumedSessionId && (
+      {!messages && (
         <div
           style={{
             marginBottom: 18,
@@ -1982,8 +1995,10 @@ function RunDetail({ run, messages, theme, onResumeKlide }: { run: Run; messages
           }}
         >
           {resumable
-            ? "Read-only transcript. Click Resume in OpenCode above to pick the session back up in Klide's terminal — your prior context, model, and workspace are preserved."
-            : "Read-only inspector for the local session log. Resume/open controls are intentionally parked until Klide can hand the run back to the right CLI."}
+            ? `Resume continues your last ${SOURCE_LABEL[run.source]} session in a new AI panel — prior context, model, and workspace intact. "Open in {CLI}" drops you into a fresh TUI in the same project.`
+            : run.source === "klide"
+            ? "Resume in Klide reopens the AI panel with this transcript. Open in {CLI} hands the first message off to a fresh delegate session."
+            : "Read-only inspector for the local session log."}
         </div>
       )}
 
@@ -2099,11 +2114,21 @@ export function MissionControl({
   workspaceRoot,
   theme,
   onResumeKlideRun,
+  onOpenInAiPanel,
   onBack,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
   onResumeKlideRun?: (runId: string) => void;
+  /** Land the user in a new AI panel pinned to the chosen delegate provider.
+   *  Used by every "Resume in {CLI}" / "Open in {CLI}" action — the AI panel
+   *  is the natural home for an agent TUI. */
+  onOpenInAiPanel?: (opts: {
+    provider: TaskSource;
+    workspaceRoot: string | null;
+    resumeSessionId?: string;
+    initialTask?: string;
+  }) => void;
   onBack?: () => void;
 }) {
   const tasks = useSyncExternalStore(subscribeTasks, getTaskSessions);
@@ -2117,6 +2142,9 @@ export function MissionControl({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<RunSource | "all" | "subagent">("all");
   const [pinnedId, setPinnedId] = useState<string | null>(null);
+  // First user message of the currently selected Klide run. Used as the
+  // task prompt when handing the run off to a CLI via "Open in {CLI}".
+  const [firstUserMessage, setFirstUserMessage] = useState<string | null>(null);
 
   // Initial load (and refresh) — just the most-recent page.
   async function load() {
@@ -2237,6 +2265,30 @@ export function MissionControl({
     selectedTask || selectedConvo
       ? null
       : allRuns.find((r) => r.id === selectedId) ?? null;
+
+  // When a Klide run (kind=run) is selected, fetch its transcript once and
+  // pull out the first user message — that's the prompt we'll hand off to
+  // a fresh delegate session if the user opens this run in another CLI.
+  useEffect(() => {
+    if (!selected || selected.source !== "klide" || selected.kind !== "run") {
+      setFirstUserMessage(null);
+      return;
+    }
+    let cancelled = false;
+    setFirstUserMessage(null);
+    fetchRunMessages(selected)
+      .then((msgs) => {
+        if (cancelled) return;
+        const first = msgs.find((m) => m.role === "user");
+        setFirstUserMessage(first?.text?.trim() || null);
+      })
+      .catch(() => {
+        if (!cancelled) setFirstUserMessage(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id, selected?.source, selected?.kind]);
 
   function selectRun(run: Run) {
     setSelectedId(run.id);
@@ -2404,6 +2456,13 @@ export function MissionControl({
                       run.kind === "run" &&
                       run.status !== "running" &&
                       onResumeKlideRun;
+                    const cliResumable =
+                      run.kind === "run" &&
+                      (run.source === "claude-code" ||
+                        run.source === "codex" ||
+                        run.source === "opencode") &&
+                      run.status !== "running" &&
+                      onOpenInAiPanel;
                     const children = (childrenByParent.get(run.id) ?? [])
                       .slice()
                       .sort((a, b) => a.createdMs - b.createdMs);
@@ -2436,6 +2495,17 @@ export function MissionControl({
                                   runId={run.id}
                                   onResume={(id) => onResumeKlideRun?.(id)}
                                 />
+                              ) : cliResumable ? (
+                                <ResumeCli
+                                  source={run.source}
+                                  onResume={() =>
+                                    onOpenInAiPanel?.({
+                                      provider: run.source as TaskSource,
+                                      workspaceRoot: run.cwd,
+                                      resumeSessionId: run.id,
+                                    })
+                                  }
+                                />
                               ) : hasChildren(run.id) ? (
                                 <span title={`${children.length} sub-agent${children.length > 1 ? "s" : ""}`} style={{
                                   fontSize: 10, fontFamily: "var(--font-mono)",
@@ -2456,6 +2526,13 @@ export function MissionControl({
                           const childTask = tasks.find((t) => t.id === child.id);
                           const childSendable =
                             childTask && (childTask.status === "queued" || childTask.status === "error");
+                          const childCliResumable =
+                            child.kind === "run" &&
+                            (child.source === "claude-code" ||
+                              child.source === "codex" ||
+                              child.source === "opencode") &&
+                            child.status !== "running" &&
+                            onOpenInAiPanel;
                           const inset = 14 * Math.min(i + 1, 3);
                           return (
                             <div
@@ -2481,6 +2558,17 @@ export function MissionControl({
                                     <QuickSend
                                       taskId={child.id}
                                       onSent={() => setSelectedId(child.id)}
+                                    />
+                                  ) : childCliResumable ? (
+                                    <ResumeCli
+                                      source={child.source}
+                                      onResume={() =>
+                                        onOpenInAiPanel?.({
+                                          provider: child.source as TaskSource,
+                                          workspaceRoot: child.cwd,
+                                          resumeSessionId: child.id,
+                                        })
+                                      }
                                     />
                                   ) : undefined
                                 }
@@ -2544,10 +2632,16 @@ export function MissionControl({
           <RunDetail
             run={convoToRun(selectedConvo)}
             messages={selectedConvo.messages}
-            theme={theme}
+            firstUserMessage={null}
+            onOpenInAiPanel={onOpenInAiPanel}
           />
         ) : selected ? (
-          <RunDetail run={selected} theme={theme} onResumeKlide={onResumeKlideRun} />
+          <RunDetail
+            run={selected}
+            firstUserMessage={firstUserMessage}
+            onOpenInAiPanel={onOpenInAiPanel}
+            onResumeKlide={onResumeKlideRun}
+          />
         ) : (
           <div
             style={{

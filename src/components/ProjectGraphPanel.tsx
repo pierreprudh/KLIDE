@@ -1,6 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import type { ProjectContextItem, ProjectContextSnapshot } from "../contextTray";
+import { fetchProjectGraphWithImports } from "../agent/client";
+import type { ImportEdge, ProjectGraphWithImports, ProjectGraph, ProjectGraphFile } from "../agent/types";
 
 type Props = {
   visible: boolean;
@@ -9,24 +10,7 @@ type Props = {
   fill?: boolean;
   activePath?: string | null;
   onContextChange?: (snapshot: ProjectContextSnapshot | null) => void;
-};
-
-type ProjectGraphFile = {
-  path: string;
-  status: string;
-  changed: boolean;
-  additions: number;
-  deletions: number;
-};
-
-type ProjectGraph = {
-  root_name: string;
-  branch: string;
-  total_files: number;
-  changed_files: number;
-  additions: number;
-  deletions: number;
-  files: ProjectGraphFile[];
+  editedFiles?: string[]; // Files edited in the current agent run
 };
 
 type MemoryKind = "folder" | "file";
@@ -110,7 +94,7 @@ function buildMemoryTree(files: ProjectGraphFile[]): MemoryNode {
   }
 
   for (const file of files) {
-    if (file.path.split("/").some((part) => IGNORED_DIRS.has(part))) continue;
+    if (file.path.split("/").some((part: string) => IGNORED_DIRS.has(part))) continue;
     const folder = ensureFolder(dirname(file.path));
     const node: MemoryNode = {
       id: `file:${file.path}`,
@@ -149,18 +133,69 @@ function flattenFolders(node: MemoryNode): MemoryNode[] {
   ];
 }
 
-function relatedNodes(node: MemoryNode, root: MemoryNode): MemoryNode[] {
+function relatedNodes(node: MemoryNode, root: MemoryNode, imports: ImportEdge[] = []): MemoryNode[] {
   const allFolders = flattenFolders(root);
-  if (node.kind === "folder") {
-    return node.children
-      .filter((child) => child.kind === "folder" || child.changedCount > 0)
-      .slice(0, 6);
+  const nodePath = node.path;
+
+  // Build import graph for quick lookup
+  const importsFrom = new Map<string, string[]>();
+  const importsTo = new Map<string, string[]>();
+  for (const edge of imports) {
+    if (!importsFrom.has(edge.from)) importsFrom.set(edge.from, []);
+    importsFrom.get(edge.from)!.push(edge.to);
+    if (!importsTo.has(edge.to)) importsTo.set(edge.to, []);
+    importsTo.get(edge.to)!.push(edge.from);
   }
-  const folder = allFolders.find((candidate) => candidate.path === dirname(node.path));
-  const sameExt = folder?.children.filter(
-    (child) => child.kind === "file" && child.path !== node.path && ext(child.path) === ext(node.path)
-  ) ?? [];
-  return sameExt.slice(0, 6);
+
+  // Find files that import this file or are imported by this file
+  const importedBy = importsTo.get(nodePath) ?? [];
+  const importsFromNode = importsFrom.get(nodePath) ?? [];
+
+  const related: MemoryNode[] = [];
+
+  if (node.kind === "folder") {
+    // For folders, find changed children and import-related files
+    const folderChildren = node.children
+      .filter((child) => child.kind === "folder" || child.changedCount > 0)
+      .slice(0, 4);
+    related.push(...folderChildren);
+
+    // Add files that import this folder's files
+    for (const child of node.children.filter(c => c.kind === "file")) {
+      const importedByChild = importsTo.get(child.path) ?? [];
+      for (const imp of importedByChild.slice(0, 2)) {
+        const impNode = findNode(root, imp);
+        if (impNode) related.push(impNode);
+      }
+    }
+  } else {
+    // For files, add imported-by and imports
+    for (const imp of importedBy.slice(0, 3)) {
+      const impNode = findNode(root, imp);
+      if (impNode) related.push(impNode);
+    }
+    for (const imp of importsFromNode.slice(0, 3)) {
+      const impNode = findNode(root, imp);
+      if (impNode) related.push(impNode);
+    }
+
+    // Fallback: same extension siblings
+    const folder = allFolders.find((candidate) => candidate.path === dirname(nodePath));
+    const sameExt = folder?.children.filter(
+      (child) => child.kind === "file" && child.path !== nodePath && ext(child.path) === ext(nodePath)
+    ) ?? [];
+    for (const s of sameExt.slice(0, 2)) {
+      if (!related.find(r => r.path === s.path)) related.push(s);
+    }
+  }
+
+  // Deduplicate
+  const seen = new Set<string>();
+  return related.filter((n) => {
+    if (seen.has(n.path)) return false;
+    seen.add(n.path);
+    return true;
+  }).slice(0, 6);
 }
 
 function changedFiles(node: MemoryNode) {
@@ -222,10 +257,27 @@ function uniqueContextItems(items: ProjectContextItem[]): ProjectContextItem[] {
   return out;
 }
 
-function contextSnapshot(selected: MemoryNode, root: MemoryNode, note: string): ProjectContextSnapshot {
-  const related = relatedNodes(selected, root);
+function contextSnapshot(
+  selected: MemoryNode,
+  root: MemoryNode,
+  note: string,
+  imports: ImportEdge[] = [],
+  editedFiles: string[] = []
+): ProjectContextSnapshot {
+  const related = relatedNodes(selected, root, imports);
   const parents = parentNodes(selected, root);
   const cleanNote = note.trim().slice(0, 1200);
+
+  // Build import graph
+  const importsFrom = new Map<string, string[]>();
+  const importsTo = new Map<string, string[]>();
+  for (const edge of imports) {
+    if (!importsFrom.has(edge.from)) importsFrom.set(edge.from, []);
+    importsFrom.get(edge.from)!.push(edge.to);
+    if (!importsTo.has(edge.to)) importsTo.set(edge.to, []);
+    importsTo.get(edge.to)!.push(edge.from);
+  }
+
   const activity = changedFiles(selected).map((file): ProjectContextItem => ({
     id: `activity:${file.path}`,
     path: file.path,
@@ -233,6 +285,33 @@ function contextSnapshot(selected: MemoryNode, root: MemoryNode, note: string): 
     detail: `${file.status || "changed"} with +${file.additions} -${file.deletions}.`,
     weight: 3,
   }));
+
+  // Import-based context
+  const selectedPath = selected.path;
+  const importedBy = importsTo.get(selectedPath) ?? [];
+  const importsFromNode = importsFrom.get(selectedPath) ?? [];
+
+  const importRelated = [
+    ...importedBy.slice(0, 2).map((path) => {
+      const node = findNode(root, path);
+      return node ? { ...memoryItem(node, "imported by"), weight: 5 } : null;
+    }).filter(Boolean) as ProjectContextItem[],
+    ...importsFromNode.slice(0, 2).map((path) => {
+      const node = findNode(root, path);
+      return node ? { ...memoryItem(node, "imports"), weight: 4 } : null;
+    }).filter(Boolean) as ProjectContextItem[],
+  ];
+
+  // Edited files in current run
+  const editedContext = editedFiles
+    .filter((p) => p !== selectedPath)
+    .slice(0, 3)
+    .map((path) => {
+      const node = findNode(root, path);
+      return node ? { ...memoryItem(node, "edited in run"), weight: 6 } : null;
+    })
+    .filter(Boolean) as ProjectContextItem[];
+
   const focused = [
     { ...memoryItem(selected, "current focus"), weight: 8 },
     ...(cleanNote
@@ -248,17 +327,24 @@ function contextSnapshot(selected: MemoryNode, root: MemoryNode, note: string): 
       : []),
     ...parents.slice(0, 2).map((node) => ({ ...memoryItem(node, "parent scope"), weight: 4 })),
     ...related.slice(0, 2).map((node) => ({ ...memoryItem(node, "nearby relation"), weight: 3 })),
+    ...importRelated.slice(0, 2),
+    ...editedContext.slice(0, 2),
   ];
+
   const feature = [
     ...focused,
     ...related.slice(2, 6).map((node) => ({ ...memoryItem(node, "feature relation"), weight: 2 })),
+    ...importRelated.slice(2, 4),
+    ...editedContext.slice(2, 3),
     ...activity.slice(0, 3),
   ];
+
   const workspace = [
     memoryItem(root, "workspace map"),
     ...changedFolders(root).map((node) => ({ ...memoryItem(node, "active area"), weight: 4 })),
     ...feature,
   ];
+
   const changed = changedFiles(root).map((file): ProjectContextItem => ({
     id: `changed:${file.path}`,
     path: file.path,
@@ -266,19 +352,25 @@ function contextSnapshot(selected: MemoryNode, root: MemoryNode, note: string): 
     detail: `${file.status || "changed"} with +${file.additions} -${file.deletions}.`,
     weight: 5,
   }));
+
   const nearbyFiles = selected.kind === "folder"
     ? selected.children.filter((child) => child.kind === "file").slice(0, 12)
     : findNode(root, dirname(selected.path))?.children.filter((child) => child.kind === "file").slice(0, 12) ?? [];
+
   const structural = flattenNodes(root)
     .filter((node) => node.path && (node.changedCount > 0 || node.path.startsWith("src") || node.path.startsWith("src-tauri")))
     .slice(0, 80)
     .map((node) => ({ ...memoryItem(node, node.kind === "folder" ? "project area" : "project file"), weight: node.changedCount > 0 ? 3 : 0 }));
+
   const lens = uniqueContextItems([
     ...focused,
     ...changed,
     ...nearbyFiles.map((node) => ({ ...memoryItem(node, "nearby file"), weight: 2 })),
     ...structural,
+    ...importRelated,
+    ...editedContext,
   ]);
+
   return {
     selectedPath: selected.path || ".",
     focused,
@@ -380,6 +472,7 @@ export function ProjectGraphPanel({
   fill,
   activePath,
   onContextChange,
+  editedFiles,
 }: Props) {
   const [graph, setGraph] = useState<ProjectGraph | null>(null);
   const [selectedPath, setSelectedPath] = useState("");
@@ -399,13 +492,16 @@ export function ProjectGraphPanel({
     return tree;
   }, [tree, selectedPath]);
 
+  const [imports, setImports] = useState<ImportEdge[]>([]);
+
   async function refresh() {
     if (!workspaceRoot) return;
     setLoading(true);
     setError(null);
     try {
-      const next = await invoke<ProjectGraph>("project_graph", { workspaceRoot });
-      setGraph(next);
+      const next: ProjectGraphWithImports = await fetchProjectGraphWithImports(workspaceRoot);
+      setGraph(next.graph);
+      setImports(next.imports);
       if (!selectedPath) setSelectedPath("src");
     } catch (e) {
       setGraph(null);
@@ -434,11 +530,11 @@ export function ProjectGraphPanel({
     localStorage.setItem(storageKey(workspaceRoot, selected.path), value);
   }
 
-  const related = selected && tree ? relatedNodes(selected, tree) : [];
+  const related = selected && tree ? relatedNodes(selected, tree, imports) : [];
   const changed = selected ? changedFiles(selected) : [];
   const snapshot = useMemo(
-    () => (selected && tree ? contextSnapshot(selected, tree, note) : null),
-    [selected, tree, note]
+    () => (selected && tree ? contextSnapshot(selected, tree, note, imports, editedFiles ?? []) : null),
+    [selected, tree, note, imports, editedFiles]
   );
 
   useEffect(() => {
@@ -479,7 +575,7 @@ export function ProjectGraphPanel({
           gap: 8,
         }}
       >
-        <span>Project Memory</span>
+        <span>Project Graph</span>
         {workspaceRoot && (
           <button
             aria-label="Refresh project memory"
@@ -528,7 +624,7 @@ export function ProjectGraphPanel({
               </span>
               <div style={{ minWidth: 0 }}>
                 <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {selected.path || graph.root_name}
+                  {selected.path || graph.rootName}
                 </div>
                 <div style={{ color: "var(--fg-subtle)", fontSize: 11 }}>
                   {selected.files.length} files · {selected.changedCount} changed

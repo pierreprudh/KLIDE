@@ -31,7 +31,7 @@ them.
 - [x] Editable harness settings: mode prompts, tool toggles, and tool descriptions (tool descriptions TBD).
 - [x] Checkpoint rollback: preview files changed since a turn and revert selected files.
 - [ ] Settings depth without adding persistent chrome.
-- [ ] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
+- [x] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
 - [ ] Context Lens v2: use real imports, Tauri invokes, and edited-file history instead of mostly heuristics.
 
 ## Small Follow-Ups

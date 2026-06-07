@@ -23,6 +23,10 @@
   --accent-soft:  rgba(90, 123, 76, 0.12);
   --accent-hover: #6B8E5A;
 
+  /* Controls */
+  --control-primary-bg: #1c1c1c;
+  --control-primary-fg: #fcfbf8;
+
   /* Focus ring (for accessibility on inputs/interactive elements) */
   --focus-ring:   rgba(90, 123, 76, 0.32);
 
@@ -111,6 +115,9 @@
   --accent:       #8EA2FF;
   --accent-soft:  #242B45;
 
+  --control-primary-bg: #F0EFE9;
+  --control-primary-fg: #11110F;
+
   --terminal-bg:      #0D0D0C;
   --terminal-fg:      #ECEAE1;
   --terminal-muted:   #9A978E;
@@ -144,6 +151,9 @@
 
   --accent:       #007ACC;
   --accent-soft:  #04395E;
+
+  --control-primary-bg: #FFFFFF;
+  --control-primary-fg: #1E1E1E;
 
   --terminal-bg:      #181818;
   --terminal-fg:      #CCCCCC;
@@ -179,6 +189,9 @@
   --accent:       #0969DA;
   --accent-soft:  #DDF4FF;
 
+  --control-primary-bg: #1F2328;
+  --control-primary-fg: #FFFFFF;
+
   --terminal-bg:      #F6F8FA;
   --terminal-fg:      #24292F;
   --terminal-muted:   #6E7781;
@@ -212,6 +225,9 @@
 
   --accent:       #B58900;
   --accent-soft:  #2E4C3B;
+
+  --control-primary-bg: #FDF6E3;
+  --control-primary-fg: #002B36;
 
   --terminal-bg:      #00212A;
   --terminal-fg:      #EEE8D5;
@@ -275,6 +291,299 @@ select:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent-soft);
   outline-offset: 1px;
+}
+
+.klide-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.klide-button:hover {
+  transform: translateY(-1px);
+}
+
+.klide-button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.klide-button-primary {
+  border-color: color-mix(in srgb, var(--control-primary-bg) 22%, transparent);
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 80%, transparent),
+    0 1px 1px rgba(0, 0, 0, 0.06),
+    0 10px 26px color-mix(in srgb, var(--control-primary-bg) 12%, transparent);
+}
+
+.klide-button-secondary {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--fg-strong);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.klide-button-ghost {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--fg);
+}
+
+.klide-button-subtle {
+  background: transparent;
+  color: var(--fg-subtle);
+}
+
+.klide-button-subtle:hover,
+.klide-button-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+
+.klide-field {
+  min-height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 68%, var(--bg-elevated) 32%);
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 12.5px;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 62%, transparent);
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.klide-field:focus {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 62%, transparent),
+    0 0 0 3px var(--accent-soft);
+}
+
+select.klide-field {
+  padding-right: 28px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.klide-surface {
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-elevated) 96%, var(--panel-highlight)) 0%,
+      var(--bg-elevated) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 var(--panel-highlight),
+    0 1px 1px rgba(0, 0, 0, 0.025);
+  overflow: hidden;
+}
+
+.klide-settings-section {
+  margin-bottom: 30px;
+}
+
+.klide-settings-heading {
+  margin: 0 0 10px;
+  color: var(--fg-strong);
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.klide-settings-row {
+  min-height: 64px;
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.klide-settings-row:last-child {
+  border-bottom: none;
+}
+
+.klide-settings-row:hover {
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.klide-row-title {
+  color: var(--fg-strong);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+
+.klide-row-description {
+  color: var(--fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.42;
+}
+
+.klide-switch {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-hover);
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
+}
+
+.klide-switch[data-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border-strong));
+  background: var(--accent);
+}
+
+.klide-switch-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fg-subtle);
+  display: block;
+  transform: translateX(0);
+  transition:
+    transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.klide-switch[data-checked="true"] .klide-switch-knob {
+  background: #fff;
+  transform: translateX(18px);
+}
+
+.klide-status-chip,
+.klide-code-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.klide-code-chip {
+  color: var(--fg-strong);
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+
+.klide-kbd {
+  margin-left: 2px;
+  min-height: 18px;
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  color: var(--fg-subtle);
+  background: color-mix(in srgb, var(--bg) 78%, var(--bg-elevated));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.klide-welcome-ascii-city {
+  position: absolute;
+  top: 50%;
+  right: clamp(-170px, -9vw, -64px);
+  width: min(720px, 58vw);
+  height: min(560px, 82vh);
+  color: var(--fg-dim);
+  opacity: 0.88;
+  transform: translateY(-50%);
+  mask-image:
+    linear-gradient(90deg, transparent 0%, black 35%, black 100%),
+    linear-gradient(180deg, transparent 0%, black 12%, black 84%, transparent 100%);
+  pointer-events: none;
+  user-select: none;
+}
+
+.klide-welcome-ascii-city::before {
+  content: "";
+  position: absolute;
+  inset: 7% 0 4% 18%;
+  background:
+    radial-gradient(ellipse at 64% 26%, color-mix(in srgb, #00d7ff 24%, transparent), transparent 34%),
+    radial-gradient(ellipse at 72% 58%, color-mix(in srgb, #ff4fe3 20%, transparent), transparent 38%),
+    linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent-soft) 18%, transparent), transparent);
+  filter: blur(22px);
+  opacity: 0.88;
+}
+
+.klide-ascii-city-layer {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(8.5px, 0.82vw, 12px);
+  font-weight: 400;
+  line-height: 1.04;
+  letter-spacing: 0;
+  white-space: pre;
+}
+
+.klide-ascii-city-layer.is-base {
+  color: color-mix(in srgb, var(--fg-subtle) 58%, transparent);
+  opacity: 0.3;
+  text-shadow: 0 0 20px color-mix(in srgb, var(--fg-subtle) 12%, transparent);
+}
+
+.klide-ascii-city-layer.is-cyan {
+  color: #36e7ff;
+  opacity: 0.28;
+  mix-blend-mode: screen;
+  text-shadow:
+    0 0 12px color-mix(in srgb, #36e7ff 70%, transparent),
+    0 0 34px color-mix(in srgb, #36e7ff 34%, transparent);
+}
+
+.klide-ascii-city-layer.is-magenta {
+  color: #ff4fe3;
+  opacity: 0.22;
+  mix-blend-mode: screen;
+  text-shadow:
+    0 0 12px color-mix(in srgb, #ff4fe3 70%, transparent),
+    0 0 34px color-mix(in srgb, #ff4fe3 34%, transparent);
+}
+
+.klide-welcome-ascii-city::selection,
+.klide-ascii-city-layer::selection {
+  background: transparent;
 }
 
 .settings-range {
@@ -571,6 +880,62 @@ input:focus-visible {
   }
   50% {
     opacity: 0.35;
+  }
+}
+
+/* Skeleton placeholder — a quiet shimmer sweep for loading states. Low
+   contrast, no flash; the panel structure shows instantly and only the data
+   shimmers in. Honours prefers-reduced-motion. */
+.klide-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg-dim) 16%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.klide-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--bg-elevated) 70%, transparent),
+    transparent
+  );
+  /* --shimmer-delay lets callers stagger the sweep across a row of cells. */
+  animation: klide-shimmer 1.6s var(--ease-soft) var(--shimmer-delay, 0ms) infinite;
+}
+
+@keyframes klide-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Staggered "rise" — placeholders grow up from their baseline when a load is
+   launched. --rise-delay cascades them across a row. */
+.klide-rise {
+  transform-origin: bottom;
+  animation: klide-rise var(--motion-slow) var(--ease-soft) var(--rise-delay, 0ms) both;
+}
+
+@keyframes klide-rise {
+  from {
+    transform: scaleY(0.12);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-skeleton::after,
+  .klide-rise {
+    animation: none;
   }
 }
 

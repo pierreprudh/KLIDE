@@ -42,19 +42,49 @@ export function WelcomeScreen({
         alignItems: "center",
         justifyContent: "center",
         overflow: "auto",
-        padding: "48px 32px",
+        padding: "56px 40px",
         background: "var(--bg)",
+        position: "relative",
       }}
     >
-      <div style={{ width: "min(540px, 88vw)" }}>
-        {/* Brand */}
+      <div className="klide-welcome-ascii-city" aria-hidden="true">
+        <pre className="klide-ascii-city-layer is-base">{ASCII_CITY}</pre>
+        <pre className="klide-ascii-city-layer is-cyan">{ASCII_CITY_CYAN}</pre>
+        <pre className="klide-ascii-city-layer is-magenta">{ASCII_CITY_MAGENTA}</pre>
+      </div>
+      <div
+        style={{
+          width: "min(540px, 88vw)",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--border-strong)",
+            background: "var(--bg-elevated)",
+            color: "var(--fg-strong)",
+            display: "grid",
+            placeItems: "center",
+            fontSize: 17,
+            fontWeight: 700,
+            boxShadow: "inset 0 1px 0 var(--panel-highlight)",
+            marginBottom: 18,
+          }}
+        >
+          K
+        </div>
         <div
           style={{
             fontSize: 44,
             lineHeight: 1.05,
             color: "var(--fg-strong)",
-            fontWeight: 600,
-            letterSpacing: "-0.03em",
+            fontWeight: 700,
+            letterSpacing: 0,
           }}
         >
           Klide
@@ -63,8 +93,9 @@ export function WelcomeScreen({
           style={{
             fontSize: 15,
             color: "var(--fg-subtle)",
-            lineHeight: 1.6,
+            lineHeight: 1.58,
             marginTop: 12,
+            maxWidth: 340,
           }}
         >
           A small, fast, AI-first editor.
@@ -78,34 +109,14 @@ export function WelcomeScreen({
             display: "flex",
             alignItems: "center",
             gap: 12,
-            marginTop: 40,
+            marginTop: 38,
           }}
         >
           <button
             type="button"
             onClick={onOpenFolder}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 10,
-              height: 44,
-              padding: "0 22px",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border-strong)",
-              background: "var(--bg-elevated)",
-              color: "var(--fg-strong)",
-              font: "inherit",
-              fontSize: 14.5,
-              fontWeight: 500,
-              cursor: "pointer",
-              transition: "background var(--motion-fast) var(--ease-out)",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.background = "var(--bg-hover)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.background = "var(--bg-elevated)")
-            }
+            className="klide-button klide-button-primary"
+            style={{ height: 44, padding: "0 20px", fontSize: 14 }}
           >
             <FolderIcon />
             Open Folder
@@ -114,22 +125,8 @@ export function WelcomeScreen({
           <button
             type="button"
             onClick={onOpenSettings}
-            style={{
-              height: 44,
-              padding: "0 16px",
-              borderRadius: "var(--radius-md)",
-              border: "none",
-              background: "transparent",
-              color: "var(--fg)",
-              font: "inherit",
-              fontSize: 14.5,
-              cursor: "pointer",
-              transition: "color var(--motion-fast) var(--ease-out)",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.color = "var(--fg-strong)")
-            }
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg)")}
+            className="klide-button klide-button-subtle"
+            style={{ height: 44, padding: "0 14px", fontSize: 14 }}
           >
             Settings
           </button>
@@ -137,14 +134,14 @@ export function WelcomeScreen({
 
         {/* Recent */}
         {recentFolders.length > 0 && (
-          <div style={{ marginTop: 52 }}>
+          <div className="klide-surface" style={{ marginTop: 46 }}>
             <div
               style={{
+                padding: "10px 12px 6px",
                 fontSize: 11,
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
+                fontWeight: 700,
+                letterSpacing: 0,
                 color: "var(--fg-dim)",
-                marginBottom: 6,
               }}
             >
               Recent
@@ -157,16 +154,11 @@ export function WelcomeScreen({
                     key={path}
                     onMouseEnter={() => setHovered(path)}
                     onMouseLeave={() => setHovered(null)}
+                    className="klide-settings-row"
                     style={{
-                      display: "flex",
-                      alignItems: "center",
+                      minHeight: 44,
+                      padding: "8px 12px",
                       gap: 8,
-                      padding: "10px 12px",
-                      marginLeft: -12,
-                      marginRight: -12,
-                      borderRadius: "var(--radius-sm)",
-                      background: isHovered ? "var(--bg-hover)" : "transparent",
-                      transition: "background var(--motion-fast) var(--ease-out)",
                     }}
                   >
                     <button
@@ -189,7 +181,8 @@ export function WelcomeScreen({
                     >
                       <span
                         style={{
-                          fontSize: 14,
+                          fontSize: 13.5,
+                          fontWeight: 600,
                           color: "var(--fg-strong)",
                           flex: "0 0 auto",
                         }}
@@ -198,7 +191,7 @@ export function WelcomeScreen({
                       </span>
                       <span
                         style={{
-                          fontSize: 12.5,
+                          fontSize: 12,
                           color: "var(--fg-subtle)",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
@@ -214,19 +207,13 @@ export function WelcomeScreen({
                       aria-label={`Remove ${folderName(path)} from recent`}
                       title="Remove from recent"
                       onClick={() => onRemoveRecent(path)}
+                      className="klide-button klide-button-subtle"
                       style={{
                         flex: "0 0 auto",
-                        width: 22,
-                        height: 22,
-                        display: "grid",
-                        placeItems: "center",
-                        borderRadius: "var(--radius-xs)",
-                        border: "none",
-                        background: "transparent",
-                        color: "var(--fg-dim)",
-                        cursor: "pointer",
+                        width: 24,
+                        minHeight: 24,
+                        padding: 0,
                         opacity: isHovered ? 1 : 0,
-                        transition: "opacity var(--motion-fast) var(--ease-out)",
                       }}
                     >
                       <CloseIcon />
@@ -243,24 +230,101 @@ export function WelcomeScreen({
 }
 
 function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        marginLeft: 4,
-        fontSize: 11.5,
-        lineHeight: 1,
-        padding: "3px 6px",
-        borderRadius: "var(--radius-xs)",
-        border: "1px solid var(--border)",
-        color: "var(--fg-subtle)",
-        background: "var(--bg)",
-        fontFamily: "var(--font-mono)",
-      }}
-    >
-      {children}
-    </span>
-  );
+  return <span className="klide-kbd">{children}</span>;
 }
+
+const ASCII_CITY = [
+  "          .        .        .          .",
+  "      .      _  _        _      .       ",
+  "            | || |      | |             ",
+  "     _______|_||_|______|_|_____        ",
+  "    /  _  _  _  _  _  _  _  _  \\       ",
+  "   /__/|[]|[]|[]|[]|[]|[]|[]|\\__\\      ",
+  "   |##||::|::|::|::|::|::|::||##|      ",
+  "   |##||[]|[]|[]|[]|[]|[]|[]||##|      ",
+  " __|##||::|::|::|::|::|::|::||##|___   ",
+  "|[]|##||[]|[]|[]|[]|[]|[]|[]||##|[]|   ",
+  "|::|##||::|::|::|::|::|::|::||##|::|   ",
+  "|[]|##||[]|[]|[]|[]|[]|[]|[]||##|[]|   ",
+  "|::|##||::|::|::|::|::|::|::||##|::|   ",
+  "|[]|##||[]|[]|[]|[]|[]|[]|[]||##|[]|   ",
+  "|__|##||__|__|__|__|__|__|__||##|__|   ",
+  "     |  K-LIDE  |====|  AI/RUN  |      ",
+  "  ___|__________|____|__________|___    ",
+  " /:::::/:::::/:::::/:::::/:::::/:::/|   ",
+  "/_____/_____/_____/_____/_____/___/ |   ",
+  "|  _   _   _   _   _   _   _   _  | |  ",
+  "| |_| |_| |_| |_| |_| |_| |_| |_| | |   ",
+  "|  _   _   _   _   _   _   _   _  |/   ",
+  "|_| |_| |_| |_| |_| |_| |_| |_| |_|     ",
+  "      ----==== neon rail ====----       ",
+  "   .--.        .----.        .--.       ",
+  "  /    \\______/  __  \\______/    \\      ",
+  " /  /\\  \\    /  /  \\  \\    /  /\\  \\     ",
+  "/__/  \\__\\__/__/    \\__\\__/__/  \\__\\    ",
+].join("\n");
+
+const ASCII_CITY_CYAN = [
+  "                                           ",
+  "                                           ",
+  "                         __                ",
+  "                        /  \\               ",
+  "             .---------'    '--------.     ",
+  "            /  o  o  o  o  o  o  o   \\    ",
+  "           /____________________________\\   ",
+  "             ||  ||  ||  ||  ||  ||        ",
+  "             ||  ||  ||  ||  ||  ||        ",
+  "             ||  ||  ||  ||  ||  ||        ",
+  "                                           ",
+  "       +===============================+   ",
+  "       |  DATA  DATA  DATA  DATA  DATA |   ",
+  "       +===============================+   ",
+  "                                           ",
+  "                 .---.                     ",
+  "                /  K  \\                    ",
+  "               /_______\\                   ",
+  "                                           ",
+  "        /\\                         /\\      ",
+  "       /  \\       ________        /  \\     ",
+  "      /____\\_____/________\\______/____\\    ",
+  "                                           ",
+  "      ----==== neon rail ====----          ",
+  "                                           ",
+  "                                           ",
+  "                                           ",
+  "                                           ",
+].join("\n");
+
+const ASCII_CITY_MAGENTA = [
+  "        *                       *          ",
+  "                                           ",
+  "             __                            ",
+  "            /  \\          __              ",
+  "           /    \\        /  \\             ",
+  "          /______\\      /____\\            ",
+  "                                           ",
+  "       |>|       |>|        |>|           ",
+  "       |>|       |>|        |>|           ",
+  "                                           ",
+  "  +-----------+                 +------+   ",
+  "  |  NEON-9   |                 |  RUN |   ",
+  "  +-----------+                 +------+   ",
+  "                                           ",
+  "                         .---.             ",
+  "                        / .-. \\            ",
+  "                       /  \\_/  \\           ",
+  "                      /_________\\          ",
+  "                                           ",
+  "                                           ",
+  "             .-.                           ",
+  "          .-(   )-.                        ",
+  "         (___.-.___)                       ",
+  "                                           ",
+  "    .--.                          .--.     ",
+  "   /____\\                        /____\\    ",
+  "                                           ",
+  "                                           ",
+].join("\n");
 
 function FolderIcon() {
   return (

@@ -1,14 +1,17 @@
 mod agent;
+mod memory;
 mod pty;
 use pty::{
     delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
     pty_write, DelegatePtyState, PtyState,
 };
+use memory::{memory_list, memory_read, memory_write};
 use std::process::Command;
 use std::process::Stdio;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -16,6 +19,9 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
+
+static OLLAMA_MODELS_CACHE: LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -387,6 +393,14 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
     }
 
     if provider == "ollama" {
+        {
+            let cache = OLLAMA_MODELS_CACHE.lock().unwrap();
+            if let Some((ts, names)) = cache.as_ref() {
+                if ts.elapsed() < Duration::from_secs(10) {
+                    return Ok(names.clone());
+                }
+            }
+        }
         let res = reqwest::get(format!("{OLLAMA_URL}/api/tags"))
             .await
             .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
@@ -396,7 +410,7 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
             return Err(response_error("Ollama", status, &body));
         }
         let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        let names = value
+        let names: Vec<String> = value
             .get("models")
             .and_then(|models| models.as_array())
             .map(|models| {
@@ -407,6 +421,7 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
                     .collect()
             })
             .unwrap_or_default();
+        *OLLAMA_MODELS_CACHE.lock().unwrap() = Some((Instant::now(), names.clone()));
         return Ok(names);
     }
 
@@ -2668,6 +2683,161 @@ fn project_graph(workspace_root: String) -> Result<ProjectGraph, String> {
     })
 }
 
+// ── Import extraction for Context Lens v2 ─────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportEdge {
+    from: String,
+    to: String,
+    kind: String, // "import" | "require" | "mod" | "use"
+}
+
+#[tauri::command]
+fn extract_imports(workspace_root: String, paths: Vec<String>) -> Result<Vec<ImportEdge>, String> {
+    let root = std::path::Path::new(&workspace_root);
+    let mut edges = Vec::new();
+
+    for rel_path in paths {
+        let full_path = root.join(&rel_path);
+        let content = match std::fs::read_to_string(&full_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let ext = full_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Rust: use, mod
+        if ext == "rs" {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with("use ") || line.starts_with("mod ") {
+                    if let Some(path_str) = line.split_whitespace().nth(1) {
+                        let import = path_str.trim_end_matches(';').trim();
+                        if !import.is_empty() && !import.starts_with("crate::") && !import.starts_with("self::") && !import.starts_with("super::") {
+                            edges.push(ImportEdge {
+                                from: rel_path.clone(),
+                                to: import.to_string(),
+                                kind: if line.starts_with("mod ") { "mod".to_string() } else { "use".to_string() },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // TypeScript/JavaScript: import, require
+        if matches!(ext, "ts" | "tsx" | "js" | "jsx") {
+            for line in content.lines() {
+                let line = line.trim();
+                // import ... from "..." or import "..."
+                if line.starts_with("import ") {
+                    if let Some(from_idx) = line.find(" from ") {
+                        let import = line[from_idx + 6..].trim().trim_matches(|c| c == '"' || c == '\'' || c == ';');
+                        if !import.is_empty() {
+                            edges.push(ImportEdge {
+                                from: rel_path.clone(),
+                                to: import.to_string(),
+                                kind: "import".to_string(),
+                            });
+                        }
+                    } else if let Some(start) = line.find(['"', '\'']) {
+                        let end = line[start + 1..].find(line.chars().nth(start).unwrap());
+                        if let Some(end_idx) = end {
+                            let import = &line[start + 1..start + 1 + end_idx];
+                            if !import.is_empty() {
+                                edges.push(ImportEdge {
+                                    from: rel_path.clone(),
+                                    to: import.to_string(),
+                                    kind: "import".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                // require("...") or require('...')
+                if line.contains("require(") {
+                    let mut idx = 0;
+                    while let Some(req_idx) = line[idx..].find("require(") {
+                        let abs_idx = idx + req_idx;
+                        if let Some(start) = line[abs_idx..].find(['"', '\'']) {
+                            let quote = line.chars().nth(abs_idx + start).unwrap();
+                            if let Some(end) = line[abs_idx + start + 1..].find(quote) {
+                                let import = &line[abs_idx + start + 1..abs_idx + start + 1 + end];
+                                if !import.is_empty() {
+                                    edges.push(ImportEdge {
+                                        from: rel_path.clone(),
+                                        to: import.to_string(),
+                                        kind: "require".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        idx = abs_idx + 8;
+                    }
+                }
+            }
+        }
+
+        // Python: import, from ... import
+        if ext == "py" {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with("import ") {
+                    let imports = line[7..].split(',');
+                    for imp in imports {
+                        let imp = imp.trim().split_whitespace().next().unwrap_or("");
+                        if !imp.is_empty() {
+                            edges.push(ImportEdge {
+                                from: rel_path.clone(),
+                                to: imp.to_string(),
+                                kind: "import".to_string(),
+                            });
+                        }
+                    }
+                } else if line.starts_with("from ") {
+                    if let Some(import_idx) = line.find(" import ") {
+                        let module = line[5..import_idx].trim();
+                        let imports = line[import_idx + 8..].split(',');
+                        for imp in imports {
+                            let imp = imp.trim().split_whitespace().next().unwrap_or("");
+                            if !imp.is_empty() && imp != "*" {
+                                edges.push(ImportEdge {
+                                    from: rel_path.clone(),
+                                    to: format!("{}.{}", module, imp),
+                                    kind: "import".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(edges)
+}
+
+// ── Enhanced project graph with imports ──────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectGraphWithImports {
+    graph: ProjectGraph,
+    imports: Vec<ImportEdge>,
+}
+
+#[tauri::command]
+fn project_graph_with_imports(workspace_root: String) -> Result<ProjectGraphWithImports, String> {
+    let graph = project_graph(workspace_root.clone())?;
+
+    // Extract imports for all tracked files
+    let paths: Vec<String> = graph.files.iter().map(|f| f.path.clone()).collect();
+    let imports = extract_imports(workspace_root, paths)?;
+
+    Ok(ProjectGraphWithImports { graph, imports })
+}
+
 // ── Agent runs aggregation ──────────────────────────────────────────────
 // Mission Control reads the local session logs that other agentic CLIs leave
 // on disk, so KIDE can show your real recent runs across tools in one board:
@@ -3117,12 +3287,30 @@ fn parse_codex_run(
     path: &std::path::Path,
     index: &std::collections::HashMap<String, String>,
 ) -> Option<AgentRun> {
-    let content = std::fs::read_to_string(path).ok()?;
+    use std::io::BufRead;
+    // Codex rollout files can be hundreds of MB — tool outputs are written
+    // inline, one giant JSON object per line. Building a serde_json::Value tree
+    // for every line is what made the Stats panel freeze the machine on large
+    // histories. Stream the file and skip JSON-parsing oversized lines: those
+    // are always tool-output `response_item` records, which we only need to
+    // count, never inspect. The metadata and token-usage lines we do read are
+    // always small.
+    const MAX_PARSE_LINE: usize = 32 * 1024;
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
     let (mut id, mut cwd, mut branch, mut model) = (None, None, None, None);
     let mut count: u32 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
-    for line in content.lines() {
-        let v: serde_json::Value = match serde_json::from_str(line) {
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        if line.len() > MAX_PARSE_LINE {
+            count += 1; // oversized line = a tool-output response_item
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -3768,6 +3956,8 @@ pub fn run() {
             git_commit,
             git_diff,
             project_graph,
+            project_graph_with_imports,
+            extract_imports,
             list_agent_runs,
             read_agent_run,
             read_opencode_run,
@@ -3793,6 +3983,9 @@ pub fn run() {
             agent::agent_read_run,
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,
+            memory_write,
+            memory_list,
+            memory_read,
             create_pr,
             create_worktree,
             git_log,

@@ -24,6 +24,7 @@ import type { Conversation } from "./components/ai/types";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { FileViewerPanel } from "./components/FileViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -54,7 +55,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import "./styles/tokens.css";
 
-type Panel = "explorer" | "git" | "graph" | "skills" | "ai" | "runs" | "settings";
+type Panel = "explorer" | "git" | "graph" | "memory" | "skills" | "ai" | "runs" | "settings";
 type Tab = {
   path: string;
   code: string;
@@ -123,6 +124,10 @@ function App() {
   const [graphVisible, setGraphVisible] = useState(
     () => localStorage.getItem("klide-graph-visible") === "true"
   );
+  const [memoryVisible, setMemoryVisible] = useState(
+    () => localStorage.getItem("klide-memory-visible") === "true"
+  );
+  const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
   );
@@ -134,6 +139,17 @@ function App() {
     () => localStorage.getItem("klide-sidebar-slot2") as Panel | null
   );
   const [resumeConversation, setResumeConversation] = useState<Conversation | null>(null);
+  // AI panel spawn queue: when Mission Control asks to open a fresh panel
+  // pinned to a delegate provider, we set this and the matching <AiPanel>
+  // picks it up on mount, sets its initial provider + resume/task, then
+  // clears the entry. One-at-a-time, key matched by panel id.
+  const [pendingAiPanel, setPendingAiPanel] = useState<{
+    panelId: string;
+    provider: "claude-code" | "codex" | "opencode";
+    resumeSessionId: string | null;
+    initialTask: string | null;
+  } | null>(null);
+  void pendingAiPanel;
   const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -169,7 +185,7 @@ function App() {
   ]);
   // Bring-to-front z-index. Bumped when the user clicks a panel.
   const [zCounter, setZCounter] = useState(10);
-  const [focusedPanel, setFocusedPanel] = useState<PanelLayoutId | null>(null);
+  const [focusedPanel, setFocusedPanel] = useState<string | null>(null);
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
 
   useEffect(() => {
@@ -395,7 +411,7 @@ function App() {
     }));
   }
 
-  function focusPanel(panelId: PanelLayoutId) {
+  function focusPanel(panelId: string) {
     setFocusedPanel(panelId);
     setZCounter((n) => n + 1);
   }
@@ -451,7 +467,7 @@ function App() {
       localStorage.getItem("klide-ollama-model") ||
       DEFAULT_AI_MODEL
   );
-  const [ollamaModels, setOllamaModels] = useState<string[]>([aiModel]);
+  const [panelModels, setPanelModels] = useState<Record<string, string[]>>({});
   const [requireDiffReview, setRequireDiffReview] = useState(() =>
     readBoolSetting("klide-confirm-agent-edits", true)
   );
@@ -497,6 +513,7 @@ function App() {
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
     git: view === "git-review",
     graph: view === "workbench" && (graphVisible || sidebarSlot2 === "graph"),
+    memory: view === "workbench" && (memoryVisible || sidebarSlot2 === "memory"),
     skills: view === "workbench" && (skillsVisible || sidebarSlot2 === "skills"),
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
@@ -529,7 +546,7 @@ function App() {
       return;
     }
     // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
-    if (panel === "explorer" || panel === "graph" || panel === "skills") {
+    if (panel === "explorer" || panel === "graph" || panel === "memory" || panel === "skills") {
       if (meta) {
         // ⌘+click toggles the secondary slot in the explorer panel.
         setSidebarSlot2((cur) => cur === panel ? null : panel);
@@ -538,9 +555,11 @@ function App() {
         if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
         if (panel !== "graph" && graphVisible) setGraphVisible(false);
+        if (panel !== "memory" && memoryVisible) setMemoryVisible(false);
         if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
         const setter = panel === "explorer" ? setExplorerVisible
           : panel === "graph" ? setGraphVisible
+          : panel === "memory" ? setMemoryVisible
           : setSkillsVisible;
         setter((cur) => !cur);
       }
@@ -672,8 +691,8 @@ function App() {
             }
             model={aiModel}
             onModelChange={setAiModel}
-            availableModels={ollamaModels}
-            onAvailableModelsChange={setOllamaModels}
+            availableModels={panelModels[aiPanels[0]?.id ?? "ai-main"] ?? [aiModel]}
+            onAvailableModelsChange={(models) => setPanelModels((prev) => ({ ...prev, [aiPanels[0]?.id ?? "ai-main"]: models }))}
             apiKeyVersion={apiKeyVersion}
             requireDiffReview={requireDiffReview}
             stopAfterRejection={stopAfterRejection}
@@ -861,6 +880,51 @@ function App() {
     }
   }
 
+  // "Open in {CLI}" / "Resume in {CLI}" from Mission Control — land the user
+  // in a fresh AI panel pinned to that delegate provider. The AI panel is
+  // the natural home for an agent TUI (it already renders DelegateTerminalSurface
+  // for claude-code / codex / opencode). For Klide handoff, the first user
+  // message becomes the CLI's task arg via `initialTask`.
+  function openRunInAiPanel(opts: {
+    provider: "claude-code" | "codex" | "opencode";
+    workspaceRoot: string | null;
+    resumeSessionId?: string;
+    initialTask?: string;
+  }) {
+    setView("workbench");
+    if (!aiVisible) togglePanel("ai");
+    const id = newAiPanelId();
+    setAiPanels((prevPanels) => {
+      const last = prevPanels[prevPanels.length - 1]?.rect;
+      const baseW = last?.w ?? Math.min(360, Math.max(1, workbenchSize.w));
+      const baseH = last?.h ?? Math.min(Math.max(240, workbenchSize.h - 246), Math.max(1, workbenchSize.h));
+      const offset = 20;
+      const rect = clampRect(
+        {
+          x: (last?.x ?? workbenchSize.w - baseW) - offset,
+          y: (last?.y ?? 0) + offset,
+          w: baseW,
+          h: baseH,
+        },
+        workbenchSize.w,
+        workbenchSize.h,
+        PANEL_CONSTRAINTS.ai
+      );
+      const nextPanels = [...prevPanels, { id, rect }];
+      setPanelLayout((prevLayout) => ({
+        ...prevLayout,
+        ai: nextPanels.map((panel) => panel.rect),
+      }));
+      return nextPanels;
+    });
+    setPendingAiPanel({
+      panelId: id,
+      provider: opts.provider,
+      resumeSessionId: opts.resumeSessionId ?? null,
+      initialTask: opts.initialTask ?? null,
+    });
+  }
+
   function duplicateAiPanel() {
     // Add a fresh rect for the new panel. Offset from the last one so
     // the user can see both, but clamp inside the workbench.
@@ -945,6 +1009,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("klide-graph-visible", String(graphVisible));
   }, [graphVisible]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-memory-visible", String(memoryVisible));
+  }, [memoryVisible]);
 
   useEffect(() => {
     if (sidebarSlot2) localStorage.setItem("klide-sidebar-slot2", sidebarSlot2);
@@ -1255,6 +1323,12 @@ function App() {
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
   ];
+  const statusTheme =
+    autoTheme
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? darkTheme
+        : lightTheme
+      : theme;
 
   // Nothing open → a full-screen welcome page (no chrome at all). Settings stays
   // reachable so API keys can be set up before a folder is ever opened.
@@ -1329,7 +1403,7 @@ function App() {
             onEditorMinimapChange={setEditorMinimap}
             aiModel={aiModel}
             onAiModelChange={setAiModel}
-            availableAiModels={ollamaModels}
+            availableAiModels={panelModels["ai-main"] ?? [aiModel]}
             requireDiffReview={requireDiffReview}
             onRequireDiffReviewChange={setRequireDiffReview}
             stopAfterRejection={stopAfterRejection}
@@ -1359,6 +1433,7 @@ function App() {
                 workspaceRoot={workspaceRoot}
                 theme={theme}
                 onResumeKlideRun={resumeKlideRun}
+                onOpenInAiPanel={openRunInAiPanel}
                 onBack={() => setView("workbench")}
               />
             ) : activeGrid ? (
@@ -1509,6 +1584,27 @@ function App() {
                     />
                   </FloatingPanel>
                 )}
+                {memoryVisible && sidebarSlot2 !== "memory" && panelLayout.memory && (
+                  <FloatingPanel
+                    panelId="memory"
+                    rect={panelLayout.memory}
+                    workbenchW={workbenchSize.w}
+                    workbenchH={workbenchSize.h}
+                    zIndex={focusedPanel === "memory" ? 10 + zCounter : 10}
+                    onFocus={() => focusPanel("memory")}
+                    onResize={(next) => updatePanelRect("memory", next)}
+                    onMove={(next) => updatePanelRect("memory", next)}
+                  >
+                    <MemoryPanel
+                      fill
+                      visible
+                      width={panelLayout.memory.w}
+                      workspaceRoot={workspaceRoot}
+                      refreshKey={memoryRefreshKey}
+                      onOpenInEditor={(path, content) => openFile(path, content)}
+                    />
+                  </FloatingPanel>
+                )}
                 {previewPath && (
                   <div
                     style={{
@@ -1563,8 +1659,8 @@ function App() {
                       rect={panel.rect}
                       workbenchW={workbenchSize.w}
                       workbenchH={workbenchSize.h}
-                      zIndex={focusedPanel === "ai" ? 10 + zCounter + idx : 10 + idx}
-                      onFocus={() => focusPanel("ai")}
+                      zIndex={focusedPanel === panel.id ? 10 + zCounter : 10 + idx}
+                      onFocus={() => focusPanel(panel.id)}
                       onResize={(next) => updateAiRect(idx, next)}
                       onMove={(next) => updateAiRect(idx, next)}
                     >
@@ -1573,6 +1669,26 @@ function App() {
                         visible
                         width={panel.rect.w}
                         panelId={panel.id}
+                        initialProvider={
+                          pendingAiPanel?.panelId === panel.id
+                            ? pendingAiPanel.provider
+                            : undefined
+                        }
+                        initialResumeSessionId={
+                          pendingAiPanel?.panelId === panel.id
+                            ? pendingAiPanel.resumeSessionId
+                            : undefined
+                        }
+                        initialTask={
+                          pendingAiPanel?.panelId === panel.id
+                            ? pendingAiPanel.initialTask
+                            : undefined
+                        }
+                        onInitialConsumed={
+                          pendingAiPanel?.panelId === panel.id
+                            ? () => setPendingAiPanel(null)
+                            : undefined
+                        }
                         workspaceRoot={workspaceRoot}
                         onFileWritten={onAgentWrote}
                         onWorkspaceChanged={() =>
@@ -1580,8 +1696,8 @@ function App() {
                         }
                         model={aiModel}
                         onModelChange={setAiModel}
-                        availableModels={ollamaModels}
-                        onAvailableModelsChange={setOllamaModels}
+                        availableModels={panelModels[panel.id] ?? [aiModel]}
+                        onAvailableModelsChange={(models) => setPanelModels((prev) => ({ ...prev, [panel.id]: models }))}
                         apiKeyVersion={apiKeyVersion}
                         requireDiffReview={requireDiffReview}
                         stopAfterRejection={stopAfterRejection}
@@ -1594,6 +1710,12 @@ function App() {
                         }
                         resumeConversation={resumeConversation}
                         onResumeConsumed={() => setResumeConversation(null)}
+                        onMemoryWritten={(entry) => {
+                          setMemoryRefreshKey((k) => k + 1);
+                          setFileNotice(
+                            `Memory written → ${entry.title} (${entry.relPath})`
+                          );
+                        }}
                       />
                     </FloatingPanel>
                   );
@@ -1616,7 +1738,8 @@ function App() {
         onApplyGrid={applyGrid}
         onExitGrid={exitGrid}
         onOpenGrid={openGridSettings}
-        theme={theme}
+        theme={statusTheme}
+        autoTheme={autoTheme}
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
         onResetLayout={resetPanelLayout}
       />
