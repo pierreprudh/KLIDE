@@ -80,6 +80,10 @@ type Props = {
   onClose?: () => void;
   resumeConversation?: Conversation | null;
   onResumeConsumed?: () => void;
+  /** When true (e.g. on app launch), skip restoring conversation from
+   *  localStorage so the panel opens fresh. Conversations are still saved
+   *  and accessible via the sidebar. */
+  startFresh?: boolean;
   /** When set on first mount, the panel starts pinned to this delegate
    *  provider (claude-code / codex / opencode). Used by Mission Control's
    *  "Resume in {CLI}" / "Open in {CLI}" handoffs to land the user in a
@@ -121,6 +125,7 @@ export function AiPanel({
   onClose,
   resumeConversation,
   onResumeConsumed,
+  startFresh,
   initialProvider,
   initialResumeSessionId,
   initialTask,
@@ -306,7 +311,7 @@ export function AiPanel({
 
   async function ensureFileList() {
     if (!workspaceRoot || fileList.length > 0) return;
-    try { setFileList(await (await import("./ai/tool-execution")).listWorkspaceFiles(workspaceRoot)); } catch {}
+    try { setFileList(await (await import("./ai/workspaceFiles")).listWorkspaceFiles(workspaceRoot)); } catch {}
   }
 
   function handleComposerChange(value: string, caret: number) {
@@ -390,6 +395,7 @@ export function AiPanel({
 
   useEffect(() => {
     if (!panelId) return;
+    if (startFresh) return;
     const conv = loadConversations<Conversation>().find((c) => c.id === panelId);
     if (!conv) return;
     if (conv.msgs.length === 0) return;
@@ -403,9 +409,6 @@ export function AiPanel({
       if (prev.some((c) => c.id === conv.id)) return prev;
       return [conv, ...prev];
     });
-    // Run only on mount — we want to re-attach to the panel's prior thread,
-    // not re-run on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function newConversation() {
@@ -508,6 +511,8 @@ export function AiPanel({
 
   useEffect(() => {
     if (streaming || msgs.length === 0) return;
+    const lastMsg = msgs[msgs.length - 1];
+    if (lastMsg.role === "assistant" && lastMsg.content === "" && !lastMsg.thinking && !lastMsg.toolCalls) return;
     setConversations((prev) => {
       const conv: Conversation = { id: currentId, title: deriveTitle(msgs), msgs, updatedAt: Date.now() };
       const next = [conv, ...prev.filter((c) => c.id !== currentId)];
@@ -995,7 +1000,7 @@ export function AiPanel({
         )}
         {msgs.map((m, i) => {
           const isLast = i === msgs.length - 1;
-          const isAssistantPlaceholder = m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls;
+          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls;
           const isStreamingActive = streaming && isLast && m.role === "assistant" && m.content !== "";
 
           if (m.role === "user") {

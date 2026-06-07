@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { listWorkspaceFiles } from "./ai/tool-execution";
+import { listWorkspaceFiles } from "./ai/workspaceFiles";
 
 type CommandItem = {
   id: string;
