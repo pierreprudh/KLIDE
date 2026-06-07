@@ -23,8 +23,7 @@ import type { AgentEvent } from "./agent/types";
 import type { Conversation } from "./components/ai/types";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
-import { ProjectGraphPanel } from "./components/ProjectGraphPanel";
-import { MemoryPanel } from "./components/MemoryPanel";
+import { MemoryModal } from "./components/MemoryModal";
 import { FileViewerPanel } from "./components/FileViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -50,12 +49,11 @@ import {
   type PanelRect,
   type PanelId as PanelLayoutId,
 } from "./panelLayout";
-import type { ProjectContextSnapshot } from "./contextTray";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import "./styles/tokens.css";
 
-type Panel = "explorer" | "git" | "graph" | "memory" | "skills" | "ai" | "runs" | "settings";
+type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings";
 type Tab = {
   path: string;
   code: string;
@@ -121,12 +119,9 @@ function App() {
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
-  const [graphVisible, setGraphVisible] = useState(
-    () => localStorage.getItem("klide-graph-visible") === "true"
-  );
-  const [memoryVisible, setMemoryVisible] = useState(
-    () => localStorage.getItem("klide-memory-visible") === "true"
-  );
+  const [memoryVisible, setMemoryVisible] = useState(false);
+  // Bumped when the AI panel writes a new memory entry, so the modal
+  // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
@@ -150,7 +145,6 @@ function App() {
     initialTask: string | null;
   } | null>(null);
   void pendingAiPanel;
-  const [projectContext, setProjectContext] = useState<ProjectContextSnapshot | null>(null);
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
@@ -183,6 +177,15 @@ function App() {
   const [aiPanels, setAiPanels] = useState<AiPanelInstance[]>(() => [
     { id: "ai-main", rect: { x: 0, y: 0, w: 360, h: 360 } },
   ]);
+  // Track first render to start AI panels fresh (don't restore old convos).
+  // Reset to false synchronously during first render so remounts from view
+  // switches still restore their conversation.
+  const isFirstRender = useRef(true);
+  // We flip the ref inline during render so it's false for any subsequent
+  // AiPanel mount (e.g. switching back to the AI view).
+  const startFresh = isFirstRender.current;
+  // eslint-disable-next-line react-compiler/react-internal-key
+  isFirstRender.current = false;
   // Bring-to-front z-index. Bumped when the user clicks a panel.
   const [zCounter, setZCounter] = useState(10);
   const [focusedPanel, setFocusedPanel] = useState<string | null>(null);
@@ -226,10 +229,7 @@ function App() {
   const [layoutMigrated, setLayoutMigrated] = useState(false);
   function fallbackAiRect(): PanelRect {
     const w = Math.min(360, Math.max(1, workbenchSize.w));
-    const h = Math.min(
-      Math.max(240, workbenchSize.h - 246),
-      Math.max(1, workbenchSize.h)
-    );
+    const h = workbenchSize.h;
     return clampRect(
       { x: Math.max(0, workbenchSize.w - w), y: 0, w, h },
       workbenchSize.w,
@@ -276,12 +276,6 @@ function App() {
           w: readNumberSetting("klide-git-width", 280, 220, 520),
           h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
         },
-        graph: {
-          x: 0,
-          y: 0,
-          w: readNumberSetting("klide-graph-width", 320, 260, 560),
-          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
-        },
         ai: [{
           x: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620),
           y: 0,
@@ -322,7 +316,7 @@ function App() {
     if (Object.keys(panelLayout).length === 0) return;
     let dirty = false;
     const next: PanelLayout = { ...panelLayout };
-    for (const id of ["explorer", "git", "graph", "memory", "terminal"] as const) {
+    for (const id of ["explorer", "git", "memory", "terminal"] as const) {
       const rect = panelLayout[id];
       if (!rect) continue;
       const clamped = clampRect(
@@ -512,8 +506,7 @@ function App() {
   const activityState: Record<Panel, boolean> = {
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
     git: view === "git-review",
-    graph: view === "workbench" && (graphVisible || sidebarSlot2 === "graph"),
-    memory: view === "workbench" && (memoryVisible || sidebarSlot2 === "memory"),
+    memory: view === "workbench" && memoryVisible,
     skills: view === "workbench" && (skillsVisible || sidebarSlot2 === "skills"),
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
@@ -546,7 +539,7 @@ function App() {
       return;
     }
     // Sidebar views: normal click opens one at a time; ⌘+click stacks below.
-    if (panel === "explorer" || panel === "graph" || panel === "memory" || panel === "skills") {
+    if (panel === "explorer" || panel === "skills") {
       if (meta) {
         // ⌘+click toggles the secondary slot in the explorer panel.
         setSidebarSlot2((cur) => cur === panel ? null : panel);
@@ -554,13 +547,8 @@ function App() {
         // Plain click: collapse any other sidebar view, then toggle this one.
         if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
-        if (panel !== "graph" && graphVisible) setGraphVisible(false);
-        if (panel !== "memory" && memoryVisible) setMemoryVisible(false);
         if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
-        const setter = panel === "explorer" ? setExplorerVisible
-          : panel === "graph" ? setGraphVisible
-          : panel === "memory" ? setMemoryVisible
-          : setSkillsVisible;
+        const setter = panel === "explorer" ? setExplorerVisible : setSkillsVisible;
         setter((cur) => !cur);
       }
       return;
@@ -568,6 +556,13 @@ function App() {
     // Git is a dedicated full-window view, not a sidebar panel.
     if (panel === "git") {
       setView((v) => (v === "git-review" ? "workbench" : "git-review"));
+      return;
+    }
+    // Memory opens as a centered modal (like Skills) rather than a
+    // sidebar — its list+detail layout needs the room.
+    if (panel === "memory") {
+      setView("workbench");
+      setMemoryVisible((cur) => !cur);
       return;
     }
   }
@@ -652,18 +647,6 @@ function App() {
             onFilePreview={setPreviewPath}
           />
         );
-      case "graph":
-        return (
-          <ProjectGraphPanel
-            key={key}
-            fill
-            visible
-            width={panelLayout.graph?.w ?? 320}
-            workspaceRoot={workspaceRoot}
-            activePath={active?.path ?? null}
-            onContextChange={setProjectContext}
-          />
-        );
       case "terminal":
         return (
           <TerminalPanel
@@ -684,6 +667,7 @@ function App() {
             visible
             width={aiPanels[0]?.rect.w ?? 360}
             panelId={aiPanels[0]?.id}
+            startFresh={startFresh}
             workspaceRoot={workspaceRoot}
             onFileWritten={onAgentWrote}
             onWorkspaceChanged={() =>
@@ -697,7 +681,6 @@ function App() {
             requireDiffReview={requireDiffReview}
             stopAfterRejection={stopAfterRejection}
             skills={skills}
-            projectContext={projectContext}
             harnessSettings={harnessSettings}
             resumeConversation={resumeConversation}
             onResumeConsumed={() => setResumeConversation(null)}
@@ -897,7 +880,7 @@ function App() {
     setAiPanels((prevPanels) => {
       const last = prevPanels[prevPanels.length - 1]?.rect;
       const baseW = last?.w ?? Math.min(360, Math.max(1, workbenchSize.w));
-      const baseH = last?.h ?? Math.min(Math.max(240, workbenchSize.h - 246), Math.max(1, workbenchSize.h));
+      const baseH = last?.h ?? workbenchSize.h;
       const offset = 20;
       const rect = clampRect(
         {
@@ -931,7 +914,7 @@ function App() {
     setAiPanels((prevPanels) => {
       const last = prevPanels[prevPanels.length - 1]?.rect;
       const baseW = last?.w ?? Math.min(360, Math.max(1, workbenchSize.w));
-      const baseH = last?.h ?? Math.min(Math.max(240, workbenchSize.h - 246), Math.max(1, workbenchSize.h));
+      const baseH = last?.h ?? workbenchSize.h;
       const offset = 20;
       const rect = clampRect(
         {
@@ -999,20 +982,11 @@ function App() {
   }, [activeGridId]);
 
   useEffect(() => {
-    setProjectContext(null);
   }, [workspaceRoot]);
 
   useEffect(() => {
     localStorage.setItem("klide-explorer-visible", String(explorerVisible));
   }, [explorerVisible]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-graph-visible", String(graphVisible));
-  }, [graphVisible]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-memory-visible", String(memoryVisible));
-  }, [memoryVisible]);
 
   useEffect(() => {
     if (sidebarSlot2) localStorage.setItem("klide-sidebar-slot2", sidebarSlot2);
@@ -1527,16 +1501,7 @@ function App() {
                           />
                         }
                         bottom={
-                          sidebarSlot2 === "graph" ? (
-                            <ProjectGraphPanel
-                              fill
-                              visible
-                              width={panelLayout.explorer.w}
-                              workspaceRoot={workspaceRoot}
-                              activePath={active?.path ?? null}
-                              onContextChange={setProjectContext}
-                            />
-                          ) : sidebarSlot2 === "skills" ? (
+                          sidebarSlot2 === "skills" ? (
                             <SkillsModal
                               open
                               skills={skills}
@@ -1561,48 +1526,6 @@ function App() {
                         onFilePreview={setPreviewPath}
                       />
                     )}
-                  </FloatingPanel>
-                )}
-                {graphVisible && sidebarSlot2 !== "graph" && panelLayout.graph && (
-                  <FloatingPanel
-                    panelId="graph"
-                    rect={panelLayout.graph}
-                    workbenchW={workbenchSize.w}
-                    workbenchH={workbenchSize.h}
-                    zIndex={focusedPanel === "graph" ? 10 + zCounter : 10}
-                    onFocus={() => focusPanel("graph")}
-                    onResize={(next) => updatePanelRect("graph", next)}
-                    onMove={(next) => updatePanelRect("graph", next)}
-                  >
-                    <ProjectGraphPanel
-                      fill
-                      visible
-                      width={panelLayout.graph.w}
-                      workspaceRoot={workspaceRoot}
-                      activePath={active?.path ?? null}
-                      onContextChange={setProjectContext}
-                    />
-                  </FloatingPanel>
-                )}
-                {memoryVisible && sidebarSlot2 !== "memory" && panelLayout.memory && (
-                  <FloatingPanel
-                    panelId="memory"
-                    rect={panelLayout.memory}
-                    workbenchW={workbenchSize.w}
-                    workbenchH={workbenchSize.h}
-                    zIndex={focusedPanel === "memory" ? 10 + zCounter : 10}
-                    onFocus={() => focusPanel("memory")}
-                    onResize={(next) => updatePanelRect("memory", next)}
-                    onMove={(next) => updatePanelRect("memory", next)}
-                  >
-                    <MemoryPanel
-                      fill
-                      visible
-                      width={panelLayout.memory.w}
-                      workspaceRoot={workspaceRoot}
-                      refreshKey={memoryRefreshKey}
-                      onOpenInEditor={(path, content) => openFile(path, content)}
-                    />
                   </FloatingPanel>
                 )}
                 {previewPath && (
@@ -1669,6 +1592,7 @@ function App() {
                         visible
                         width={panel.rect.w}
                         panelId={panel.id}
+                        startFresh={startFresh}
                         initialProvider={
                           pendingAiPanel?.panelId === panel.id
                             ? pendingAiPanel.provider
@@ -1702,7 +1626,6 @@ function App() {
                         requireDiffReview={requireDiffReview}
                         stopAfterRejection={stopAfterRejection}
                         skills={skills}
-                        projectContext={projectContext}
                         harnessSettings={harnessSettings}
                         onDuplicate={duplicateAiPanel}
                         onClose={
@@ -1748,6 +1671,13 @@ function App() {
         skills={skills}
         onChange={updateSkills}
         onClose={() => setSkillsVisible(false)}
+      />
+      <MemoryModal
+        open={memoryVisible}
+        workspaceRoot={workspaceRoot}
+        refreshKey={memoryRefreshKey}
+        onOpenInEditor={(path: string, content: string) => openFile(path, content)}
+        onClose={() => setMemoryVisible(false)}
       />
       {paletteOpen && (
         <CommandPalette

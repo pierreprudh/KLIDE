@@ -8,8 +8,6 @@ type Props = {
   onOpenSettings: () => void;
 };
 
-// Display helpers — split an absolute path into its folder name (bold) and the
-// parent directory (muted), abbreviating the home dir to "~" when present.
 function folderName(path: string): string {
   const parts = path.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -33,120 +31,136 @@ export function WelcomeScreen({
 
   return (
     <div
-      className="welcome-screen"
       style={{
         flex: 1,
         minHeight: 0,
         display: "flex",
-        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        overflow: "auto",
-        padding: "56px 40px",
+        overflow: "hidden",
+        padding: "64px 48px",
         background: "var(--bg)",
         position: "relative",
       }}
     >
-      <div className="klide-welcome-ascii-city" aria-hidden="true">
-        <pre className="klide-ascii-city-layer is-base">{ASCII_CITY}</pre>
-        <pre className="klide-ascii-city-layer is-cyan">{ASCII_CITY_CYAN}</pre>
-        <pre className="klide-ascii-city-layer is-magenta">{ASCII_CITY_MAGENTA}</pre>
-      </div>
+      <pre
+        aria-hidden
+        style={{
+          position: "absolute",
+          right: -20,
+          bottom: -10,
+          margin: 0,
+          fontSize: 9,
+          lineHeight: 1.15,
+          letterSpacing: "0.08em",
+          fontFamily: "var(--font-mono)",
+          color: "var(--fg-dim)",
+          textAlign: "right",
+          userSelect: "none",
+          pointerEvents: "none",
+          maskImage: "linear-gradient(to left, black 10%, transparent 70%)",
+          WebkitMaskImage: "linear-gradient(to left, black 10%, transparent 70%)",
+          opacity: 0.35,
+        }}
+      >
+        {ASCII_LANDSCAPE}
+      </pre>
+
       <div
         style={{
-          width: "min(540px, 88vw)",
+          width: "min(480px, 88vw)",
           position: "relative",
           zIndex: 1,
         }}
       >
         <div
-          aria-hidden
           style={{
-            width: 34,
-            height: 34,
-            borderRadius: "var(--radius-md)",
-            border: "1px solid var(--border-strong)",
-            background: "var(--bg-elevated)",
+            fontSize: 32,
+            lineHeight: 1.1,
             color: "var(--fg-strong)",
-            display: "grid",
-            placeItems: "center",
-            fontSize: 17,
-            fontWeight: 700,
-            boxShadow: "inset 0 1px 0 var(--panel-highlight)",
-            marginBottom: 18,
-          }}
-        >
-          K
-        </div>
-        <div
-          style={{
-            fontSize: 44,
-            lineHeight: 1.05,
-            color: "var(--fg-strong)",
-            fontWeight: 700,
-            letterSpacing: 0,
+            fontWeight: 600,
+            letterSpacing: "-0.02em",
           }}
         >
           Klide
         </div>
         <div
           style={{
-            fontSize: 15,
+            fontSize: 13,
             color: "var(--fg-subtle)",
-            lineHeight: 1.58,
-            marginTop: 12,
-            maxWidth: 340,
+            lineHeight: 1.55,
+            marginTop: 10,
+            maxWidth: 300,
           }}
         >
-          A small, fast, AI-first editor.
-          <br />
-          Open a folder to begin.
+          Small, fast, AI-first editor.
         </div>
 
-        {/* Actions */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 12,
-            marginTop: 38,
+            gap: 8,
+            marginTop: 32,
           }}
         >
           <button
             type="button"
             onClick={onOpenFolder}
-            className="klide-button klide-button-primary"
-            style={{ height: 44, padding: "0 20px", fontSize: 14 }}
+            style={{
+              height: 36,
+              padding: "0 14px",
+              fontSize: 12.5,
+              fontWeight: 500,
+              border: "none",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--fg-strong)",
+              color: "var(--bg)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
           >
-            <FolderIcon />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h7A1.5 1.5 0 0 1 19 9v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17V6.5Z" />
+            </svg>
             Open Folder
-            <Kbd>⌘O</Kbd>
           </button>
           <button
             type="button"
             onClick={onOpenSettings}
-            className="klide-button klide-button-subtle"
-            style={{ height: 44, padding: "0 14px", fontSize: 14 }}
+            style={{
+              height: 36,
+              padding: "0 12px",
+              fontSize: 12.5,
+              fontWeight: 500,
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              background: "transparent",
+              color: "var(--fg-subtle)",
+              cursor: "pointer",
+            }}
           >
             Settings
           </button>
         </div>
 
-        {/* Recent */}
         {recentFolders.length > 0 && (
-          <div className="klide-surface" style={{ marginTop: 46 }}>
+          <div style={{ marginTop: 40 }}>
             <div
               style={{
-                padding: "10px 12px 6px",
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: 0,
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
                 color: "var(--fg-dim)",
+                marginBottom: 8,
               }}
             >
               Recent
             </div>
-            <div style={{ display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {recentFolders.map((path) => {
                 const isHovered = hovered === path;
                 return (
@@ -154,11 +168,14 @@ export function WelcomeScreen({
                     key={path}
                     onMouseEnter={() => setHovered(path)}
                     onMouseLeave={() => setHovered(null)}
-                    className="klide-settings-row"
                     style={{
-                      minHeight: 44,
-                      padding: "8px 12px",
-                      gap: 8,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      height: 34,
+                      padding: "0 8px",
+                      borderRadius: "var(--radius-sm)",
+                      background: isHovered ? "var(--bg-hover)" : "transparent",
                     }}
                   >
                     <button
@@ -169,8 +186,8 @@ export function WelcomeScreen({
                         flex: 1,
                         minWidth: 0,
                         display: "flex",
-                        alignItems: "baseline",
-                        gap: 12,
+                        alignItems: "center",
+                        gap: 10,
                         background: "transparent",
                         border: "none",
                         padding: 0,
@@ -179,44 +196,34 @@ export function WelcomeScreen({
                         textAlign: "left",
                       }}
                     >
-                      <span
-                        style={{
-                          fontSize: 13.5,
-                          fontWeight: 600,
-                          color: "var(--fg-strong)",
-                          flex: "0 0 auto",
-                        }}
-                      >
+                      <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)", flexShrink: 0 }}>
                         {folderName(path)}
                       </span>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          color: "var(--fg-subtle)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          minWidth: 0,
-                        }}
-                      >
+                      <span style={{ fontSize: 11.5, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {parentPath(path)}
                       </span>
                     </button>
                     <button
                       type="button"
-                      aria-label={`Remove ${folderName(path)} from recent`}
-                      title="Remove from recent"
+                      aria-label={`Remove ${folderName(path)}`}
+                      title="Remove"
                       onClick={() => onRemoveRecent(path)}
-                      className="klide-button klide-button-subtle"
                       style={{
-                        flex: "0 0 auto",
-                        width: 24,
-                        minHeight: 24,
+                        flexShrink: 0,
+                        width: 22,
+                        height: 22,
+                        display: "grid",
+                        placeItems: "center",
+                        background: "transparent",
+                        border: "none",
                         padding: 0,
+                        cursor: "pointer",
+                        color: "var(--fg-dim)",
                         opacity: isHovered ? 1 : 0,
+                        fontSize: 12,
                       }}
                     >
-                      <CloseIcon />
+                      ×
                     </button>
                   </div>
                 );
@@ -229,125 +236,30 @@ export function WelcomeScreen({
   );
 }
 
-function Kbd({ children }: { children: React.ReactNode }) {
-  return <span className="klide-kbd">{children}</span>;
-}
-
-const ASCII_CITY = [
-  "          .        .        .          .",
-  "      .      _  _        _      .       ",
-  "            | || |      | |             ",
-  "     _______|_||_|______|_|_____        ",
-  "    /  _  _  _  _  _  _  _  _  \\       ",
-  "   /__/|[]|[]|[]|[]|[]|[]|[]|\\__\\      ",
-  "   |##||::|::|::|::|::|::|::||##|      ",
-  "   |##||[]|[]|[]|[]|[]|[]|[]||##|      ",
-  " __|##||::|::|::|::|::|::|::||##|___   ",
-  "|[]|##||[]|[]|[]|[]|[]|[]|[]||##|[]|   ",
-  "|::|##||::|::|::|::|::|::|::||##|::|   ",
-  "|[]|##||[]|[]|[]|[]|[]|[]|[]||##|[]|   ",
-  "|::|##||::|::|::|::|::|::|::||##|::|   ",
-  "|[]|##||[]|[]|[]|[]|[]|[]|[]||##|[]|   ",
-  "|__|##||__|__|__|__|__|__|__||##|__|   ",
-  "     |  K-LIDE  |====|  AI/RUN  |      ",
-  "  ___|__________|____|__________|___    ",
-  " /:::::/:::::/:::::/:::::/:::::/:::/|   ",
-  "/_____/_____/_____/_____/_____/___/ |   ",
-  "|  _   _   _   _   _   _   _   _  | |  ",
-  "| |_| |_| |_| |_| |_| |_| |_| |_| | |   ",
-  "|  _   _   _   _   _   _   _   _  |/   ",
-  "|_| |_| |_| |_| |_| |_| |_| |_| |_|     ",
-  "      ----==== neon rail ====----       ",
-  "   .--.        .----.        .--.       ",
-  "  /    \\______/  __  \\______/    \\      ",
-  " /  /\\  \\    /  /  \\  \\    /  /\\  \\     ",
-  "/__/  \\__\\__/__/    \\__\\__/__/  \\__\\    ",
+const ASCII_LANDSCAPE = [
+  "                                                                       *",
+  "                                                     *                 ",
+  "                                                                       ",
+  "                               *                *        *             ",
+  "                                                                    *  ",
+  "                        *                 *                           ",
+  "                                                     *               ",
+  "                                          _                           ",
+  "                                      .-'` `'-.                       ",
+  "                          *          /          \\          *         ",
+  "                  _                 /    /\\       \\                    ",
+  "                 / \\              /    /  \\       \\                   ",
+  "          *     /   \\      _     /    /    \\       \\                  ",
+  "               /     \\    / \\   /    /      \\       \\           *    ",
+  "              /       \\  /   \\ /    /        \\       \\                ",
+  "            _/         \\/     \\/   /          \\       \\               ",
+  "          _/\\_________/             \\         \\       \\              ",
+  "    _/\\_/\\/                            \\         \\       \\           ",
+  "   /                                     \\         \\       \\         ",
+  "  /                                       \\         \\       \\       ",
+  " /                                         \\         \\       \\     ",
+  "/  _   _   _   _   _   _   _   _   _   _   _\\_   _   _\\_   _  _\\",
+  "| / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\ / \\",
+  "|/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\_/\\",
+  "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
 ].join("\n");
-
-const ASCII_CITY_CYAN = [
-  "                                           ",
-  "                                           ",
-  "                         __                ",
-  "                        /  \\               ",
-  "             .---------'    '--------.     ",
-  "            /  o  o  o  o  o  o  o   \\    ",
-  "           /____________________________\\   ",
-  "             ||  ||  ||  ||  ||  ||        ",
-  "             ||  ||  ||  ||  ||  ||        ",
-  "             ||  ||  ||  ||  ||  ||        ",
-  "                                           ",
-  "       +===============================+   ",
-  "       |  DATA  DATA  DATA  DATA  DATA |   ",
-  "       +===============================+   ",
-  "                                           ",
-  "                 .---.                     ",
-  "                /  K  \\                    ",
-  "               /_______\\                   ",
-  "                                           ",
-  "        /\\                         /\\      ",
-  "       /  \\       ________        /  \\     ",
-  "      /____\\_____/________\\______/____\\    ",
-  "                                           ",
-  "      ----==== neon rail ====----          ",
-  "                                           ",
-  "                                           ",
-  "                                           ",
-  "                                           ",
-].join("\n");
-
-const ASCII_CITY_MAGENTA = [
-  "        *                       *          ",
-  "                                           ",
-  "             __                            ",
-  "            /  \\          __              ",
-  "           /    \\        /  \\             ",
-  "          /______\\      /____\\            ",
-  "                                           ",
-  "       |>|       |>|        |>|           ",
-  "       |>|       |>|        |>|           ",
-  "                                           ",
-  "  +-----------+                 +------+   ",
-  "  |  NEON-9   |                 |  RUN |   ",
-  "  +-----------+                 +------+   ",
-  "                                           ",
-  "                         .---.             ",
-  "                        / .-. \\            ",
-  "                       /  \\_/  \\           ",
-  "                      /_________\\          ",
-  "                                           ",
-  "                                           ",
-  "             .-.                           ",
-  "          .-(   )-.                        ",
-  "         (___.-.___)                       ",
-  "                                           ",
-  "    .--.                          .--.     ",
-  "   /____\\                        /____\\    ",
-  "                                           ",
-  "                                           ",
-].join("\n");
-
-function FolderIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h7A1.5 1.5 0 0 1 19 9v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17V6.5Z"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M6 6l12 12M18 6L6 18"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}

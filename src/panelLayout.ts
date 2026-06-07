@@ -7,7 +7,6 @@
 export type PanelId =
   | "explorer"
   | "git"
-  | "graph"
   | "memory"
   | "terminal"
   | "ai";
@@ -22,11 +21,12 @@ export type PanelRect = {
 // "ai" is special: the user can spawn multiple AI panels (one per
 // provider / conversation), and each one carries its own rect so they
 // can be dragged and resized independently instead of all sharing one
-// box split down the middle.
+// box split down the middle. The "memory" panel id is kept here for
+// backward compat with stored layouts; the Memory surface itself now
+// opens as a centered modal, not a sidebar.
 export type Layout = {
   explorer?: PanelRect;
   git?: PanelRect;
-  graph?: PanelRect;
   memory?: PanelRect;
   terminal?: PanelRect;
   ai?: PanelRect[];
@@ -44,7 +44,6 @@ export type PanelConstraints = {
 export const PANEL_CONSTRAINTS: { [P in PanelId]: PanelConstraints } = {
   explorer: { minW: 200, minH: 160, maxW: 600, maxH: 1600 },
   git:      { minW: 200, minH: 160, maxW: 600, maxH: 1600 },
-  graph:    { minW: 240, minH: 200, maxW: 720, maxH: 1600 },
   memory:   { minW: 240, minH: 200, maxW: 640, maxH: 1600 },
   terminal: { minW: 320, minH: 120, maxW: 2400, maxH: 900 },
   ai:       { minW: 280, minH: 240, maxW: 720, maxH: 1600 },
@@ -64,15 +63,14 @@ export function defaultLayout(workbenchW: number, workbenchH: number): Layout {
   const terminalH = Math.min(220, Math.max(120, Math.floor(h * 0.28)));
   const aiW = Math.min(360, Math.max(1, w));
   const mainH = Math.max(1, h - terminalH - PANEL_GAP);
-  // Side column panels — explorer, git, graph side-by-side, all full main height.
+  // Side column panels — explorer + git side-by-side, both full main
+  // height. Memory is now a centered modal (not a sidebar), so it has
+  // no rect here.
   const explorerW = 280;
   const gitW = 280;
-  const graphW = 320;
   return {
     explorer: { x: 0, y: 0, w: explorerW, h: mainH },
     git:      { x: explorerW + PANEL_GAP, y: 0, w: gitW, h: mainH },
-    graph:    { x: explorerW + PANEL_GAP + gitW + PANEL_GAP, y: 0, w: graphW, h: mainH },
-    memory:   { x: explorerW + PANEL_GAP + gitW + PANEL_GAP + graphW + PANEL_GAP, y: 0, w: 320, h: mainH },
     ai:       [{ x: Math.max(0, w - aiW), y: 0, w: aiW, h: mainH }],
     terminal: { x: 0, y: mainH + PANEL_GAP, w: Math.max(1, w - aiW - PANEL_GAP), h: terminalH },
   };

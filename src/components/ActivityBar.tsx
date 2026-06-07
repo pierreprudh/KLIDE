@@ -1,4 +1,4 @@
-type View = "explorer" | "git" | "graph" | "memory" | "skills" | "ai" | "runs" | "settings";
+type View = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings";
 type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
 
 function FolderIcon() {
@@ -57,30 +57,6 @@ function GitIcon() {
   );
 }
 
-function GraphIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.25"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="6" cy="7" r="2.3" />
-      <circle cx="18" cy="6" r="2.3" />
-      <circle cx="8" cy="18" r="2.3" />
-      <circle cx="18" cy="17" r="2.3" />
-      <path d="M8.2 7h7.6" />
-      <path d="M7 9.1l1 6.6" />
-      <path d="M10.2 17.8h5.6" />
-      <path d="M17.8 8.3v6.4" />
-    </svg>
-  );
-}
-
 function SkillsIcon() {
   return (
     <svg
@@ -100,8 +76,9 @@ function SkillsIcon() {
 }
 
 function MemoryIcon() {
-  // A small notebook with a bookmark ribbon — the "memory" sidebar view
-  // (durable handoff notes in .klide/memory/).
+  // Small notebook with a bookmark ribbon — the "Memory" activity bar
+  // item, which opens the centered MemoryModal (session handoff notes
+  // in .klide/memory/).
   return (
     <svg
       width="18"
@@ -171,7 +148,6 @@ export function ActivityBar({ active, onToggle }: Props) {
   const items = [
     { id: "explorer" as const, label: "Files", Icon: FolderIcon },
     { id: "git" as const, label: "Git", Icon: GitIcon },
-    { id: "graph" as const, label: "Project", Icon: GraphIcon },
     { id: "memory" as const, label: "Memory", Icon: MemoryIcon },
     { id: "skills" as const, label: "Skills", Icon: SkillsIcon },
     { id: "ai" as const, label: "AI", Icon: SparkIcon },
