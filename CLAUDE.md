@@ -49,12 +49,12 @@ Klide/
 ├── Ideas.md                   Future ideas + inspiration
 ├── src/                       React + TypeScript frontend
 │   ├── main.tsx                 React boot
-│   ├── App.tsx                  Root layout (1138 lines)
+│   ├── App.tsx                  Root layout
 │   ├── theme.ts                 5 themes + Monaco theme defs
 │   ├── styles/tokens.css        CSS custom properties
 │   ├── components/
 │   │   ├── ActivityBar.tsx      Vertical icon bar (7 items)
-│   │   ├── AiPanel.tsx          AI chat panel (902 lines, post-split)
+│   │   ├── AiPanel.tsx          AI chat panel (post-split)
 │   │   ├── CommandPalette.tsx   Cmd+P / Cmd+Shift+P modal
 │   │   ├── ContextMenu.tsx      Right-click context menu
 │   │   ├── DiffModal.tsx        Diff review modal
@@ -64,8 +64,9 @@ Klide/
 │   │   ├── LayoutCanvas.tsx     Visual layout editor
 │   │   ├── GridWorkbench.tsx    Grid layout rendering
 │   │   ├── GridLayoutBuilder.tsx Grid drag-and-drop builder
+│   │   ├── MemoryModal.tsx      Centered Memory handoff-notes modal
+│   │   ├── MemoryPanel.tsx      List+detail body inside MemoryModal
 │   │   ├── MissionControl.tsx   Agent run board
-│   │   ├── ProjectGraphPanel.tsx Workspace structure viz
 │   │   ├── SearchPanel.tsx      Find-in-files results
 │   │   ├── SettingsPanel.tsx    Full settings (8 sections)
 │   │   ├── Sidebar.tsx          File explorer tree
@@ -82,6 +83,7 @@ Klide/
 │   │       ├── tool-execution.ts  executeTool, toOllamaMessage
 │   │       ├── markdown.tsx       CodeBlock, renderMarkdown
 │   │       ├── ChatMessage.tsx    renderMessageBody
+│   │       ├── summarize.ts       Summarize-and-handoff helper
 │   │       ├── ConversationHistory.tsx
 │   │       └── DelegateTerminal.tsx
 │   ├── agent/
@@ -90,9 +92,10 @@ Klide/
 │   │   ├── client.ts            Frontend agent harness client
 │   │   ├── reducer.ts           Frontend state reducer for agent events
 │   │   └── tools.ts             Frontend tool list fetcher (fetches from Rust)
-│   ├── contextTray.ts           Project context lens
 │   ├── gridLayouts.ts           Freeform grid layouts
 │   ├── layouts.ts               Fixed-frame layout presets
+│   ├── memory.ts                Project Memory data layer
+│   ├── panelLayout.ts           Floating panel rect store
 │   ├── skills.ts                Skills store
 │   ├── tasks.ts                 Delegated tasks
 │   ├── runs.ts                  Agent run data layer
@@ -101,17 +104,18 @@ Klide/
     ├── Cargo.toml
     ├── src/
     │   ├── main.rs               Entry point
-    │   ├── lib.rs                Tauri commands (~2400 lines)
+    │   ├── lib.rs                Tauri commands
     │   │   ├── AI chat dispatch (Ollama, OpenAI, Anthropic, Mistral, xAI)
     │   │   ├── Provider streaming trait + 3 adapters
-    │   │   ├── Subscription CLI delegates (Claude Code, Codex)
+    │   │   ├── Subscription CLI delegates (Claude Code, Codex, OpenCode)
     │   │   ├── File system ops + git commands
-    │   │   ├── Project graph builder
-    │   │   ├── Agent run listing (Claude Code, Codex, OpenCode)
+    │   │   ├── Memory read/write/list (project handoff notes)
+    │   │   ├── Agent run listing (Claude Code, Codex, OpenCode, Klide)
     │   │   ├── Keychain-backed API key management
     │   │   ├── Tool list + find-in-files commands
     │   │   └── Tauri plugin registration
     │   ├── pty.rs                PTY management (native + delegate)
+    │   ├── memory.rs             Project memory markdown I/O
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── tools.rs           Tool registry (schema + execution)
@@ -137,6 +141,18 @@ AiPanel (view) → startAgentRun() → Rust run_agent_loop()
 - Write tools pause for diff review via `tokio::sync::oneshot` channels
 - Diff approval triggers `agent_resolve_diff` → harness continues
 - Max 8 turns, cancellation via `CancellationToken`
+
+### Mission Control → AI panel handoff
+
+Mission Control rows for CLI runs (claude-code / codex / opencode) carry a "Resume" / "Open in {CLI}" action that doesn't open a separate terminal — it asks the parent (`App.tsx`) to spawn a fresh AI panel pinned to the chosen delegate. The AI panel's `initialProvider` / `initialResumeSessionId` / `initialTask` props land the TUI in the right state on mount. The detail pane is transcript + metadata only; the TUI lives in the AI panel.
+
+### Project Memory (handoff notes)
+
+Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (or future you) can pick up where the last session stopped.
+
+- **Storage** — `src-tauri/src/memory.rs` writes one markdown file per entry with a YAML frontmatter (date, runId, provider, model, mode, status) + structured body (Goal / Plan / Decisions / Files touched / Next steps / Notes). Commands: `memory_write`, `memory_list`, `memory_read`.
+- **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; `MemoryModal` is the centered overlay (same pattern as `SkillsModal`).
+- **Trigger** — the AI panel header has a "Summarize" bookmark button (`src/components/ai/summarize.ts`) that calls the model once with a structured prompt, parses the response, and writes via `memory_write`. The first user message becomes the title; file paths are extracted from the conversation; the model produces Notes + Decisions + Goal.
 
 ### Provider streaming (1 loop, 3 adapters)
 
@@ -177,7 +193,7 @@ ToolEntry { kind, schema, run_read, run_write_preview }
 
 ## Features shipped (v0.2)
 
-- [x] Activity bar (Files, Git, Graph, Skills, AI, Mission Control, Settings)
+- [x] Activity bar (Files, Git, Memory, Skills, AI, Mission Control, Settings)
 - [x] File explorer with tree view, git decorations, context menu, inline rename
 - [x] Tabs with dirty indicator, unsaved-changes confirm
 - [x] Monaco editor with syntax highlighting, Cmd+S, 5 themes
@@ -186,8 +202,9 @@ ToolEntry { kind, schema, run_read, run_write_preview }
 - [x] AI panel — streaming chat with Ollama, Anthropic, OpenAI, Mistral, xAI
 - [x] Agent mode — goal/plan modes, diff-reviewed edits, tool loop
 - [x] Git panel — stage/unstage/commit with inline diff
-- [x] Mission Control — aggregate agent run board (Claude Code, Codex, OpenCode, Klide)
-- [x] Project Graph — workspace file map with git change overlay
+- [x] Mission Control — aggregate agent run board (Claude Code, Codex, OpenCode, Klide) with handoff to AI panel
+- [x] Project Memory — durable handoff notes in `.klide/memory/`, opened as a centered modal (Skills-style list+detail)
+- [x] AI-panel "Summarize" header action — writes a structured memory note from the current conversation
 - [x] Settings — 8 sections, API keys in macOS Keychain
 - [x] Skills — AI instruction bundles with tool allowlists
 - [x] Layout system — fixed presets + freeform grid builder

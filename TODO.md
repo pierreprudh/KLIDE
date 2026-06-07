@@ -32,7 +32,7 @@ them.
 - [x] Checkpoint rollback: preview files changed since a turn and revert selected files.
 - [ ] Settings depth without adding persistent chrome.
 - [x] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
-- [ ] Context Lens v2: use real imports, Tauri invokes, and edited-file history instead of mostly heuristics.
+- [ ] Project Memory v2: cross-link entries to the file graph (click `filesTouched` to jump to the file) + auto-summarizer that watches completed/stopped runs.
 
 ## Small Follow-Ups
 
@@ -44,6 +44,10 @@ them.
 
 ## Parking Lot
 
-- Project Memory / Context Lens is promising but not there yet. Avoid overfitting
-  the UI around manual context controls; the differentiator should feel like
-  Klide understands the project graph and proposes the right working set.
+- The earlier "Context Lens" idea (heuristic auto-injection of folder
+  descriptions, parent scopes, changed-file context) was killed along with
+  the file-tree sidebar — the heuristics weren't earning their place.
+  If a real project-graph signal ever lands, it should feed Memory /
+  summarization, not the chat composer.
+- `.klide/memory/` write semantics — currently plain workspace files,
+  not gitignored and not auto-committed. The user needs to pick per repo.
