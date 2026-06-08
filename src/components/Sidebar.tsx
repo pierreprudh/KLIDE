@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { watch } from "@tauri-apps/plugin-fs";
 import { useEffect, useRef, useState } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
+import { HoverPopover } from "./HoverPopover";
 import type { GitFile, GitStatus } from "../gitTypes";
 
 type Props = {
@@ -76,6 +77,38 @@ function FolderOpenSmall() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z" />
       <path d="M3 14h5l1.5-3h7L18 14" />
+    </svg>
+  );
+}
+
+function FilePlusIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="M12 11v6" />
+      <path d="M9 14h6" />
+    </svg>
+  );
+}
+
+function FolderPlusIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z" />
+      <path d="M12 11v6" />
+      <path d="M9 14h6" />
+    </svg>
+  );
+}
+
+function CollapseAllIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 5h16" />
+      <path d="M6 9h12" />
+      <path d="M8 13h8" />
+      <path d="M10 17h4" />
     </svg>
   );
 }
@@ -528,6 +561,12 @@ export function Sidebar({
     }
   }
 
+  function collapseAll() {
+    if (!root) return;
+    setExpanded(new Set());
+    localStorage.setItem(expandedStoreKey(root), JSON.stringify([]));
+  }
+
   async function toggleFolder(path: string, isVirtualFolder = false) {
     const next = new Set(expanded);
     if (next.has(path)) {
@@ -829,52 +868,87 @@ export function Sidebar({
         const isActive = activePath != null && path === activePath;
         return (
           <li key={path}>
-            <div
-              className="klide-explorer-row"
-              data-active={isActive}
-              data-virtual={isVirtual}
-              onClick={() => {
-                if (isDir) toggleFolder(path, isVirtual);
-                else if (!isVirtual) pick(path);
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (isVirtual) return; // deleted-file ghosts have no disk entry
-                setMenu({ x: event.clientX, y: event.clientY, path, isDirectory: isDir });
-              }}
-              title={decoration ? `${path} · ${decoration.title}` : path}
-              style={{
-                paddingLeft: indent,
-                color: decoration ? decoration.color : isDir ? "var(--fg)" : "var(--fg-strong)",
-                cursor: isVirtual && !isDir ? "default" : "pointer",
-              }}
+            <HoverPopover
+              content={(close) => (
+                <div className="klide-popover-section">
+                  <span className="klide-popover-label">
+                    {isDir ? "Folder" : isVirtual ? "Deleted file" : "File"}
+                  </span>
+                  <span className="klide-popover-path">{path}</span>
+                  <div className="klide-popover-divider" />
+                  <div className="klide-popover-actions">
+                    {isDir && !isVirtual && (
+                      <>
+                        <button
+                          className="klide-popover-action"
+                          onClick={() => { startCreate(path, false); close(); }}
+                        >
+                          <FilePlusIcon /> New file
+                        </button>
+                        <button
+                          className="klide-popover-action"
+                          onClick={() => { startCreate(path, true); close(); }}
+                        >
+                          <FolderPlusIcon /> New folder
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="klide-popover-action"
+                      data-primary="true"
+                      onClick={() => { collapseAll(); close(); }}
+                    >
+                      <CollapseAllIcon /> Collapse all
+                    </button>
+                  </div>
+                </div>
+              )}
             >
-              <span className="klide-explorer-chevron" data-open={isExpanded}>
-                {isDir ? <ChevronRight /> : null}
-              </span>
-              <span className="klide-explorer-icon">
-                {isDir ? <FolderRow open={isExpanded} /> : <FileRow name={e.name} />}
-              </span>
-              {editing?.mode === "rename" && editing.path === path ? (
-                <InlineNameInput
-                  defaultValue={e.name}
-                  onCommit={(name) => void commitRename(path, name)}
-                  onCancel={() => setEditing(null)}
-                />
-              ) : (
-                <span className="klide-explorer-name">{e.name}</span>
-              )}
-              {decoration && (
-                <span
-                  className="klide-explorer-decoration"
-                  title={decoration.title}
-                  style={{ color: decoration.color }}
-                >
-                  {decoration.label}
+              <div
+                className="klide-explorer-row"
+                data-active={isActive}
+                data-virtual={isVirtual}
+                onClick={() => {
+                  if (isDir) toggleFolder(path, isVirtual);
+                  else if (!isVirtual) pick(path);
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (isVirtual) return; // deleted-file ghosts have no disk entry
+                  setMenu({ x: event.clientX, y: event.clientY, path, isDirectory: isDir });
+                }}
+                style={{
+                  paddingLeft: indent,
+                  color: decoration ? decoration.color : isDir ? "var(--fg)" : "var(--fg-strong)",
+                  cursor: isVirtual && !isDir ? "default" : "pointer",
+                }}
+              >
+                <span className="klide-explorer-chevron" data-open={isExpanded}>
+                  {isDir ? <ChevronRight /> : null}
                 </span>
-              )}
-            </div>
+                <span className="klide-explorer-icon">
+                  {isDir ? <FolderRow open={isExpanded} /> : <FileRow name={e.name} />}
+                </span>
+                {editing?.mode === "rename" && editing.path === path ? (
+                  <InlineNameInput
+                    defaultValue={e.name}
+                    onCommit={(name) => void commitRename(path, name)}
+                    onCancel={() => setEditing(null)}
+                  />
+                ) : (
+                  <span className="klide-explorer-name">{e.name}</span>
+                )}
+                {decoration && (
+                  <span
+                    className="klide-explorer-decoration"
+                    style={{ color: decoration.color }}
+                  >
+                    {decoration.label}
+                  </span>
+                )}
+              </div>
+            </HoverPopover>
             {isDir && isExpanded && (
               <ul>
                 {isLoading ? (
