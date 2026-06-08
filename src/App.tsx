@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -19,7 +20,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
-import type { AgentEvent } from "./agent/types";
+import type { AgentEvent, ProviderId } from "./agent/types";
 import type { Conversation } from "./components/ai/types";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
@@ -27,6 +28,7 @@ import { MemoryModal } from "./components/MemoryModal";
 import { FileViewerPanel } from "./components/FileViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
 import {
@@ -53,7 +55,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import "./styles/tokens.css";
 
-type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings";
+type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
 type Tab = {
   path: string;
   code: string;
@@ -66,6 +68,8 @@ type Tab = {
 type AiPanelInstance = {
   id: string;
   rect: PanelRect;
+  provider?: ProviderId;
+  model?: string;
 };
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
@@ -123,6 +127,7 @@ function App() {
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
+  const [profileVisible, setProfileVisible] = useState(false);
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
   );
@@ -177,34 +182,22 @@ function App() {
   const [aiPanels, setAiPanels] = useState<AiPanelInstance[]>(() => [
     { id: "ai-main", rect: { x: 0, y: 0, w: 360, h: 360 } },
   ]);
-  // Track first render to start AI panels fresh (don't restore old convos).
-  // Reset to false synchronously during first render so remounts from view
-  // switches still restore their conversation.
-  const isFirstRender = useRef(true);
-  // We flip the ref inline during render so it's false for any subsequent
-  // AiPanel mount (e.g. switching back to the AI view).
-  const startFresh = isFirstRender.current;
-  // eslint-disable-next-line react-compiler/react-internal-key
-  isFirstRender.current = false;
   // Bring-to-front z-index. Bumped when the user clicks a panel.
   const [zCounter, setZCounter] = useState(10);
   const [focusedPanel, setFocusedPanel] = useState<string | null>(null);
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const fsSkills = await loadFilesystemSkills(workspaceRoot);
-      if (cancelled) return;
-      setSkills((prev) => {
-        const userDefined = prev.filter((s) => !s.fromFile);
-        const existingFileIds = new Set(userDefined.map((s) => s.id));
-        const newFileSkills = fsSkills.filter((s) => !existingFileIds.has(s.id));
-        return [...userDefined, ...newFileSkills];
-      });
-    })();
-    return () => { cancelled = true; };
+  const reloadFilesystemSkills = useCallback(async () => {
+    const fsSkills = await loadFilesystemSkills(workspaceRoot);
+    setSkills((prev) => {
+      const userDefined = prev.filter((s) => !s.fromFile);
+      return [...userDefined, ...fsSkills];
+    });
   }, [workspaceRoot]);
+
+  useEffect(() => {
+    void reloadFilesystemSkills();
+  }, [reloadFilesystemSkills]);
 
   // Measure the workbench container so we can build a default layout on
   // first paint, and re-clamp every panel rect when the window resizes.
@@ -246,6 +239,8 @@ function App() {
     return source.map((rect, idx) => ({
       id: previous[idx]?.id ?? (idx === 0 ? "ai-main" : newAiPanelId()),
       rect,
+      provider: previous[idx]?.provider,
+      model: previous[idx]?.model,
     }));
   }
 
@@ -511,12 +506,17 @@ function App() {
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
     settings: view === "settings",
+    profile: profileVisible,
   };
 
   function togglePanel(panel: Panel, meta?: boolean) {
     if (panel === "settings") {
       setSettingsInitial(null);
       setView("settings");
+      return;
+    }
+    if (panel === "profile") {
+      setProfileVisible((cur) => !cur);
       return;
     }
     if (panel === "runs") {
@@ -667,15 +667,16 @@ function App() {
             visible
             width={aiPanels[0]?.rect.w ?? 360}
             panelId={aiPanels[0]?.id}
-            startFresh={startFresh}
+            initialProvider={aiPanels[0]?.provider}
             workspaceRoot={workspaceRoot}
             onFileWritten={onAgentWrote}
             onWorkspaceChanged={() =>
               workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
             }
-            model={aiModel}
-            onModelChange={setAiModel}
-            availableModels={panelModels[aiPanels[0]?.id ?? "ai-main"] ?? [aiModel]}
+            model={aiPanels[0]?.model ?? aiModel}
+            onModelChange={(model) => updateAiPanelModel(aiPanels[0]?.id ?? "ai-main", model)}
+            onProviderChange={(provider) => updateAiPanelProvider(aiPanels[0]?.id ?? "ai-main", provider)}
+            availableModels={panelModels[aiPanels[0]?.id ?? "ai-main"] ?? [aiPanels[0]?.model ?? aiModel]}
             onAvailableModelsChange={(models) => setPanelModels((prev) => ({ ...prev, [aiPanels[0]?.id ?? "ai-main"]: models }))}
             apiKeyVersion={apiKeyVersion}
             requireDiffReview={requireDiffReview}
@@ -893,7 +894,7 @@ function App() {
         workbenchSize.h,
         PANEL_CONSTRAINTS.ai
       );
-      const nextPanels = [...prevPanels, { id, rect }];
+      const nextPanels = [...prevPanels, { id, rect, provider: opts.provider }];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
         ai: nextPanels.map((panel) => panel.rect),
@@ -908,7 +909,20 @@ function App() {
     });
   }
 
-  function duplicateAiPanel() {
+  function updateAiPanelProvider(id: string, provider: ProviderId) {
+    setAiPanels((panels) =>
+      panels.map((panel) => panel.id === id ? { ...panel, provider } : panel)
+    );
+  }
+
+  function updateAiPanelModel(id: string, model: string) {
+    setAiPanels((panels) =>
+      panels.map((panel) => panel.id === id ? { ...panel, model } : panel)
+    );
+    if (id === "ai-main") setAiModel(model);
+  }
+
+  function duplicateAiPanel(snapshot?: { provider: ProviderId; model: string }) {
     // Add a fresh rect for the new panel. Offset from the last one so
     // the user can see both, but clamp inside the workbench.
     setAiPanels((prevPanels) => {
@@ -927,7 +941,15 @@ function App() {
         workbenchSize.h,
         PANEL_CONSTRAINTS.ai
       );
-      const nextPanels = [...prevPanels, { id: newAiPanelId(), rect }];
+      const nextPanels = [
+        ...prevPanels,
+        {
+          id: newAiPanelId(),
+          rect,
+          provider: snapshot?.provider,
+          model: snapshot?.model,
+        },
+      ];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
         ai: nextPanels.map((panel) => panel.rect),
@@ -1200,6 +1222,11 @@ function App() {
         setView("settings");
         return;
       }
+      if (mod && !e.shiftKey && e.key === ".") {
+        e.preventDefault();
+        setProfileVisible((v) => !v);
+        return;
+      }
       if (mod && !e.shiftKey && e.key === "n") {
         e.preventDefault();
         setView("workbench");
@@ -1285,6 +1312,7 @@ function App() {
     { id: "find", label: "Edit: Find in Files", shortcut: "⌘⇧F", action: () => { setSearchVisible((v) => !v); setPaletteOpen(false); } },
     { id: "terminal-toggle", label: "Terminal: Toggle", shortcut: "⌘`", action: () => { setTerminalVisible((v) => !v); setPaletteOpen(false); } },
     { id: "settings", label: "Preferences: Open Settings", shortcut: "⌘,", action: () => { setView("settings"); setPaletteOpen(false); } },
+    { id: "profile", label: "View: Open Profile", shortcut: "⌘.", action: () => { setProfileVisible(true); setPaletteOpen(false); } },
     { id: "theme", label: "Appearance: Toggle Theme", action: () => { setTheme((t) => getNextThemeId(t)); setPaletteOpen(false); } },
     { id: "word-wrap", label: "Editor: Toggle Word Wrap", action: () => { setEditorWordWrap((v) => !v); setPaletteOpen(false); } },
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
@@ -1506,6 +1534,7 @@ function App() {
                               open
                               skills={skills}
                               onChange={setSkills}
+                              onReloadFilesystemSkills={reloadFilesystemSkills}
                               onClose={() => setSidebarSlot2(null)}
                             />
                           ) : null
@@ -1592,11 +1621,10 @@ function App() {
                         visible
                         width={panel.rect.w}
                         panelId={panel.id}
-                        startFresh={startFresh}
                         initialProvider={
                           pendingAiPanel?.panelId === panel.id
                             ? pendingAiPanel.provider
-                            : undefined
+                            : panel.provider
                         }
                         initialResumeSessionId={
                           pendingAiPanel?.panelId === panel.id
@@ -1618,9 +1646,10 @@ function App() {
                         onWorkspaceChanged={() =>
                           workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
                         }
-                        model={aiModel}
-                        onModelChange={setAiModel}
-                        availableModels={panelModels[panel.id] ?? [aiModel]}
+                        model={panel.model ?? aiModel}
+                        onModelChange={(model) => updateAiPanelModel(panel.id, model)}
+                        onProviderChange={(provider) => updateAiPanelProvider(panel.id, provider)}
+                        availableModels={panelModels[panel.id] ?? [panel.model ?? aiModel]}
                         onAvailableModelsChange={(models) => setPanelModels((prev) => ({ ...prev, [panel.id]: models }))}
                         apiKeyVersion={apiKeyVersion}
                         requireDiffReview={requireDiffReview}
@@ -1638,6 +1667,10 @@ function App() {
                           setFileNotice(
                             `Memory written → ${entry.title} (${entry.relPath})`
                           );
+                        }}
+                        onSkillGenerated={(skill) => {
+                          void reloadFilesystemSkills();
+                          setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
                         }}
                       />
                     </FloatingPanel>
@@ -1670,6 +1703,7 @@ function App() {
         open={skillsVisible && sidebarSlot2 !== "skills"}
         skills={skills}
         onChange={updateSkills}
+        onReloadFilesystemSkills={reloadFilesystemSkills}
         onClose={() => setSkillsVisible(false)}
       />
       <MemoryModal
@@ -1678,6 +1712,11 @@ function App() {
         refreshKey={memoryRefreshKey}
         onOpenInEditor={(path: string, content: string) => openFile(path, content)}
         onClose={() => setMemoryVisible(false)}
+      />
+      <ProfileModal
+        open={profileVisible}
+        workspaceRoot={workspaceRoot}
+        onClose={() => setProfileVisible(false)}
       />
       {paletteOpen && (
         <CommandPalette

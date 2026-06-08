@@ -1,8 +1,8 @@
 1 - [x] Queue system for messages
 2 - [x] Subagent gestion via KLide harness -> can delegated to claude or codex
 3 - [x] OpenRouter Connexion
-4 - Project Memory for agent continuity: a persistent, agent-oriented memory layer so another agent/session can pick up a task exactly where the previous one stopped. This should capture the goal, current plan, decisions made, files touched, blockers, next steps, and useful context lens/project graph signals.
-5 - Global settings panel with stats 
+4 - [x] Project Memory v1 — durable handoff notes in `.klide/memory/` with Goal / Plan / Decisions / Files touched / Next steps / Notes. Triggered manually from the AI panel's "Summarize" header action.
+5 - [x] Global settings panel with stats — keychain-backed keys, harness settings editor, GitHub-style activity heatmap, provider breakdown
 
 - need breakdown for OpenAI -> ( API / Codex ) & Anthropic -> (Claude code /API) + on hover details over graph + when settings get's opened there is a big lag  
 
@@ -29,6 +29,9 @@ Design to always fulfill screen
 ## Mission Control
 [x] Markdown for mission control convos
 [x] Resume and open — every CLI run in Mission Control has Resume (--resume/<id>) + Open in {other CLI} + Open in Terminal buttons. The row hover shows a single Resume icon. Resume/Open land the user in a new AI panel pinned to the chosen delegate (the AI panel is the natural home for an agent TUI).
+[x] Sub-agent tree — runs nest under their parent so you can see a CLI delegate that spawned a Klide sub-run, and the sub-run's stats.
+[x] Real token usage — actual cost / tokens surfaced per row.
+[x] Brand logos — Anthropic, OpenAI, Claude Code, Codex, OpenCode logos per row.
 
 ## Project Memory
 [x] Save end-of-session task summaries into project memory so future Klide agents can resume without rereading the whole conversation.
@@ -36,7 +39,7 @@ Design to always fulfill screen
 [x] Store memory in a project-readable format with links to files, diffs, runs, and decisions.
 [] Explore an automatic summarizer agent that watches completed/stopped runs and writes durable memory notes.
 [] Decide whether `.klide/memory/` should be gitignored or committed per-repo (currently neither — it's plain workspace files).
-[] Cross-link memory entries back to the file graph: click a file in `filesTouched` to jump to that file in the editor + the future Project Graph tab.
+[] Cross-link memory entries back to the file graph: click a file in `filesTouched` to jump to that file in the editor.
 
 ## Known bugs
 - [] When switching away from a workbench view right after creating an AI panel, switching back creates the same AI panel (model) — the panel-preservation story is still per-view, not per-workspace.
@@ -47,10 +50,14 @@ Design to always fulfill screen
 [x] based on time and light/dark mode from machine directly
 [x] Stop a chat
 [x] Open windows view like git panel for File viewing
+[x] Quick view file reader (`FileViewerPanel`) — read-only overlay for the selected file, no tab opened
+[x] Activity bar split — top zone (6 tools) + bottom zone (Settings + Profile), separated by a hairline divider
+[x] Profile modal — local IDE profile (avatar + identity + workspace), `⌘.`
 
-## SKills & harness
-- Auto-generated skills — when the agent solves a problem, it writes a reusable skill so it never solves it from scratch twice. Persistent
-  memory across sessions.
+## Skills & harness
+[x] Skills install via `npx skills add <owner/repo>` from the SkillsModal → Install tab, full provenance-grouped loader (workspace / personal / Vercel / Matt Pocock / Anthropic).
+[x] Auto-generated skills — when the agent solves a problem, the user clicks the "Save as skill" sparkle and the model writes a `SKILL.md` to `<workspace>/.klide/skills/<slug>/`. Persistent across sessions.
+[x] Skills now come from four well-known locations: workspace `.agents/skills`, workspace `.klide/skills`, user `.agents/skills`, user `.claude/skills`.
 - Natural-language scheduling — "every morning, summarize X" → unattended cron runs through the gateway.
 - Delegation framework, not chat — you assign tasks, Devin works async, you review draft PRs later. The human role is project manager +
   approver, not pair-programmer.
@@ -60,37 +67,5 @@ Design to always fulfill screen
 - SKills like improve-codebase from the github [here](https://github.com/mattpocock/skills)
 - [x] providers logo over subscription settings
 
-## Housekeeping
-- [ ] Rust `project_graph` command is now dead code (no frontend caller after the file-tree removal). Trivial delete.
-- [ ] `src/contextTray.ts` (`lensItemsForPrompt`, `ProjectContextSnapshot`) is dead — no UI feeds the AI context lens any more. The Ideas.md parking lot already flagged this as not-yet-there, so it lands in the right place.
-
 
 # ERRORS
-
-
-Klide Light (default)
-- Accent: #5A7B4C (soft sage green)
-- Accent hover: #6B8E5A
-- Background: #f7f4ed
-- Foreground: #1c1c1c
-- Border: #eceae4
-Midnight (cursor-dark)
-- Accent: #8EA2FF (blue-violet)
-- Background: #11110F
-- Foreground: #F0EFE9
-- Border: #292824
-VS Code Dark
-- Accent: #007ACC (classic blue)
-- Background: #1E1E1E
-- Foreground: #FFFFFF
-- Border: #2D2D30
-GitHub Light
-- Accent: #0969DA (blue)
-- Background: #FFFFFF
-- Foreground: #1F2328
-- Border: #D8DEE4
-Solarized Dark
-- Accent: #B58900 (gold)
-- Background: #002B36
-- Foreground: #FDF6E3
-- Border: #174652

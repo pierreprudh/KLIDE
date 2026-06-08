@@ -4,15 +4,15 @@ pub mod transcripts;
 pub mod types;
 
 use self::tools::{
-    execute_read_only_tool, execute_write_tool_preview, is_write_tool, parse_tool_calls,
-    schemas_for_mode, NormalizedToolCall, apply_write, clean_context_ids,
+    apply_write, clean_context_ids, execute_read_only_tool, execute_write_tool_preview,
+    is_write_tool, parse_tool_calls, schemas_for_mode, NormalizedToolCall,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
     write_summary,
 };
 use self::types::{
-    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentRunStatus,
+    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
     AgentRunSummary, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
@@ -129,16 +129,20 @@ fn provider_messages(request: &StartRunRequest, system: String) -> Vec<serde_jso
         user_text.push_str("\n\n[Files attached for context]\n");
         user_text.push_str(&attachments);
     }
-    let mut messages = vec![
-        serde_json::json!({ "role": "system", "content": system }),
-    ];
-    // Inject initial todo list as context
-    if let Some(cwd) = &request.workspace_root {
-        if let Some(todo_text) = todo::list_todos_text(cwd) {
-            messages.push(serde_json::json!({
-                "role": "system",
-                "content": format!("[TODO list]\n{}", todo_text)
-            }));
+    let mut messages = vec![serde_json::json!({ "role": "system", "content": system })];
+    // Inject initial todo list as context for tool-capable/project turns.
+    // Local chat should stay tiny; sending project metadata to MLX/Ollama for
+    // "hello" made prompt processing feel broken.
+    let should_include_todos = !(matches!(request.provider.as_str(), "mlx" | "ollama")
+        && matches!(request.mode, AgentMode::Chat));
+    if should_include_todos {
+        if let Some(cwd) = &request.workspace_root {
+            if let Some(todo_text) = todo::list_todos_text(cwd) {
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!("[TODO list]\n{}", todo_text)
+                }));
+            }
         }
     }
     messages.push(serde_json::json!({ "role": "user", "content": user_text }));
@@ -261,8 +265,15 @@ pub async fn agent_start_run(
     let task_app = app.clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(err) =
-            run_agent_loop(task_app, runs_dir, task_id.clone(), request, on_event, cancel).await
+        if let Err(err) = run_agent_loop(
+            task_app,
+            runs_dir,
+            task_id.clone(),
+            request,
+            on_event,
+            cancel,
+        )
+        .await
         {
             eprintln!("agent run {task_id} failed: {err}");
         }
@@ -345,15 +356,21 @@ async fn run_agent_loop(
         if messages.len() > COMPACT_AFTER {
             let mut compacted = 0;
             for msg in messages.iter_mut().skip(1) {
-                if compacted >= 5 { break; }
+                if compacted >= 5 {
+                    break;
+                }
                 if msg.get("role").and_then(|v| v.as_str()) == Some("tool") {
                     let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-                    let content_len = msg.get("content").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+                    let content_len = msg
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.len())
+                        .unwrap_or(0);
                     if content_len > 200 {
-                        msg["content"] = serde_json::Value::String(
-                            format!("[compacted: {name}]")
-                        );
-                        if let Some(obj) = msg.as_object_mut() { obj.remove("name"); }
+                        msg["content"] = serde_json::Value::String(format!("[compacted: {name}]"));
+                        if let Some(obj) = msg.as_object_mut() {
+                            obj.remove("name");
+                        }
                         compacted += 1;
                     }
                 }
@@ -386,14 +403,16 @@ async fn run_agent_loop(
             let todo_text = todo::list_todos_text(cwd);
             for msg in messages.iter_mut() {
                 if msg.get("role").and_then(|v| v.as_str()) == Some("system")
-                    && msg.get("content").and_then(|v| v.as_str()).map(|c| c.starts_with("[TODO list]")).unwrap_or(false)
+                    && msg
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(|c| c.starts_with("[TODO list]"))
+                        .unwrap_or(false)
                 {
-                    msg["content"] = serde_json::Value::String(
-                        match &todo_text {
-                            Some(t) => format!("[TODO list]\n{t}"),
-                            None => "[TODO list]\nNo todos.".to_string(),
-                        }
-                    );
+                    msg["content"] = serde_json::Value::String(match &todo_text {
+                        Some(t) => format!("[TODO list]\n{t}"),
+                        None => "[TODO list]\nNo todos.".to_string(),
+                    });
                     break;
                 }
             }
@@ -566,7 +585,10 @@ async fn run_agent_loop(
                 let (tx, rx) = tokio::sync::oneshot::channel::<String>();
                 {
                     let state = app.state::<AgentSupervisorState>();
-                    let mut runs = state.runs.lock().map_err(|_| "Agent state unavailable".to_string())?;
+                    let mut runs = state
+                        .runs
+                        .lock()
+                        .map_err(|_| "Agent state unavailable".to_string())?;
                     if let Some(handle) = runs.get_mut(&id) {
                         *handle.pending_diff.lock().unwrap() = Some(tx);
                     }
@@ -606,8 +628,8 @@ async fn run_agent_loop(
                             // what agent_list_checkpoints deserializes.
                             let checkpoint_dir = runs_dir.join(&id).join("checkpoints");
                             let _ = std::fs::create_dir_all(&checkpoint_dir);
-                            let checkpoint_file =
-                                checkpoint_dir.join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
+                            let checkpoint_file = checkpoint_dir
+                                .join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
                             let entry = CheckpointEntry {
                                 tool_call_id: proposal.tool_call_id.clone(),
                                 path: proposal.path.clone(),
@@ -639,7 +661,11 @@ async fn run_agent_loop(
                         content: format!(
                             "Rejected by user: {} was not {}.",
                             proposal.path,
-                            if proposal.is_create { "created" } else { "changed" }
+                            if proposal.is_create {
+                                "created"
+                            } else {
+                                "changed"
+                            }
                         ),
                         metadata: None,
                     };
@@ -660,9 +686,15 @@ async fn run_agent_loop(
             messages.push(tool_provider_message(&call, &tool_result));
 
             if call.name == "clean_context" {
-                let ids: Vec<String> = call.input.get("ids")
+                let ids: Vec<String> = call
+                    .input
+                    .get("ids")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 clean_context_ids(&ids, &mut messages);
             }
@@ -708,9 +740,7 @@ pub async fn agent_submit_user_turn(
 // pause for permissions/diffs yet; writing fake "resolved" events here would
 // corrupt transcript ordering and let a UI believe approval was enforced.
 #[tauri::command]
-pub async fn agent_resolve_permission(
-    _decision: PermissionDecisionRequest,
-) -> Result<(), String> {
+pub async fn agent_resolve_permission(_decision: PermissionDecisionRequest) -> Result<(), String> {
     Err("The harness does not pause for permissions yet; nothing to resolve.".to_string())
 }
 
@@ -765,11 +795,37 @@ pub async fn agent_abort_run(
 #[tauri::command]
 pub async fn agent_list_runs(
     app: tauri::AppHandle,
+    state: tauri::State<'_, AgentSupervisorState>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<AgentRunSummary>, String> {
     let runs_dir = app_runs_dir(&app)?;
-    list_summaries(&runs_dir, limit, offset)
+    let live_run_ids = state
+        .runs
+        .lock()
+        .map_err(|_| "Agent state is unavailable".to_string())?
+        .iter()
+        .filter(|(_, handle)| {
+            matches!(
+                handle.status,
+                AgentRunStatus::Queued
+                    | AgentRunStatus::Running
+                    | AgentRunStatus::WaitingForPermission
+                    | AgentRunStatus::WaitingForDiff
+                    | AgentRunStatus::Paused
+            )
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut summaries = list_summaries(&runs_dir, limit, offset)?;
+    for summary in &mut summaries {
+        if matches!(summary.status.as_str(), "running" | "queued" | "waiting")
+            && !live_run_ids.contains(&summary.id)
+        {
+            summary.status = "cancelled".to_string();
+        }
+    }
+    Ok(summaries)
 }
 
 #[tauri::command]
@@ -799,7 +855,13 @@ pub(crate) struct CheckpointEntry {
 /// separators — flatten them so they are safe as checkpoint file names.
 fn sanitize_file_id(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -849,8 +911,8 @@ pub(crate) fn revert_checkpoint_at(
     let file = checkpoint_file(runs_dir, run_id, tool_call_id);
     let content = std::fs::read_to_string(&file)
         .map_err(|_| format!("Checkpoint {tool_call_id} not found"))?;
-    let entry: CheckpointEntry = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid checkpoint: {e}"))?;
+    let entry: CheckpointEntry =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid checkpoint: {e}"))?;
 
     // Resolve against the workspace the edit was applied in, with the same
     // containment guard as the write tools.
@@ -1041,15 +1103,7 @@ mod checkpoint_tests {
         std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
         std::fs::write(&abs, "v1").unwrap();
 
-        let json = checkpoint_json(
-            "edit_x",
-            rel,
-            "v1",
-            "v2",
-            false,
-            ws.to_str().unwrap(),
-            0,
-        );
+        let json = checkpoint_json("edit_x", rel, "v1", "v2", false, ws.to_str().unwrap(), 0);
         write_checkpoint(&runs, run, "edit_x", &json);
         std::fs::write(&abs, "v2").unwrap();
 
@@ -1088,7 +1142,10 @@ mod checkpoint_tests {
         );
         write_checkpoint(&runs, run, "edit_evil", &json);
         let result = revert_checkpoint_at(&runs, run, "edit_evil");
-        assert!(result.is_err(), "revert must refuse a non-existent workspace root");
+        assert!(
+            result.is_err(),
+            "revert must refuse a non-existent workspace root"
+        );
         // The checkpoint file should still be present — the revert never
         // got far enough to consume it, so the user can try again after
         // fixing the workspace path.

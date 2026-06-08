@@ -3,6 +3,11 @@
 // A skill is a named block of instructions the assistant should follow when
 // enabled. Enabled skills get folded into the system prompt (see AiPanel).
 // Stored in localStorage so they persist across sessions.
+//
+// Filesystem-loaded skills (`SKILL.md` files under one of the four well-
+// known skill locations) are fetched through the Rust `list_filesystem_skills`
+// command — the FS plugin in Tauri 2 is path-scope-restricted, so the
+// webview can't read arbitrary home-directory paths on its own.
 
 export type Skill = {
   id: string;
@@ -14,18 +19,71 @@ export type Skill = {
   builtin?: boolean;
   updatedAt?: number;
   fromFile?: string;
+  /** Provenance group for filesystem-loaded skills — e.g. "Vercel",
+   *  "Matt Pocock", "Personal", "Workspace (auto-generated)". User-
+   *  defined and built-in skills leave this undefined. */
+  group?: string;
 };
 
-// The tools the AI panel exposes — kept in sync with the TOOLS array in AiPanel.
-// A skill lists which of these it's allowed to use, à la Claude Code's allowed-tools.
+// The tools the AI panel exposes — kept in sync with the Rust tool
+// registry (the source of truth) via the `ai_list_tools` IPC command.
+// `SKILL_TOOLS` is a static fallback that covers the four tools that
+// have existed since v0.1, so the UI stays useful even before the
+// async fetch resolves. Call `getAvailableTools()` for the live list.
 export const SKILL_TOOLS: { id: string; label: string; description: string }[] = [
   { id: "read_file", label: "Read file", description: "Read the contents of a file." },
   { id: "list_dir", label: "List directory", description: "List files and folders." },
+  { id: "glob", label: "Glob", description: "Find workspace files matching a pattern (e.g. src/**/*.ts)." },
+  { id: "grep", label: "Grep", description: "Search text files in the workspace for a literal pattern." },
+  { id: "get_git_status", label: "Git status", description: "Return git branch and changed files for the workspace." },
+  { id: "get_git_diff", label: "Git diff", description: "Return git diff for the workspace or one path." },
+  { id: "clean_context", label: "Clean context", description: "Discard tool results that led nowhere from the current turn." },
+  { id: "web_search", label: "Web search", description: "Search the web for documentation or current information." },
+  { id: "web_fetch", label: "Web fetch", description: "Fetch the content of a URL as text." },
+  { id: "get_todo_list", label: "Read todos", description: "Read the current TODO list for this project." },
+  { id: "update_todo_list", label: "Update todos", description: "Add, complete, edit, or remove project TODOs." },
   { id: "write_file", label: "Edit file", description: "Propose an edit to an existing file (diff review)." },
   { id: "create_file", label: "Create file", description: "Propose a brand-new file (diff review)." },
+  { id: "create_skill", label: "Create skill", description: "Save a reusable skill to .agents/skills/ (diff review)." },
 ];
 
 export const ALL_TOOL_IDS = SKILL_TOOLS.map((t) => t.id);
+
+// Live, Rust-sourced tool list. Returns the same `{ id, label, description }`
+// shape but pulls the canonical descriptions from the agent harness so we
+// never drift. Falls back to the static SKILL_TOOLS list if the IPC call
+// is unavailable.
+export async function getAvailableTools(): Promise<{ id: string; label: string; description: string }[]> {
+  try {
+    const { listAllTools } = await import("./agent/tools");
+    const raw = await listAllTools();
+    if (!Array.isArray(raw) || raw.length === 0) return SKILL_TOOLS;
+    const mapped = raw
+      .map((t: any) => {
+        const fn = t?.function;
+        if (!fn || typeof fn.name !== "string") return null;
+        const id = fn.name;
+        return {
+          id,
+          label: humanizeToolId(id),
+          description: typeof fn.description === "string" ? fn.description : "",
+        };
+      })
+      .filter((x: { id: string; label: string; description: string } | null): x is { id: string; label: string; description: string } => x !== null);
+    return mapped.length > 0 ? mapped : SKILL_TOOLS;
+  } catch {
+    return SKILL_TOOLS;
+  }
+}
+
+// "read_file" -> "Read file", "get_git_status" -> "Get git status",
+// "create_skill" -> "Create skill". Reasonable enough for display.
+function humanizeToolId(id: string): string {
+  return id
+    .split("_")
+    .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1)))
+    .join(" ");
+}
 
 const SKILLS_KEY = "klide-skills";
 
@@ -104,65 +162,40 @@ export function enabledSkillsPrompt(skills: Skill[]): string {
 }
 
 export async function loadFilesystemSkills(workspaceRoot: string | null): Promise<Skill[]> {
-  const skills: Skill[] = [];
-  const { exists, readDir, readTextFile } = await import("@tauri-apps/plugin-fs");
-  const { homeDir } = await import("@tauri-apps/api/path");
-
-  const home = await homeDir();
-  const dirs: string[] = [];
-  if (workspaceRoot) dirs.push(`${workspaceRoot}/.agents/skills`);
-  dirs.push(`${home}/.agents/skills`);
-
-  for (const baseDir of dirs) {
-    try {
-      if (!(await exists(baseDir))) continue;
-      const entries = await readDir(baseDir);
-      for (const entry of entries) {
-        if (!entry.isDirectory) continue;
-        const skillDir = `${baseDir}/${entry.name}`;
-        const skillFile = `${skillDir}/SKILL.md`;
-        try {
-          if (!(await exists(skillFile))) continue;
-          const raw = await readTextFile(skillFile);
-          const { name, description, instructions } = parseSkillMd(raw, entry.name);
-          skills.push({
-            id: `file-${entry.name}`,
-            name,
-            description: description || `Skill from ${skillFile}`,
-            instructions,
-            tools: ["read_file", "list_dir", "write_file", "create_file", "glob", "grep"],
-            enabled: true,
-            fromFile: skillFile,
-          });
-        } catch { /* skip unreadable skill */ }
-      }
-    } catch { /* directory doesn't exist */ }
+  // Lives in Rust — see `list_filesystem_skills` in src-tauri/src/lib.rs.
+  // The Rust side resolves the home dir, walks the four skill folders,
+  // and parses each `SKILL.md` frontmatter. The FS plugin can't see
+  // arbitrary home-directory paths under Tauri 2's scope rules.
+  type FileSystemSkill = {
+    id: string;
+    name: string;
+    description: string;
+    instructions: string;
+    fromFile: string;
+    source: string;
+    group: string;
+  };
+  let raw: FileSystemSkill[] = [];
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    raw = await invoke<FileSystemSkill[]>("list_filesystem_skills", { workspaceRoot });
+  } catch {
+    return [];
   }
-
-  return skills;
-}
-
-function parseSkillMd(raw: string, folderName: string): { name: string; description: string; instructions: string } {
-  let name = folderName;
-  let description = "";
-  let instructions = raw;
-
-  // Parse YAML frontmatter if present
-  if (raw.startsWith("---\n")) {
-    const end = raw.indexOf("\n---\n", 4);
-    if (end > 0) {
-      const frontmatter = raw.slice(4, end);
-      for (const line of frontmatter.split("\n")) {
-        const colon = line.indexOf(":");
-        if (colon < 0) continue;
-        const key = line.slice(0, colon).trim();
-        const value = line.slice(colon + 1).trim();
-        if (key === "name") name = value;
-        if (key === "description") description = value;
-      }
-      instructions = raw.slice(end + 5).trim();
-    }
-  }
-
-  return { name, description, instructions };
+  // Grant filesystem-loaded skills every tool the harness exposes. Skills
+  // pulled from `npx skills` (Vercel, Anthropic, mattpocock, etc.) were
+  // designed to use the full Claude Code tool set, and the SKILL.md they
+  // ship rarely enumerates an allowlist.
+  const available = await getAvailableTools();
+  const allIds = available.map((t) => t.id);
+  return raw.map((s) => ({
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    instructions: s.instructions,
+    tools: allIds,
+    enabled: true,
+    fromFile: s.fromFile,
+    group: s.group,
+  }));
 }

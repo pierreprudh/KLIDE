@@ -31,6 +31,7 @@ export function WelcomeScreen({
 
   return (
     <div
+      className="shell-enter"
       style={{
         flex: 1,
         minHeight: 0,
@@ -68,34 +69,50 @@ export function WelcomeScreen({
 
       <div
         style={{
-          width: "min(480px, 88vw)",
+          width: "min(520px, 88vw)",
           position: "relative",
           zIndex: 1,
         }}
       >
-        <div
-          style={{
-            fontSize: 32,
-            lineHeight: 1.1,
-            color: "var(--fg-strong)",
-            fontWeight: 600,
-            letterSpacing: "-0.02em",
-          }}
-        >
-          Klide
+        {/* Hero */}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
+          <div
+            style={{
+              fontSize: 40,
+              lineHeight: 1,
+              color: "var(--fg-strong)",
+              fontWeight: 600,
+              letterSpacing: "-0.028em",
+            }}
+          >
+            Klide
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.04em",
+              color: "var(--fg-dim)",
+              paddingTop: 4,
+            }}
+          >
+            v0.2
+          </div>
         </div>
         <div
           style={{
-            fontSize: 13,
+            fontSize: 14,
             color: "var(--fg-subtle)",
             lineHeight: 1.55,
-            marginTop: 10,
-            maxWidth: 300,
+            marginTop: 12,
+            maxWidth: 360,
+            letterSpacing: "-0.005em",
           }}
         >
-          Small, fast, AI-first editor.
+          A quiet, AI-first editor — small, fast, and built for the agent loop.
         </div>
 
+        {/* CTAs */}
         <div
           style={{
             display: "flex",
@@ -107,58 +124,49 @@ export function WelcomeScreen({
           <button
             type="button"
             onClick={onOpenFolder}
-            style={{
-              height: 36,
-              padding: "0 14px",
-              fontSize: 12.5,
-              fontWeight: 500,
-              border: "none",
-              borderRadius: "var(--radius-sm)",
-              background: "var(--fg-strong)",
-              color: "var(--bg)",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
+            className="klide-button klide-button-primary"
+            style={{ minHeight: 36, padding: "0 16px", fontSize: 13, fontWeight: 500 }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
               <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h7A1.5 1.5 0 0 1 19 9v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17V6.5Z" />
             </svg>
             Open Folder
+            <span className="klide-kbd" style={{ marginLeft: 4 }}>⌘ O</span>
           </button>
           <button
             type="button"
             onClick={onOpenSettings}
-            style={{
-              height: 36,
-              padding: "0 12px",
-              fontSize: 12.5,
-              fontWeight: 500,
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              background: "transparent",
-              color: "var(--fg-subtle)",
-              cursor: "pointer",
-            }}
+            className="klide-button klide-button-ghost"
+            style={{ minHeight: 36, padding: "0 14px", fontSize: 13, fontWeight: 500, color: "var(--fg-subtle)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
           >
+            <SettingsIcon />
             Settings
           </button>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", letterSpacing: "0.04em", color: "var(--fg-dim)" }}>
+            {recentFolders.length} recent
+          </span>
         </div>
 
         {recentFolders.length > 0 && (
-          <div style={{ marginTop: 40 }}>
+          <section style={{ marginTop: 44 }}>
             <div
               style={{
-                fontSize: 10,
+                fontSize: 10.5,
                 fontWeight: 600,
-                letterSpacing: "0.06em",
+                letterSpacing: "0.08em",
                 textTransform: "uppercase",
-                color: "var(--fg-dim)",
-                marginBottom: 8,
+                color: "var(--fg-subtle)",
+                marginBottom: 10,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
               }}
             >
               Recent
+              <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {recentFolders.map((path) => {
@@ -168,38 +176,21 @@ export function WelcomeScreen({
                     key={path}
                     onMouseEnter={() => setHovered(path)}
                     onMouseLeave={() => setHovered(null)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      height: 34,
-                      padding: "0 8px",
-                      borderRadius: "var(--radius-sm)",
-                      background: isHovered ? "var(--bg-hover)" : "transparent",
-                    }}
+                    className="klide-recent-row"
+                    data-hovered={isHovered}
                   >
                     <button
                       type="button"
                       onClick={() => onOpenRecent(path)}
                       title={path}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        background: "transparent",
-                        border: "none",
-                        padding: 0,
-                        font: "inherit",
-                        cursor: "pointer",
-                        textAlign: "left",
-                      }}
+                      className="klide-recent-open"
                     >
-                      <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)", flexShrink: 0 }}>
+                      <FolderIcon />
+                      <span style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-strong)", flexShrink: 0, letterSpacing: "-0.005em" }}>
                         {folderName(path)}
                       </span>
-                      <span style={{ fontSize: 11.5, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                      <span className="klide-recent-path">
                         {parentPath(path)}
                       </span>
                     </button>
@@ -208,31 +199,44 @@ export function WelcomeScreen({
                       aria-label={`Remove ${folderName(path)}`}
                       title="Remove"
                       onClick={() => onRemoveRecent(path)}
-                      style={{
-                        flexShrink: 0,
-                        width: 22,
-                        height: 22,
-                        display: "grid",
-                        placeItems: "center",
-                        background: "transparent",
-                        border: "none",
-                        padding: 0,
-                        cursor: "pointer",
-                        color: "var(--fg-dim)",
-                        opacity: isHovered ? 1 : 0,
-                        fontSize: 12,
-                      }}
+                      className="klide-recent-remove"
+                      data-visible={isHovered}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   </div>
                 );
               })}
             </div>
-          </div>
+          </section>
         )}
       </div>
     </div>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h7A1.5 1.5 0 0 1 19 9v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17V6.5Z" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="2.6" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
   );
 }
 

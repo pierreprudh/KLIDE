@@ -37,6 +37,7 @@ If a UI element doesn't serve clarity, it doesn't ship.
 | Frontend | **React 19 + TypeScript + Vite** | |
 | Local AI | **Ollama** HTTP API on `localhost:11434` | Default model: `llama3.1:8b` |
 | Online AI | Anthropic + OpenAI + Mistral + xAI | Keys in macOS Keychain, never in webview |
+| Auto-install | `npx skills add <owner/repo>` | Skill install + uninstall via Rust commands |
 
 ## Repo layout
 
@@ -51,52 +52,58 @@ Klide/
 │   ├── main.tsx                 React boot
 │   ├── App.tsx                  Root layout
 │   ├── theme.ts                 5 themes + Monaco theme defs
-│   ├── styles/tokens.css        CSS custom properties
+│   ├── styles/tokens.css        CSS custom properties + design primitives
+│   ├── hooks/
+│   │   └── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
 │   ├── components/
-│   │   ├── ActivityBar.tsx      Vertical icon bar (7 items)
-│   │   ├── AiPanel.tsx          AI chat panel (post-split)
+│   │   ├── ActivityBar.tsx      Left rail — top zone (6 tools, FLIP) + bottom zone (Settings + Profile, dock dot)
+│   │   ├── AiPanel.tsx          AI chat panel (post-split, ~1300 lines)
+│   │   ├── CheckpointPanel.tsx  Per-run file checkpoint rollback UI
 │   │   ├── CommandPalette.tsx   Cmd+P / Cmd+Shift+P modal
 │   │   ├── ContextMenu.tsx      Right-click context menu
-│   │   ├── DiffModal.tsx        Diff review modal
 │   │   ├── EditorArea.tsx       Monaco editor wrapper
-│   │   ├── GitPanel.tsx         Git staging + diff viewer
+│   │   ├── FileViewerPanel.tsx  Read-only Quick View overlay
+│   │   ├── FloatingPanel.tsx    Free-floating, resizable, draggable panel shell
+│   │   ├── GitReview.tsx        Full-view Git workbench (staging + diffs)
+│   │   ├── GridLayoutBuilder.tsx Drag-and-drop grid layout editor
+│   │   ├── GridWorkbench.tsx    Grid layout rendering
 │   │   ├── LayoutBento.tsx      Layout picker widget
 │   │   ├── LayoutCanvas.tsx     Visual layout editor
-│   │   ├── GridWorkbench.tsx    Grid layout rendering
-│   │   ├── GridLayoutBuilder.tsx Grid drag-and-drop builder
 │   │   ├── MemoryModal.tsx      Centered Memory handoff-notes modal
 │   │   ├── MemoryPanel.tsx      List+detail body inside MemoryModal
-│   │   ├── MissionControl.tsx   Agent run board
+│   │   ├── MissionControl.tsx   Agent run board + delegate handoff
+│   │   ├── ProfileModal.tsx     Local IDE profile (avatar + identity + workspace)
 │   │   ├── SearchPanel.tsx      Find-in-files results
-│   │   ├── SettingsPanel.tsx    Full settings (8 sections)
+│   │   ├── SettingsPanel.tsx    Full settings (keychain, harness, stats)
 │   │   ├── Sidebar.tsx          File explorer tree
-│   │   ├── SkillsModal.tsx      Skill editor
-│   │   ├── StatusBar.tsx        Bottom bar
-│   │   ├── TabBar.tsx           Open file tabs
+│   │   ├── SkillsModal.tsx      Skill editor + install + provenance groups
+│   │   ├── SplitPane.tsx        Vertical/horizontal split shell
+│   │   ├── StatusBar.tsx        Bottom bar — file/lang/branch/notice/chips
+│   │   ├── TabBar.tsx           Open file tabs (FLIP-animated underline)
 │   │   ├── TerminalPanel.tsx    xterm.js + Rust PTY
+│   │   ├── TodoStrip.tsx        Project-wide todo list strip
 │   │   ├── WelcomeScreen.tsx    Empty-state screen
 │   │   └── ai/                  Extracted AI panel modules
 │   │       ├── types.ts           Msg, QueuedTurn, Conversation
 │   │       ├── icons.tsx          Provider logos, action icons
 │   │       ├── utils.ts           Tokens, fuzzy files, persistence
 │   │       ├── system-prompt.ts   buildSystemPrompt
-│   │       ├── tool-execution.ts  executeTool, toOllamaMessage
 │   │       ├── markdown.tsx       CodeBlock, renderMarkdown
 │   │       ├── ChatMessage.tsx    renderMessageBody
-│   │       ├── summarize.ts       Summarize-and-handoff helper
+│   │       ├── eventsToMsgs.ts    AgentEvent replay into chat messages
+│   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
 │   │       ├── ConversationHistory.tsx
 │   │       └── DelegateTerminal.tsx
 │   ├── agent/
 │   │   ├── types.ts             Agent protocol types (events, diffs, permissions)
 │   │   ├── providers.ts         Provider definitions (12 providers)
 │   │   ├── client.ts            Frontend agent harness client
-│   │   ├── reducer.ts           Frontend state reducer for agent events
 │   │   └── tools.ts             Frontend tool list fetcher (fetches from Rust)
 │   ├── gridLayouts.ts           Freeform grid layouts
 │   ├── layouts.ts               Fixed-frame layout presets
 │   ├── memory.ts                Project Memory data layer
 │   ├── panelLayout.ts           Floating panel rect store
-│   ├── skills.ts                Skills store
+│   ├── skills.ts                Skills store (loader + auto-grant)
 │   ├── tasks.ts                 Delegated tasks
 │   ├── runs.ts                  Agent run data layer
 │   └── klideConvos.ts           AI panel → Mission Control pub/sub
@@ -113,6 +120,9 @@ Klide/
     │   │   ├── Agent run listing (Claude Code, Codex, OpenCode, Klide)
     │   │   ├── Keychain-backed API key management
     │   │   ├── Tool list + find-in-files commands
+    │   │   ├── Skill install + uninstall (npx skills add)
+    │   │   ├── Filesystem-skill loader (4 dirs, provenance grouping)
+    │   │   ├── User / host info for the profile modal
     │   │   └── Tauri plugin registration
     │   ├── pty.rs                PTY management (native + delegate)
     │   ├── memory.rs             Project memory markdown I/O
@@ -154,6 +164,16 @@ Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (
 - **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; `MemoryModal` is the centered overlay (same pattern as `SkillsModal`).
 - **Trigger** — the AI panel header has a "Summarize" bookmark button (`src/components/ai/summarize.ts`) that calls the model once with a structured prompt, parses the response, and writes via `memory_write`. The first user message becomes the title; file paths are extracted from the conversation; the model produces Notes + Decisions + Goal.
 
+### v0.2 stabilization focus
+
+Current branch: `feat/project-memory-and-mc-v2`. v0.2 is functionally complete — provider smoke matrix verified 2026-06-08, skill install/uninstall UI is shipped, premium polish pass on the always-visible chrome is shipped.
+
+- Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
+- Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.
+- Treat Project Memory as the continuity surface. The older Context Lens/project-graph path is parked unless it feeds memory or summarization directly.
+- Skills now load from four well-known locations (workspace `.agents/skills`, workspace `.klide/skills`, user `.agents/skills`, user `.claude/skills`), and the install + uninstall flow is wired through `install_skill` / `uninstall_skill` Rust commands. Provenance is grouped by `metadata.author` / GitHub repo owner into Workspace / Personal / Vercel / Matt Pocock / Anthropic / Other.
+- "Save as skill" sparkle in the AI panel header (`detectAndGenerateSkill` in `src/components/ai/summarize.ts`) auto-generates a `SKILL.md` to `<workspace>/.klide/skills/<slug>/` when the model detects a reusable pattern.
+
 ### Provider streaming (1 loop, 3 adapters)
 
 ```
@@ -193,23 +213,27 @@ ToolEntry { kind, schema, run_read, run_write_preview }
 
 ## Features shipped (v0.2)
 
-- [x] Activity bar (Files, Git, Memory, Skills, AI, Mission Control, Settings)
+- [x] Activity bar — top zone (6 tools) with FLIP-animated indicator + bottom zone (Settings + Profile) with a dock-style dot and a hairline divider.
 - [x] File explorer with tree view, git decorations, context menu, inline rename
-- [x] Tabs with dirty indicator, unsaved-changes confirm
+- [x] Tabs with dirty indicator, unsaved-changes confirm, FLIP-animated 2px bottom accent bar
 - [x] Monaco editor with syntax highlighting, Cmd+S, 5 themes
-- [x] Status bar with file path, language, git branch, theme/terminal/layout toggles
+- [x] Status bar — file path, language, git branch, theme/terminal/layout toggles, dot separators
 - [x] Terminal panel with real shell via Rust portable-pty
-- [x] AI panel — streaming chat with Ollama, Anthropic, OpenAI, Mistral, xAI
+- [x] AI panel — streaming chat with Ollama, Anthropic, OpenAI, Mistral, xAI, 14 built-in tools
 - [x] Agent mode — goal/plan modes, diff-reviewed edits, tool loop
-- [x] Git panel — stage/unstage/commit with inline diff
+- [x] Git panel — full-view Git Review workbench (staging + diffs)
 - [x] Mission Control — aggregate agent run board (Claude Code, Codex, OpenCode, Klide) with handoff to AI panel
-- [x] Project Memory — durable handoff notes in `.klide/memory/`, opened as a centered modal (Skills-style list+detail)
+- [x] Project Memory — durable handoff notes in `.klide/memory/`, opened as a centered modal
 - [x] AI-panel "Summarize" header action — writes a structured memory note from the current conversation
-- [x] Settings — 8 sections, API keys in macOS Keychain
-- [x] Skills — AI instruction bundles with tool allowlists
+- [x] AI-panel "Save as skill" sparkle — auto-generates a `SKILL.md` for reusable patterns
+- [x] Settings — keychain-backed keys, harness settings editor, stats panel
+- [x] Skills — instruction bundles with tool allowlists, loaded from 4 filesystem locations, install/uninstall via `npx skills add`, provenance grouping
+- [x] Profile modal — local IDE profile (avatar + identity + workspace), `⌘.`
 - [x] Layout system — fixed presets + freeform grid builder
-- [x] Command palette — Cmd+P files, Cmd+Shift+P commands
+- [x] Command palette — Cmd+P files, Cmd+Shift+P commands (incl. `View: Open Profile`)
 - [x] Find in files — Cmd+Shift+F, Rust-backed search
+- [x] Checkpoint rollback — preview files changed since a turn and revert selected ones
+- [x] Project todo list — Rust-backed store, agent tools to add/complete items
 
 ## Development
 

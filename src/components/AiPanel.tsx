@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { exists, readTextFile } from "@tauri-apps/plugin-fs";
@@ -38,7 +39,7 @@ import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { renderMessageBody } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { buildSystemPrompt } from "./ai/system-prompt";
-import { summarizeAndHandoff } from "./ai/summarize";
+import { summarizeAndHandoff, detectAndGenerateSkill } from "./ai/summarize";
 import {
   genId,
   deriveTitle,
@@ -76,14 +77,11 @@ type Props = {
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
   harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> };
-  onDuplicate?: () => void;
+  onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
+  onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
   resumeConversation?: Conversation | null;
   onResumeConsumed?: () => void;
-  /** When true (e.g. on app launch), skip restoring conversation from
-   *  localStorage so the panel opens fresh. Conversations are still saved
-   *  and accessible via the sidebar. */
-  startFresh?: boolean;
   /** When set on first mount, the panel starts pinned to this delegate
    *  provider (claude-code / codex / opencode). Used by Mission Control's
    *  "Resume in {CLI}" / "Open in {CLI}" handoffs to land the user in a
@@ -101,7 +99,49 @@ type Props = {
    *  "Summarize" header action). The host uses it to bump the sidebar's
    *  refresh key + show a notice. */
   onMemoryWritten?: (entry: { relPath: string; title: string }) => void;
+  /** Called when a skill is generated from this panel (via the
+   *  "Save as skill" header action). The host uses it to reload the
+   *  filesystem-skill list. */
+  onSkillGenerated?: (skill: { relPath: string; name: string }) => void;
 };
+
+const menuActionIconStyle: CSSProperties = {
+  width: 18,
+  display: "grid",
+  placeItems: "center",
+  flexShrink: 0,
+};
+
+function menuActionStyle(disabled: boolean): CSSProperties {
+  return {
+    width: "100%",
+    height: 30,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "0 8px",
+    border: "none",
+    borderRadius: "var(--radius-sm)",
+    background: "transparent",
+    color: disabled ? "var(--fg-dim)" : "var(--fg-strong)",
+    font: "inherit",
+    fontSize: 12,
+    textAlign: "left",
+    cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.58 : 1,
+  };
+}
+
+function storedModelForProvider(id: ProviderId): string {
+  const stored = localStorage.getItem(`klide.model.${id}`);
+  if (id === "mlx" && stored) {
+    // MLX expects Hugging Face-style ids or local paths. Ignore stale
+    // Ollama-style tags such as `gemma4:12b-mlx` from earlier shared-model UI.
+    const looksLikeMlx = stored.includes("/") || stored.startsWith(".");
+    if (!looksLikeMlx || stored.includes(":")) return DEFAULT_MODELS[id];
+  }
+  return stored || DEFAULT_MODELS[id];
+}
 
 export function AiPanel({
   workspaceRoot,
@@ -122,15 +162,16 @@ export function AiPanel({
   projectContext,
   harnessSettings,
   onDuplicate,
+  onProviderChange,
   onClose,
   resumeConversation,
   onResumeConsumed,
-  startFresh,
   initialProvider,
   initialResumeSessionId,
   initialTask,
   onInitialConsumed,
   onMemoryWritten,
+  onSkillGenerated,
 }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -141,6 +182,8 @@ export function AiPanel({
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [generatingSkill, setGeneratingSkill] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
 
   const convoIdRef = useRef<string | null>(null);
   const lastPublishRef = useRef({ count: -1, streaming: false });
@@ -177,8 +220,9 @@ export function AiPanel({
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
   const [connected, setConnected] = useState(false);
-  const [, setServerRunning] = useState(false);
-  const [serverError] = useState<string | null>(null);
+  const [serverRunning, setServerRunning] = useState(false);
+  const [serverStarting, setServerStarting] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [serverRefresh] = useState(0);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
@@ -237,10 +281,10 @@ export function AiPanel({
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
     setProvider(id);
+    onProviderChange?.(id);
     if (panelId) localStorage.setItem(`klide.provider.${panelId}`, id);
     localStorage.setItem("klide.provider", id);
-    const stored = localStorage.getItem(`klide.model.${id}`);
-    onModelChange(stored || DEFAULT_MODELS[id]);
+    onModelChange(storedModelForProvider(id));
     setProviderOpen(false);
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
@@ -390,26 +434,20 @@ export function AiPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
   useEffect(() => {
-    if (!panelId) return;
-    if (startFresh) return;
-    const conv = loadConversations<Conversation>().find((c) => c.id === panelId);
-    if (!conv) return;
-    if (conv.msgs.length === 0) return;
-    abortActiveHarnessRun();
-    setMsgs(conv.msgs);
-    msgsRef.current = conv.msgs;
-    queueRef.current = [];
-    queueGenerationRef.current += 1;
-    setQueuedTurns([]);
-    setConversations((prev) => {
-      if (prev.some((c) => c.id === conv.id)) return prev;
-      return [conv, ...prev];
-    });
-  }, []);
+    if (!actionsOpen) return;
+    function onDown(e: MouseEvent) {
+      if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
+        setActionsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [actionsOpen]);
 
   function newConversation() {
     if (providerDelegatesWork) { void invoke("delegate_pty_stop", { sessionId: `${currentId}:${provider}` }); }
@@ -453,6 +491,33 @@ export function AiPanel({
       console.error("Summarize failed:", err);
     } finally {
       setSummarizing(false);
+    }
+  }
+
+  // Detect a reusable pattern in the current conversation and write a
+  // SKILL.md to .klide/skills/. Two model calls (classify, then draft);
+  // the file loader picks the new skill up on the next refresh.
+  async function runGenerateSkill() {
+    if (!workspaceRoot || generatingSkill || msgs.length < 2) return;
+    setGeneratingSkill(true);
+    try {
+      const skill = await detectAndGenerateSkill({
+        workspaceRoot,
+        provider,
+        model,
+        mode: normalizeAgentMode(agentMode),
+        msgs,
+      });
+      if (skill) {
+        onSkillGenerated?.({ relPath: skill.relPath, name: skill.name });
+      } else {
+        // No reusable pattern detected — surface to the console + tooltip.
+        console.info("No reusable pattern detected for this session.");
+      }
+    } catch (err) {
+      console.error("Generate skill failed:", err);
+    } finally {
+      setGeneratingSkill(false);
     }
   }
 
@@ -536,21 +601,21 @@ export function AiPanel({
       try {
         const names = await invoke<string[]>("ai_provider_models", { provider });
         if (cancelled) return;
-        setConnected(true);
+        if (!isLocalProvider) setConnected(true);
         const next = names.length > 0 ? names : [DEFAULT_MODELS[provider]];
         onAvailableModelsChange(next);
         if (!next.includes(model)) onModelChange(next[0]);
       } catch {
         if (cancelled) return;
         setConnected(false);
-        const fallback = localStorage.getItem(`klide.model.${provider}`) || DEFAULT_MODELS[provider];
+        const fallback = storedModelForProvider(provider);
         onAvailableModelsChange([fallback]);
         if (model !== fallback) onModelChange(fallback);
       }
     }
     void loadProviderModels();
     return () => { cancelled = true; };
-  }, [provider, apiKeyVersion, serverRefresh, onAvailableModelsChange, onModelChange]);
+  }, [provider, apiKeyVersion, serverRefresh, model]);
 
   useEffect(() => {
     if (!isLocalProvider) {
@@ -562,8 +627,11 @@ export function AiPanel({
       try {
         const running = await invoke<boolean>("ai_local_server_status", { provider });
         setServerRunning(running);
+        setConnected(running);
+        if (running) setServerError(null);
       } catch {
         setServerRunning(false);
+        setConnected(false);
       }
     }
     check();
@@ -760,11 +828,14 @@ export function AiPanel({
       const toolsAvailable = turn.modelSupportsTools;
       const overrides = harnessSettings?.toolOverrides;
       const disabledTools = overrides ? Object.keys(overrides).filter((k) => overrides[k] === false) : undefined;
+      const systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
+        ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.`
+        : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings);
       const session = await startAgentRun({
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
         text: turn.text, attachments: turn.attachments,
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
-        systemPrompt: buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings),
+        systemPrompt,
         disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
@@ -821,14 +892,50 @@ export function AiPanel({
     } finally { processingQueueRef.current = false; }
   }
 
+  async function ensureLocalServerReady(): Promise<boolean> {
+    if (!isLocalProvider) return true;
+    setServerError(null);
+    try {
+      const running = await invoke<boolean>("ai_local_server_status", { provider });
+      if (running) {
+        setServerRunning(true);
+        setConnected(true);
+        return true;
+      }
+    } catch {
+      // Try to start it below.
+    }
+
+    setServerStarting(true);
+    try {
+      const started = await invoke<boolean>("ai_local_server_start", { provider, model });
+      setServerRunning(started);
+      setConnected(started);
+      if (!started) {
+        setServerError(`${providerName(provider)} did not start.`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      const message = String(e);
+      setServerRunning(false);
+      setConnected(false);
+      setServerError(message);
+      return false;
+    } finally {
+      setServerStarting(false);
+    }
+  }
+
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
-    if (!text.trim()) return;
+    if (!text.trim() || serverStarting) return;
     if (providerDelegatesWork) {
       setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
       await invoke("delegate_pty_write", { sessionId: `${currentId}:${provider}`, data: `${text}\r` });
       return;
     }
+    if (!(await ensureLocalServerReady())) return;
     const requestedMode = opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const mode: AgentMode = !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
@@ -851,6 +958,10 @@ export function AiPanel({
 
   const activeMode = nextSendMode ?? agentMode;
   const effectiveMode = !modelSupportsTools && !providerDelegatesWork && activeMode === "goal" ? "chat" : activeMode;
+  const localServerNotice = isLocalProvider
+    ? serverError ?? (serverStarting ? `Starting ${providerName(provider)}...` : !serverRunning ? `${providerName(provider)} stopped` : null)
+    : null;
+  const canSend = !!input.trim() && !serverStarting;
 
   return (
     <>
@@ -893,9 +1004,9 @@ export function AiPanel({
             </div>
           )}
         </div>
-        {isLocalProvider && serverError && (
+        {isLocalProvider && localServerNotice && (
           <div
-            title={serverError}
+            title={localServerNotice}
             style={{
               maxWidth: 180,
               overflow: "hidden",
@@ -906,59 +1017,99 @@ export function AiPanel({
               padding: "0 4px",
             }}
           >
-            {serverError}
+            {localServerNotice}
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 2, textTransform: "none", letterSpacing: 0 }}>
-          {onDuplicate && (
-            <button onClick={() => onDuplicate()} title="Duplicate panel" aria-label="Duplicate panel" style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: "var(--fg-subtle)", background: "transparent" }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" /></svg>
-            </button>
-          )}
-          {/* "Summarize and hand off" — write a structured memory note to
-              .klide/memory/ so a future agent (or future you) can pick up
-              where this session stopped. Disabled when the panel is empty
-              or the workspace isn't open. */}
-          {workspaceRoot && onMemoryWritten && (
+          <div ref={actionsRef} style={{ position: "relative" }}>
             <button
-              onClick={() => void runSummarize()}
-              disabled={summarizing || msgs.length === 0}
-              title={
-                msgs.length === 0
-                  ? "Start a conversation first"
-                  : "Summarize and write to .klide/memory/"
-              }
-              aria-label="Summarize and hand off"
-              style={{
-                width: 26,
-                height: 22,
-                display: "grid",
-                placeItems: "center",
-                borderRadius: "var(--radius-sm)",
-                color: summarizing ? "var(--accent)" : "var(--fg-subtle)",
-                background: "transparent",
-                opacity: msgs.length === 0 ? 0.4 : 1,
-                cursor: msgs.length === 0 ? "default" : "pointer",
-              }}
-              onMouseEnter={(e) => {
-                if (msgs.length === 0) return;
-                e.currentTarget.style.color = "var(--fg-strong)";
-                e.currentTarget.style.background = "var(--bg-hover)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = summarizing ? "var(--accent)" : "var(--fg-subtle)";
-                e.currentTarget.style.background = "transparent";
-              }}
+              onClick={() => setActionsOpen((open) => !open)}
+              title="More actions"
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={actionsOpen}
+              style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: actionsOpen ? "var(--fg-strong)" : "var(--fg-subtle)", background: actionsOpen ? "var(--bg-hover)" : "transparent" }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { if (!actionsOpen) { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; } }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
-                <path d="M9 8h6" />
-                <path d="M9 12h4" />
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="19" cy="12" r="1.6" />
               </svg>
             </button>
-          )}
+            {actionsOpen && (
+              <div
+                role="menu"
+                className="popover-enter"
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: "calc(100% + 8px)",
+                  width: 218,
+                  padding: 5,
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-strong)",
+                  background: "var(--bg-elevated)",
+                  boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)",
+                  zIndex: 35,
+                }}
+              >
+                {onDuplicate && (
+                  <button
+                    role="menuitem"
+                    onClick={() => { onDuplicate({ provider, model }); setActionsOpen(false); }}
+                    style={menuActionStyle(false)}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={menuActionIconStyle}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" /></svg>
+                    </span>
+                    <span style={{ flex: 1 }}>Duplicate panel</span>
+                  </button>
+                )}
+                {workspaceRoot && onMemoryWritten && (
+                  <button
+                    role="menuitem"
+                    disabled={summarizing || msgs.length === 0}
+                    title={msgs.length === 0 ? "Start a conversation first" : "Summarize and write to .klide/memory/"}
+                    onClick={() => { if (msgs.length === 0 || summarizing) return; setActionsOpen(false); void runSummarize(); }}
+                    style={menuActionStyle(summarizing || msgs.length === 0)}
+                    onMouseEnter={(e) => { if (msgs.length > 0 && !summarizing) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{ ...menuActionIconStyle, color: summarizing ? "var(--accent)" : "currentColor" }}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+                        <path d="M9 8h6" />
+                        <path d="M9 12h4" />
+                      </svg>
+                    </span>
+                    <span style={{ flex: 1 }}>{summarizing ? "Writing memory..." : "Summarize to Memory"}</span>
+                  </button>
+                )}
+                {workspaceRoot && (
+                  <button
+                    role="menuitem"
+                    disabled={generatingSkill || msgs.length < 2}
+                    title={msgs.length < 2 ? "Need at least one exchange to detect a pattern" : "Save this session as a reusable skill"}
+                    onClick={() => { if (msgs.length < 2 || generatingSkill) return; setActionsOpen(false); void runGenerateSkill(); }}
+                    style={menuActionStyle(generatingSkill || msgs.length < 2)}
+                    onMouseEnter={(e) => { if (msgs.length >= 2 && !generatingSkill) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{ ...menuActionIconStyle, color: generatingSkill ? "var(--accent)" : "currentColor" }}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 3l1.8 4.2L18 9l-3.3 2.9L15.7 16 12 13.6 8.3 16l1-4.1L6 9l4.2-1.8z" />
+                      </svg>
+                    </span>
+                    <span style={{ flex: 1 }}>{generatingSkill ? "Generating skill..." : "Save as skill"}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <ConversationHistory conversations={conversations} currentId={currentId} historyOpen={historyOpen} setHistoryOpen={setHistoryOpen} onSelect={loadConversation} onDelete={deleteConversation} />
           <button onClick={newConversation} title="New conversation" aria-label="New conversation" style={{ width: 26, height: 22, display: "grid", placeItems: "center", borderRadius: "var(--radius-sm)", color: "var(--fg-subtle)", background: "transparent" }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -1097,7 +1248,7 @@ export function AiPanel({
             }}
             onFocus={() => { setComposerFocused(true); }}
             onBlur={() => { setComposerFocused(false); setMention(null); setSlash(null); }}
-            placeholder={streaming ? "Queue another message…" : "Ask anything, @ to attach a file…"}
+            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : "Ask anything, @ to attach a file…"}
             rows={1}
             style={{ width: "100%", minHeight: 38, maxHeight: 160, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13, lineHeight: 1.5, padding: "10px 10px 2px", outline: "none", display: "block" }}
           />
@@ -1173,9 +1324,9 @@ export function AiPanel({
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
               </button>
             ) : (
-              <button onClick={() => send()} disabled={!input.trim()} aria-label="Send message" title="Send (Enter)"
-                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: input.trim() ? "#fff" : "var(--fg-dim)", background: input.trim() ? "var(--accent)" : "var(--bg-elevated)", cursor: input.trim() ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
-                onMouseEnter={(e) => { if (input.trim()) e.currentTarget.style.filter = "brightness(1.08)"; }}
+              <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
+                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "#fff" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
+                onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
                 onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
               </button>

@@ -94,15 +94,17 @@ export function StatusBar({
     <footer
       style={{
         height: "var(--size-status-bar)",
-        background: "var(--bg-elevated)",
+        background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
         borderTop: "1px solid var(--border)",
         display: "flex",
         alignItems: "center",
-        padding: "0 12px",
-        gap: 16,
+        padding: "0 10px",
+        gap: 10,
         fontSize: 11,
         color: "var(--fg-subtle)",
         fontFamily: "var(--font-ui)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
       }}
     >
       <span
@@ -113,77 +115,89 @@ export function StatusBar({
           overflow: "hidden",
           textOverflow: "ellipsis",
           maxWidth: "42vw",
+          fontWeight: filename ? 500 : 400,
+          letterSpacing: "-0.005em",
         }}
       >
         {display ?? "Klide"}
       </span>
-      {language && <span>{language}</span>}
-      {workspaceRoot && <span>{workspaceRoot.split("/").pop()}</span>}
+      {language && (
+        <>
+          <span className="klide-status-dot" />
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>{language}</span>
+        </>
+      )}
+      {workspaceRoot && (
+        <>
+          <span className="klide-status-dot" />
+          <span>{workspaceRoot.split("/").pop()}</span>
+        </>
+      )}
       {gitStatus && (
-        <span
-          title={`${gitStatus.branch} · ${gitStatus.files.length} ${
-            gitStatus.files.length === 1 ? "change" : "changes"
-          }`}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 5,
-            color: gitStatus.files.length > 0 ? "var(--accent)" : "var(--fg-subtle)",
-            minWidth: 0,
-            whiteSpace: "nowrap",
-          }}
-        >
-          <BranchIcon />
+        <>
+          <span className="klide-status-dot" />
           <span
+            title={`${gitStatus.branch} · ${gitStatus.files.length} ${
+              gitStatus.files.length === 1 ? "change" : "changes"
+            }`}
             style={{
-              maxWidth: 140,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              color: gitStatus.files.length > 0 ? "var(--accent)" : "var(--fg-subtle)",
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10.5,
             }}
           >
-            {gitStatus.branch}
+            <BranchIcon />
+            <span
+              style={{
+                maxWidth: 140,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {gitStatus.branch}
+            </span>
+            <span style={{ color: "var(--fg-dim)" }}>·</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{gitStatus.files.length}</span>
           </span>
-          <span>
-            {gitStatus.files.length}
-          </span>
-        </span>
+        </>
       )}
       {fileNotice && (
-        <span
-          title={fileNotice}
-          style={{
-            color: fileNotice.includes("changed") || fileNotice.includes("unavailable")
-              ? "var(--code-number)"
-              : "var(--fg-subtle)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            maxWidth: "22vw",
-          }}
-        >
-          {fileNotice}
-        </span>
+        <>
+          <span className="klide-status-dot" />
+          <span
+            title={fileNotice}
+            style={{
+              color: fileNotice.includes("changed") || fileNotice.includes("unavailable")
+                ? "var(--warning)"
+                : "var(--fg-subtle)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              maxWidth: "22vw",
+            }}
+          >
+            {fileNotice}
+          </span>
+        </>
       )}
+      <div style={{ flex: 1 }} />
       <button
         onClick={onToggleTheme}
         title={autoTheme ? "Cycle theme preference (auto theme is on)" : "Cycle theme"}
         aria-label="Toggle theme"
         aria-pressed={themeMeta.isDark}
-        className="klide-button klide-button-subtle"
-        style={{
-          marginLeft: "auto",
-          height: 18,
-          padding: "0 7px",
-          fontSize: 11,
-          minHeight: 18,
-          gap: 5,
-        }}
+        className="klide-status-chip-btn"
       >
         <span
           aria-hidden
           style={{
-            width: 6,
-            height: 6,
+            width: 7,
+            height: 7,
             borderRadius: "50%",
             background: themeMeta.swatches[2],
             boxShadow: "0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent)",
@@ -191,34 +205,19 @@ export function StatusBar({
         />
         {autoTheme ? "Auto" : "Theme"} · {themeMeta.name}
       </button>
+      <span className="klide-status-dot" />
       <button
         onClick={onToggleTerminal}
         title="Toggle terminal (⌃`)"
         aria-label="Toggle terminal"
         aria-pressed={terminalVisible}
-        style={{
-          height: 18,
-          padding: "0 7px",
-          borderRadius: "var(--radius-sm)",
-          display: "flex",
-          alignItems: "center",
-          gap: 5,
-          fontSize: 11,
-          color: terminalVisible ? "var(--accent)" : "var(--fg-subtle)",
-          background: terminalVisible ? "var(--accent-soft)" : "transparent",
-          transition:
-            "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out)",
-        }}
-        onMouseEnter={(e) => {
-          if (!terminalVisible) e.currentTarget.style.background = "var(--bg-hover)";
-        }}
-        onMouseLeave={(e) => {
-          if (!terminalVisible) e.currentTarget.style.background = "transparent";
-        }}
+        className="klide-status-chip-btn"
+        data-active={terminalVisible}
       >
         <TerminalIcon />
         Terminal
       </button>
+      <span className="klide-status-dot" />
       <LayoutBento
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
@@ -226,30 +225,19 @@ export function StatusBar({
         onExitGrid={onExitGrid}
         onOpenGrid={onOpenGrid}
       />
+      <span className="klide-status-dot" />
       <button
         onClick={onResetLayout}
         title="Reset panel layout to default"
         aria-label="Reset panel layout"
-        style={{
-          height: 18,
-          padding: "0 7px",
-          borderRadius: "var(--radius-sm)",
-          display: "flex",
-          alignItems: "center",
-          gap: 5,
-          fontSize: 11,
-          color: "var(--fg-subtle)",
-          background: "transparent",
-          transition:
-            "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out)",
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        className="klide-status-chip-btn"
       >
         Reset
       </button>
-      <span>UTF-8</span>
-      <span>LF</span>
+      <span className="klide-status-dot" />
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>UTF-8</span>
+      <span className="klide-status-dot" />
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>LF</span>
     </footer>
   );
 }

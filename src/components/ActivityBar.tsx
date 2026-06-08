@@ -1,4 +1,6 @@
-type View = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings";
+import { useFlipIndicator } from "../hooks/useFlipIndicator";
+
+type View = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
 type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
 
 function FolderIcon() {
@@ -144,61 +146,208 @@ function SettingsIcon() {
   );
 }
 
+function ProfileIcon() {
+  // Person silhouette with a small status dot bottom-right — the
+  // "you, on this machine" entry in the bottom zone.
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="9" r="3.6" />
+      <path d="M5 20a7 7 0 0 1 14 0" />
+      <circle cx="18.5" cy="17.5" r="1.6" fill="var(--success)" stroke="none" />
+    </svg>
+  );
+}
+
 export function ActivityBar({ active, onToggle }: Props) {
-  const items = [
-    { id: "explorer" as const, label: "Files", Icon: FolderIcon },
-    { id: "git" as const, label: "Git", Icon: GitIcon },
-    { id: "memory" as const, label: "Memory", Icon: MemoryIcon },
-    { id: "skills" as const, label: "Skills", Icon: SkillsIcon },
-    { id: "ai" as const, label: "AI", Icon: SparkIcon },
-    { id: "runs" as const, label: "Mission Control", Icon: MissionIcon },
-    { id: "settings" as const, label: "Settings", Icon: SettingsIcon },
+  // Top zone — in-workbench / full-window tools. The FLIP bar rides
+  // between them when one is active.
+  const toolItems: { id: View; label: string; Icon: () => React.JSX.Element }[] = [
+    { id: "explorer", label: "Files", Icon: FolderIcon },
+    { id: "git", label: "Git", Icon: GitIcon },
+    { id: "memory", label: "Memory", Icon: MemoryIcon },
+    { id: "skills", label: "Skills", Icon: SkillsIcon },
+    { id: "ai", label: "AI", Icon: SparkIcon },
+    { id: "runs", label: "Mission Control", Icon: MissionIcon },
   ];
+
+  // Bottom zone — app-level destinations. The active state here is a
+  // simple background tint (no FLIP bar), so it reads as "open this
+  // thing" rather than "switch to this tool".
+  const destinationItems: { id: View; label: string; Icon: () => React.JSX.Element }[] = [
+    { id: "settings", label: "Settings", Icon: SettingsIcon },
+    { id: "profile", label: "Profile", Icon: ProfileIcon },
+  ];
+
+  // The FLIP bar follows the most-recently-activated tool. The
+  // destination zone's active state is a plain `bg-selected` tint.
+  const activeTool = toolItems.reduce<View | null>(
+    (acc, n) => (active[n.id] ? n.id : acc),
+    null,
+  );
+  const flip = useFlipIndicator(activeTool, { size: 32, active: activeTool !== null });
 
   return (
     <nav
+      aria-label="Activity"
       style={{
         width: "var(--size-activity-bar)",
         background: "var(--bg-elevated)",
         borderRight: "1px solid var(--border)",
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        paddingTop: 6,
-        gap: 2,
+        alignItems: "stretch",
+        position: "relative",
       }}
     >
-      {items.map(({ id, label, Icon }) => {
-        const isActive = active[id];
-        return (
-          <button
-            key={id}
-            onClick={(e) => onToggle(id, e.metaKey || e.ctrlKey)}
-            title={id === "ai" ? label : `${label}  (⌘+click to stack)`}
-            aria-label={label}
-            aria-pressed={isActive}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: "var(--radius-md)",
-              display: "grid",
-              placeItems: "center",
-              color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
-              background: isActive ? "var(--bg-selected)" : "transparent",
-              transition:
-                "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), transform var(--motion-fast) var(--ease-out)",
-            }}
-            onMouseEnter={(e) => {
-              if (!isActive) e.currentTarget.style.color = "var(--fg-strong)";
-            }}
-            onMouseLeave={(e) => {
-              if (!isActive) e.currentTarget.style.color = "var(--fg-subtle)";
-            }}
-          >
-            <Icon />
-          </button>
-        );
-      })}
+      {/* Top zone */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          padding: "6px 0",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "stretch",
+        }}
+      >
+        <div
+          ref={flip.trackRef}
+          data-flip={flip.flip}
+          style={{
+            position: "relative",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "stretch",
+            gap: 2,
+          }}
+        >
+          <span
+            className="klide-flip-indicator klide-activity-bar-indicator"
+            style={flip.style}
+            aria-hidden="true"
+          />
+          {toolItems.map(({ id, label, Icon }) => {
+            const isActive = active[id];
+            return (
+              <button
+                key={id}
+                ref={flip.setItemRef(id)}
+                onClick={(e) => onToggle(id, e.metaKey || e.ctrlKey)}
+                title={id === "ai" ? label : `${label}  (⌘+click to stack)`}
+                aria-label={label}
+                aria-pressed={isActive}
+                data-active={isActive}
+                className="klide-activity-bar-item"
+                style={{
+                  position: "relative",
+                  zIndex: 1,
+                  width: 32,
+                  height: 32,
+                  margin: "0 auto",
+                  borderRadius: "var(--radius-md)",
+                  display: "grid",
+                  placeItems: "center",
+                  color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) e.currentTarget.style.color = "var(--fg-strong)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) e.currentTarget.style.color = "var(--fg-subtle)";
+                }}
+              >
+                <Icon />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Hairline divider — a 12px-wide notch that sits centred at the
+          bottom of the top zone, with the same 1px border colour as
+          the rail's right edge. Quiet, but it reads as a zone break. */}
+      <div
+        aria-hidden
+        style={{
+          height: 1,
+          margin: "0 auto",
+          width: 18,
+          background: "var(--border)",
+        }}
+      />
+
+      {/* Bottom zone — destinations. The active state is a small accent
+          dot underneath the icon (macOS-dock style), so it can never be
+          confused with the top zone's FLIP bar. The button is 40px
+          tall to leave room for the dot. */}
+      <div
+        style={{
+          padding: "8px 0 10px",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "stretch",
+          gap: 2,
+        }}
+      >
+        {destinationItems.map(({ id, label, Icon }) => {
+          const isActive = active[id];
+          return (
+            <button
+              key={id}
+              onClick={() => onToggle(id)}
+              title={label}
+              aria-label={label}
+              aria-pressed={isActive}
+              data-active={isActive}
+              className="klide-activity-bar-item klide-activity-bar-destination"
+              style={{
+                position: "relative",
+                width: 32,
+                height: 40,
+                margin: "0 auto",
+                borderRadius: "var(--radius-md)",
+                display: "grid",
+                placeItems: "center",
+                color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
+                background: "transparent",
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) e.currentTarget.style.color = "var(--fg-strong)";
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) e.currentTarget.style.color = "var(--fg-subtle)";
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 18,
+                  height: 18,
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                <Icon />
+              </span>
+              <span
+                aria-hidden
+                data-visible={isActive}
+                className="klide-activity-bar-dock-dot"
+              />
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }

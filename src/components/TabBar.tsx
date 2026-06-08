@@ -1,3 +1,6 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import { useFlipIndicator } from "../hooks/useFlipIndicator";
+
 type Tab = { path: string; dirty: boolean };
 type Props = {
   tabs: Tab[];
@@ -15,6 +18,20 @@ function displayPath(path: string, workspaceRoot: string | null): string {
 }
 
 export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Props) {
+  // The FLIP bar rides along the bottom of the active tab. The bar's
+  // width follows the active tab's measured width.
+  const activeTab = activeIdx >= 0 ? tabs[activeIdx]?.path : null;
+  const flip = useFlipIndicator(activeTab ?? null, { size: 2, active: activeTab !== null, axis: "x" });
+  const [barWidth, setBarWidth] = useState(0);
+
+  // The bar's width tracks the active tab's measured width so it
+  // spans the tab like a Linear-style underline indicator.
+  const activeItemRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (!activeItemRef.current) return;
+    setBarWidth(activeItemRef.current.getBoundingClientRect().width);
+  }, [activeIdx, tabs.length]);
+
   if (tabs.length === 0) {
     return null;
   }
@@ -23,6 +40,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
     <div
       className="chrome-enter"
       style={{
+        position: "relative",
         height: "var(--size-tab-strip)",
         background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
         display: "flex",
@@ -34,6 +52,31 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
         gap: 2,
       }}
     >
+      <div
+        ref={flip.trackRef}
+        data-flip={flip.flip}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          left: 10,
+          right: 10,
+          bottom: 0,
+          height: 2,
+          pointerEvents: "none",
+        }}
+      >
+        <span
+          className="klide-flip-indicator klide-tab-bar-indicator"
+          style={{
+            ...flip.style,
+            height: 2,
+            width: barWidth,
+            background: "var(--accent)",
+            borderRadius: "2px 2px 0 0",
+          }}
+        />
+      </div>
+
       {tabs.map((t, i) => {
         const isActive = i === activeIdx;
         const relative = displayPath(t.path, workspaceRoot);
@@ -44,8 +87,11 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
         return (
           <div
             key={t.path}
+            ref={isActive ? activeItemRef : null}
             onClick={() => onSelect(i)}
             title={relative}
+            data-active={isActive}
+            className="klide-tab"
             style={{
               display: "flex",
               alignItems: "center",

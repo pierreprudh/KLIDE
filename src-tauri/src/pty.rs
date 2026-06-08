@@ -364,7 +364,10 @@ pub fn read_delegate_sessions(app: &tauri::AppHandle) -> HashMap<String, Delegat
     let path = delegate_sessions_path(app);
     if let Ok(content) = std::fs::read_to_string(&path) {
         if let Ok(mappings) = serde_json::from_str::<Vec<DelegateSessionMapping>>(&content) {
-            return mappings.into_iter().map(|m| (m.delegate_id.clone(), m)).collect();
+            return mappings
+                .into_iter()
+                .map(|m| (m.delegate_id.clone(), m))
+                .collect();
         }
     }
     HashMap::new()
@@ -373,7 +376,12 @@ pub fn read_delegate_sessions(app: &tauri::AppHandle) -> HashMap<String, Delegat
 /// Read sessions into TWO maps: one keyed by delegate_id, one by external_id.
 /// This lets us look up parent_id by either Klide's session ID or the external
 /// session ID that OpenCode/Claude Code/Codex creates internally.
-pub fn read_delegate_sessions_by_id(app: &tauri::AppHandle) -> (HashMap<String, DelegateSessionMapping>, HashMap<String, DelegateSessionMapping>) {
+pub fn read_delegate_sessions_by_id(
+    app: &tauri::AppHandle,
+) -> (
+    HashMap<String, DelegateSessionMapping>,
+    HashMap<String, DelegateSessionMapping>,
+) {
     let path = delegate_sessions_path(app);
     let mut by_delegate = HashMap::new();
     let mut by_external = HashMap::new();
@@ -390,7 +398,10 @@ pub fn read_delegate_sessions_by_id(app: &tauri::AppHandle) -> (HashMap<String, 
     (by_delegate, by_external)
 }
 
-fn write_delegate_sessions(app: &tauri::AppHandle, mappings: &HashMap<String, DelegateSessionMapping>) -> Result<(), String> {
+fn write_delegate_sessions(
+    app: &tauri::AppHandle,
+    mappings: &HashMap<String, DelegateSessionMapping>,
+) -> Result<(), String> {
     let path = delegate_sessions_path(app);
     // Deduplicate by delegate_id before writing
     let mut seen = HashMap::new();
@@ -409,16 +420,19 @@ pub fn record_delegate_parent(
     provider: &str,
 ) -> Result<(), String> {
     let mut mappings = read_delegate_sessions(app);
-    mappings.insert(delegate_id.to_string(), DelegateSessionMapping {
-        delegate_id: delegate_id.to_string(),
-        parent_id: parent_id.to_string(),
-        provider: provider.to_string(),
-        created_at_ms: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0),
-        external_id: None,
-    });
+    mappings.insert(
+        delegate_id.to_string(),
+        DelegateSessionMapping {
+            delegate_id: delegate_id.to_string(),
+            parent_id: parent_id.to_string(),
+            provider: provider.to_string(),
+            created_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+            external_id: None,
+        },
+    );
     write_delegate_sessions(app, &mappings)
 }
 
@@ -438,7 +452,9 @@ pub fn set_delegate_external_id(
 
 #[allow(dead_code)]
 pub fn get_delegate_parent(app: &tauri::AppHandle, delegate_id: &str) -> Option<String> {
-    read_delegate_sessions(app).get(delegate_id).map(|m| m.parent_id.clone())
+    read_delegate_sessions(app)
+        .get(delegate_id)
+        .map(|m| m.parent_id.clone())
 }
 
 /// Try to extract OpenCode's session ID from PTY output. OpenCode outputs
@@ -447,19 +463,28 @@ fn extract_opencode_session(output: &str) -> Option<String> {
     // Pattern: "Using session: <id>" where id might be "oss-..." or similar
     for line in output.lines() {
         let line = line.trim();
-        if line.contains("Using session:") || line.contains("Session ID:") || line.contains("session:") {
+        if line.contains("Using session:")
+            || line.contains("Session ID:")
+            || line.contains("session:")
+        {
             // Extract the ID after the colon
             if let Some(colon_pos) = line.rfind(':') {
                 let after = line[colon_pos + 1..].trim();
                 // Session IDs are typically alphanumeric with dashes
-                if after.len() > 3 && after.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                if after.len() > 3
+                    && after
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
                     return Some(after.to_string());
                 }
             }
             // Try to find "oss-" prefix which is common in OpenCode
             if let Some(pos) = line.find("oss-") {
                 let candidate = &line[pos..];
-                let end = candidate.find(|c: char| !c.is_alphanumeric() && c != '-').unwrap_or(candidate.len());
+                let end = candidate
+                    .find(|c: char| !c.is_alphanumeric() && c != '-')
+                    .unwrap_or(candidate.len());
                 if end > 3 {
                     return Some(candidate[..end].to_string());
                 }

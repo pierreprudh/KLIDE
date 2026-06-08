@@ -14,7 +14,7 @@ Local models by default · online providers when you want them · real agent ter
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Ollama](https://img.shields.io/badge/Ollama-local_first-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com)
 
-![Status](https://img.shields.io/badge/status-pre--alpha-E0A458?style=flat-square)
+![Status](https://img.shields.io/badge/status-v0.2--shipped-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS_·_Linux_·_Windows-555555?style=flat-square)
 ![Binary](https://img.shields.io/badge/binary-~10_MB-4263EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-555555?style=flat-square)
@@ -69,31 +69,30 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 | Editor | **Monaco** | The exact editor from VS Code, MIT licensed |
 | Terminal | **xterm.js** + **portable-pty** | Same terminal VS Code uses, real PTY on the Rust side |
 | Frontend | **React + TypeScript + Vite** | Largest ecosystem of Monaco / xterm.js examples |
-| Local AI | **Ollama** | Local LLM runtime, native `tools` API |
-| Providers | **Anthropic · OpenAI · Gemini · Mistral …** | Provider switcher; keys live on the Rust side |
+| Local AI | **Ollama · MLX** | Ollama for local tool-capable runs; MLX for Apple Silicon chat via `mlx_lm.server` |
+| Providers | **Anthropic · OpenAI-compatible APIs · Mistral · xAI** | Provider switcher; keys live on the Rust side |
 
 ## Features
 
 **Editor & shell**
-- Activity bar, file-tree explorer, multi-file tabs, Monaco editor with `Cmd+S`
+- Activity bar, stackable file explorer, multi-file tabs, Monaco editor with `Cmd+S`
 - Real shell via PTY (toggleable), status bar with file / language / cursor
 - Light + dark themes shared across app, editor, and terminal — including a full per-theme terminal ANSI palette
 
 **AI panel**
 - **Streaming chat** — all providers stream token-by-token through a single Rust `ai_chat` command, so keys never enter the webview
-- **Multi-provider** — local Ollama, direct/API providers, and delegate subscription CLIs (Claude Code · Codex), all behind one switcher
-- **Real delegate terminals** — Claude Code and Codex run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
+- **Multi-provider** — local Ollama/MLX, direct/API providers, OpenAI-compatible providers, and delegate subscription CLIs (Claude Code · Codex · OpenCode), all behind one switcher
+- **Real delegate terminals** — Claude Code, Codex, and OpenCode run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
 - **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits (`Tab` to switch)
 - **Quiet agent controls** — mode switching, provider selection, context pressure, history, skills, project rules, and diff review stay close to the work without becoming a dashboard
-- **Context Lens (experimental)** — Klide infers a small working set from the active file, project movement, memory notes, and your draft prompt
 - **`@`-mentions** — fuzzy-pick workspace files to attach as context
 - **Slash commands** — `/chat`, `/plan`, `/goal`, `/clear`, `/explain`, `/init`
 - **Keychain-stored keys** — API keys live in the OS keychain (env vars as fallback); managed from Settings → API
-- Auto-loads project rules from `AGENTS.md` / `CLAUDE.md`
+- Auto-loads project rules from `AGENTS.md` / `CLAUDE.md`, plus skills from workspace and user skill folders
 
 **Agent operations**
-- **Mission Control** — read-only board for local Claude Code / Codex / Klide runs, with transcript preview and session metadata
-- **Project Memory** — a working-map experiment for project areas, recent movement, notes, and relationships
+- **Mission Control** — run board for Klide and delegate runs, with transcript preview, metadata, resume, and "open in another CLI" handoff
+- **Project Memory** — durable handoff notes in `.klide/memory/`, surfaced through a centered Memory modal and written from the AI panel's summarize action
 
 ## Roadmap
 
@@ -108,18 +107,31 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] AI panel — streaming chat against local Ollama (native `tools` API)
 - [x] Agent mode — `write_file` / `create_file` with diff review
 
-**v0.2 — in progress**
+**v0.2 — shipped** (verified 2026-06-08)
 
 - [x] Plan / Build modes, `@`-mentions, slash commands, project-rules loading
 - [x] Provider switcher — Ollama, OpenAI-compatible APIs, and subscription CLIs all live
 - [x] Streaming through Rust for every provider
 - [x] API keys stored in the OS keychain, managed from Settings
 - [x] Quiet agent control surface with mode switching, provider choice, context pressure, skills, rules, history, and diff review
-- [x] Real Claude Code / Codex delegate PTYs in the AI panel
-- [x] Mission Control read-only run inspector
-- [ ] Context Lens / Project Memory: keep iterating until it feels like project intelligence, not context plumbing
-- [ ] Verify Anthropic direct API end-to-end; add Google Gemini direct API
-- [ ] Command palette · find-in-files · editable harness settings · checkpoint rollback
+- [x] Real Claude Code / Codex / OpenCode delegate PTYs in the AI panel
+- [x] Mission Control v2 — inspect runs, resume delegate sessions, and hand off a run to another CLI
+- [x] Project Memory v1 — summarize a session into durable `.klide/memory/` markdown and browse it in a centered modal
+- [x] Skills install + uninstall via `npx skills add`, with provenance grouping (Vercel / Matt Pocock / Anthropic / Personal / Workspace)
+- [x] "Save as skill" sparkle — auto-generates a `SKILL.md` for reusable patterns in finished sessions
+- [x] Profile modal — local IDE profile (avatar + identity + workspace), `⌘.`
+- [x] Command palette · find-in-files · editable harness settings · checkpoint rollback
+- [x] Live provider smoke matrix verified for Ollama, MLX, Anthropic direct API, one OpenAI-compatible API, and Claude Code / Codex / OpenCode delegates
+- [x] Premium polish pass on the always-visible chrome (ActivityBar, TabBar, StatusBar, WelcomeScreen)
+- [x] Parked: Context Lens/project graph heuristics. If revived, feed Memory/summarization instead of silently injecting chat context.
+
+**v0.3 — next moves**
+
+- [ ] Project Memory v2 — cross-link touched files, decide `.klide/memory/` git semantics, and explore automatic summarization
+- [ ] Settings depth without persistent chrome; reduce lag when opening settings
+- [ ] Auto-suggest codebase improvements (mattpocock/skills-style)
+- [ ] Multi-account setup (professional / private)
+- [ ] Natural-language scheduling ("every morning, summarize X")
 
 ## Build & run
 

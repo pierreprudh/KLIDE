@@ -349,7 +349,16 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
     Some((days * 86_400 + hour * 3600 + min * 60 + sec) * 1000)
 }
 
-fn split_sections(body: &str) -> (String, Vec<String>, Vec<String>, Vec<String>, Vec<String>, String) {
+fn split_sections(
+    body: &str,
+) -> (
+    String,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    String,
+) {
     let mut goal = String::new();
     let mut plan = Vec::new();
     let mut decisions = Vec::new();
@@ -395,20 +404,28 @@ fn split_sections(body: &str) -> (String, Vec<String>, Vec<String>, Vec<String>,
             }
             Section::Plan => plan.push(line.trim_start_matches("- ").to_string()),
             Section::Decisions => decisions.push(line.trim_start_matches("- ").to_string()),
-            Section::Files => files.push(line.trim_start_matches("- `").trim_end_matches('`').to_string()),
+            Section::Files => files.push(
+                line.trim_start_matches("- `")
+                    .trim_end_matches('`')
+                    .to_string(),
+            ),
             Section::Next => next_steps.push(line.trim_start_matches("- ").to_string()),
             Section::Notes => notes_buf.push(line.to_string()),
             Section::None => {}
         }
     }
-    (goal, plan, decisions, files, next_steps, notes_buf.join("\n"))
+    (
+        goal,
+        plan,
+        decisions,
+        files,
+        next_steps,
+        notes_buf.join("\n"),
+    )
 }
 
 #[tauri::command]
-pub fn memory_write(
-    workspace_root: String,
-    input: MemoryInput,
-) -> Result<MemoryEntry, String> {
+pub fn memory_write(workspace_root: String, input: MemoryInput) -> Result<MemoryEntry, String> {
     let dir = memory_dir(&workspace_root)?;
     let created = now_ms();
     let date_iso = iso_date(created);
@@ -418,7 +435,10 @@ pub fn memory_write(
     let entry = MemoryEntry {
         id: stem,
         path: path.to_string_lossy().to_string(),
-        rel_path: format!(".klide/memory/{}.md", path.file_stem().and_then(|s| s.to_str()).unwrap_or("")),
+        rel_path: format!(
+            ".klide/memory/{}.md",
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+        ),
         created_at_ms: created,
         date_iso,
         title: input.title,
@@ -461,10 +481,7 @@ pub fn memory_list(
         }
     }
     entries.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
-    Ok(entries
-        .into_iter()
-        .take(limit.unwrap_or(50))
-        .collect())
+    Ok(entries.into_iter().take(limit.unwrap_or(50)).collect())
 }
 
 #[tauri::command]

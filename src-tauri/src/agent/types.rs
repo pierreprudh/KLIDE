@@ -8,7 +8,7 @@ pub enum AgentMode {
     Goal,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRunStatus {
     Queued,

@@ -5,6 +5,7 @@
 // survives — not the transcript.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { mkdir, writeTextFile } from "@tauri-apps/plugin-fs";
 import { writeMemory, type MemoryEntry } from "../../memory";
 import type { Msg } from "./types";
 
@@ -219,4 +220,113 @@ export async function summarizeAndHandoff(
     mode: input.mode,
     status: input.status ?? null,
   });
+}
+
+/* ============================================================ auto-skill ===*/
+
+// Detect-and-write a reusable skill from the current conversation.
+//
+// Flow: ask the model twice.
+//   1) CLASSIFY — is there a reusable pattern? If not, return null.
+//   2) DRAFT — produce a SKILL.md (frontmatter + body) for that pattern.
+// Then write `<workspace>/.klide/skills/<slug>/SKILL.md`. The SkillsModal
+// file loader picks it up on the next reload (or the caller triggers one).
+
+export type GeneratedSkill = {
+  name: string;
+  description: string;
+  slug: string;
+  relPath: string; // e.g. ".klide/skills/review-pr/SKILL.md"
+};
+
+const CLASSIFY_PROMPT = `You are reading a coding session transcript. Decide if it contains a REUSABLE PATTERN the assistant should follow next time: a workflow, a code-review checklist, a deploy ritual, a coding-style rule, a way of using a tool, or a debugging playbook. NOT just a one-off fix.
+
+Reply in exactly this shape, with no other text:
+
+REUSABLE: yes
+NAME: <short kebab-case id, e.g. review-strict-pr>
+TITLE: <human title>
+DESCRIPTION: <one-sentence "when to use this">
+
+or
+
+REUSABLE: no
+`;
+
+function parseClassify(text: string): { reusable: boolean; slug: string; title: string; description: string } | null {
+  const t = text.trim();
+  if (!/^REUSABLE:\s*yes/m.test(t)) return null;
+  const get = (key: string) => {
+    const m = new RegExp(`^${key}:\\s*(.*)$`, "m").exec(t);
+    return m ? m[1].trim() : "";
+  };
+  const slug = get("NAME").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  if (!slug) return null;
+  return {
+    reusable: true,
+    slug,
+    title: get("TITLE") || slug,
+    description: get("DESCRIPTION") || `Auto-generated from a session.`,
+  };
+}
+
+const SKILL_BODY_PROMPT = `You are drafting a SKILL.md for a Klide / Claude Code style skill. The skill is based on a coding session you just read. Write instructions a future agent can follow in plain language.
+
+Strict rules:
+- Output the full SKILL.md file contents, no preamble, no code fences around the whole thing.
+- Start with a YAML frontmatter block:
+---
+name: <title>
+description: <one sentence>
+---
+- After the frontmatter, write concise instructions. Use headings + bullets. No fluff. Cite specific commands, file paths, or constraints the session revealed.
+- Aim for 12-40 lines of body. If the pattern is genuinely simple, 6-8 lines is fine.
+`;
+
+export type GenerateSkillInput = {
+  workspaceRoot: string;
+  provider: string;
+  model: string;
+  mode: string;
+  msgs: Msg[];
+};
+
+export async function detectAndGenerateSkill(
+  input: GenerateSkillInput
+): Promise<GeneratedSkill | null> {
+  if (input.msgs.length < 2) return null;
+  const transcript = serializeConversation(input.msgs);
+  const classifyText = await callModel(input.provider, input.model, [
+    { role: "user", content: CLASSIFY_PROMPT + transcript },
+  ]);
+  const cls = parseClassify(classifyText);
+  if (!cls) return null;
+
+  const bodyText = await callModel(input.provider, input.model, [
+    {
+      role: "user",
+      content:
+        `Skill name: ${cls.slug}\nTitle: ${cls.title}\nDescription: ${cls.description}\n\n` +
+        SKILL_BODY_PROMPT +
+        `\nSource session transcript:\n${transcript}`,
+    },
+  ]);
+  const raw = bodyText.trim();
+  // If the model ignored the "no fences" rule, strip a single outer fence pair.
+  const stripped = raw.replace(/^```(?:md|markdown)?\s*\n/i, "").replace(/\n```\s*$/, "");
+  // If the model forgot the frontmatter, prepend a minimal one from the classify result.
+  const withFrontmatter = stripped.startsWith("---")
+    ? stripped
+    : `---\nname: ${cls.title}\ndescription: ${cls.description}\n---\n\n${stripped}`;
+
+  const dir = `${input.workspaceRoot}/.klide/skills/${cls.slug}`;
+  const file = `${dir}/SKILL.md`;
+  await mkdir(dir, { recursive: true });
+  await writeTextFile(file, withFrontmatter + "\n");
+  return {
+    name: cls.title,
+    description: cls.description,
+    slug: cls.slug,
+    relPath: `.klide/skills/${cls.slug}/SKILL.md`,
+  };
 }

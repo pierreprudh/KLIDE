@@ -37,8 +37,8 @@ fn save(root: &str, store: &TodoStore) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create .agents dir: {e}"))?;
     }
-    let json = serde_json::to_string_pretty(store)
-        .map_err(|e| format!("Cannot serialize todos: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(store).map_err(|e| format!("Cannot serialize todos: {e}"))?;
     std::fs::write(&path, json).map_err(|e| format!("Cannot write todos: {e}"))
 }
 
