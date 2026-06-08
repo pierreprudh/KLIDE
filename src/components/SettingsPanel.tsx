@@ -1725,7 +1725,7 @@ export function SettingsPanel({
               <SettingBlock title="Local Servers">
                 <Panel>
                   <LocalServerRow provider="ollama" title="Ollama" defaultModel="llama3.1:8b" />
-                  <LocalServerRow provider="mlx" title="MLX" defaultModel="mlx-community/Meta-Llama-3.1-8B-Instruct-4bit" />
+                  <LocalServerRow provider="mlx" title="MLX" defaultModel="mlx-community/Llama-3.1-8B-Instruct-4bit" />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Notes">

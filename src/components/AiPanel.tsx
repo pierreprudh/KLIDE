@@ -19,6 +19,7 @@ import { startAgentRun, stopAgentRun, resolveDiff } from "../agent/client";
 import { TodoStrip } from "./TodoStrip";
 import {
   DEFAULT_MODELS,
+  MLX_MODEL_PRESETS,
   MODE_OPTIONS,
   PROVIDER_GROUPS,
   isDelegateProvider,
@@ -141,6 +142,17 @@ function storedModelForProvider(id: ProviderId): string {
     if (!looksLikeMlx || stored.includes(":")) return DEFAULT_MODELS[id];
   }
   return stored || DEFAULT_MODELS[id];
+}
+
+function modelOptionsFor(provider: ProviderId, model: string, availableModels: string[]): string[] {
+  const options = [...availableModels];
+  if (model && !options.includes(model)) options.unshift(model);
+  if (provider === "mlx") {
+    for (const preset of MLX_MODEL_PRESETS) {
+      if (!options.includes(preset)) options.push(preset);
+    }
+  }
+  return options;
 }
 
 export function AiPanel({
@@ -1295,7 +1307,7 @@ export function AiPanel({
                   style={{ appearance: "none", WebkitAppearance: "none", MozAppearance: "none", width: "100%", height: 24, color: "var(--fg-subtle)", background: "transparent", border: "none", borderRadius: "var(--radius-xs)", font: "inherit", fontSize: 11, outline: "none", padding: "0 18px 0 6px", cursor: streaming ? "default" : "pointer", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", transition: "color var(--motion-fast) var(--ease-out)" }}
                   onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
                   onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-subtle)")}>
-                  {availableModels.map((name) => <option key={name} value={name}>{name}</option>)}
+                  {modelOptionsFor(provider, model, availableModels).map((name) => <option key={name} value={name}>{name}</option>)}
                 </select>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", right: 4, pointerEvents: "none", color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
               </div>

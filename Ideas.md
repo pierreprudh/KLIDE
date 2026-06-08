@@ -20,7 +20,8 @@ Inspiration :
 - https://www.letta.com Obsidian like memory - Dreaming agent ? 
 - https://agentrq.com Worth take a look ? 
 - https://ara.so 
-
+- For visibility ? https://github.com/superloglabs/superlog
+- 
 
 # On-Go
 

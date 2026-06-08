@@ -39,9 +39,15 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
 
 export const ALL_PROVIDERS = PROVIDER_GROUPS.flatMap((g) => g.items);
 
+export const MLX_MODEL_PRESETS = [
+  "mlx-community/Llama-3.1-8B-Instruct-4bit",
+  "Qwen/Qwen3-4B-MLX-4bit",
+  "mlx-community/gemma-2-9b-it-4bit",
+] as const;
+
 export const DEFAULT_MODELS: Record<ProviderId, string> = {
   ollama: "llama3.1:8b",
-  mlx: "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+  mlx: MLX_MODEL_PRESETS[0],
   lmstudio: "local-model",
   llamacpp: "local-model",
   vllm: "local-model",
@@ -75,4 +81,3 @@ export function normalizeAgentMode(value: string | null): AgentMode {
   if (value === "plan") return "plan";
   return "chat";
 }
-

@@ -20,7 +20,12 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
-const MLX_DEFAULT_MODEL: &str = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit";
+const MLX_DEFAULT_MODEL: &str = "mlx-community/Llama-3.1-8B-Instruct-4bit";
+const MLX_MODEL_PRESETS: [&str; 3] = [
+    MLX_DEFAULT_MODEL,
+    "Qwen/Qwen3-4B-MLX-4bit",
+    "mlx-community/gemma-2-9b-it-4bit",
+];
 
 static OLLAMA_MODELS_CACHE: LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -457,7 +462,10 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
         // mlx_lm.server's /v1/models endpoint is expensive/noisy and can
         // interfere with prompt processing. Klide treats MLX model selection
         // as an explicit configured value instead of polling the server.
-        return Ok(vec![MLX_DEFAULT_MODEL.to_string()]);
+        return Ok(MLX_MODEL_PRESETS
+            .iter()
+            .map(|model| (*model).to_string())
+            .collect());
     }
 
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
@@ -4639,7 +4647,7 @@ mod tests {
     async fn mlx_does_not_advertise_tool_support() {
         let supports = ai_model_supports_tools(
             "mlx".to_string(),
-            "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit".to_string(),
+            "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
         )
         .await
         .unwrap();
@@ -4651,8 +4659,21 @@ mod tests {
         assert_eq!(canonical_mlx_model("gemma4:12b-mlx"), MLX_DEFAULT_MODEL);
         assert_eq!(canonical_mlx_model("gemma-4-4b-it"), MLX_DEFAULT_MODEL);
         assert_eq!(
-            canonical_mlx_model("mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"),
-            "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
+            canonical_mlx_model("mlx-community/Llama-3.1-8B-Instruct-4bit"),
+            "mlx-community/Llama-3.1-8B-Instruct-4bit"
+        );
+    }
+
+    #[tokio::test]
+    async fn mlx_provider_models_returns_presets_without_polling_server() {
+        let models = ai_provider_models("mlx".to_string()).await.unwrap();
+        assert_eq!(
+            models,
+            vec![
+                "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
+                "Qwen/Qwen3-4B-MLX-4bit".to_string(),
+                "mlx-community/gemma-2-9b-it-4bit".to_string(),
+            ]
         );
     }
 
@@ -4667,7 +4688,7 @@ mod tests {
             },
         })];
         let body = openai_chat_body(
-            "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+            "mlx-community/Llama-3.1-8B-Instruct-4bit",
             vec![serde_json::json!({ "role": "user", "content": "hi" })],
             Some(tools),
             false,
