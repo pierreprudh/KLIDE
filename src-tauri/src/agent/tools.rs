@@ -28,7 +28,8 @@ pub enum ToolKind {
 }
 
 type ReadToolFn = fn(root: &str, input: &serde_json::Value) -> ToolResult;
-type WritePreviewFn = fn(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult>;
+type WritePreviewFn =
+    fn(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult>;
 
 struct ToolEntry {
     kind: ToolKind,
@@ -37,7 +38,12 @@ struct ToolEntry {
     run_write_preview: Option<WritePreviewFn>,
 }
 
-fn schema(name: &str, description: &str, properties: serde_json::Value, required: &[&str]) -> serde_json::Value {
+fn schema(
+    name: &str,
+    description: &str,
+    properties: serde_json::Value,
+    required: &[&str],
+) -> serde_json::Value {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -273,10 +279,13 @@ pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Valu
         AgentMode::Plan => Some(ToolKind::ReadOnly),
         AgentMode::Goal => None,
     };
-    let mut tools: Vec<serde_json::Value> = reg.iter()
+    let mut tools: Vec<serde_json::Value> = reg
+        .iter()
         .filter(|e| {
             let kind_ok = kind_filter.map_or(true, |k| e.kind == k);
-            if !kind_ok { return false; }
+            if !kind_ok {
+                return false;
+            }
             let name = e.schema["function"]["name"].as_str().unwrap_or("");
             !disabled.iter().any(|d| d == name)
         })
@@ -291,11 +300,17 @@ pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Valu
 
 pub fn schemas_for_mode(mode: &AgentMode, disabled: &[String]) -> Option<Vec<serde_json::Value>> {
     let tools = list_tools(mode, disabled);
-    if tools.is_empty() { None } else { Some(tools) }
+    if tools.is_empty() {
+        None
+    } else {
+        Some(tools)
+    }
 }
 
 pub fn is_write_tool(name: &str) -> bool {
-    registry().iter().any(|e| e.kind == ToolKind::Write && schema_has_name(&e.schema, name))
+    registry()
+        .iter()
+        .any(|e| e.kind == ToolKind::Write && schema_has_name(&e.schema, name))
 }
 
 fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
@@ -312,15 +327,23 @@ pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResu
         return result;
     }
     // Then built-in registry
-    let entry = registry().into_iter().find(|e| schema_has_name(&e.schema, &call.name));
+    let entry = registry()
+        .into_iter()
+        .find(|e| schema_has_name(&e.schema, &call.name));
     match entry.and_then(|e| e.run_read) {
         Some(f) => f(root, &call.input),
         None => err(format!("Unknown tool: {}", call.name)),
     }
 }
 
-pub fn execute_write_tool_preview(root: &str, call: &NormalizedToolCall, run_id: &str) -> Result<DiffProposal, ToolResult> {
-    let entry = registry().into_iter().find(|e| schema_has_name(&e.schema, &call.name));
+pub fn execute_write_tool_preview(
+    root: &str,
+    call: &NormalizedToolCall,
+    run_id: &str,
+) -> Result<DiffProposal, ToolResult> {
+    let entry = registry()
+        .into_iter()
+        .find(|e| schema_has_name(&e.schema, &call.name));
     match entry.and_then(|e| e.run_write_preview) {
         // Key the proposal to the tool call's id (unique per call), not the
         // file path — two edits to the same file in one run must not collide.
@@ -346,7 +369,9 @@ struct DynamicToolDef {
     cwd: String,
 }
 
-fn default_timeout() -> u64 { 30 }
+fn default_timeout() -> u64 {
+    30
+}
 
 #[derive(serde::Deserialize)]
 struct ToolsConfig {
@@ -354,8 +379,14 @@ struct ToolsConfig {
 }
 
 fn load_tools_from(path: &Path) -> Vec<DynamicToolDef> {
-    let content = match std::fs::read_to_string(path) { Ok(c) => c, Err(_) => return Vec::new() };
-    let config: ToolsConfig = match serde_json::from_str(&content) { Ok(c) => c, Err(_) => return Vec::new() };
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let config: ToolsConfig = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
     config.tools
 }
 
@@ -396,17 +427,31 @@ fn dynamic_tool_schema(def: &DynamicToolDef) -> serde_json::Value {
     })
 }
 
-pub fn execute_dynamic_tool(name: &str, input: &serde_json::Value, workspace_root: Option<&str>) -> Option<ToolResult> {
+pub fn execute_dynamic_tool(
+    name: &str,
+    input: &serde_json::Value,
+    workspace_root: Option<&str>,
+) -> Option<ToolResult> {
     let mut all_defs = Vec::new();
     let home = std::env::var("HOME").unwrap_or_default();
-    all_defs.extend(load_tools_from(&Path::new(&home).join(".agents/tools.json")));
+    all_defs.extend(load_tools_from(
+        &Path::new(&home).join(".agents/tools.json"),
+    ));
     if let Some(root) = workspace_root {
         all_defs.extend(load_tools_from(&Path::new(root).join(".agents/tools.json")));
     }
     let def = all_defs.iter().find(|d| d.name == name)?;
-    let cwd = if def.cwd == "workspace" { workspace_root.unwrap_or(".") } else { "." };
+    let cwd = if def.cwd == "workspace" {
+        workspace_root.unwrap_or(".")
+    } else {
+        "."
+    };
     let args_str = string_arg(input, "args").unwrap_or_default();
-    let full_command = if args_str.is_empty() { def.command.clone() } else { format!("{} {}", def.command, args_str) };
+    let full_command = if args_str.is_empty() {
+        def.command.clone()
+    } else {
+        format!("{} {}", def.command, args_str)
+    };
 
     let output = Command::new("sh")
         .arg("-c")
@@ -415,18 +460,36 @@ pub fn execute_dynamic_tool(name: &str, input: &serde_json::Value, workspace_roo
         .output();
     let output = match output {
         Ok(o) => o,
-        Err(e) => return Some(ToolResult { ok: false, content: format!("Failed to run {}: {e}", def.name), metadata: None }),
+        Err(e) => {
+            return Some(ToolResult {
+                ok: false,
+                content: format!("Failed to run {}: {e}", def.name),
+                metadata: None,
+            })
+        }
     };
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let mut result = stdout.trim().to_string();
-        if !stderr.trim().is_empty() { result.push_str(&format!("\n\nstderr:\n{}", stderr.trim())); }
-        if result.is_empty() { result = "(command completed successfully)".to_string(); }
-        Some(ToolResult { ok: true, content: result.chars().take(4000).collect(), metadata: None })
+        if !stderr.trim().is_empty() {
+            result.push_str(&format!("\n\nstderr:\n{}", stderr.trim()));
+        }
+        if result.is_empty() {
+            result = "(command completed successfully)".to_string();
+        }
+        Some(ToolResult {
+            ok: true,
+            content: result.chars().take(4000).collect(),
+            metadata: None,
+        })
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Some(ToolResult { ok: false, content: format!("{} failed: {}", def.name, stderr.trim()), metadata: None })
+        Some(ToolResult {
+            ok: false,
+            content: format!("{} failed: {}", def.name, stderr.trim()),
+            metadata: None,
+        })
     }
 }
 
@@ -449,7 +512,11 @@ pub fn parse_tool_calls(raw: &[serde_json::Value]) -> Vec<NormalizedToolCall> {
                 Some(other) => other.clone(),
                 None => serde_json::json!({}),
             };
-            Some(NormalizedToolCall { id, name: name.to_string(), input })
+            Some(NormalizedToolCall {
+                id,
+                name: name.to_string(),
+                input,
+            })
         })
         .collect()
 }
@@ -457,11 +524,19 @@ pub fn parse_tool_calls(raw: &[serde_json::Value]) -> Vec<NormalizedToolCall> {
 // ── Execution helpers ────────────────────────────────────────────────────
 
 fn ok(content: String) -> ToolResult {
-    ToolResult { ok: true, content, metadata: None }
+    ToolResult {
+        ok: true,
+        content,
+        metadata: None,
+    }
 }
 
 fn err(content: String) -> ToolResult {
-    ToolResult { ok: false, content, metadata: None }
+    ToolResult {
+        ok: false,
+        content,
+        metadata: None,
+    }
 }
 
 /// Raw string argument — preserves whitespace exactly. Use for file contents
@@ -472,7 +547,12 @@ fn string_arg(input: &serde_json::Value, key: &str) -> Option<String> {
 
 /// Trimmed, non-empty string argument — for paths, patterns, queries, URLs.
 fn trimmed_arg(input: &serde_json::Value, key: &str) -> Option<String> {
-    input.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    input
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn bool_arg(input: &serde_json::Value, key: &str) -> bool {
@@ -480,25 +560,43 @@ fn bool_arg(input: &serde_json::Value, key: &str) -> bool {
 }
 
 fn usize_arg(input: &serde_json::Value, key: &str, fallback: usize) -> usize {
-    input.get(key).and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(fallback)
+    input
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(fallback)
 }
 
 fn display_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root).ok().filter(|p| !p.as_os_str().is_empty())
+    path.strip_prefix(root)
+        .ok()
+        .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string())
 }
 
 fn clean_user_path(user_path: &str) -> String {
     let trimmed = user_path.trim();
-    if trimmed.is_empty() || trimmed == "/" { ".".to_string() } else { trimmed.trim_start_matches('/').to_string() }
+    if trimmed.is_empty() || trimmed == "/" {
+        ".".to_string()
+    } else {
+        trimmed.trim_start_matches('/').to_string()
+    }
 }
 
 fn resolve_existing_path(root: &Path, user_path: &str) -> Result<PathBuf, String> {
-    let root_real = root.canonicalize().map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
+    let root_real = root
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
     let cleaned = clean_user_path(user_path);
-    let candidate = if cleaned == "." { root_real.clone() } else { root.join(cleaned) };
-    let real = candidate.canonicalize().map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
+    let candidate = if cleaned == "." {
+        root_real.clone()
+    } else {
+        root.join(cleaned)
+    };
+    let real = candidate
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
     if !real.starts_with(&root_real) {
         return Err(format!("Path \"{user_path}\" is outside the workspace"));
     }
@@ -512,10 +610,15 @@ fn resolve_existing_path(root: &Path, user_path: &str) -> Result<PathBuf, String
 /// write outside the root.
 pub(crate) fn resolve_new_path(root: &Path, user_path: &str) -> Result<PathBuf, String> {
     use std::path::Component;
-    let root_real = root.canonicalize().map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
+    let root_real = root
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
     let cleaned = clean_user_path(user_path);
     let rel = Path::new(&cleaned);
-    if rel.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+    if rel
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+    {
         return Err(format!("Path \"{user_path}\" is outside the workspace"));
     }
     let candidate = root_real.join(rel);
@@ -526,7 +629,9 @@ pub(crate) fn resolve_new_path(root: &Path, user_path: &str) -> Result<PathBuf, 
             None => return Err(format!("Path \"{user_path}\" is outside the workspace")),
         }
     }
-    let ancestor_real = ancestor.canonicalize().map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
+    let ancestor_real = ancestor
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
     if !ancestor_real.starts_with(&root_real) {
         return Err(format!("Path \"{user_path}\" is outside the workspace"));
     }
@@ -537,47 +642,111 @@ pub(crate) fn resolve_new_path(root: &Path, user_path: &str) -> Result<PathBuf, 
 
 fn read_file(root: &str, path: &str) -> ToolResult {
     let root = Path::new(root);
-    let full = match resolve_existing_path(root, path) { Ok(p) => p, Err(e) => return err(e) };
-    let metadata = match std::fs::metadata(&full) { Ok(m) => m, Err(e) => return err(format!("Unable to read metadata: {e}")) };
-    if !metadata.is_file() { return err(format!("{} is not a file", display_path(root, &full))); }
+    let full = match resolve_existing_path(root, path) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let metadata = match std::fs::metadata(&full) {
+        Ok(m) => m,
+        Err(e) => return err(format!("Unable to read metadata: {e}")),
+    };
+    if !metadata.is_file() {
+        return err(format!("{} is not a file", display_path(root, &full)));
+    }
     if metadata.len() > MAX_FILE_BYTES {
-        return err(format!("{} is too large to read safely ({} bytes, max {})", display_path(root, &full), metadata.len(), MAX_FILE_BYTES));
+        return err(format!(
+            "{} is too large to read safely ({} bytes, max {})",
+            display_path(root, &full),
+            metadata.len(),
+            MAX_FILE_BYTES
+        ));
     }
     match std::fs::read_to_string(&full) {
-        Ok(content) => ok(format!("Contents of {} ({} chars):\n```\n{}\n```", display_path(root, &full), content.len(), content)),
-        Err(e) => err(format!("Unable to read {} as text: {e}", display_path(root, &full))),
+        Ok(content) => ok(format!(
+            "Contents of {} ({} chars):\n```\n{}\n```",
+            display_path(root, &full),
+            content.len(),
+            content
+        )),
+        Err(e) => err(format!(
+            "Unable to read {} as text: {e}",
+            display_path(root, &full)
+        )),
     }
 }
 
 fn list_dir(root: &str, path: &str) -> ToolResult {
     let root = Path::new(root);
-    let full = match resolve_existing_path(root, path) { Ok(p) => p, Err(e) => return err(e) };
-    if !full.is_dir() { return err(format!("{} is not a directory", display_path(root, &full))); }
-    let entries = match std::fs::read_dir(&full) { Ok(e) => e, Err(e) => return err(format!("Unable to list directory: {e}")) };
+    let full = match resolve_existing_path(root, path) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    if !full.is_dir() {
+        return err(format!("{} is not a directory", display_path(root, &full)));
+    }
+    let entries = match std::fs::read_dir(&full) {
+        Ok(e) => e,
+        Err(e) => return err(format!("Unable to list directory: {e}")),
+    };
     let mut rows = Vec::new();
     for entry in entries.flatten().take(MAX_LIST_ENTRIES) {
         let file_type = entry.file_type().ok();
         let is_dir = file_type.as_ref().is_some_and(|t| t.is_dir());
-        rows.push(format!("{}{}", if is_dir { "[dir] " } else { "      " }, entry.file_name().to_string_lossy()));
+        rows.push(format!(
+            "{}{}",
+            if is_dir { "[dir] " } else { "      " },
+            entry.file_name().to_string_lossy()
+        ));
     }
     rows.sort();
-    ok(format!("Entries in {}:\n{}", display_path(root, &full), if rows.is_empty() { "(empty)".to_string() } else { rows.join("\n") }))
+    ok(format!(
+        "Entries in {}:\n{}",
+        display_path(root, &full),
+        if rows.is_empty() {
+            "(empty)".to_string()
+        } else {
+            rows.join("\n")
+        }
+    ))
 }
 
 fn ignored_dir(name: &str) -> bool {
-    matches!(name, ".git" | "node_modules" | "target" | "dist" | "build" | ".next" | ".turbo" | ".cache" | "coverage" | ".venv" | "__pycache__")
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".turbo"
+            | ".cache"
+            | "coverage"
+            | ".venv"
+            | "__pycache__"
+    )
 }
 
 fn walk_files(root: &Path, start: &Path, out: &mut Vec<PathBuf>) {
-    if out.len() >= MAX_WALK_FILES { return; }
-    let Ok(entries) = std::fs::read_dir(start) else { return; };
+    if out.len() >= MAX_WALK_FILES {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(start) else {
+        return;
+    };
     for entry in entries.flatten() {
-        if out.len() >= MAX_WALK_FILES { return; }
+        if out.len() >= MAX_WALK_FILES {
+            return;
+        }
         let path = entry.path();
-        let Ok(ft) = entry.file_type() else { continue; };
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
         if ft.is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if !ignored_dir(&name) { walk_files(root, &path, out); }
+            if !ignored_dir(&name) {
+                walk_files(root, &path, out);
+            }
         } else if ft.is_file() && path.starts_with(root) {
             out.push(path);
         }
@@ -589,77 +758,165 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
     let t = text.as_bytes();
     let (mut pi, mut ti, mut star, mut mark) = (0_usize, 0_usize, None, 0_usize);
     while ti < t.len() {
-        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) { pi += 1; ti += 1; }
-        else if pi < p.len() && p[pi] == b'*' { star = Some(pi); mark = ti; pi += 1; }
-        else if let Some(s) = star { pi = s + 1; mark += 1; ti = mark; }
-        else { return false; }
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
     }
-    while pi < p.len() && p[pi] == b'*' { pi += 1; }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
     pi == p.len()
 }
 
 fn glob(root: &str, input: &serde_json::Value) -> ToolResult {
-    let pattern = match trimmed_arg(input, "pattern") { Some(p) => p, None => return err("glob requires a string pattern".to_string()) };
+    let pattern = match trimmed_arg(input, "pattern") {
+        Some(p) => p,
+        None => return err("glob requires a string pattern".to_string()),
+    };
     let start_arg = trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string());
     let root = Path::new(root);
-    let start = match resolve_existing_path(root, &start_arg) { Ok(p) => p, Err(e) => return err(e) };
+    let start = match resolve_existing_path(root, &start_arg) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     let mut files = Vec::new();
     walk_files(root, &start, &mut files);
     let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let mut matches: Vec<String> = files.into_iter()
+    let mut matches: Vec<String> = files
+        .into_iter()
         .filter_map(|path| {
             let rel = display_path(&root_real, &path);
-            if wildcard_match(&pattern, &rel) || wildcard_match(&pattern.replace("**/", ""), &rel) { Some(rel) } else { None }
+            if wildcard_match(&pattern, &rel) || wildcard_match(&pattern.replace("**/", ""), &rel) {
+                Some(rel)
+            } else {
+                None
+            }
         })
-        .take(MAX_SEARCH_RESULTS).collect();
+        .take(MAX_SEARCH_RESULTS)
+        .collect();
     matches.sort();
-    ok(format!("Glob matches for {pattern}:\n{}", if matches.is_empty() { "(none)".to_string() } else { matches.join("\n") }))
+    ok(format!(
+        "Glob matches for {pattern}:\n{}",
+        if matches.is_empty() {
+            "(none)".to_string()
+        } else {
+            matches.join("\n")
+        }
+    ))
 }
 
 fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
     // Grep patterns keep their whitespace (a leading space can be the point),
     // but an empty pattern would match every line.
-    let pattern = match string_arg(input, "pattern").filter(|p| !p.is_empty()) { Some(p) => p, None => return err("grep requires a string pattern".to_string()) };
+    let pattern = match string_arg(input, "pattern").filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => return err("grep requires a string pattern".to_string()),
+    };
     let max = usize_arg(input, "maxResults", MAX_SEARCH_RESULTS).min(MAX_SEARCH_RESULTS);
     let path_arg = trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string());
     let root = Path::new(root);
-    let start = match resolve_existing_path(root, &path_arg) { Ok(p) => p, Err(e) => return err(e) };
+    let start = match resolve_existing_path(root, &path_arg) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     let mut files = Vec::new();
-    if start.is_file() { files.push(start); } else { walk_files(root, &start, &mut files); }
+    if start.is_file() {
+        files.push(start);
+    } else {
+        walk_files(root, &start, &mut files);
+    }
     let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut rows = Vec::new();
     for file in files {
-        if rows.len() >= max { break; }
-        if std::fs::metadata(&file).map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true) { continue; }
-        let Ok(content) = std::fs::read_to_string(&file) else { continue; };
+        if rows.len() >= max {
+            break;
+        }
+        if std::fs::metadata(&file)
+            .map(|m| m.len() > MAX_FILE_BYTES)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
         for (idx, line) in content.lines().enumerate() {
             if line.contains(&pattern) {
-                rows.push(format!("{}:{}: {}", display_path(&root_real, &file), idx + 1, line));
-                if rows.len() >= max { break; }
+                rows.push(format!(
+                    "{}:{}: {}",
+                    display_path(&root_real, &file),
+                    idx + 1,
+                    line
+                ));
+                if rows.len() >= max {
+                    break;
+                }
             }
         }
     }
-    ok(format!("Grep matches for {pattern}:\n{}", if rows.is_empty() { "(none)".to_string() } else { rows.join("\n") }))
+    ok(format!(
+        "Grep matches for {pattern}:\n{}",
+        if rows.is_empty() {
+            "(none)".to_string()
+        } else {
+            rows.join("\n")
+        }
+    ))
 }
 
 fn git_output(root: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git").arg("-C").arg(root).args(args).output().map_err(|e| format!("Failed to run git: {e}"))?;
-    if output.status.success() { Ok(String::from_utf8_lossy(&output.stdout).to_string()) }
-    else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 fn get_git_status(root: &str) -> ToolResult {
-    match git_output(root, &["status", "--short", "--branch"]) { Ok(o) => ok(format!("Git status:\n{}", o.trim())), Err(e) => err(e) }
+    match git_output(root, &["status", "--short", "--branch"]) {
+        Ok(o) => ok(format!("Git status:\n{}", o.trim())),
+        Err(e) => err(e),
+    }
 }
 
 fn get_git_diff(root: &str, input: &serde_json::Value) -> ToolResult {
     let staged = bool_arg(input, "staged");
     let path = trimmed_arg(input, "path");
     let mut args = vec!["diff"];
-    if staged { args.push("--cached"); }
-    if let Some(p) = path.as_deref() { args.push("--"); args.push(p); }
+    if staged {
+        args.push("--cached");
+    }
+    if let Some(p) = path.as_deref() {
+        args.push("--");
+        args.push(p);
+    }
     match git_output(root, &args) {
-        Ok(output) => ok(format!("Git diff{}:\n{}", if staged { " (staged)" } else { "" }, if output.trim().is_empty() { "(empty)" } else { output.trim() })),
+        Ok(output) => ok(format!(
+            "Git diff{}:\n{}",
+            if staged { " (staged)" } else { "" },
+            if output.trim().is_empty() {
+                "(empty)"
+            } else {
+                output.trim()
+            }
+        )),
         Err(e) => err(e),
     }
 }
@@ -667,8 +924,14 @@ fn get_git_diff(root: &str, input: &serde_json::Value) -> ToolResult {
 // ── Web tools ───────────────────────────────────────────────────────────
 
 fn web_search(input: &serde_json::Value) -> ToolResult {
-    let query = match trimmed_arg(input, "query") { Some(q) => q, None => return err("web_search requires a query".to_string()) };
-    let url = format!("https://lite.duckduckgo.com/lite/?q={}", urlencoding(&query));
+    let query = match trimmed_arg(input, "query") {
+        Some(q) => q,
+        None => return err("web_search requires a query".to_string()),
+    };
+    let url = format!(
+        "https://lite.duckduckgo.com/lite/?q={}",
+        urlencoding(&query)
+    );
 
     let resp = match std::panic::catch_unwind(|| {
         reqwest::blocking::Client::builder()
@@ -699,11 +962,17 @@ fn web_search(input: &serde_json::Value) -> ToolResult {
     if results.is_empty() {
         return ok(format!("No results found for '{query}'. Try rephrasing."));
     }
-    ok(format!("Web results for '{query}':\n\n{}", results.join("\n\n")))
+    ok(format!(
+        "Web results for '{query}':\n\n{}",
+        results.join("\n\n")
+    ))
 }
 
 fn web_fetch(input: &serde_json::Value) -> ToolResult {
-    let url = match trimmed_arg(input, "url") { Some(u) => u, None => return err("web_fetch requires a url".to_string()) };
+    let url = match trimmed_arg(input, "url") {
+        Some(u) => u,
+        None => return err("web_fetch requires a url".to_string()),
+    };
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return err("URL must start with http:// or https://".to_string());
     }
@@ -717,12 +986,20 @@ fn web_fetch(input: &serde_json::Value) -> ToolResult {
             .and_then(|r| r.text().ok())
     }) {
         Ok(Some(b)) => b,
-        _ => return err("Web fetch timed out. The page may be too large or unreachable.".to_string()),
+        _ => {
+            return err(
+                "Web fetch timed out. The page may be too large or unreachable.".to_string(),
+            )
+        }
     };
 
     let text = strip_html(&body);
     let truncated: String = text.chars().take(6000).collect();
-    let note = if text.chars().count() > 6000 { "\n\n…(truncated)" } else { "" };
+    let note = if text.chars().count() > 6000 {
+        "\n\n…(truncated)"
+    } else {
+        ""
+    };
     ok(format!("Content of {url}:\n\n{truncated}{note}"))
 }
 
@@ -731,7 +1008,11 @@ fn extract_href(line: &str) -> Option<String> {
     let rest = &line[start + 6..];
     let end = rest.find('"')?;
     let href = decode_html_entities(&rest[..end]);
-    if href.is_empty() { None } else { Some(href) }
+    if href.is_empty() {
+        None
+    } else {
+        Some(href)
+    }
 }
 
 fn normalize_search_href(href: &str) -> Option<String> {
@@ -814,9 +1095,17 @@ fn strip_tags(text: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
     for c in text.chars() {
-        if c == '<' { in_tag = true; continue; }
-        if c == '>' { in_tag = false; continue; }
-        if !in_tag { out.push(c); }
+        if c == '<' {
+            in_tag = true;
+            continue;
+        }
+        if c == '>' {
+            in_tag = false;
+            continue;
+        }
+        if !in_tag {
+            out.push(c);
+        }
     }
     decode_html_entities(out.trim())
 }
@@ -828,7 +1117,10 @@ fn strip_html(input: &str) -> String {
     let mut skip: usize = 0;
 
     for (i, c) in input.char_indices() {
-        if skip > 0 { skip -= 1; continue; }
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
         if in_script {
             if c == '<' && input[i..].starts_with("</script") {
                 in_script = false;
@@ -839,20 +1131,41 @@ fn strip_html(input: &str) -> String {
         }
         if c == '<' {
             in_tag = true;
-            if input[i..].to_lowercase().starts_with("<script") { in_script = true; }
-            if input[i..].to_lowercase().starts_with("<style") { in_script = true; }
+            if input[i..].to_lowercase().starts_with("<script") {
+                in_script = true;
+            }
+            if input[i..].to_lowercase().starts_with("<style") {
+                in_script = true;
+            }
             continue;
         }
-        if c == '>' { in_tag = false; continue; }
+        if c == '>' {
+            in_tag = false;
+            continue;
+        }
         if !in_tag {
             if c == '&' {
-                if input[i..].starts_with("&amp;") { out.push('&'); skip = 4; }
-                else if input[i..].starts_with("&lt;") { out.push('<'); skip = 3; }
-                else if input[i..].starts_with("&gt;") { out.push('>'); skip = 3; }
-                else if input[i..].starts_with("&quot;") { out.push('"'); skip = 5; }
-                else if input[i..].starts_with("&#39;") { out.push('\''); skip = 4; }
-                else if input[i..].starts_with("&nbsp;") { out.push(' '); skip = 5; }
-                else { out.push(c); }
+                if input[i..].starts_with("&amp;") {
+                    out.push('&');
+                    skip = 4;
+                } else if input[i..].starts_with("&lt;") {
+                    out.push('<');
+                    skip = 3;
+                } else if input[i..].starts_with("&gt;") {
+                    out.push('>');
+                    skip = 3;
+                } else if input[i..].starts_with("&quot;") {
+                    out.push('"');
+                    skip = 5;
+                } else if input[i..].starts_with("&#39;") {
+                    out.push('\'');
+                    skip = 4;
+                } else if input[i..].starts_with("&nbsp;") {
+                    out.push(' ');
+                    skip = 5;
+                } else {
+                    out.push(c);
+                }
             } else {
                 out.push(c);
             }
@@ -887,7 +1200,11 @@ fn hash_content(content: &str) -> String {
 fn diff_ops<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str)> {
     const MAX_LCS: usize = 1500;
     if old.len() > MAX_LCS || new.len() > MAX_LCS {
-        return old.iter().map(|l| ('-', *l)).chain(new.iter().map(|l| ('+', *l))).collect();
+        return old
+            .iter()
+            .map(|l| ('-', *l))
+            .chain(new.iter().map(|l| ('+', *l)))
+            .collect();
     }
     let (n, m) = (old.len(), new.len());
     let width = m + 1;
@@ -924,17 +1241,24 @@ fn diff_ops<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str)> {
 /// Unified diff with real line numbers: trim the common prefix/suffix, run a
 /// positional diff on the middle, emit one hunk with 3 lines of context.
 fn unified_diff_lines(old: &str, new: &str) -> String {
-    if old == new { return String::new(); }
+    if old == new {
+        return String::new();
+    }
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
     let mut prefix = 0;
     let max_prefix = old_lines.len().min(new_lines.len());
-    while prefix < max_prefix && old_lines[prefix] == new_lines[prefix] { prefix += 1; }
+    while prefix < max_prefix && old_lines[prefix] == new_lines[prefix] {
+        prefix += 1;
+    }
     let mut suffix = 0;
     let max_suffix = max_prefix - prefix;
     while suffix < max_suffix
-        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix] { suffix += 1; }
+        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
 
     let ops = diff_ops(
         &old_lines[prefix..old_lines.len() - suffix],
@@ -945,15 +1269,27 @@ fn unified_diff_lines(old: &str, new: &str) -> String {
     let ctx_start = prefix.saturating_sub(CONTEXT);
     let lead = old_lines[ctx_start..prefix].iter().map(|l| (' ', *l));
     let tail_end = (old_lines.len() - suffix + CONTEXT).min(old_lines.len());
-    let tail = old_lines[old_lines.len() - suffix..tail_end].iter().map(|l| (' ', *l));
+    let tail = old_lines[old_lines.len() - suffix..tail_end]
+        .iter()
+        .map(|l| (' ', *l));
     let hunk: Vec<(char, &str)> = lead.chain(ops).chain(tail).collect();
 
     let old_count = hunk.iter().filter(|(c, _)| *c != '+').count();
     let new_count = hunk.iter().filter(|(c, _)| *c != '-').count();
     let mut out = format!(
         "@@ -{},{} +{},{} @@\n",
-        if old_count == 0 { ctx_start } else { ctx_start + 1 }, old_count,
-        if new_count == 0 { ctx_start } else { ctx_start + 1 }, new_count,
+        if old_count == 0 {
+            ctx_start
+        } else {
+            ctx_start + 1
+        },
+        old_count,
+        if new_count == 0 {
+            ctx_start
+        } else {
+            ctx_start + 1
+        },
+        new_count,
     );
     for (c, l) in &hunk {
         out.push(*c);
@@ -963,65 +1299,132 @@ fn unified_diff_lines(old: &str, new: &str) -> String {
     out.trim_end().to_string()
 }
 
-fn preview_write_file(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult> {
-    let path = trimmed_arg(input, "path").ok_or_else(|| err("write_file requires a string path".to_string()))?;
+fn preview_write_file(
+    root: &str,
+    input: &serde_json::Value,
+    run_id: &str,
+) -> Result<DiffProposal, ToolResult> {
+    let path = trimmed_arg(input, "path")
+        .ok_or_else(|| err("write_file requires a string path".to_string()))?;
     // old_str/new_str must keep their whitespace verbatim — indentation and
     // trailing newlines are part of the match and the replacement.
-    let old_str = string_arg(input, "old_str").filter(|s| !s.is_empty()).ok_or_else(|| err("write_file requires old_str".to_string()))?;
+    let old_str = string_arg(input, "old_str")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| err("write_file requires old_str".to_string()))?;
     let new_str = string_arg(input, "new_str").unwrap_or_default();
     let root = Path::new(root);
     let full = resolve_existing_path(root, &path).map_err(|e| err(e))?;
     let rel = display_path(root, &full);
-    let current = std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
+    let current =
+        std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
     let occurrences = current.matches(&old_str).count();
-    if occurrences == 0 { return Err(err(format!("old_str not found in {rel}. Read the file again and use an exact substring."))); }
-    if occurrences > 1 { return Err(err(format!("old_str matches {occurrences} locations in {rel}. Include more surrounding context."))); }
+    if occurrences == 0 {
+        return Err(err(format!(
+            "old_str not found in {rel}. Read the file again and use an exact substring."
+        )));
+    }
+    if occurrences > 1 {
+        return Err(err(format!(
+            "old_str matches {occurrences} locations in {rel}. Include more surrounding context."
+        )));
+    }
     let new_content = current.replacen(&old_str, &new_str, 1);
-    if new_content.len() as u64 > MAX_WRITE_BYTES { return Err(err(format!("Resulting file would be too large"))); }
+    if new_content.len() as u64 > MAX_WRITE_BYTES {
+        return Err(err(format!("Resulting file would be too large")));
+    }
     Ok(DiffProposal {
-        id: format!("diff_{}_{}", run_id, format!("write_{}", rel.replace('/', "_"))),
-        run_id: run_id.to_string(), tool_call_id: format!("write_{}", rel),
-        path: rel, old_content: current.clone(), new_content: new_content.clone(),
-        old_hash: hash_content(&current), new_hash: hash_content(&new_content),
+        id: format!(
+            "diff_{}_{}",
+            run_id,
+            format!("write_{}", rel.replace('/', "_"))
+        ),
+        run_id: run_id.to_string(),
+        tool_call_id: format!("write_{}", rel),
+        path: rel,
+        old_content: current.clone(),
+        new_content: new_content.clone(),
+        old_hash: hash_content(&current),
+        new_hash: hash_content(&new_content),
         unified_diff: unified_diff_lines(&current, &new_content),
-        is_create: false, reason: None,
+        is_create: false,
+        reason: None,
     })
 }
 
-fn preview_create_file(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult> {
-    let path = trimmed_arg(input, "path").ok_or_else(|| err("create_file requires a string path".to_string()))?;
+fn preview_create_file(
+    root: &str,
+    input: &serde_json::Value,
+    run_id: &str,
+) -> Result<DiffProposal, ToolResult> {
+    let path = trimmed_arg(input, "path")
+        .ok_or_else(|| err("create_file requires a string path".to_string()))?;
     // Contents are raw (may legitimately be empty or whitespace-only).
-    let contents = string_arg(input, "contents").ok_or_else(|| err("create_file requires string contents".to_string()))?;
+    let contents = string_arg(input, "contents")
+        .ok_or_else(|| err("create_file requires string contents".to_string()))?;
     let root = Path::new(root);
     let candidate = resolve_new_path(root, &path).map_err(err)?;
     let rel = clean_user_path(&path);
-    if candidate.exists() { return Err(err(format!("{rel} already exists. Use write_file to modify an existing file."))); }
-    if contents.len() as u64 > MAX_WRITE_BYTES { return Err(err(format!("Contents too large"))); }
+    if candidate.exists() {
+        return Err(err(format!(
+            "{rel} already exists. Use write_file to modify an existing file."
+        )));
+    }
+    if contents.len() as u64 > MAX_WRITE_BYTES {
+        return Err(err(format!("Contents too large")));
+    }
     Ok(DiffProposal {
-        id: format!("diff_{}_{}", run_id, format!("create_{}", rel.replace('/', "_"))),
-        run_id: run_id.to_string(), tool_call_id: format!("create_{}", rel),
-        path: rel, old_content: String::new(), new_content: contents.clone(),
-        old_hash: hash_content(""), new_hash: hash_content(&contents),
-        unified_diff: format!("@@ -0,0 +1,{} @@\n{}", contents.lines().count(), contents.lines().map(|l| format!("+{}", l)).collect::<Vec<_>>().join("\n")),
-        is_create: true, reason: None,
+        id: format!(
+            "diff_{}_{}",
+            run_id,
+            format!("create_{}", rel.replace('/', "_"))
+        ),
+        run_id: run_id.to_string(),
+        tool_call_id: format!("create_{}", rel),
+        path: rel,
+        old_content: String::new(),
+        new_content: contents.clone(),
+        old_hash: hash_content(""),
+        new_hash: hash_content(&contents),
+        unified_diff: format!(
+            "@@ -0,0 +1,{} @@\n{}",
+            contents.lines().count(),
+            contents
+                .lines()
+                .map(|l| format!("+{}", l))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        is_create: true,
+        reason: None,
     })
 }
 
-fn preview_create_skill(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult> {
-    let name = string_arg(input, "name").ok_or_else(|| err("create_skill requires a name".to_string()))?;
+fn preview_create_skill(
+    root: &str,
+    input: &serde_json::Value,
+    run_id: &str,
+) -> Result<DiffProposal, ToolResult> {
+    let name =
+        string_arg(input, "name").ok_or_else(|| err("create_skill requires a name".to_string()))?;
     let title = string_arg(input, "title").unwrap_or_else(|| name.clone());
     let description = string_arg(input, "description").unwrap_or_default();
-    let instructions = string_arg(input, "instructions").ok_or_else(|| err("create_skill requires instructions".to_string()))?;
-    let safe_name = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-').to_string();
+    let instructions = string_arg(input, "instructions")
+        .ok_or_else(|| err("create_skill requires instructions".to_string()))?;
+    let safe_name = name
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+        .trim_matches('-')
+        .to_string();
     let rel = format!(".agents/skills/{safe_name}/SKILL.md");
     let root_path = Path::new(root);
     let full = root_path.join(&rel);
     if full.exists() {
-        return Err(err(format!("{rel} already exists. Use write_file to edit it.")));
+        return Err(err(format!(
+            "{rel} already exists. Use write_file to edit it."
+        )));
     }
-    let content = format!(
-        "---\nname: {title}\ndescription: {description}\n---\n\n{instructions}\n"
-    );
+    let content =
+        format!("---\nname: {title}\ndescription: {description}\n---\n\n{instructions}\n");
     Ok(DiffProposal {
         id: format!("diff_{}_{}", run_id, safe_name),
         run_id: run_id.to_string(),
@@ -1031,7 +1434,15 @@ fn preview_create_skill(root: &str, input: &serde_json::Value, run_id: &str) -> 
         new_content: content.clone(),
         old_hash: hash_content(""),
         new_hash: hash_content(&content),
-        unified_diff: format!("@@ -0,0 +1,{} @@\n{}", content.lines().count(), content.lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n")),
+        unified_diff: format!(
+            "@@ -0,0 +1,{} @@\n{}",
+            content.lines().count(),
+            content
+                .lines()
+                .map(|l| format!("+{l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
         is_create: true,
         reason: Some(format!("New skill: {title}")),
     })
@@ -1041,17 +1452,32 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
     let root_path = Path::new(root);
     // Re-validate at apply time: never trust a proposal path blindly.
     let full = resolve_new_path(root_path, &diff.path).map_err(err)?;
-    if let Some(parent) = full.parent() { std::fs::create_dir_all(parent).map_err(|e| err(format!("Cannot create directory: {e}")))?; }
-    std::fs::write(&full, &diff.new_content).map_err(|e| err(format!("Cannot write {}: {e}", diff.path)))?;
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| err(format!("Cannot create directory: {e}")))?;
+    }
+    std::fs::write(&full, &diff.new_content)
+        .map_err(|e| err(format!("Cannot write {}: {e}", diff.path)))?;
     let rel = display_path(root_path, &full);
-    if diff.is_create { Ok(ok(format!("Applied: created {rel} ({} chars).", diff.new_content.len()))) }
-    else { Ok(ok(format!("Applied: edited {rel}."))) }
+    if diff.is_create {
+        Ok(ok(format!(
+            "Applied: created {rel} ({} chars).",
+            diff.new_content.len()
+        )))
+    } else {
+        Ok(ok(format!("Applied: edited {rel}.")))
+    }
 }
 
 pub fn clean_context_ids(tool_call_ids: &[String], messages: &mut Vec<serde_json::Value>) {
     for msg in messages.iter_mut() {
-        if msg.get("role").and_then(|v| v.as_str()) != Some("tool") { continue; }
-        let tc_id = msg.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or_default();
+        if msg.get("role").and_then(|v| v.as_str()) != Some("tool") {
+            continue;
+        }
+        let tc_id = msg
+            .get("tool_call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if tool_call_ids.iter().any(|id| id == tc_id) {
             let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
             msg["content"] = serde_json::Value::String(format!("[cleaned: {name}]"));
@@ -1069,7 +1495,10 @@ mod tests {
     #[test]
     fn string_arg_preserves_whitespace() {
         let input = serde_json::json!({ "old_str": "    return x;\n" });
-        assert_eq!(string_arg(&input, "old_str").as_deref(), Some("    return x;\n"));
+        assert_eq!(
+            string_arg(&input, "old_str").as_deref(),
+            Some("    return x;\n")
+        );
     }
 
     #[test]

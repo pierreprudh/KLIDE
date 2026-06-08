@@ -23,6 +23,10 @@
   --accent-soft:  rgba(90, 123, 76, 0.12);
   --accent-hover: #6B8E5A;
 
+  /* Controls */
+  --control-primary-bg: #1c1c1c;
+  --control-primary-fg: #fcfbf8;
+
   /* Focus ring (for accessibility on inputs/interactive elements) */
   --focus-ring:   rgba(90, 123, 76, 0.32);
 
@@ -111,6 +115,9 @@
   --accent:       #8EA2FF;
   --accent-soft:  #242B45;
 
+  --control-primary-bg: #F0EFE9;
+  --control-primary-fg: #11110F;
+
   --terminal-bg:      #0D0D0C;
   --terminal-fg:      #ECEAE1;
   --terminal-muted:   #9A978E;
@@ -144,6 +151,9 @@
 
   --accent:       #007ACC;
   --accent-soft:  #04395E;
+
+  --control-primary-bg: #FFFFFF;
+  --control-primary-fg: #1E1E1E;
 
   --terminal-bg:      #181818;
   --terminal-fg:      #CCCCCC;
@@ -179,6 +189,9 @@
   --accent:       #0969DA;
   --accent-soft:  #DDF4FF;
 
+  --control-primary-bg: #1F2328;
+  --control-primary-fg: #FFFFFF;
+
   --terminal-bg:      #F6F8FA;
   --terminal-fg:      #24292F;
   --terminal-muted:   #6E7781;
@@ -212,6 +225,9 @@
 
   --accent:       #B58900;
   --accent-soft:  #2E4C3B;
+
+  --control-primary-bg: #FDF6E3;
+  --control-primary-fg: #002B36;
 
   --terminal-bg:      #00212A;
   --terminal-fg:      #EEE8D5;
@@ -275,6 +291,299 @@ select:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent-soft);
   outline-offset: 1px;
+}
+
+.klide-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.klide-button:hover {
+  transform: translateY(-1px);
+}
+
+.klide-button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.klide-button-primary {
+  border-color: color-mix(in srgb, var(--control-primary-bg) 22%, transparent);
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 80%, transparent),
+    0 1px 1px rgba(0, 0, 0, 0.06),
+    0 10px 26px color-mix(in srgb, var(--control-primary-bg) 12%, transparent);
+}
+
+.klide-button-secondary {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--fg-strong);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.klide-button-ghost {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--fg);
+}
+
+.klide-button-subtle {
+  background: transparent;
+  color: var(--fg-subtle);
+}
+
+.klide-button-subtle:hover,
+.klide-button-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+
+.klide-field {
+  min-height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 68%, var(--bg-elevated) 32%);
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 12.5px;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 62%, transparent);
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.klide-field:focus {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--panel-highlight) 62%, transparent),
+    0 0 0 3px var(--accent-soft);
+}
+
+select.klide-field {
+  padding-right: 28px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.klide-surface {
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-elevated) 96%, var(--panel-highlight)) 0%,
+      var(--bg-elevated) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 var(--panel-highlight),
+    0 1px 1px rgba(0, 0, 0, 0.025);
+  overflow: hidden;
+}
+
+.klide-settings-section {
+  margin-bottom: 30px;
+}
+
+.klide-settings-heading {
+  margin: 0 0 10px;
+  color: var(--fg-strong);
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.klide-settings-row {
+  min-height: 64px;
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.klide-settings-row:last-child {
+  border-bottom: none;
+}
+
+.klide-settings-row:hover {
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.klide-row-title {
+  color: var(--fg-strong);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+
+.klide-row-description {
+  color: var(--fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.42;
+}
+
+.klide-switch {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-hover);
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
+}
+
+.klide-switch[data-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border-strong));
+  background: var(--accent);
+}
+
+.klide-switch-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fg-subtle);
+  display: block;
+  transform: translateX(0);
+  transition:
+    transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.klide-switch[data-checked="true"] .klide-switch-knob {
+  background: #fff;
+  transform: translateX(18px);
+}
+
+.klide-status-chip,
+.klide-code-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.klide-code-chip {
+  color: var(--fg-strong);
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+
+.klide-kbd {
+  margin-left: 2px;
+  min-height: 18px;
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  color: var(--fg-subtle);
+  background: color-mix(in srgb, var(--bg) 78%, var(--bg-elevated));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.klide-welcome-ascii-city {
+  position: absolute;
+  top: 50%;
+  right: clamp(-170px, -9vw, -64px);
+  width: min(720px, 58vw);
+  height: min(560px, 82vh);
+  color: var(--fg-dim);
+  opacity: 0.88;
+  transform: translateY(-50%);
+  mask-image:
+    linear-gradient(90deg, transparent 0%, black 35%, black 100%),
+    linear-gradient(180deg, transparent 0%, black 12%, black 84%, transparent 100%);
+  pointer-events: none;
+  user-select: none;
+}
+
+.klide-welcome-ascii-city::before {
+  content: "";
+  position: absolute;
+  inset: 7% 0 4% 18%;
+  background:
+    radial-gradient(ellipse at 64% 26%, color-mix(in srgb, #00d7ff 24%, transparent), transparent 34%),
+    radial-gradient(ellipse at 72% 58%, color-mix(in srgb, #ff4fe3 20%, transparent), transparent 38%),
+    linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent-soft) 18%, transparent), transparent);
+  filter: blur(22px);
+  opacity: 0.88;
+}
+
+.klide-ascii-city-layer {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(8.5px, 0.82vw, 12px);
+  font-weight: 400;
+  line-height: 1.04;
+  letter-spacing: 0;
+  white-space: pre;
+}
+
+.klide-ascii-city-layer.is-base {
+  color: color-mix(in srgb, var(--fg-subtle) 58%, transparent);
+  opacity: 0.3;
+  text-shadow: 0 0 20px color-mix(in srgb, var(--fg-subtle) 12%, transparent);
+}
+
+.klide-ascii-city-layer.is-cyan {
+  color: #36e7ff;
+  opacity: 0.28;
+  mix-blend-mode: screen;
+  text-shadow:
+    0 0 12px color-mix(in srgb, #36e7ff 70%, transparent),
+    0 0 34px color-mix(in srgb, #36e7ff 34%, transparent);
+}
+
+.klide-ascii-city-layer.is-magenta {
+  color: #ff4fe3;
+  opacity: 0.22;
+  mix-blend-mode: screen;
+  text-shadow:
+    0 0 12px color-mix(in srgb, #ff4fe3 70%, transparent),
+    0 0 34px color-mix(in srgb, #ff4fe3 34%, transparent);
+}
+
+.klide-welcome-ascii-city::selection,
+.klide-ascii-city-layer::selection {
+  background: transparent;
 }
 
 .settings-range {
@@ -574,6 +883,62 @@ input:focus-visible {
   }
 }
 
+/* Skeleton placeholder — a quiet shimmer sweep for loading states. Low
+   contrast, no flash; the panel structure shows instantly and only the data
+   shimmers in. Honours prefers-reduced-motion. */
+.klide-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg-dim) 16%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.klide-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--bg-elevated) 70%, transparent),
+    transparent
+  );
+  /* --shimmer-delay lets callers stagger the sweep across a row of cells. */
+  animation: klide-shimmer 1.6s var(--ease-soft) var(--shimmer-delay, 0ms) infinite;
+}
+
+@keyframes klide-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Staggered "rise" — placeholders grow up from their baseline when a load is
+   launched. --rise-delay cascades them across a row. */
+.klide-rise {
+  transform-origin: bottom;
+  animation: klide-rise var(--motion-slow) var(--ease-soft) var(--rise-delay, 0ms) both;
+}
+
+@keyframes klide-rise {
+  from {
+    transform: scaleY(0.12);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-skeleton::after,
+  .klide-rise {
+    animation: none;
+  }
+}
+
 .opencode-logo {
   display: inline-grid;
   place-items: center;
@@ -721,4 +1086,631 @@ input:focus-visible {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* Compact popover enter — used for quiet overflow menus in panel headers. */
+.popover-enter {
+  animation: popover-in var(--motion-med) var(--ease-soft);
+  transform-origin: top right;
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Side-rail navigation item. The active state adds a thin accent bar
+   on the inner edge (left in LTR) and an inset highlight on the
+   rail surface. The 3px bar replaces the heavier full-tile tint used
+   elsewhere. */
+.klide-nav-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 14px 0 17px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-subtle);
+  border-radius: 0;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-nav-rail-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* Active state: colour shifts to fg-strong only. The gradient + accent
+   edge are drawn by the FLIP-animated indicator below, so the active
+   "glow" can travel smoothly between rows. */
+.klide-nav-rail-item[data-active="true"] {
+  color: var(--fg-strong);
+  background: transparent;
+}
+
+/* FLIP-animated indicator — single element that draws both the soft
+   gradient fill and the 2px accent edge. Sits behind the buttons
+   (z-index 0) and translates between nav items on tab change. */
+.klide-nav-rail-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  /* TBD: the user wants to revisit the selection highlight treatment
+     later. For now the active row has no extra background or edge —
+     the only active-state signal is the icon going to --fg-strong
+     and the FLIP animation moving between rows. */
+  background: transparent;
+  box-shadow: none;
+  transition: transform var(--motion-slow) var(--ease-soft);
+  will-change: transform;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Before the first measurement lands, the indicator is sitting at
+   `transform: translateY(0)` with `opacity: 0`. We keep the
+   transition off so it doesn't visibly slide in from the origin. */
+.klide-nav-rail-list[data-flip="false"] .klide-nav-rail-indicator {
+  transition: none;
+}
+
+/* Buttons sit on top of the indicator. */
+.klide-nav-rail-list .klide-nav-rail-item {
+  position: relative;
+  z-index: 1;
+}
+
+.klide-nav-rail-item .klide-nav-rail-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--fg-subtle);
+}
+
+.klide-nav-rail-item[data-active="true"] .klide-nav-rail-icon {
+  color: var(--fg-strong);
+}
+
+.klide-nav-rail-item .klide-nav-rail-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+/* Editorial quote — the small italic pull-quote used in detail views.
+   Uses Atkinson Hyperlegible at italic with em-dashes to feel like a
+   footnote from a manual. */
+.klide-quote {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.55;
+  font-style: italic;
+  color: var(--fg);
+  letter-spacing: -0.005em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.klide-quote::before { content: "\2014\00a0\00a0"; color: var(--fg-dim); }
+.klide-quote::after  { content: ""; }
+
+/* Paper card — a recessed surface for reading content. Stronger
+   inner top highlight than .klide-surface, with a 1px border. Used
+   for instructions and detail bodies where the content needs to
+   feel like a document, not a panel. */
+.klide-paper {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  box-shadow:
+    inset 0 1px 0 var(--panel-highlight),
+    inset 0 -1px 0 color-mix(in srgb, var(--border) 60%, transparent);
+  overflow: hidden;
+}
+
+.klide-paper-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 65%, transparent);
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* Modal tab transition — gentle cross-fade for content swap. */
+@keyframes skills-tab-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.skills-tab-in {
+  animation: skills-tab-in var(--motion-med) var(--ease-soft);
+}
+
+/* Skill row — the unit in the left list. Has its own hover lift and
+   an active state with a left accent bar instead of a full tint. */
+.klide-skill-row {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px 9px 15px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  background: transparent;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-skill-row:hover {
+  background: var(--bg-hover);
+}
+
+.klide-skill-row[data-active="true"] {
+  background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.klide-skill-row[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.klide-skill-row[data-disabled="true"] {
+  opacity: 0.78;
+}
+
+.klide-skill-row[data-disabled="true"][data-active="true"] {
+  opacity: 0.92;
+}
+
+/* Tool grid card — used in the skill form and detail view to pick /
+   display the tools a skill can use. Sits between .klide-button-ghost
+   and the inline toggle. */
+.klide-tool-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.klide-tool-card:hover {
+  background: var(--bg-hover);
+}
+
+.klide-tool-card[data-checked="true"] {
+  background: color-mix(in srgb, var(--accent-soft) 50%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.klide-tool-card .klide-tool-check {
+  flex-shrink: 0;
+  margin-top: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.klide-tool-card[data-checked="true"] .klide-tool-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.klide-tool-card .klide-tool-name {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-strong);
+}
+
+.klide-tool-card .klide-tool-desc {
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-subtle);
+  margin-top: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-nav-rail-item,
+  .klide-skill-row,
+  .klide-tool-card,
+  .skills-tab-in {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Generic FLIP-animated indicator. Container is `.klide-flip-track`
+   (position: relative), the bar is one of these placed inside it.
+   The component owns the transform: translateY(...) inline; this
+   class only carries the transition + visual styles. */
+.klide-flip-indicator {
+  position: absolute;
+  pointer-events: none;
+  will-change: transform;
+  transition: transform var(--motion-slow) var(--ease-soft);
+}
+
+.klide-flip-track[data-flip="false"] .klide-flip-indicator {
+  transition: none;
+}
+
+/* Activity bar item — sits on top of the FLIP indicator, with a hover
+   lift and an active state that uses the indicator for its glow
+   instead of an in-button background tint. */
+.klide-activity-bar-item {
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-activity-bar-item:hover {
+  color: var(--fg-strong);
+}
+
+.klide-activity-bar-item[data-active="true"] {
+  color: var(--fg-strong);
+}
+
+.klide-activity-bar-item:active {
+  transform: scale(0.94);
+}
+
+/* Dock-style dot indicator for bottom-zone destinations. A 3px disc
+   in --accent, sitting just below the icon. Opacity + scale
+   transition gives a quiet pop when a destination becomes active. */
+.klide-activity-bar-dock-dot {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateX(-50%) scale(0.5);
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-med) var(--ease-soft);
+  pointer-events: none;
+}
+
+.klide-activity-bar-dock-dot[data-visible="true"] {
+  transform: translateX(-50%) scale(1);
+  opacity: 1;
+}
+
+/* The activity bar's FLIP indicator: 2px left accent bar plus a soft
+   32px gradient fill that flows from accent-soft to transparent. */
+.klide-activity-bar-indicator {
+  top: 0;
+  left: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  /* TBD: revisit the active-state highlight later. The indicator
+     still FLIP-animates between rows; the only active-state signal
+     right now is the icon going to --fg-strong. */
+  background: transparent;
+  box-shadow: none;
+  transition: transform var(--motion-slow) var(--ease-soft);
+}
+
+[data-flip="false"] .klide-activity-bar-indicator {
+  transition: none;
+}
+
+/* Tab bar indicator — a 2px tall accent bar that rides along the
+   bottom of the active tab. Width tracks the tab's measured width
+   inline; the transform is set by the FLIP hook. */
+.klide-tab-bar-indicator {
+  top: auto;
+  bottom: 0;
+  transition: transform var(--motion-slow) var(--ease-soft);
+}
+
+[data-flip="false"] .klide-tab-bar-indicator {
+  transition: none;
+}
+
+/* Welcome screen recent-row — two buttons (open + remove) share a
+   single rounded container. The path string sits right-aligned, in
+   mono, dimmed, with a hairline separator. */
+.klide-recent-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.klide-recent-row:hover {
+  background: var(--bg-hover);
+}
+
+.klide-recent-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg-subtle);
+}
+
+.klide-recent-open > svg {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.klide-recent-row:hover .klide-recent-open > svg {
+  color: var(--fg);
+}
+
+.klide-recent-path {
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+
+.klide-recent-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--fg-dim);
+  border-radius: var(--radius-xs);
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-recent-remove[data-visible="true"] {
+  opacity: 1;
+}
+
+.klide-recent-remove:hover {
+  background: var(--bg);
+  color: var(--danger);
+}
+
+/* Profile modal — quick action rows + recent activity cards. */
+
+.klide-profile-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-profile-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.klide-profile-action[data-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.klide-profile-action[data-disabled="true"]:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.klide-profile-action-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-subtle);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.klide-profile-action:hover .klide-profile-action-icon {
+  color: var(--fg-strong);
+  border-color: var(--border-strong);
+}
+
+.klide-profile-action-label {
+  display: block;
+  font-size: 13;
+  font-weight: 500;
+  color: var(--fg-strong);
+  letter-spacing: "-0.005em";
+}
+
+.klide-profile-action-detail {
+  display: block;
+  font-size: 11;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.klide-profile-action > svg:last-child {
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.klide-profile-recent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.klide-profile-recent:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.klide-profile-recent-title {
+  font-size: 13;
+  font-weight: 500;
+  color: var(--fg-strong);
+  letter-spacing: "-0.005em";
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-profile-recent-meta {
+  font-size: 10.5;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-profile-recent-time {
+  flex-shrink: 0;
+  font-size: 10.5;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+}
+
+/* Status bar dot separator — a 3px disc in --fg-dim, sits between
+   adjacent status items to give the bar a measured rhythm. */
+.klide-status-dot {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+/* Status bar action chip — the right-side toggles (theme, terminal,
+   layout, reset). One shape, one hover, one active. */
+.klide-status-chip-btn {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg-subtle);
+  background: transparent;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-status-chip-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.klide-status-chip-btn[data-active="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
 }

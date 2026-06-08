@@ -57,12 +57,22 @@ export function DelegateTerminalSurface({
   provider,
   workspaceRoot,
   parentRunId,
+  resumeSessionId,
+  task,
 }: {
   sessionId: string;
   providerId: ProviderId;
   provider: string;
   workspaceRoot: string | null;
   parentRunId?: string;
+  /** Pass through to `delegate_pty_spawn` so the TUI continues a past
+   *  session (e.g. `claude --resume <id>` / `codex resume <id>` /
+   *  `opencode -s <id>`). */
+  resumeSessionId?: string | null;
+  /** Pass through to `delegate_pty_spawn` as the CLI's first prompt — used
+   *  for Klide handoff so a fresh delegate session opens with the original
+   *  user message already sent. */
+  task?: string | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -90,7 +100,14 @@ export function DelegateTerminalSurface({
       void invoke("delegate_pty_resize", { sessionId, rows: term.rows, cols: term.cols });
     };
 
-    void invoke("delegate_pty_spawn", { sessionId, provider: providerId, workspaceRoot, parentRunId })
+    void invoke("delegate_pty_spawn", {
+      sessionId,
+      provider: providerId,
+      workspaceRoot,
+      parentRunId,
+      resumeSessionId: resumeSessionId ?? null,
+      task: task ?? null,
+    })
       .then(() => { syncSize(); })
       .catch((err) => {
         term.writeln(`Failed to start ${provider}: ${err instanceof Error ? err.message : String(err)}`);

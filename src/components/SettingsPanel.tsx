@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
 import { ProviderLogo } from "./ai/icons";
@@ -13,7 +20,13 @@ import {
   msToKey,
   startOfDay,
 } from "./ActivityHeatmap";
-import { SOURCE_LABEL, type Run, type RunSource } from "../runs";
+import {
+  SOURCE_LABEL,
+  fetchAgentRunsCached,
+  peekAgentRunsCache,
+  type Run,
+  type RunSource,
+} from "../runs";
 import {
 
   BUILTIN_PRESETS,
@@ -146,37 +159,15 @@ function clamp(value: number, min: number, max: number): number {
 
 function SettingBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section style={{ marginBottom: 28 }}>
-      <h2
-        style={{
-          margin: "0 0 10px",
-          color: "var(--fg-strong)",
-          fontSize: 13,
-          lineHeight: 1.25,
-          fontWeight: 600,
-          letterSpacing: "0.02em",
-        }}
-      >
-        {title}
-      </h2>
+    <section className="klide-settings-section">
+      <h2 className="klide-settings-heading">{title}</h2>
       {children}
     </section>
   );
 }
 
 function Panel({ children }: { children: ReactNode }) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--border-strong)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--bg-elevated)",
-        overflow: "hidden",
-      }}
-    >
-      {children}
-    </div>
-  );
+  return <div className="klide-surface">{children}</div>;
 }
 
 function Row({
@@ -192,16 +183,7 @@ function Row({
 }) {
   return (
     <div
-      style={{
-        minHeight: 64,
-        padding: "14px 18px",
-        borderBottom: "1px solid var(--border)",
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) auto",
-        alignItems: "center",
-        gap: 16,
-        transition: "background 0.1s ease",
-      }}
+      className="klide-settings-row"
     >
       <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
         {leading && (
@@ -210,12 +192,8 @@ function Row({
           </div>
         )}
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, marginBottom: 3 }}>
-            {title}
-          </div>
-          <div style={{ color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.4 }}>
-            {description}
-          </div>
+          <div className="klide-row-title">{title}</div>
+          <div className="klide-row-description">{description}</div>
         </div>
       </div>
       {control}
@@ -239,33 +217,10 @@ function Toggle({
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
-      style={{
-        width: 42,
-        height: 24,
-        borderRadius: 999,
-        padding: 3,
-        border: "1px solid var(--border-strong)",
-        background: checked ? "var(--accent)" : "var(--bg-hover)",
-        display: "flex",
-        alignItems: "center",
-        flex: "0 0 auto",
-        cursor: "pointer",
-        transition: "background 0.1s ease",
-        willChange: "background",
-      }}
+      className="klide-switch"
+      data-checked={checked}
     >
-      <span
-        style={{
-          width: 16,
-          height: 16,
-          borderRadius: "50%",
-          background: checked ? "#FFFFFF" : "var(--fg-subtle)",
-          display: "block",
-          transform: `translateX(${checked ? 18 : 0}px)`,
-          transition: "transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.1s ease",
-          willChange: "transform",
-        }}
-      />
+      <span className="klide-switch-knob" />
     </button>
   );
 }
@@ -286,21 +241,13 @@ function Select({
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      className="klide-field"
       style={{
         minWidth: 180,
         height: 30,
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        background: "var(--bg-hover)",
-        color: "var(--fg-strong)",
-        font: "inherit",
-        fontSize: 12.5,
         padding: "0 30px 0 10px",
         cursor: "pointer",
-        transition: "border-color 0.1s ease",
       }}
-      onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
-      onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
     >
       {options.map((option) => (
         <option key={option} value={option}>
@@ -335,6 +282,7 @@ function ChoiceCards<T extends string>({
             key={option.value}
             type="button"
             onClick={() => onChange(option.value)}
+            className={active ? "klide-surface" : ""}
             style={{
               minHeight: 88,
               padding: "16px 18px",
@@ -510,14 +458,9 @@ function GhostButton({
     <button
       type="button"
       onClick={onClick}
+      className="klide-button klide-button-ghost"
       style={{
         height: 32,
-        padding: "0 12px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        background: "transparent",
-        color: "var(--fg)",
-        fontSize: 13,
       }}
     >
       {children}
@@ -536,14 +479,9 @@ function LinkButton({
     <button
       type="button"
       onClick={onClick}
+      className="klide-button klide-button-secondary"
       style={{
         height: 32,
-        padding: "0 12px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border-strong)",
-        background: "var(--bg-hover)",
-        color: "var(--fg-strong)",
-        fontSize: 13,
       }}
     >
       {children}
@@ -554,19 +492,7 @@ function LinkButton({
 function CodePill({ children }: { children: ReactNode }) {
   return (
     <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        minHeight: 28,
-        padding: "0 10px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        background: "var(--bg-hover)",
-        color: "var(--fg-strong)",
-        fontFamily: "var(--font-mono)",
-        fontSize: 12,
-        whiteSpace: "nowrap",
-      }}
+      className="klide-code-chip"
     >
       {children}
     </span>
@@ -645,18 +571,10 @@ function StatusPill({
       : "var(--bg-hover)";
   return (
     <span
+      className="klide-status-chip"
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        minHeight: 28,
-        padding: "0 10px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
         background,
         color,
-        fontSize: 12,
-        fontWeight: 500,
-        whiteSpace: "nowrap",
       }}
     >
       {children}
@@ -798,14 +716,10 @@ function ApiKeyRow({
             }}
             aria-label={`${title} API key`}
             autoComplete="off"
+            className="klide-field"
             style={{
               width: 190,
               height: 34,
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--border)",
-              background: "var(--bg-hover)",
-              color: "var(--fg-strong)",
-              font: "inherit",
               padding: "0 12px",
             }}
           />
@@ -1225,12 +1139,18 @@ export function SettingsPanel({
 
             <SettingBlock title="AI Provider">
               <Panel>
-                {PROVIDER_GROUPS.map((group) => (
-                  <div key={group.label} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <div style={{ padding: "10px 18px 4px", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--fg-dim)" }}>
+                {PROVIDER_GROUPS.map((group, groupIdx) => (
+                  <div
+                    key={group.label}
+                    style={{
+                      borderBottom: groupIdx < PROVIDER_GROUPS.length - 1 ? "1px solid var(--border)" : "none",
+                      paddingBottom: 2,
+                    }}
+                  >
+                    <div style={{ padding: "12px 18px 5px", fontSize: 11, fontWeight: 700, letterSpacing: 0, color: "var(--fg-dim)" }}>
                       {group.label}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, padding: "4px 14px 12px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 7, padding: "4px 14px 14px" }}>
                       {group.items.map((p) => {
                         const isActive = settingsProvider === p.id;
                         return (
@@ -1241,19 +1161,19 @@ export function SettingsPanel({
                               setSettingsProvider(p.id);
                               localStorage.setItem("klide.provider", p.id);
                             }}
-                            onMouseEnter={(e) => { if (!isActive && p.available) e.currentTarget.style.borderColor = "var(--fg-subtle)"; }}
-                            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.borderColor = "var(--border)"; }}
+                            className="klide-button"
                             style={{
-                              display: "flex", alignItems: "center", gap: 7,
-                              padding: "7px 9px", borderRadius: "var(--radius-sm)",
-                              border: "1px solid var(--border)",
-                              background: isActive ? "var(--accent-soft)" : "transparent",
+                              justifyContent: "flex-start",
+                              minHeight: 32,
+                              padding: "0 9px",
+                              border: `1px solid ${isActive ? "color-mix(in srgb, var(--accent) 42%, var(--border))" : "transparent"}`,
+                              background: isActive ? "var(--accent-soft)" : "var(--bg-hover)",
                               color: isActive ? "var(--accent)" : !p.available ? "var(--fg-dim)" : "var(--fg-strong)",
                               cursor: p.available ? "pointer" : "not-allowed",
-                              opacity: p.available ? 1 : 0.4,
-                              fontSize: 12.5, textAlign: "left",
-                              transition: "border-color 0.1s ease, background 0.1s ease",
-                              willChange: "border-color, background",
+                              opacity: p.available ? 1 : 0.46,
+                              fontSize: 12.5,
+                              textAlign: "left",
+                              boxShadow: isActive ? "inset 0 1px 0 var(--panel-highlight)" : "none",
                             }}
                           >
                             <ProviderLogo id={p.id} size={13} />
@@ -1311,7 +1231,7 @@ export function SettingsPanel({
                               display: "flex", alignItems: "center", gap: 3,
                               fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer",
                               padding: "2px 6px", borderRadius: "var(--radius-xs)",
-                              background: enabled ? "var(--bg-faint)" : "transparent",
+                              background: enabled ? "var(--bg-hover)" : "transparent",
                               transition: "background 0.1s ease",
                             }}
                           >
@@ -1347,23 +1267,17 @@ export function SettingsPanel({
                       }}
                       placeholder={`Use default ${mode} prompt`}
                       rows={2}
+                      className="klide-field"
                       style={{
                         width: "100%",
                         resize: "vertical",
-                        background: "var(--bg)",
-                        color: "var(--fg-strong)",
-                        border: "1px solid var(--border)",
-                        borderRadius: "var(--radius-sm)",
                         fontSize: 11.5,
                         fontFamily: "var(--font-mono)",
                         padding: "6px 8px",
                         outline: "none",
                         lineHeight: 1.45,
                         minHeight: 44,
-                        transition: "border-color 0.1s ease",
                       }}
-                      onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
-                      onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
                     />
                   </div>
                 ))}
@@ -1394,14 +1308,10 @@ export function SettingsPanel({
                           <select
                             value={lightTheme}
                             onChange={(e) => onLightThemeChange(e.target.value as ThemeId)}
+                            className="klide-field"
                             style={{
-                              background: "var(--bg)",
-                              color: "var(--fg-strong)",
-                              border: "1px solid var(--border-strong)",
-                              borderRadius: "var(--radius-sm)",
                               padding: "4px 8px",
                               fontSize: 12,
-                              outline: "none",
                             }}
                           >
                             {THEMES.filter((t) => !t.isDark).map((t) => (
@@ -1417,14 +1327,10 @@ export function SettingsPanel({
                           <select
                             value={darkTheme}
                             onChange={(e) => onDarkThemeChange(e.target.value as ThemeId)}
+                            className="klide-field"
                             style={{
-                              background: "var(--bg)",
-                              color: "var(--fg-strong)",
-                              border: "1px solid var(--border-strong)",
-                              borderRadius: "var(--radius-sm)",
                               padding: "4px 8px",
                               fontSize: 12,
-                              outline: "none",
                             }}
                           >
                             {THEMES.filter((t) => t.isDark).map((t) => (
@@ -1549,14 +1455,10 @@ export function SettingsPanel({
                           <button
                             type="button"
                             onClick={() => applyPreset(preset)}
+                            className="klide-button klide-button-secondary"
                             style={{
                               height: 32,
                               padding: "0 14px",
-                              borderRadius: "var(--radius-sm)",
-                              border: "1px solid var(--border-strong)",
-                              background: "var(--bg-hover)",
-                              color: "var(--fg-strong)",
-                              fontSize: 13,
                             }}
                           >
                             Apply
@@ -1579,14 +1481,10 @@ export function SettingsPanel({
                         value={draft.name}
                         placeholder="e.g. Review"
                         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                        className="klide-field"
                         style={{
                           minWidth: 220,
                           height: 34,
-                          borderRadius: "var(--radius-sm)",
-                          border: "1px solid var(--border)",
-                          background: "var(--bg-hover)",
-                          color: "var(--fg-strong)",
-                          font: "inherit",
                           padding: "0 12px",
                         }}
                       />
@@ -1636,14 +1534,10 @@ export function SettingsPanel({
                     <button
                       type="button"
                       onClick={saveDraft}
+                      className="klide-button klide-button-primary"
                       style={{
                         height: 34,
                         padding: "0 16px",
-                        borderRadius: "var(--radius-sm)",
-                        border: "1px solid var(--accent)",
-                        background: "var(--accent)",
-                        color: "#FFFFFF",
-                        fontSize: 13,
                       }}
                     >
                       {editingId ? "Save changes" : "Save layout"}
@@ -1752,7 +1646,7 @@ export function SettingsPanel({
                                 display: "flex", alignItems: "center", gap: 4,
                                 fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer",
                                 padding: "3px 7px", borderRadius: "var(--radius-sm)",
-                                background: enabled ? "var(--bg-faint)" : "transparent",
+                                background: enabled ? "var(--bg-hover)" : "transparent",
                               }}
                             >
                               <input
@@ -1787,13 +1681,10 @@ export function SettingsPanel({
                         }}
                         placeholder={`Use default ${mode} prompt`}
                         rows={3}
+                        className="klide-field"
                         style={{
                           width: "100%",
                           resize: "vertical",
-                          background: "var(--bg)",
-                          color: "var(--fg-strong)",
-                          border: "1px solid var(--border-strong)",
-                          borderRadius: "var(--radius-sm)",
                           fontSize: 11.5,
                           fontFamily: "var(--font-mono)",
                           padding: "7px 9px",
@@ -1834,7 +1725,7 @@ export function SettingsPanel({
               <SettingBlock title="Local Servers">
                 <Panel>
                   <LocalServerRow provider="ollama" title="Ollama" defaultModel="llama3.1:8b" />
-                  <LocalServerRow provider="mlx" title="MLX" defaultModel="gemma-4-4b-it" />
+                  <LocalServerRow provider="mlx" title="MLX" defaultModel="mlx-community/Llama-3.1-8B-Instruct-4bit" />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Notes">
@@ -2421,41 +2312,229 @@ function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) 
   );
 }
 
+// Pre-fetch / loading state for the stats panel. Mirrors the real layout
+// (heatmap, histogram, provider rows) as placeholders, with a "Load stats"
+// button over it — so the user triggers the (slow) log parse themselves and
+// the wait reads as intentional. Placeholders shimmer only while loading.
+function StatsSkeleton({
+  loading,
+  onFetch,
+}: {
+  loading: boolean;
+  onFetch: () => void;
+}) {
+  const bar = (width: number | string, height: number, extra?: CSSProperties) => (
+    <div
+      className={loading ? "klide-skeleton" : undefined}
+      style={{
+        width,
+        height,
+        borderRadius: 4,
+        ...(loading
+          ? {}
+          : { background: "color-mix(in srgb, var(--fg-dim) 13%, transparent)" }),
+        ...extra,
+      }}
+    />
+  );
+  // Deterministic, calm-looking histogram bar heights (percent of track).
+  const histHeights = [
+    30, 44, 38, 52, 60, 48, 66, 72, 58, 80, 70, 90, 84, 76, 64, 88, 78, 92, 70,
+    60, 74, 82, 56, 68, 50, 62,
+  ];
+  return (
+    <div style={{ position: "relative" }}>
+      {/* The placeholder layout, dimmed and inert until the user loads it. */}
+      <div
+        aria-hidden
+        style={{
+          opacity: loading ? 1 : 0.55,
+          pointerEvents: "none",
+          transition: "opacity var(--motion-med) var(--ease-out)",
+        }}
+      >
+      <SettingBlock title="Activity">
+        <Panel>
+          <div style={{ padding: "14px 18px" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 16,
+                marginBottom: 14,
+              }}
+            >
+              {bar("min(60%, 360px)", 12)}
+              {bar(108, 22, { borderRadius: 9999 })}
+            </div>
+            {bar("100%", 96, { borderRadius: 6 })}
+          </div>
+        </Panel>
+      </SettingBlock>
+
+      <SettingBlock title="Usage over time">
+        <Panel>
+          <div style={{ padding: "14px 18px" }}>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 96 }}>
+              {histHeights.map((h, i) => (
+                <div
+                  key={i}
+                  className={loading ? "klide-skeleton klide-rise" : undefined}
+                  style={{
+                    flex: 1,
+                    height: `${h}%`,
+                    borderRadius: 2,
+                    // Stagger the rise so the bars cascade up on click.
+                    ...(loading
+                      ? { animationDelay: `${i * 26}ms` }
+                      : {
+                          background:
+                            "color-mix(in srgb, var(--fg-dim) 13%, transparent)",
+                        }),
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        </Panel>
+      </SettingBlock>
+
+      <SettingBlock title="Providers & models">
+        <Panel>
+          {[0, 1, 2].map((gi) => (
+            <div
+              key={gi}
+              style={{
+                padding: "14px 18px",
+                borderBottom: gi < 2 ? "1px solid var(--border)" : "none",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 16,
+                  marginBottom: 8,
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {bar(18, 18, { borderRadius: 4 })}
+                  {bar(120, 13)}
+                </span>
+                {bar(150, 11)}
+              </div>
+              {bar(`${[88, 64, 40][gi]}%`, 6, { borderRadius: 3, marginBottom: 10 })}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {bar("70%", 11)}
+                {bar("52%", 11)}
+              </div>
+            </div>
+          ))}
+        </Panel>
+      </SettingBlock>
+      </div>
+
+      {/* Call-to-action layer: load button (idle) or progress (loading). */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "center",
+          paddingTop: 96,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+            textAlign: "center",
+            padding: "20px 24px",
+            maxWidth: 320,
+          }}
+        >
+          {loading ? (
+            <div
+              className="ai-msg-in"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <span className="ai-loader-orbit" aria-hidden>
+                <span />
+                <span />
+                <span />
+                <span />
+              </span>
+              <div style={{ color: "var(--fg-subtle)", fontSize: 12.5 }}>
+                Reading session logs…
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 600 }}>
+                Session stats
+              </div>
+              <div style={{ color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.45 }}>
+                Reading your agent logs takes a moment. Load them when you're ready.
+              </div>
+              <button
+                type="button"
+                onClick={onFetch}
+                style={{
+                  marginTop: 4,
+                  background: "var(--control-primary-bg)",
+                  color: "var(--control-primary-fg)",
+                  border: "none",
+                  borderRadius: "var(--radius-md)",
+                  padding: "8px 18px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Load stats
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatsSection() {
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Render instantly from the session cache when it's warm — the parse of all
+  // session logs is expensive, so we only pay it on a genuine cold open.
+  // Don't auto-fetch on open — parsing every session log is slow, and an
+  // unprompted wait reads as lag. Show the skeleton with a "Load stats" button
+  // so the wait is the user's own action. A warm cache renders instantly.
+  const cached = peekAgentRunsCache(1000, 0);
+  const [runs, setRuns] = useState<Run[]>(cached ?? []);
+  const [loading, setLoading] = useState(false);
+  const [fetched, setFetched] = useState(cached !== null);
   const [metric, setMetric] = useState<StatsMetric>("conversations");
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    // Hold the loader for at least this long so the user can actually see
-    // it — a warm-cache fetch can complete in well under 200ms, which
-    // reads as a freeze rather than a wait.
-    const minDisplayMs = 400;
-    const start = performance.now();
-    (async () => {
-      try {
-        const { fetchAgentRuns } = await import("../runs");
-        const all = await fetchAgentRuns(1000, 0);
-        if (alive) setRuns(all);
-      } catch {
-        // Outside Tauri (plain Vite) — leave the section empty.
-      } finally {
-        if (!alive) return;
-        const remaining = Math.max(0, minDisplayMs - (performance.now() - start));
-        if (remaining > 0) {
-          setTimeout(() => {
-            if (alive) setLoading(false);
-          }, remaining);
-        } else {
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const all = await fetchAgentRunsCached(1000, 0);
+      setRuns(all);
+    } catch {
+      // Outside Tauri (plain Vite) — leave the section empty.
+    } finally {
+      setLoading(false);
+      setFetched(true);
+    }
   }, []);
 
   // Stable weight fn so the heatmap's useMemo doesn't recompute every render.
@@ -2531,8 +2610,8 @@ function StatsSection() {
     return { conversations, inputTokens, outputTokens };
   }, [runs, selectedDay]);
 
-  if (loading && runs.length === 0) {
-    return <CenteredLoader label="Reading session logs…" />;
+  if (!fetched) {
+    return <StatsSkeleton loading={loading} onFetch={load} />;
   }
 
   return (

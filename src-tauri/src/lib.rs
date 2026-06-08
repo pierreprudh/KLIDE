@@ -1,14 +1,18 @@
 mod agent;
+mod memory;
 mod pty;
+use memory::{memory_list, memory_read, memory_write};
 use pty::{
     delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
     pty_write, DelegatePtyState, PtyState,
 };
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
-use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -16,6 +20,15 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
+const MLX_DEFAULT_MODEL: &str = "mlx-community/Llama-3.1-8B-Instruct-4bit";
+const MLX_MODEL_PRESETS: [&str; 3] = [
+    MLX_DEFAULT_MODEL,
+    "Qwen/Qwen3-4B-MLX-4bit",
+    "mlx-community/gemma-2-9b-it-4bit",
+];
+
+static OLLAMA_MODELS_CACHE: LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +107,51 @@ struct GitStash {
     timestamp: i64,
 }
 
+/// Identity / host info used by the profile modal. All fields are
+/// best-effort — failures during the shell-out become empty strings
+/// rather than a hard error, so a missing `whoami` on some weird
+/// container still returns a usable (if partial) struct.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppUserInfo {
+    username: String,
+    hostname: String,
+    home_dir: String,
+}
+
+fn shell_one_line(cmd: &str, arg: &str) -> Option<String> {
+    let out = std::process::Command::new(cmd).arg(arg).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+#[tauri::command]
+fn app_user_info() -> AppUserInfo {
+    let username = shell_one_line("whoami", "")
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("USERNAME").ok())
+        .unwrap_or_default();
+    let hostname = shell_one_line("hostname", "")
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .unwrap_or_default();
+    let home = home_dir_path()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    AppUserInfo {
+        username,
+        hostname,
+        home_dir: home,
+    }
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
@@ -136,45 +194,6 @@ struct PullRequestDetails {
     mergeable: String,
     created_at_ms: i64,
     updated_at_ms: i64,
-}
-
-#[derive(serde::Serialize)]
-struct ProjectGraphGroup {
-    name: String,
-    file_count: usize,
-    changed_count: usize,
-    additions: usize,
-    deletions: usize,
-}
-
-#[derive(serde::Serialize)]
-struct ProjectGraphChange {
-    path: String,
-    status: String,
-    additions: usize,
-    deletions: usize,
-}
-
-#[derive(serde::Serialize)]
-struct ProjectGraphFile {
-    path: String,
-    status: String,
-    changed: bool,
-    additions: usize,
-    deletions: usize,
-}
-
-#[derive(serde::Serialize)]
-struct ProjectGraph {
-    root_name: String,
-    branch: String,
-    total_files: usize,
-    changed_files: usize,
-    additions: usize,
-    deletions: usize,
-    groups: Vec<ProjectGraphGroup>,
-    changes: Vec<ProjectGraphChange>,
-    files: Vec<ProjectGraphFile>,
 }
 
 #[derive(serde::Serialize)]
@@ -340,9 +359,11 @@ fn provider_chat_url(provider: &str) -> Result<&'static str, String> {
         "openai" => Ok("https://api.openai.com/v1/chat/completions"),
         "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
         "xai" => Ok("https://api.x.ai/v1/chat/completions"),
-        "mlx" => Ok("http://localhost:8080/v1/chat/completions"),
+        "mlx" => Ok("http://127.0.0.1:8080/v1/chat/completions"),
         "openrouter" => Ok("https://openrouter.ai/api/v1/chat/completions"),
-        _ => Err(format!("Provider \"{provider}\" has no chat-completions endpoint")),
+        _ => Err(format!(
+            "Provider \"{provider}\" has no chat-completions endpoint"
+        )),
     }
 }
 
@@ -351,7 +372,7 @@ fn provider_models_url(provider: &str) -> Result<&'static str, String> {
         "openai" => Ok("https://api.openai.com/v1/models"),
         "mistral" => Ok("https://api.mistral.ai/v1/models"),
         "xai" => Ok("https://api.x.ai/v1/models"),
-        "mlx" => Ok("http://localhost:8080/v1/models"),
+        "mlx" => Ok("http://127.0.0.1:8080/v1/models"),
         "openrouter" => Ok("https://openrouter.ai/api/v1/models"),
         _ => Err(format!("Provider \"{provider}\" has no models endpoint")),
     }
@@ -387,6 +408,14 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
     }
 
     if provider == "ollama" {
+        {
+            let cache = OLLAMA_MODELS_CACHE.lock().unwrap();
+            if let Some((ts, names)) = cache.as_ref() {
+                if ts.elapsed() < Duration::from_secs(10) {
+                    return Ok(names.clone());
+                }
+            }
+        }
         let res = reqwest::get(format!("{OLLAMA_URL}/api/tags"))
             .await
             .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
@@ -396,7 +425,7 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
             return Err(response_error("Ollama", status, &body));
         }
         let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        let names = value
+        let names: Vec<String> = value
             .get("models")
             .and_then(|models| models.as_array())
             .map(|models| {
@@ -407,6 +436,7 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
                     .collect()
             })
             .unwrap_or_default();
+        *OLLAMA_MODELS_CACHE.lock().unwrap() = Some((Instant::now(), names.clone()));
         return Ok(names);
     }
 
@@ -429,16 +459,13 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
     }
 
     if provider == "mlx" {
-        let res = reqwest::get("http://localhost:8080/v1/models")
-            .await
-            .map_err(|e| format!("Unable to reach MLX: {e}"))?;
-        let status = res.status();
-        let body = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(response_error("MLX", status, &body));
-        }
-        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        return Ok(normalize_model_ids(&value));
+        // mlx_lm.server's /v1/models endpoint is expensive/noisy and can
+        // interfere with prompt processing. Klide treats MLX model selection
+        // as an explicit configured value instead of polling the server.
+        return Ok(MLX_MODEL_PRESETS
+            .iter()
+            .map(|model| (*model).to_string())
+            .collect());
     }
 
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
@@ -477,8 +504,7 @@ fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
                 "gpt-5.2".to_string(),
             ]
         }),
-        "opencode" => opencode_cached_models()
-            .unwrap_or_else(|| vec!["opencode".to_string()]),
+        "opencode" => opencode_cached_models().unwrap_or_else(|| vec!["opencode".to_string()]),
         _ => return Err(format!("Provider \"{provider}\" is not a subscription CLI")),
     };
     Ok(models)
@@ -486,7 +512,10 @@ fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
 
 fn opencode_cached_models() -> Option<Vec<String>> {
     let cli = resolve_command("opencode").ok()?;
-    let output = std::process::Command::new(cli).arg("models").output().ok()?;
+    let output = std::process::Command::new(cli)
+        .arg("models")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -837,7 +866,9 @@ async fn ai_model_supports_tools(provider: String, model: String) -> Result<bool
         let value: serde_json::Value =
             serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
         let details = value.get("details");
-        let family = details.and_then(|d| d.get("family")).and_then(|v| v.as_str());
+        let family = details
+            .and_then(|d| d.get("family"))
+            .and_then(|v| v.as_str());
         if family == Some("deepseek") || family == Some("qwen2") {
             return Ok(true);
         }
@@ -850,7 +881,7 @@ async fn ai_model_supports_tools(provider: String, model: String) -> Result<bool
     }
 
     if provider == "mlx" {
-        return Ok(true);
+        return Ok(false);
     }
 
     Ok(true)
@@ -909,7 +940,11 @@ fn search_in_files(
         .filter(|s| !s.trim().is_empty() && s.as_str() != "*")
         .map(|s| {
             let s = s.trim();
-            if s.starts_with('*') { &s[1..] } else { s }
+            if s.starts_with('*') {
+                &s[1..]
+            } else {
+                s
+            }
         })
         .map(|s| s.to_lowercase());
 
@@ -920,14 +955,27 @@ fn search_in_files(
             Err(_) => continue,
         };
         for entry in entries.flatten() {
-            if matches.len() >= CAP { capped = true; break; }
+            if matches.len() >= CAP {
+                capped = true;
+                break;
+            }
             let path = entry.path();
-            let ft = match entry.file_type() { Ok(t) => t, Err(_) => continue };
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
             let name = entry.file_name().to_string_lossy().to_lowercase();
             if ft.is_dir() {
                 if !matches!(
                     name.as_str(),
-                    ".git" | "node_modules" | "target" | "dist" | ".next" | ".cache" | ".venv" | "__pycache__"
+                    ".git"
+                        | "node_modules"
+                        | "target"
+                        | "dist"
+                        | ".next"
+                        | ".cache"
+                        | ".venv"
+                        | "__pycache__"
                 ) {
                     pending.push(path);
                 }
@@ -935,16 +983,33 @@ fn search_in_files(
             }
             if ft.is_file() {
                 if let Some(ref filter) = include_filter {
-                    if !name.ends_with(filter) { continue; }
+                    if !name.ends_with(filter) {
+                        continue;
+                    }
                 }
-                if path.metadata().map(|m| m.len() > 500_000).unwrap_or(true) { continue; }
-                let content = match std::fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
-                let rel = path.strip_prefix(root).ok().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
+                if path.metadata().map(|m| m.len() > 500_000).unwrap_or(true) {
+                    continue;
+                }
+                let content = match std::fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let rel = path
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
                 let mut found_in_file = false;
                 for (idx, line) in content.lines().enumerate() {
-                    if matches.len() >= CAP { capped = true; break; }
+                    if matches.len() >= CAP {
+                        capped = true;
+                        break;
+                    }
                     if let Some(col) = line.find(&pattern) {
-                        if !found_in_file { file_count += 1; found_in_file = true; }
+                        if !found_in_file {
+                            file_count += 1;
+                            found_in_file = true;
+                        }
                         matches.push(SearchMatch {
                             file: rel.clone(),
                             line: idx + 1,
@@ -955,10 +1020,16 @@ fn search_in_files(
                 }
             }
         }
-        if capped { break; }
+        if capped {
+            break;
+        }
     }
 
-    Ok(SearchResult { matches, file_count: file_count as usize, capped })
+    Ok(SearchResult {
+        matches,
+        file_count: file_count as usize,
+        capped,
+    })
 }
 
 #[tauri::command]
@@ -1008,6 +1079,10 @@ fn resolve_command(command: &str) -> Result<String, String> {
         "opencode" => vec![
             format!("{home}/.opencode/bin/opencode"),
             format!("{home}/.local/bin/opencode"),
+        ],
+        "mlx_lm.server" => vec![
+            format!("{home}/.pyenv/shims/mlx_lm.server"),
+            format!("{home}/.local/bin/mlx_lm.server"),
         ],
         _ => Vec::new(),
     };
@@ -1220,10 +1295,7 @@ trait StreamingProvider {
 
     fn name(&self) -> &str;
 
-    fn build_request(
-        &self,
-        client: &reqwest::Client,
-    ) -> Result<reqwest::RequestBuilder, String>;
+    fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String>;
 
     /// Parse one streamed line. Err means the provider reported a fatal
     /// mid-stream error (delivered over HTTP 200) — the whole request fails.
@@ -1249,7 +1321,11 @@ async fn stream_provider<S: StreamingProvider>(
     provider: S,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("Unable to build HTTP client: {e}"))?;
     let res = provider
         .build_request(&client)?
         .send()
@@ -1306,7 +1382,9 @@ struct OllamaAdapter {
 impl StreamingProvider for OllamaAdapter {
     type ToolAccumulator = Vec<serde_json::Value>;
 
-    fn name(&self) -> &str { "Ollama" }
+    fn name(&self) -> &str {
+        "Ollama"
+    }
 
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
         let mut body = serde_json::json!({
@@ -1317,9 +1395,7 @@ impl StreamingProvider for OllamaAdapter {
         if let Some(tools) = &self.tools {
             body["tools"] = serde_json::Value::Array(tools.clone());
         }
-        Ok(client
-            .post(format!("{OLLAMA_URL}/api/chat"))
-            .json(&body))
+        Ok(client.post(format!("{OLLAMA_URL}/api/chat")).json(&body))
     }
 
     fn parse_line(
@@ -1331,18 +1407,33 @@ impl StreamingProvider for OllamaAdapter {
         on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
         let line = line.trim();
-        if line.is_empty() { return Ok(()); }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { return Ok(()); };
+        if line.is_empty() {
+            return Ok(());
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return Ok(());
+        };
         if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
             return Err(format!("Ollama error: {error}"));
         }
-        let Some(message) = value.get("message") else { return Ok(()); };
-        let c = message.get("content").and_then(|v| v.as_str()).unwrap_or_default();
-        let t = message.get("thinking").and_then(|v| v.as_str()).unwrap_or_default();
+        let Some(message) = value.get("message") else {
+            return Ok(());
+        };
+        let c = message
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let t = message
+            .get("thinking")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if !c.is_empty() || !t.is_empty() {
             content.push_str(c);
             thinking.push_str(t);
-            on_chunk(StreamChunk { content: c.to_string(), thinking: t.to_string() });
+            on_chunk(StreamChunk {
+                content: c.to_string(),
+                thinking: t.to_string(),
+            });
         }
         if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
             tools.extend(calls.iter().cloned());
@@ -1350,10 +1441,18 @@ impl StreamingProvider for OllamaAdapter {
         Ok(())
     }
 
-    fn finalize_response(content: String, thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
+    fn finalize_response(
+        content: String,
+        thinking: String,
+        tools: Self::ToolAccumulator,
+    ) -> AiChatResponse {
         AiChatResponse {
             content,
-            thinking: if thinking.is_empty() { None } else { Some(thinking) },
+            thinking: if thinking.is_empty() {
+                None
+            } else {
+                Some(thinking)
+            },
             tool_calls: tools,
         }
     }
@@ -1365,7 +1464,11 @@ async fn ollama_chat(
     tools: Option<Vec<serde_json::Value>>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let adapter = OllamaAdapter { model, messages, tools };
+    let adapter = OllamaAdapter {
+        model,
+        messages,
+        tools,
+    };
     stream_provider(adapter, on_chunk).await
 }
 
@@ -1389,21 +1492,18 @@ struct OpenAiAdapter {
 impl StreamingProvider for OpenAiAdapter {
     type ToolAccumulator = Vec<OpenAiToolAcc>;
 
-    fn name(&self) -> &str { &self.provider }
+    fn name(&self) -> &str {
+        &self.provider
+    }
 
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
-        let mut body = serde_json::json!({
-            "model": self.model,
-            "messages": normalize_openai_messages(self.messages.clone()),
-            "stream": true,
-        });
-        if let Some(tools) = &self.tools {
-            body["tools"] = serde_json::Value::Array(tools.clone());
-            body["tool_choice"] = serde_json::json!("auto");
-        }
-        let mut req = client
-            .post(provider_chat_url(&self.provider)?)
-            .json(&body);
+        let body = openai_chat_body(
+            &self.model,
+            self.messages.clone(),
+            self.tools.clone(),
+            self.provider != "mlx",
+        );
+        let mut req = client.post(provider_chat_url(&self.provider)?).json(&body);
         if let Some(key) = &self.key {
             req = req.bearer_auth(key);
         }
@@ -1418,12 +1518,21 @@ impl StreamingProvider for OpenAiAdapter {
         tools: &mut Self::ToolAccumulator,
         on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
-        let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
+        let Some(data) = line.trim().strip_prefix("data:") else {
+            return Ok(());
+        };
         let data = data.trim();
-        if data.is_empty() || data == "[DONE]" { return Ok(()); }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return Ok(()); };
+        if data.is_empty() || data == "[DONE]" {
+            return Ok(());
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            return Ok(());
+        };
         if let Some(error) = value.get("error") {
-            let message = error.get("message").and_then(|v| v.as_str()).unwrap_or("stream error");
+            let message = error
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stream error");
             return Err(format!("{} error: {message}", self.provider));
         }
         let Some(delta) = value
@@ -1431,39 +1540,112 @@ impl StreamingProvider for OpenAiAdapter {
             .and_then(|c| c.as_array())
             .and_then(|c| c.first())
             .and_then(|c| c.get("delta"))
-        else { return Ok(()); };
+        else {
+            return Ok(());
+        };
         if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
             if !c.is_empty() {
                 content.push_str(c);
-                on_chunk(StreamChunk { content: c.to_string(), thinking: String::new() });
+                on_chunk(StreamChunk {
+                    content: c.to_string(),
+                    thinking: String::new(),
+                });
             }
         }
         if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
             for call in calls {
                 let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while tools.len() <= index { tools.push(OpenAiToolAcc::default()); }
+                while tools.len() <= index {
+                    tools.push(OpenAiToolAcc::default());
+                }
                 let acc = &mut tools[index];
-                if let Some(id) = call.get("id").and_then(|v| v.as_str()) { acc.id = id.to_string(); }
+                if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
+                    acc.id = id.to_string();
+                }
                 if let Some(function) = call.get("function") {
-                    if let Some(name) = function.get("name").and_then(|v| v.as_str()) { acc.name.push_str(name); }
-                    if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) { acc.args.push_str(args); }
+                    if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
+                        acc.name.push_str(name);
+                    }
+                    if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) {
+                        acc.args.push_str(args);
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    fn finalize_response(content: String, _thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
+    fn finalize_response(
+        content: String,
+        _thinking: String,
+        tools: Self::ToolAccumulator,
+    ) -> AiChatResponse {
+        let (content, thinking) = split_thinking_tags(&content);
         let tool_calls: Vec<serde_json::Value> = tools
             .into_iter()
             .filter(|t| !t.name.is_empty())
-            .map(|t| serde_json::json!({
-                "id": t.id, "type": "function",
-                "function": { "name": t.name, "arguments": t.args },
-            }))
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id, "type": "function",
+                    "function": { "name": t.name, "arguments": t.args },
+                })
+            })
             .collect();
-        AiChatResponse { content, thinking: None, tool_calls }
+        AiChatResponse {
+            content,
+            thinking: if thinking.trim().is_empty() {
+                None
+            } else {
+                Some(thinking)
+            },
+            tool_calls,
+        }
     }
+}
+
+fn openai_chat_body(
+    model: &str,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    include_tools: bool,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": normalize_openai_messages(messages),
+        "stream": true,
+    });
+    if include_tools {
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                body["tools"] = serde_json::Value::Array(tools);
+                body["tool_choice"] = serde_json::json!("auto");
+            }
+        }
+    }
+    body
+}
+
+fn split_thinking_tags(raw: &str) -> (String, String) {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let mut thinking = String::new();
+    let mut content = String::new();
+    let mut rest = raw;
+    loop {
+        let Some(open) = rest.find(OPEN) else {
+            content.push_str(rest);
+            break;
+        };
+        content.push_str(&rest[..open]);
+        let after_open = &rest[open + OPEN.len()..];
+        let Some(close) = after_open.find(CLOSE) else {
+            thinking.push_str(after_open);
+            break;
+        };
+        thinking.push_str(&after_open[..close]);
+        rest = &after_open[close + CLOSE.len()..];
+    }
+    (content.trim_start().to_string(), thinking)
 }
 
 async fn openai_compatible_chat(
@@ -1474,7 +1656,13 @@ async fn openai_compatible_chat(
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
-    let adapter = OpenAiAdapter { provider, model, messages, tools, key: Some(key) };
+    let adapter = OpenAiAdapter {
+        provider,
+        model,
+        messages,
+        tools,
+        key: Some(key),
+    };
     stream_provider(adapter, on_chunk).await
 }
 
@@ -1484,7 +1672,13 @@ async fn mlx_chat(
     tools: Option<Vec<serde_json::Value>>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let adapter = OpenAiAdapter { provider: "mlx".to_string(), model, messages, tools, key: None };
+    let adapter = OpenAiAdapter {
+        provider: "mlx".to_string(),
+        model,
+        messages,
+        tools,
+        key: None,
+    };
     stream_provider(adapter, on_chunk).await
 }
 
@@ -1519,7 +1713,9 @@ fn anthropic_push(
     role: &str,
     blocks: Vec<serde_json::Value>,
 ) {
-    if blocks.is_empty() { return; }
+    if blocks.is_empty() {
+        return;
+    }
     if let Some(last) = turns.last_mut() {
         if last.0 == role {
             last.1.extend(blocks);
@@ -1533,28 +1729,43 @@ fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_js
     let mut system_parts: Vec<String> = Vec::new();
     let mut turns: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
     for message in &messages {
-        let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let role = message
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or("user");
         match role {
             "system" => {
                 let text = text_from_message(message);
-                if !text.trim().is_empty() { system_parts.push(text); }
+                if !text.trim().is_empty() {
+                    system_parts.push(text);
+                }
             }
             "tool" => {
-                let id = message.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or_default();
+                let id = message
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let block = serde_json::json!({ "type": "tool_result", "tool_use_id": id, "content": text_from_message(message) });
                 anthropic_push(&mut turns, "user", vec![block]);
             }
             "assistant" => {
                 let mut blocks = Vec::new();
                 let text = text_from_message(message);
-                if !text.trim().is_empty() { blocks.push(serde_json::json!({ "type": "text", "text": text })); }
+                if !text.trim().is_empty() {
+                    blocks.push(serde_json::json!({ "type": "text", "text": text }));
+                }
                 if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
                     for call in calls {
                         let id = call.get("id").and_then(|v| v.as_str()).unwrap_or_default();
                         let function = call.get("function");
-                        let name = function.and_then(|f| f.get("name")).and_then(|v| v.as_str()).unwrap_or_default();
+                        let name = function
+                            .and_then(|f| f.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
                         let input = match function.and_then(|f| f.get("arguments")) {
-                            Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({})),
+                            Some(serde_json::Value::String(s)) => {
+                                serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({}))
+                            }
                             Some(other) => other.clone(),
                             None => serde_json::json!({}),
                         };
@@ -1566,24 +1777,39 @@ fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_js
             _ => {
                 let text = text_from_message(message);
                 if !text.trim().is_empty() {
-                    anthropic_push(&mut turns, "user", vec![serde_json::json!({ "type": "text", "text": text })]);
+                    anthropic_push(
+                        &mut turns,
+                        "user",
+                        vec![serde_json::json!({ "type": "text", "text": text })],
+                    );
                 }
             }
         }
     }
-    let out = turns.into_iter().map(|(role, blocks)| serde_json::json!({ "role": role, "content": blocks })).collect();
+    let out = turns
+        .into_iter()
+        .map(|(role, blocks)| serde_json::json!({ "role": role, "content": blocks }))
+        .collect();
     (system_parts.join("\n\n"), out)
 }
 
 fn anthropic_tools(tools: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-    tools.into_iter().filter_map(|t| {
-        let function = t.get("function")?;
-        let name = function.get("name")?.as_str()?;
-        let mut tool = serde_json::json!({ "name": name });
-        if let Some(desc) = function.get("description") { tool["description"] = desc.clone(); }
-        tool["input_schema"] = function.get("parameters").cloned().unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
-        Some(tool)
-    }).collect()
+    tools
+        .into_iter()
+        .filter_map(|t| {
+            let function = t.get("function")?;
+            let name = function.get("name")?.as_str()?;
+            let mut tool = serde_json::json!({ "name": name });
+            if let Some(desc) = function.get("description") {
+                tool["description"] = desc.clone();
+            }
+            tool["input_schema"] = function
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
+            Some(tool)
+        })
+        .collect()
 }
 
 // ── Anthropic adapter ──
@@ -1605,7 +1831,9 @@ struct AnthropicAdapter {
 impl StreamingProvider for AnthropicAdapter {
     type ToolAccumulator = Vec<AnthropicToolAcc>;
 
-    fn name(&self) -> &str { "Anthropic" }
+    fn name(&self) -> &str {
+        "Anthropic"
+    }
 
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
         let (system, msgs) = anthropic_messages(self.messages.clone());
@@ -1640,11 +1868,21 @@ impl StreamingProvider for AnthropicAdapter {
         tools: &mut Self::ToolAccumulator,
         on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
-        let Some(data) = line.trim().strip_prefix("data:") else { return Ok(()); };
+        let Some(data) = line.trim().strip_prefix("data:") else {
+            return Ok(());
+        };
         let data = data.trim();
-        if data.is_empty() { return Ok(()); }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { return Ok(()); };
-        match value.get("type").and_then(|v| v.as_str()).unwrap_or_default() {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            return Ok(());
+        };
+        match value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+        {
             // Anthropic delivers mid-stream failures as `error` events over
             // HTTP 200 — they must fail the request, not vanish.
             "error" => {
@@ -1657,25 +1895,42 @@ impl StreamingProvider for AnthropicAdapter {
             }
             "content_block_start" => {
                 let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while tools.len() <= index { tools.push(AnthropicToolAcc::default()); }
+                while tools.len() <= index {
+                    tools.push(AnthropicToolAcc::default());
+                }
                 if let Some(cb) = value.get("content_block") {
                     if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
                         let acc = &mut tools[index];
-                        acc.id = cb.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                        acc.name = cb.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                        acc.id = cb
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        acc.name = cb
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
                     }
                 }
             }
             "content_block_delta" => {
                 let index = value.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while tools.len() <= index { tools.push(AnthropicToolAcc::default()); }
-                let Some(delta) = value.get("delta") else { return Ok(()); };
+                while tools.len() <= index {
+                    tools.push(AnthropicToolAcc::default());
+                }
+                let Some(delta) = value.get("delta") else {
+                    return Ok(());
+                };
                 match delta.get("type").and_then(|v| v.as_str()) {
                     Some("text_delta") => {
                         if let Some(t) = delta.get("text").and_then(|v| v.as_str()) {
                             if !t.is_empty() {
                                 content.push_str(t);
-                                on_chunk(StreamChunk { content: t.to_string(), thinking: String::new() });
+                                on_chunk(StreamChunk {
+                                    content: t.to_string(),
+                                    thinking: String::new(),
+                                });
                             }
                         }
                     }
@@ -1692,19 +1947,29 @@ impl StreamingProvider for AnthropicAdapter {
         Ok(())
     }
 
-    fn finalize_response(content: String, _thinking: String, tools: Self::ToolAccumulator) -> AiChatResponse {
+    fn finalize_response(
+        content: String,
+        _thinking: String,
+        tools: Self::ToolAccumulator,
+    ) -> AiChatResponse {
         let tool_calls: Vec<serde_json::Value> = tools
             .into_iter()
             .filter(|b| !b.name.is_empty())
-            .map(|b| serde_json::json!({
-                "id": b.id, "type": "function",
-                "function": {
-                    "name": b.name,
-                    "arguments": if b.args.is_empty() { "{}".to_string() } else { b.args },
-                },
-            }))
+            .map(|b| {
+                serde_json::json!({
+                    "id": b.id, "type": "function",
+                    "function": {
+                        "name": b.name,
+                        "arguments": if b.args.is_empty() { "{}".to_string() } else { b.args },
+                    },
+                })
+            })
             .collect();
-        AiChatResponse { content, thinking: None, tool_calls }
+        AiChatResponse {
+            content,
+            thinking: None,
+            tool_calls,
+        }
     }
 }
 
@@ -1715,7 +1980,12 @@ async fn anthropic_chat(
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
-    let adapter = AnthropicAdapter { model, messages, tools, key };
+    let adapter = AnthropicAdapter {
+        model,
+        messages,
+        tools,
+        key,
+    };
     stream_provider(adapter, on_chunk).await
 }
 
@@ -1912,19 +2182,31 @@ fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Result<String, String> {
+fn create_pr(
+    workspace_root: String,
+    title: String,
+    body: Option<String>,
+) -> Result<String, String> {
     // Create a branch from the current changes. Cap the name at 50 chars —
     // truncate() takes a BYTE index and panics mid-char on non-ASCII titles
     // (is_alphanumeric keeps accented/Unicode letters), so count chars instead.
-    let branch: String = format!("klide/{}", title.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-'))
-        .chars()
-        .take(50)
-        .collect();
+    let branch: String = format!(
+        "klide/{}",
+        title
+            .to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+            .trim_matches('-')
+    )
+    .chars()
+    .take(50)
+    .collect();
 
     // Check if gh CLI is available
     let gh_check = Command::new("gh").arg("--version").output();
     if gh_check.is_err() || !gh_check.unwrap().status.success() {
-        return Err("GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string());
+        return Err(
+            "GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string(),
+        );
     }
 
     // Stage all changes
@@ -1947,13 +2229,24 @@ fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Res
     run_git(&workspace_root, &["commit", "-m", title.trim()])?;
 
     let push = Command::new("git")
-        .args(["-C", &workspace_root, "push", "-u", "origin", branch.as_str()])
+        .args([
+            "-C",
+            &workspace_root,
+            "push",
+            "-u",
+            "origin",
+            branch.as_str(),
+        ])
         .output()
         .map_err(|e| format!("Failed to push: {e}"))?;
     if !push.status.success() {
         let err = String::from_utf8_lossy(&push.stderr);
-        let _ = Command::new("git").args(["-C", &workspace_root, "checkout", "-"]).status();
-        let _ = Command::new("git").args(["-C", &workspace_root, "branch", "-D", branch.as_str()]).status();
+        let _ = Command::new("git")
+            .args(["-C", &workspace_root, "checkout", "-"])
+            .status();
+        let _ = Command::new("git")
+            .args(["-C", &workspace_root, "branch", "-D", branch.as_str()])
+            .status();
         return Err(format!("Push failed: {}", err.trim()));
     }
 
@@ -1973,7 +2266,11 @@ fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Res
 
     if pr.status.success() {
         let url = String::from_utf8_lossy(&pr.stdout).trim().to_string();
-        Ok(if url.is_empty() { format!("PR created on branch '{branch}'") } else { url })
+        Ok(if url.is_empty() {
+            format!("PR created on branch '{branch}'")
+        } else {
+            url
+        })
     } else {
         let err = String::from_utf8_lossy(&pr.stderr);
         Err(format!("PR creation failed: {}", err.trim()))
@@ -1982,20 +2279,34 @@ fn create_pr(workspace_root: String, title: String, body: Option<String>) -> Res
 
 #[tauri::command]
 fn create_worktree(workspace_root: String, name: String) -> Result<String, String> {
-    let safe = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-").trim_matches('-').to_string();
+    let safe = name
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+        .trim_matches('-')
+        .to_string();
     let branch = format!("feature/{safe}");
     let worktree_path = format!("{}-{}", workspace_root.trim_end_matches('/'), safe);
 
     run_git(&workspace_root, &["checkout", "-b", &branch])?;
     let output = Command::new("git")
-        .args(["-C", &workspace_root, "worktree", "add", worktree_path.as_str(), &branch])
+        .args([
+            "-C",
+            &workspace_root,
+            "worktree",
+            "add",
+            worktree_path.as_str(),
+            &branch,
+        ])
         .output()
         .map_err(|e| format!("Failed to create worktree: {e}"))?;
 
     if !output.status.success() {
         let _ = run_git(&workspace_root, &["checkout", "-"]);
         let _ = run_git(&workspace_root, &["branch", "-D", &branch]);
-        return Err(format!("Worktree creation failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        return Err(format!(
+            "Worktree creation failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     Ok(worktree_path)
 }
@@ -2158,13 +2469,28 @@ fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String>
     } else {
         branch
     };
-    let upstream = git_output(workspace_root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok();
-    let upstream = upstream.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let upstream = git_output(
+        workspace_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok();
+    let upstream = upstream
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     // ahead/behind relative to upstream.
     let (ahead, behind) = match &upstream {
         Some(up) => {
-            let ab = git_output(workspace_root, &["rev-list", "--left-right", "--count", &format!("{up}...HEAD")]).unwrap_or_default();
+            let ab = git_output(
+                workspace_root,
+                &[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    &format!("{up}...HEAD"),
+                ],
+            )
+            .unwrap_or_default();
             let mut it = ab.split_whitespace();
             (
                 it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
@@ -2249,7 +2575,11 @@ fn git_discard(workspace_root: String, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn git_stash(workspace_root: String, action: String, message: Option<String>) -> Result<String, String> {
+fn git_stash(
+    workspace_root: String,
+    action: String,
+    message: Option<String>,
+) -> Result<String, String> {
     match action.as_str() {
         "push" => {
             let msg = message.unwrap_or_else(|| "WIP".to_string());
@@ -2338,21 +2668,47 @@ fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, String> {
             None => continue,
         };
         let number = obj.get("number").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-        let title = obj.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let state = obj.get("state").and_then(|x| x.as_str()).unwrap_or("OPEN").to_string();
-        let is_draft = obj.get("isDraft").and_then(|x| x.as_bool()).unwrap_or(false);
+        let title = obj
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let state = obj
+            .get("state")
+            .and_then(|x| x.as_str())
+            .unwrap_or("OPEN")
+            .to_string();
+        let is_draft = obj
+            .get("isDraft")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
         let author = obj
             .get("author")
             .and_then(|x| x.get("login"))
             .and_then(|x| x.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let head_ref = obj.get("headRefName").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let base_ref = obj.get("baseRefName").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let url = obj.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let head_ref = obj
+            .get("headRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let base_ref = obj
+            .get("baseRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let url = obj
+            .get("url")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         let additions = obj.get("additions").and_then(|x| x.as_i64()).unwrap_or(0);
         let deletions = obj.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0);
-        let changed_files = obj.get("changedFiles").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+        let changed_files = obj
+            .get("changedFiles")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0) as i32;
         let updated_at_ms = obj
             .get("updatedAt")
             .and_then(|x| x.as_str())
@@ -2402,13 +2758,32 @@ fn git_pr_view(workspace_root: String, number: u32) -> Result<PullRequestDetails
         Some(o) => o,
         None => return Err(format!("PR #{number} not found")),
     };
-    let state = obj.get("state").and_then(|x| x.as_str()).unwrap_or("OPEN").to_string();
-    let is_draft = obj.get("isDraft").and_then(|x| x.as_bool()).unwrap_or(false);
-    let badge = if is_draft { "draft".to_string() } else { state.to_lowercase() };
+    let state = obj
+        .get("state")
+        .and_then(|x| x.as_str())
+        .unwrap_or("OPEN")
+        .to_string();
+    let is_draft = obj
+        .get("isDraft")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let badge = if is_draft {
+        "draft".to_string()
+    } else {
+        state.to_lowercase()
+    };
     Ok(PullRequestDetails {
         number: obj.get("number").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-        title: obj.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        body: obj.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        title: obj
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        body: obj
+            .get("body")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         state,
         is_draft,
         author: obj
@@ -2417,14 +2792,33 @@ fn git_pr_view(workspace_root: String, number: u32) -> Result<PullRequestDetails
             .and_then(|x| x.as_str())
             .unwrap_or("unknown")
             .to_string(),
-        head_ref: obj.get("headRefName").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        base_ref: obj.get("baseRefName").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        url: obj.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        head_ref: obj
+            .get("headRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        base_ref: obj
+            .get("baseRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        url: obj
+            .get("url")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         additions: obj.get("additions").and_then(|x| x.as_i64()).unwrap_or(0),
         deletions: obj.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0),
-        changed_files: obj.get("changedFiles").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+        changed_files: obj
+            .get("changedFiles")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0) as i32,
         badge,
-        mergeable: obj.get("mergeable").and_then(|x| x.as_str()).unwrap_or("UNKNOWN").to_string(),
+        mergeable: obj
+            .get("mergeable")
+            .and_then(|x| x.as_str())
+            .unwrap_or("UNKNOWN")
+            .to_string(),
         created_at_ms: obj
             .get("createdAt")
             .and_then(|x| x.as_str())
@@ -2442,15 +2836,16 @@ fn git_pr_view(workspace_root: String, number: u32) -> Result<PullRequestDetails
 
 #[tauri::command]
 fn git_pr_checkout(workspace_root: String, number: u32) -> Result<String, String> {
-    let out = git_output(
-        &workspace_root,
-        &["pr", "checkout", &number.to_string()],
-    )?;
+    let out = git_output(&workspace_root, &["pr", "checkout", &number.to_string()])?;
     Ok(out.trim().to_string())
 }
 
 #[tauri::command]
-fn git_pr_merge(workspace_root: String, number: u32, method: Option<String>) -> Result<String, String> {
+fn git_pr_merge(
+    workspace_root: String,
+    number: u32,
+    method: Option<String>,
+) -> Result<String, String> {
     let method = method.unwrap_or_else(|| "merge".to_string());
     let flag = match method.as_str() {
         "merge" => "--merge",
@@ -2471,7 +2866,15 @@ fn git_pr_open(workspace_root: String, number: u32) -> Result<String, String> {
     // resolved URL so the UI can show a toast.
     let url = git_output(
         &workspace_root,
-        &["pr", "view", &number.to_string(), "--json", "url", "-q", ".url"],
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "url",
+            "-q",
+            ".url",
+        ],
     )?;
     let url = url.trim().to_string();
     if url.is_empty() {
@@ -2490,182 +2893,17 @@ fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool, String> {
     // `gh pr view <n> --json merged -q .merged` is the cheapest signal.
     let raw = git_output(
         &workspace_root,
-        &["pr", "view", &number.to_string(), "--json", "merged", "-q", ".merged"],
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "merged",
+            "-q",
+            ".merged",
+        ],
     )?;
     Ok(raw.trim().eq_ignore_ascii_case("true"))
-}
-
-fn graph_group_name(path: &str) -> String {
-    let first = path.split('/').next().unwrap_or(path);
-    match first {
-        "src" => "Frontend".to_string(),
-        "src-tauri" => "Tauri".to_string(),
-        "public" => "Assets".to_string(),
-        ".github" => "Automation".to_string(),
-        _ if path.contains('/') => first.to_string(),
-        _ => "Root".to_string(),
-    }
-}
-
-#[tauri::command]
-fn project_graph(workspace_root: String) -> Result<ProjectGraph, String> {
-    use std::collections::BTreeMap;
-
-    let branch = git_output(&workspace_root, &["branch", "--show-current"])?
-        .trim()
-        .to_string();
-    let files_out = git_output(&workspace_root, &["ls-files"])?;
-    let tracked_files: Vec<String> = files_out
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.to_string())
-        .collect();
-
-    let status = git_status(workspace_root.clone())?;
-    let mut additions_by_path: BTreeMap<String, usize> = BTreeMap::new();
-    let mut deletions_by_path: BTreeMap<String, usize> = BTreeMap::new();
-
-    let numstat = git_output(&workspace_root, &["diff", "--numstat"])?;
-    for line in numstat.lines() {
-        let mut parts = line.split('\t');
-        let adds = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        let dels = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        if let Some(path) = parts.next() {
-            additions_by_path.insert(path.to_string(), adds);
-            deletions_by_path.insert(path.to_string(), dels);
-        }
-    }
-
-    let staged_numstat = git_output(&workspace_root, &["diff", "--cached", "--numstat"])?;
-    for line in staged_numstat.lines() {
-        let mut parts = line.split('\t');
-        let adds = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        let dels = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        if let Some(path) = parts.next() {
-            *additions_by_path.entry(path.to_string()).or_default() += adds;
-            *deletions_by_path.entry(path.to_string()).or_default() += dels;
-        }
-    }
-
-    for file in &status.files {
-        if file.status == "??" {
-            let full_path = std::path::Path::new(&workspace_root).join(&file.path);
-            let line_count = std::fs::read_to_string(full_path)
-                .map(|content| content.lines().count().max(1))
-                .unwrap_or(0);
-            additions_by_path.insert(file.path.clone(), line_count);
-            deletions_by_path.insert(file.path.clone(), 0);
-        }
-    }
-
-    let mut groups: BTreeMap<String, ProjectGraphGroup> = BTreeMap::new();
-    let status_by_path: BTreeMap<String, String> = status
-        .files
-        .iter()
-        .map(|file| (file.path.clone(), file.status.clone()))
-        .collect();
-
-    for path in &tracked_files {
-        let name = graph_group_name(path);
-        let entry = groups.entry(name.clone()).or_insert(ProjectGraphGroup {
-            name,
-            file_count: 0,
-            changed_count: 0,
-            additions: 0,
-            deletions: 0,
-        });
-        entry.file_count += 1;
-    }
-
-    let mut changes = Vec::new();
-    let mut additions = 0;
-    let mut deletions = 0;
-    for file in &status.files {
-        let adds = additions_by_path.get(&file.path).copied().unwrap_or(0);
-        let dels = deletions_by_path.get(&file.path).copied().unwrap_or(0);
-        additions += adds;
-        deletions += dels;
-
-        let name = graph_group_name(&file.path);
-        let entry = groups.entry(name.clone()).or_insert(ProjectGraphGroup {
-            name,
-            file_count: 0,
-            changed_count: 0,
-            additions: 0,
-            deletions: 0,
-        });
-        entry.changed_count += 1;
-        entry.additions += adds;
-        entry.deletions += dels;
-
-        changes.push(ProjectGraphChange {
-            path: file.path.clone(),
-            status: file.status.clone(),
-            additions: adds,
-            deletions: dels,
-        });
-    }
-
-    let mut graph_files: Vec<ProjectGraphFile> = tracked_files
-        .iter()
-        .map(|path| {
-            let status = status_by_path.get(path).cloned().unwrap_or_default();
-            ProjectGraphFile {
-                path: path.clone(),
-                changed: !status.is_empty(),
-                additions: additions_by_path.get(path).copied().unwrap_or(0),
-                deletions: deletions_by_path.get(path).copied().unwrap_or(0),
-                status,
-            }
-        })
-        .collect();
-
-    for file in &status.files {
-        if file.status == "??" && !graph_files.iter().any(|tracked| tracked.path == file.path) {
-            graph_files.push(ProjectGraphFile {
-                path: file.path.clone(),
-                status: file.status.clone(),
-                changed: true,
-                additions: additions_by_path.get(&file.path).copied().unwrap_or(0),
-                deletions: deletions_by_path.get(&file.path).copied().unwrap_or(0),
-            });
-        }
-    }
-
-    graph_files.sort_by(|a, b| a.path.cmp(&b.path));
-
-    let root_name = std::path::Path::new(&workspace_root)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| workspace_root.clone());
-
-    Ok(ProjectGraph {
-        root_name,
-        branch: if branch.is_empty() {
-            "unknown".to_string()
-        } else {
-            branch
-        },
-        total_files: tracked_files.len(),
-        changed_files: status.files.len(),
-        additions,
-        deletions,
-        groups: groups.into_values().collect(),
-        changes,
-        files: graph_files,
-    })
 }
 
 // ── Agent runs aggregation ──────────────────────────────────────────────
@@ -2739,10 +2977,7 @@ fn opencode_model_label(raw: &str) -> Option<String> {
 
 // One round-trip per row: pull everything the board needs, including the
 // message count via subquery so we don't fan out one extra query per session.
-fn parse_opencode_run(
-    conn: &rusqlite::Connection,
-    session_id: &str,
-) -> Option<AgentRun> {
+fn parse_opencode_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> {
     let mut stmt = conn
         .prepare(
             "SELECT s.id, s.title, s.directory, s.model, s.time_updated, \
@@ -2824,7 +3059,11 @@ fn parse_opencode_run(
                 return None;
             }
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
     let project = cwd.as_deref().and_then(project_name);
 
@@ -2895,8 +3134,8 @@ fn opencode_message_text(parts: &[serde_json::Value]) -> Option<String> {
 
 #[tauri::command]
 fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String> {
-    let conn = opencode_connect()
-        .ok_or_else(|| "OpenCode session database is unavailable".to_string())?;
+    let conn =
+        opencode_connect().ok_or_else(|| "OpenCode session database is unavailable".to_string())?;
 
     let mut msg_stmt = conn
         .prepare(
@@ -2945,9 +3184,7 @@ fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String> {
             continue;
         }
         let parts = parts_by_message.get(&msg_id);
-        if let Some(text) =
-            opencode_message_text(parts.map(|v| v.as_slice()).unwrap_or(&[]))
-        {
+        if let Some(text) = opencode_message_text(parts.map(|v| v.as_slice()).unwrap_or(&[])) {
             if role == "user" && text.starts_with('<') {
                 continue;
             }
@@ -3117,12 +3354,30 @@ fn parse_codex_run(
     path: &std::path::Path,
     index: &std::collections::HashMap<String, String>,
 ) -> Option<AgentRun> {
-    let content = std::fs::read_to_string(path).ok()?;
+    use std::io::BufRead;
+    // Codex rollout files can be hundreds of MB — tool outputs are written
+    // inline, one giant JSON object per line. Building a serde_json::Value tree
+    // for every line is what made the Stats panel freeze the machine on large
+    // histories. Stream the file and skip JSON-parsing oversized lines: those
+    // are always tool-output `response_item` records, which we only need to
+    // count, never inspect. The metadata and token-usage lines we do read are
+    // always small.
+    const MAX_PARSE_LINE: usize = 32 * 1024;
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
     let (mut id, mut cwd, mut branch, mut model) = (None, None, None, None);
     let mut count: u32 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
-    for line in content.lines() {
-        let v: serde_json::Value = match serde_json::from_str(line) {
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        if line.len() > MAX_PARSE_LINE {
+            count += 1; // oversized line = a tool-output response_item
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -3237,7 +3492,11 @@ fn collect_codex_rollouts(dir: &std::path::Path, out: &mut Vec<std::path::PathBu
 }
 
 #[tauri::command]
-fn list_agent_runs(app: tauri::AppHandle, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<AgentRun>, String> {
+fn list_agent_runs(
+    app: tauri::AppHandle,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<AgentRun>, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let cap = limit.unwrap_or(10);
     let off = offset.unwrap_or(0);
@@ -3307,7 +3566,9 @@ fn list_agent_runs(app: tauri::AppHandle, limit: Option<usize>, offset: Option<u
             let mut run = match source {
                 "claude-code" => parse_claude_run(&path)?,
                 "codex" => parse_codex_run(&path, &codex_index)?,
-                "opencode" => opencode_conn.as_ref().and_then(|c| parse_opencode_run(c, path.to_str().unwrap_or("")))?,
+                "opencode" => opencode_conn
+                    .as_ref()
+                    .and_then(|c| parse_opencode_run(c, path.to_str().unwrap_or("")))?,
                 _ => return None,
             };
             // Inject parent_id from spawn mapping if available.
@@ -3315,7 +3576,8 @@ fn list_agent_runs(app: tauri::AppHandle, limit: Option<usize>, offset: Option<u
             // (for cases where OpenCode created its own session ID different
             // from the session_id we passed to delegate_pty_spawn).
             if run.parent_id.is_none() {
-                let parent = by_delegate.get(&run.id)
+                let parent = by_delegate
+                    .get(&run.id)
                     .or_else(|| by_external.get(&run.id));
                 if let Some(mapping) = parent {
                     run.parent_id = Some(mapping.parent_id.clone());
@@ -3491,19 +3753,101 @@ fn local_server_command(provider: &str, model: &str) -> Result<(String, Vec<Stri
     match provider {
         "ollama" => Ok(("ollama".to_string(), vec!["serve".to_string()])),
         "mlx" => {
+            let model = canonical_mlx_model(model);
+            if let Ok(server) = resolve_command("mlx_lm.server") {
+                return Ok((server, vec!["--model".to_string(), model]));
+            }
             let python = if std::env::consts::OS == "macos" {
                 "python3"
             } else {
                 "python"
             };
-            Ok((python.to_string(), vec![
-                "-m".to_string(),
-                "mlx_lm.server".to_string(),
-                "--model".to_string(),
-                model.to_string(),
-            ]))
+            Ok((
+                python.to_string(),
+                vec![
+                    "-m".to_string(),
+                    "mlx_lm.server".to_string(),
+                    "--model".to_string(),
+                    model,
+                ],
+            ))
         }
         _ => Err(format!("{provider} is not a local server provider")),
+    }
+}
+
+fn canonical_mlx_model(model: &str) -> String {
+    let trimmed = model.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(':')
+        || (!trimmed.contains('/') && !trimmed.starts_with('.'))
+    {
+        MLX_DEFAULT_MODEL.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn home_dir_path() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    if cfg!(windows) {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    } else {
+        None
+    }
+}
+
+fn hf_hub_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("HF_HUB_CACHE")
+        .map(PathBuf::from)
+        .or_else(|| home_dir_path().map(|home| home.join(".cache").join("huggingface").join("hub")))
+}
+
+fn ensure_mlx_cache_dir() -> Result<Option<PathBuf>, String> {
+    let Some(cache_dir) = hf_hub_cache_dir() else {
+        return Ok(None);
+    };
+    std::fs::create_dir_all(&cache_dir).map_err(|e| {
+        format!(
+            "Failed to create Hugging Face cache dir {}: {e}",
+            cache_dir.display()
+        )
+    })?;
+    Ok(Some(cache_dir))
+}
+
+fn local_server_stderr_path(provider: &str) -> PathBuf {
+    if cfg!(unix) {
+        PathBuf::from(format!("/tmp/klide-{provider}-stderr.log"))
+    } else {
+        std::env::temp_dir().join(format!("klide-{provider}-stderr.log"))
+    }
+}
+
+async fn mlx_server_ready() -> bool {
+    tokio::net::TcpStream::connect("127.0.0.1:8080")
+        .await
+        .is_ok()
+}
+
+async fn local_server_ready(provider: &str) -> bool {
+    match provider {
+        "ollama" => reqwest::get(format!("{OLLAMA_URL}/api/tags"))
+            .await
+            .map(|res| res.status().is_success())
+            .unwrap_or(false),
+        "mlx" => mlx_server_ready().await,
+        _ => false,
+    }
+}
+
+fn local_server_start_attempts(provider: &str) -> usize {
+    match provider {
+        // First MLX run can include Hugging Face download + Metal model load.
+        "mlx" => 360,
+        _ => 40,
     }
 }
 
@@ -3517,17 +3861,9 @@ async fn ai_local_server_start(
         return Err(format!("{provider} is not a local server provider"));
     }
 
-    let url = match provider.as_str() {
-        "ollama" => format!("{OLLAMA_URL}/api/tags"),
-        "mlx" => "http://localhost:8080/v1/models".to_string(),
-        _ => return Ok(false),
-    };
-
     // Already running externally or previously started
-    if let Ok(res) = reqwest::get(&url).await {
-        if res.status().is_success() {
-            return Ok(true);
-        }
+    if local_server_ready(&provider).await {
+        return Ok(true);
     }
 
     {
@@ -3539,23 +3875,33 @@ async fn ai_local_server_start(
 
     let (cmd, args) = local_server_command(&provider, &model)?;
 
-    let stderr_path = std::env::temp_dir().join(format!("klide-{provider}-stderr.log"));
+    let hf_cache_dir = if provider == "mlx" {
+        ensure_mlx_cache_dir()?
+    } else {
+        None
+    };
+
+    let stderr_path = local_server_stderr_path(&provider);
     let stderr_file = std::fs::File::create(&stderr_path)
         .map_err(|e| format!("Failed to create stderr log: {e}"))?;
 
-    let mut child = Command::new(&cmd)
+    let mut command = Command::new(&cmd);
+    command
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::from(stderr_file))
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                format!("Command not found: {cmd}. Make sure {provider} is installed.")
-            } else {
-                format!("Failed to start {provider}: {e}")
-            }
-        })?;
+        .stderr(Stdio::from(stderr_file));
+    if let Some(cache_dir) = hf_cache_dir {
+        command.env("HF_HUB_CACHE", cache_dir);
+    }
+
+    let mut child = command.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("Command not found: {cmd}. Make sure {provider} is installed.")
+        } else {
+            format!("Failed to start {provider}: {e}")
+        }
+    })?;
 
     // Quick check for immediate exit (wrong args, missing module, etc.)
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -3569,8 +3915,9 @@ async fn ai_local_server_start(
         return Err(msg);
     }
 
-    // MLX model loading can take 10–20 s on first run; retry up to 20 s.
-    for _ in 0..40 {
+    // MLX first run can take minutes if it has to download and compile/load
+    // the model; Ollama usually answers quickly.
+    for _ in 0..local_server_start_attempts(&provider) {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         match child.try_wait() {
@@ -3587,12 +3934,10 @@ async fn ai_local_server_start(
             Err(e) => return Err(format!("Failed to check {provider} status: {e}")),
         }
 
-        if let Ok(res) = reqwest::get(&url).await {
-            if res.status().is_success() {
-                let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
-                procs.insert(provider, child);
-                return Ok(true);
-            }
+        if local_server_ready(&provider).await {
+            let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
+            procs.insert(provider, child);
+            return Ok(true);
         }
     }
 
@@ -3603,7 +3948,9 @@ async fn ai_local_server_start(
     if stderr.trim().is_empty() {
         Ok(false)
     } else {
-        Err(format!("{provider} timed out starting. Last stderr:\n{stderr}"))
+        Err(format!(
+            "{provider} timed out starting. Last stderr:\n{stderr}"
+        ))
     }
 }
 
@@ -3629,20 +3976,333 @@ fn ai_local_server_stop(
     Ok(false)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillCommandResult {
+    ok: bool,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// One skill discovered on disk. Mirrors the shape the frontend builds
+/// locally so the UI can drop these into the same Skill[] list.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileSystemSkill {
+    id: String,
+    name: String,
+    description: String,
+    instructions: String,
+    /// Path to the SKILL.md, absolute. Display-only — the frontend
+    /// hands it back to `uninstall_skill` by folder name.
+    from_file: String,
+    /// "workspace-agents" | "workspace-klide" | "home-agents" | "home-claude"
+    source: String,
+    /// Human-readable provenance label for grouping in the modal — e.g.
+    /// "Vercel", "Matt Pocock", "Personal", "Workspace".
+    group: String,
+}
+
+fn parse_skill_md(raw: &str, folder: &str) -> (String, String, String) {
+    // Returns (name, description, instructions).
+    let mut name = folder.to_string();
+    let mut description = String::new();
+    let mut instructions = raw.to_string();
+    if let Some(stripped) = raw.strip_prefix("---\n") {
+        if let Some(end) = stripped.find("\n---\n") {
+            let frontmatter = &stripped[..end];
+            for line in frontmatter.lines() {
+                if let Some((k, v)) = line.split_once(':') {
+                    let key = k.trim();
+                    let value = v.trim();
+                    if key == "name" {
+                        name = value.to_string();
+                    }
+                    if key == "description" {
+                        description = value.to_string();
+                    }
+                }
+            }
+            instructions = stripped[end + 5..].trim().to_string();
+        }
+    }
+    (name, description, instructions)
+}
+
+/// Extract provenance metadata from a SKILL.md frontmatter. Returns
+/// (author, repository) — both are best-effort and may be empty. We
+/// support the flat `metadata:` block that `npx skills` packages use:
+///
+///     metadata:
+///       author: vercel
+///       version: "1.0.0"
+fn parse_skill_provenance(raw: &str) -> (String, String) {
+    let Some(stripped) = raw.strip_prefix("---\n") else {
+        return (String::new(), String::new());
+    };
+    let Some(end) = stripped.find("\n---\n") else {
+        return (String::new(), String::new());
+    };
+    let frontmatter = &stripped[..end];
+    let mut in_metadata = false;
+    let mut author = String::new();
+    let mut repository = String::new();
+    for line in frontmatter.lines() {
+        if line.starts_with("metadata:") {
+            in_metadata = true;
+            continue;
+        }
+        if in_metadata {
+            // End of the metadata block when we hit a non-indented line.
+            if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
+                in_metadata = false;
+            } else if let Some((k, v)) = line.trim().split_once(':') {
+                let key = k.trim();
+                let value = v.trim().trim_matches('"');
+                if key == "author" {
+                    author = value.to_string();
+                }
+                if key == "repository" {
+                    repository = value.to_string();
+                }
+            }
+        }
+    }
+    (author, repository)
+}
+
+/// Map (source, author, repository) to a display group label for the
+/// modal. The grouping is "where did this come from" — so install
+/// paths, publisher, and self-authored all show up distinctly.
+fn skill_group_label(source: &str, author: &str, repository: &str) -> String {
+    // Workspace folders always show as their own group, regardless of author.
+    if source == "workspace-agents" {
+        return "Workspace".to_string();
+    }
+    if source == "workspace-klide" {
+        return "Workspace (auto-generated)".to_string();
+    }
+
+    // Author takes precedence — it's the most reliable signal.
+    let a = author.to_lowercase();
+    if !a.is_empty() {
+        match a.as_str() {
+            "vercel" => return "Vercel".to_string(),
+            "anthropic" | "anthropics" => return "Anthropic".to_string(),
+            "mattpocock" | "matt pocock" => return "Matt Pocock".to_string(),
+            _ => {
+                // Unknown author: title-case it for display.
+                let mut chars = a.chars();
+                let titled = match chars.next() {
+                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                };
+                return titled;
+            }
+        }
+    }
+
+    // Fall back to the GitHub repo's owner if we have it.
+    if !repository.is_empty() {
+        // e.g. "https://github.com/vercel-labs/agent-skills" -> "Vercel"
+        let path = repository.trim_end_matches('/');
+        let lower = path.to_lowercase();
+        if let Some(rest) = lower
+            .strip_prefix("https://github.com/")
+            .or_else(|| lower.strip_prefix("github.com/"))
+        {
+            let owner = rest.split('/').next().unwrap_or("");
+            let clean = owner.trim_start_matches('@');
+            match clean {
+                "vercel-labs" | "vercel" => return "Vercel".to_string(),
+                "anthropics" | "anthropic" => return "Anthropic".to_string(),
+                "mattpocock" => return "Matt Pocock".to_string(),
+                _ => {
+                    if !clean.is_empty() {
+                        // Title-case the owner for display.
+                        let mut chars = clean.chars();
+                        return match chars.next() {
+                            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                            None => String::new(),
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    // No author and no repository — distinguish home vs. personal.
+    if source == "home-agents" {
+        return "Personal".to_string();
+    }
+    "Personal".to_string()
+}
+
+/// Walk the four well-known skill locations and return everything we
+/// can find on disk. The Rust side runs unsandboxed, so it can read
+/// the user's home directory without a Tauri fs scope entry.
+#[tauri::command]
+fn list_filesystem_skills(workspace_root: Option<String>) -> Result<Vec<FileSystemSkill>, String> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "Could not resolve home directory.".to_string())?;
+    let home = home.to_string_lossy().to_string();
+
+    let sources: [(&str, std::path::PathBuf); 4] = [
+        (
+            "workspace-agents",
+            std::path::PathBuf::from(format!(
+                "{}/.agents/skills",
+                workspace_root.clone().unwrap_or_default()
+            )),
+        ),
+        (
+            "workspace-klide",
+            std::path::PathBuf::from(format!(
+                "{}/.klide/skills",
+                workspace_root.clone().unwrap_or_default()
+            )),
+        ),
+        (
+            "home-agents",
+            std::path::PathBuf::from(format!("{home}/.agents/skills")),
+        ),
+        (
+            "home-claude",
+            std::path::PathBuf::from(format!("{home}/.claude/skills")),
+        ),
+    ];
+
+    let mut out: Vec<FileSystemSkill> = Vec::new();
+    for (source, dir) in sources.iter() {
+        // Skip the two workspace paths when no workspace is open — the
+        // `format!` above produced an empty workspace_root, which would
+        // otherwise resolve to a stray `/.agents/skills` on macOS.
+        if source.starts_with("workspace-") && workspace_root.is_none() {
+            continue;
+        }
+        let Ok(read) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let folder = match entry.file_name().into_string() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let skill_file = entry.path().join("SKILL.md");
+            if !skill_file.exists() {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(&skill_file) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let (name, description, instructions) = parse_skill_md(&raw, &folder);
+            let (author, repository) = parse_skill_provenance(&raw);
+            let group = skill_group_label(source, &author, &repository);
+            let id = format!("file-{source}-{folder}");
+            out.push(FileSystemSkill {
+                id,
+                name: if name.is_empty() {
+                    folder.clone()
+                } else {
+                    name
+                },
+                description: if description.is_empty() {
+                    format!("Skill from {}", skill_file.display())
+                } else {
+                    description
+                },
+                instructions,
+                from_file: skill_file.to_string_lossy().to_string(),
+                source: (*source).to_string(),
+                group,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Install a skill from a GitHub-style package spec (e.g. `anthropics/skills`,
+/// `anthropics/skills/frontend-design`) into `~/.claude/skills/` via the
+/// `npx skills add` CLI. Returns the captured output so the UI can surface it.
+#[tauri::command]
+async fn install_skill(package: String) -> Result<SkillCommandResult, String> {
+    let trimmed = package.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Package is required.".into());
+    }
+    // No shell — we pass the package as a single argv entry.
+    let output = TokioCommand::new("npx")
+        .arg("--yes")
+        .arg("skills")
+        .arg("add")
+        .arg(&trimmed)
+        .arg("-g") // global: ~/.claude/skills
+        .arg("-y") // non-interactive
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run `npx skills add`: {e}"))?;
+    Ok(SkillCommandResult {
+        ok: output.status.success(),
+        exit_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// Remove a globally-installed skill by its folder name. Removes the
+/// `~/.claude/skills/<name>` directory if it exists.
+#[tauri::command]
+async fn uninstall_skill(name: String) -> Result<SkillCommandResult, String> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Skill name is required.".into());
+    }
+    let trimmed_skill_name = trimmed.clone();
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "Could not resolve home directory.".to_string())?;
+    let target = home
+        .join(".claude")
+        .join("skills")
+        .join(&trimmed_skill_name);
+    if !target.exists() {
+        return Ok(SkillCommandResult {
+            ok: true,
+            exit_code: Some(0),
+            stdout: format!(
+                "Skill `{}` was not installed; nothing to do.",
+                trimmed_skill_name
+            ),
+            stderr: String::new(),
+        });
+    }
+    std::fs::remove_dir_all(&target)
+        .map_err(|e| format!("Failed to remove {}: {e}", target.display()))?;
+    Ok(SkillCommandResult {
+        ok: true,
+        exit_code: Some(0),
+        stdout: format!("Removed {}.", target.display()),
+        stderr: String::new(),
+    })
+}
+
 #[tauri::command]
 async fn ai_local_server_status(provider: String) -> Result<bool, String> {
     if !is_local_server_provider(&provider) {
         return Ok(false);
     }
-    let url = match provider.as_str() {
-        "ollama" => format!("{OLLAMA_URL}/api/tags"),
-        "mlx" => "http://localhost:8080/v1/models".to_string(),
-        _ => return Ok(false),
-    };
-    match reqwest::get(&url).await {
-        Ok(res) => Ok(res.status().is_success()),
-        Err(_) => Ok(false),
-    }
+    Ok(local_server_ready(&provider).await)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3660,7 +4320,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
+            use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 
             let handle = app.handle();
 
@@ -3716,15 +4376,21 @@ pub fn run() {
                 .build()?;
 
             let menu = MenuBuilder::new(handle)
-                .item(&SubmenuBuilder::new(handle, "Klide")
-                    .item(&MenuItemBuilder::with_id("settings", "Settings…").accelerator("CmdOrCtrl+,").build(handle)?)
-                    .separator()
-                    .item(&PredefinedMenuItem::hide(handle, None)?)
-                    .item(&PredefinedMenuItem::hide_others(handle, None)?)
-                    .item(&PredefinedMenuItem::show_all(handle, None)?)
-                    .separator()
-                    .item(&PredefinedMenuItem::quit(handle, None)?)
-                    .build()?)
+                .item(
+                    &SubmenuBuilder::new(handle, "Klide")
+                        .item(
+                            &MenuItemBuilder::with_id("settings", "Settings…")
+                                .accelerator("CmdOrCtrl+,")
+                                .build(handle)?,
+                        )
+                        .separator()
+                        .item(&PredefinedMenuItem::hide(handle, None)?)
+                        .item(&PredefinedMenuItem::hide_others(handle, None)?)
+                        .item(&PredefinedMenuItem::show_all(handle, None)?)
+                        .separator()
+                        .item(&PredefinedMenuItem::quit(handle, None)?)
+                        .build()?,
+                )
                 .item(&file_menu)
                 .item(&edit_menu)
                 .item(&view_menu)
@@ -3735,14 +4401,30 @@ pub fn run() {
             app.on_menu_event(move |_app_handle, event| {
                 let id = event.id().as_ref();
                 match id {
-                    "command-palette" => { let _ = _app_handle.emit("menu:command-palette", ()); }
-                    "find-in-files" => { let _ = _app_handle.emit("menu:find-in-files", ()); }
-                    "toggle-terminal" => { let _ = _app_handle.emit("menu:toggle-terminal", ()); }
-                    "toggle-search" => { let _ = _app_handle.emit("menu:toggle-search", ()); }
-                    "settings" => { let _ = _app_handle.emit("menu:open-settings", ()); }
-                    "close-tab" => { let _ = _app_handle.emit("menu:close-tab", ()); }
-                    "close-window" => { let _ = _app_handle.emit("menu:close-window", ()); }
-                    "open-folder" => { let _ = _app_handle.emit("menu:open-folder", ()); }
+                    "command-palette" => {
+                        let _ = _app_handle.emit("menu:command-palette", ());
+                    }
+                    "find-in-files" => {
+                        let _ = _app_handle.emit("menu:find-in-files", ());
+                    }
+                    "toggle-terminal" => {
+                        let _ = _app_handle.emit("menu:toggle-terminal", ());
+                    }
+                    "toggle-search" => {
+                        let _ = _app_handle.emit("menu:toggle-search", ());
+                    }
+                    "settings" => {
+                        let _ = _app_handle.emit("menu:open-settings", ());
+                    }
+                    "close-tab" => {
+                        let _ = _app_handle.emit("menu:close-tab", ());
+                    }
+                    "close-window" => {
+                        let _ = _app_handle.emit("menu:close-window", ());
+                    }
+                    "open-folder" => {
+                        let _ = _app_handle.emit("menu:open-folder", ());
+                    }
                     _ => {}
                 }
             });
@@ -3767,12 +4449,12 @@ pub fn run() {
             git_unstage,
             git_commit,
             git_diff,
-            project_graph,
             list_agent_runs,
             read_agent_run,
             read_opencode_run,
             ai_provider_models,
             ai_subscription_status,
+            app_user_info,
             ai_context_window,
             ai_model_supports_tools,
             ai_list_tools,
@@ -3793,6 +4475,12 @@ pub fn run() {
             agent::agent_read_run,
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,
+            install_skill,
+            uninstall_skill,
+            list_filesystem_skills,
+            memory_write,
+            memory_list,
+            memory_read,
             create_pr,
             create_worktree,
             git_log,
@@ -3853,7 +4541,13 @@ mod tests {
         let rec = Recorder::default();
         for line in lines {
             adapter
-                .parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink())
+                .parse_line(
+                    line,
+                    &mut content,
+                    &mut thinking,
+                    &mut tools,
+                    &rec.as_sink(),
+                )
                 .unwrap();
         }
         (content, thinking, tools, rec.record())
@@ -3910,7 +4604,14 @@ mod tests {
         assert!(err.contains("model not found"), "got: {err}");
     }
 
-    fn run_openai(lines: &[&str]) -> (String, Vec<serde_json::Value>, Vec<StreamChunk>) {
+    fn run_openai(
+        lines: &[&str],
+    ) -> (
+        String,
+        Option<String>,
+        Vec<serde_json::Value>,
+        Vec<StreamChunk>,
+    ) {
         let mut adapter = OpenAiAdapter {
             provider: "openai".to_string(),
             model: "gpt-4.1".to_string(),
@@ -3924,11 +4625,97 @@ mod tests {
         let rec = Recorder::default();
         for line in lines {
             adapter
-                .parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink())
+                .parse_line(
+                    line,
+                    &mut content,
+                    &mut thinking,
+                    &mut tools,
+                    &rec.as_sink(),
+                )
                 .unwrap();
         }
         let response = OpenAiAdapter::finalize_response(content, thinking, tools);
-        (response.content, response.tool_calls, rec.record())
+        (
+            response.content,
+            response.thinking,
+            response.tool_calls,
+            rec.record(),
+        )
+    }
+
+    #[tokio::test]
+    async fn mlx_does_not_advertise_tool_support() {
+        let supports = ai_model_supports_tools(
+            "mlx".to_string(),
+            "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(!supports);
+    }
+
+    #[test]
+    fn mlx_model_canonicalization_rejects_ollama_style_tags() {
+        assert_eq!(canonical_mlx_model("gemma4:12b-mlx"), MLX_DEFAULT_MODEL);
+        assert_eq!(canonical_mlx_model("gemma-4-4b-it"), MLX_DEFAULT_MODEL);
+        assert_eq!(
+            canonical_mlx_model("mlx-community/Llama-3.1-8B-Instruct-4bit"),
+            "mlx-community/Llama-3.1-8B-Instruct-4bit"
+        );
+    }
+
+    #[tokio::test]
+    async fn mlx_provider_models_returns_presets_without_polling_server() {
+        let models = ai_provider_models("mlx".to_string()).await.unwrap();
+        assert_eq!(
+            models,
+            vec![
+                "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
+                "Qwen/Qwen3-4B-MLX-4bit".to_string(),
+                "mlx-community/gemma-2-9b-it-4bit".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mlx_request_body_omits_tools_even_if_supplied() {
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": { "type": "object", "properties": {} },
+            },
+        })];
+        let body = openai_chat_body(
+            "mlx-community/Llama-3.1-8B-Instruct-4bit",
+            vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            Some(tools),
+            false,
+        );
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn openai_request_body_includes_tools_when_supported() {
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": { "type": "object", "properties": {} },
+            },
+        })];
+        let body = openai_chat_body(
+            "gpt-4.1",
+            vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            Some(tools),
+            true,
+        );
+        assert!(body.get("tools").is_some());
+        assert_eq!(body["tool_choice"], "auto");
     }
 
     #[test]
@@ -3939,11 +4726,24 @@ mod tests {
             r#"data: {"choices":[{"index":0,"delta":{"content":"there"}}]}"#,
             r#"data: [DONE]"#,
         ];
-        let (content, tools, chunks) = run_openai(&lines);
+        let (content, thinking, tools, chunks) = run_openai(&lines);
         assert_eq!(content, "Hello there");
+        assert!(thinking.is_none());
         assert!(tools.is_empty());
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].content, "Hel");
+    }
+
+    #[test]
+    fn openai_splits_think_tags_into_thinking() {
+        let lines = [
+            r#"data: {"choices":[{"index":0,"delta":{"content":"<think>checking MLX</think>\nAnswer"}}]}"#,
+            r#"data: [DONE]"#,
+        ];
+        let (content, thinking, tools, _chunks) = run_openai(&lines);
+        assert_eq!(content, "Answer");
+        assert_eq!(thinking.as_deref(), Some("checking MLX"));
+        assert!(tools.is_empty());
     }
 
     #[test]
@@ -3958,25 +4758,24 @@ mod tests {
             r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x.rs\"}"}}]}}]}"#,
             r#"data: [DONE]"#,
         ];
-        let (content, tools, chunks) = run_openai(&lines);
+        let (content, thinking, tools, chunks) = run_openai(&lines);
         assert!(content.is_empty());
+        assert!(thinking.is_none());
         assert!(chunks.is_empty());
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["id"], "call_1");
         assert_eq!(tools[0]["function"]["name"], "read");
-        let args: serde_json::Value = serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        let args: serde_json::Value =
+            serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(args["path"], "x.rs");
     }
 
     #[test]
     fn openai_ignores_prefixless_and_done_lines() {
-        let (content, tools, chunks) = run_openai(&[
-            "event: ping",
-            ":heartbeat",
-            "data: [DONE]",
-            "",
-        ]);
+        let (content, thinking, tools, chunks) =
+            run_openai(&["event: ping", ":heartbeat", "data: [DONE]", ""]);
         assert!(content.is_empty());
+        assert!(thinking.is_none());
         assert!(tools.is_empty());
         assert!(chunks.is_empty());
     }
@@ -4020,7 +4819,13 @@ mod tests {
         let rec = Recorder::default();
         for line in lines {
             adapter
-                .parse_line(line, &mut content, &mut thinking, &mut tools, &rec.as_sink())
+                .parse_line(
+                    line,
+                    &mut content,
+                    &mut thinking,
+                    &mut tools,
+                    &rec.as_sink(),
+                )
                 .unwrap();
         }
         let response = AnthropicAdapter::finalize_response(content, thinking, tools);
@@ -4060,7 +4865,8 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["id"], "toolu_1");
         assert_eq!(tools[0]["function"]["name"], "write_file");
-        let args: serde_json::Value = serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        let args: serde_json::Value =
+            serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(args["path"], "a.rs");
         assert!(args.get("old_str").is_some());
     }

@@ -158,6 +158,72 @@ export async function fetchAgentRuns(limit = 10, offset = 0): Promise<Run[]> {
     .slice(0, limit);
 }
 
+// ── Stats panel cache ──────────────────────────────────────────────────────
+// fetchAgentRuns reads + JSON-parses every session log on disk (can be hundreds
+// of MB across hundreds of files). Re-running that on every Stats panel open is
+// the main source of the panel's lag, so cache the result for the session.
+// Within STATS_CACHE_TTL_MS a reopen is instant; after that it refreshes.
+const STATS_CACHE_TTL_MS = 60_000;
+type RunsCacheEntry = {
+  key: string;
+  runs: Run[] | null; // resolved value, or null while in flight
+  promise: Promise<Run[]>;
+  at: number; // performance.now() when the runs resolved
+};
+let runsCache: RunsCacheEntry | null = null;
+
+const runsCacheKey = (limit: number, offset: number) => `${limit}:${offset}`;
+
+// Cached variant of fetchAgentRuns. Dedupes concurrent calls (returns the same
+// in-flight promise) and reuses a resolved result within the TTL. Pass
+// { force: true } to bypass the cache and re-read from disk.
+export function fetchAgentRunsCached(
+  limit = 10,
+  offset = 0,
+  opts: { force?: boolean } = {}
+): Promise<Run[]> {
+  const key = runsCacheKey(limit, offset);
+  const fresh =
+    runsCache?.key === key &&
+    (runsCache.runs === null || // in flight — reuse the promise
+      performance.now() - runsCache.at < STATS_CACHE_TTL_MS);
+  if (!opts.force && fresh) return runsCache!.promise;
+
+  const entry: RunsCacheEntry = {
+    key,
+    runs: null,
+    at: performance.now(),
+    promise: Promise.resolve([]),
+  };
+  entry.promise = fetchAgentRuns(limit, offset)
+    .then((runs) => {
+      entry.runs = runs;
+      entry.at = performance.now();
+      return runs;
+    })
+    .catch((e) => {
+      // Don't cache failures — allow a retry on the next open.
+      if (runsCache === entry) runsCache = null;
+      throw e;
+    });
+  runsCache = entry;
+  return entry.promise;
+}
+
+// Synchronous peek at already-resolved cached runs (within the TTL), or null.
+// Lets a component render warm data immediately without showing a loader.
+export function peekAgentRunsCache(limit = 10, offset = 0): Run[] | null {
+  const key = runsCacheKey(limit, offset);
+  if (!runsCache || runsCache.key !== key || runsCache.runs === null) return null;
+  if (performance.now() - runsCache.at >= STATS_CACHE_TTL_MS) return null;
+  return runsCache.runs;
+}
+
+// Drop the cache so the next fetch re-reads from disk (e.g. after new runs).
+export function invalidateAgentRunsCache() {
+  runsCache = null;
+}
+
 // Read a single run's conversation (the detail pane's résumé). Throws if the
 // command is unavailable; callers handle the empty/error state.
 export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {

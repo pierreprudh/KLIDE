@@ -8,6 +8,7 @@ export type AgentToolCall = { id?: string; name: string; args: any };
 // description, and shape — no drift between TS and Rust schemas.
 
 let cachedTools: Record<string, any[] | undefined> = {};
+let cachedAllTools: any[] | undefined;
 
 export async function toolsForMode(mode: AgentMode): Promise<any[] | undefined> {
     if (mode === "chat") return undefined;
@@ -22,8 +23,24 @@ export async function toolsForMode(mode: AgentMode): Promise<any[] | undefined> 
     }
 }
 
+// The full set of tools a skill could ever allow — fetched from the
+// Rust registry in "goal" mode (which returns every built-in tool,
+// including the write tools). Used by the SkillsModal's "Tools & MCP"
+// tab so the list stays in sync with the agent harness.
+export async function listAllTools(): Promise<any[]> {
+    if (cachedAllTools) return cachedAllTools;
+    try {
+        const tools = await invoke<any[]>("ai_list_tools", { mode: "goal" });
+        cachedAllTools = tools;
+        return tools;
+    } catch {
+        return [];
+    }
+}
+
 export function clearToolCache() {
     cachedTools = {};
+    cachedAllTools = undefined;
 }
 
 export function parseToolCallsFromChunk(raw: any): AgentToolCall[] {
