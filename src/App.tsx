@@ -645,6 +645,7 @@ function App() {
             onEntryRenamed={onEntryRenamed}
             onEntryDeleted={onEntryDeleted}
             onFilePreview={setPreviewPath}
+            activePath={active?.path ?? null}
           />
         );
       case "terminal":
@@ -1526,6 +1527,7 @@ function App() {
                             onEntryRenamed={onEntryRenamed}
                             onEntryDeleted={onEntryDeleted}
                             onFilePreview={setPreviewPath}
+                            activePath={active?.path ?? null}
                           />
                         }
                         bottom={
@@ -1553,6 +1555,7 @@ function App() {
                         onEntryRenamed={onEntryRenamed}
                         onEntryDeleted={onEntryDeleted}
                         onFilePreview={setPreviewPath}
+                        activePath={active?.path ?? null}
                       />
                     )}
                   </FloatingPanel>

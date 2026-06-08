@@ -11,6 +11,8 @@ type Props = {
   onEntryRenamed?: (oldPath: string, newPath: string) => void;
   onEntryDeleted?: (path: string) => void;
   onFilePreview?: (path: string) => void;
+  /** The currently-open tab's path, used to highlight the active row. */
+  activePath?: string | null;
   visible: boolean;
   width: number;
   workspaceRoot: string | null;
@@ -44,6 +46,36 @@ function ChevronRight() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M3 21v-5h5" />
+    </svg>
+  );
+}
+
+function KebabIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="12" cy="19" r="1.5" />
+    </svg>
+  );
+}
+
+function FolderOpenSmall() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z" />
+      <path d="M3 14h5l1.5-3h7L18 14" />
     </svg>
   );
 }
@@ -325,6 +357,7 @@ export function Sidebar({
   onEntryRenamed,
   onEntryDeleted,
   onFilePreview,
+  activePath,
   visible,
   width,
   workspaceRoot,
@@ -353,12 +386,14 @@ export function Sidebar({
     setFsNotice(`${prefix}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  async function refreshGitStatus(workspaceRoot: string) {
+  async function refreshGitStatus(workspaceRoot: string): Promise<GitFile[]> {
     try {
       const status = await invoke<GitStatus>("git_status", { workspaceRoot });
       setGitFiles(status.files);
+      return status.files;
     } catch {
       setGitFiles([]);
+      return [];
     }
   }
 
@@ -374,6 +409,43 @@ export function Sidebar({
     onRootChange(picked);
   }
 
+  // Re-read the workspace tree from disk. Used both for the initial
+  // useEffect load and for the header "Refresh" button. Re-loads the
+  // root + every currently-expanded child, and the git status alongside.
+  async function refreshTree() {
+    if (!root) return;
+    setLoadingDirs(new Set());
+    setDirErrors({});
+    const expandedPaths = Array.from(expanded);
+    try {
+      const [next, _git, refreshedChildren] = await Promise.all([
+        invoke<TreeEntry[]>("list_dir", { path: root }),
+        refreshGitStatus(root),
+        Promise.all(
+          expandedPaths.map(async (path) => {
+            try {
+              return [path, await invoke<TreeEntry[]>("list_dir", { path })] as const;
+            } catch {
+              return null;
+            }
+          })
+        ),
+      ]);
+      setEntries(next);
+      setGitFiles(_git);
+      setChildren(
+        Object.fromEntries(
+          refreshedChildren.filter(
+            (entry): entry is readonly [string, TreeEntry[]] => entry !== null
+          )
+        )
+      );
+    } catch (e) {
+      console.error("Unable to load workspace root:", e);
+      setEntries([]);
+    }
+  }
+
   useEffect(() => {
     if (!root) {
       setEntries([]);
@@ -383,49 +455,10 @@ export function Sidebar({
       return;
     }
 
-    let cancelled = false;
     const nextExpanded = loadExpanded(root);
     setExpanded(nextExpanded);
     setChildren({});
-    setLoadingDirs(new Set());
-    setDirErrors({});
-
-    const expandedPaths = Array.from(nextExpanded);
-    Promise.all([
-      invoke<TreeEntry[]>("list_dir", { path: root }),
-      refreshGitStatus(root),
-      Promise.all(
-        expandedPaths.map(async (path) => {
-          try {
-            return [path, await invoke<TreeEntry[]>("list_dir", { path })] as const;
-          } catch {
-            return null;
-          }
-        })
-      ),
-    ])
-      .then(([next, _git, refreshedChildren]) => {
-        if (!cancelled) {
-          setEntries(next);
-          setChildren(
-            Object.fromEntries(
-              refreshedChildren.filter(
-                (entry): entry is readonly [string, TreeEntry[]] => entry !== null
-              )
-            )
-          );
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setEntries([]);
-          console.error("Unable to load workspace root:", e);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    void refreshTree();
   }, [root]);
 
   useEffect(() => {
@@ -748,22 +781,22 @@ export function Sidebar({
             ...gitVirtualEntries(root, basePath, existingNames, gitFiles),
           ];
 
+    // Indent per depth. The grid is fixed (chevron + icon + name +
+    // decoration), and the *whole row* is offset by `depth` levels
+    // via padding-left. Linear's tree does it this way too.
+    const indent = 8 + depth * 14;
+
     // Input row for "New File…" / "New Folder…" targeting this folder.
     const createRow =
       editing?.mode === "create" && editing.parent === basePath ? (
         <li key="__create__">
           <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "3px 8px",
-              paddingLeft: 8 + depth * 14,
-              fontSize: 13,
-            }}
+            className="klide-explorer-row"
+            data-editing="true"
+            style={{ paddingLeft: indent, gridTemplateColumns: `16px 16px 1fr` }}
           >
-            <span style={{ display: "inline-flex", width: 12, flexShrink: 0 }} />
-            <span style={{ display: "inline-flex", flexShrink: 0 }}>
+            <span className="klide-explorer-chevron" />
+            <span className="klide-explorer-icon">
               {editing.isDirectory ? <FolderRow open={false} /> : <FileRow name="" />}
             </span>
             <InlineNameInput
@@ -793,14 +826,13 @@ export function Sidebar({
         const decoration = root
           ? gitDecoration(root, path, isDir, gitFiles)
           : null;
-        const rowColor = decoration
-          ? decoration.color
-          : isDir
-          ? "var(--fg)"
-          : "var(--fg-strong)";
+        const isActive = activePath != null && path === activePath;
         return (
           <li key={path}>
             <div
+              className="klide-explorer-row"
+              data-active={isActive}
+              data-virtual={isVirtual}
               onClick={() => {
                 if (isDir) toggleFolder(path, isVirtual);
                 else if (!isVirtual) pick(path);
@@ -813,47 +845,15 @@ export function Sidebar({
               }}
               title={decoration ? `${path} · ${decoration.title}` : path}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "3px 8px",
-                paddingLeft: 8 + depth * 14,
-                borderRadius: "var(--radius-sm)",
-                color: rowColor,
+                paddingLeft: indent,
+                color: decoration ? decoration.color : isDir ? "var(--fg)" : "var(--fg-strong)",
                 cursor: isVirtual && !isDir ? "default" : "pointer",
-                opacity: isVirtual ? 0.86 : 1,
-                fontSize: 13,
-                userSelect: "none",
-                transition:
-                  "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), transform var(--motion-fast) var(--ease-out)",
-                minWidth: 0,
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--bg-hover)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
               }}
             >
-              <span
-                style={{
-                  display: "inline-flex",
-                  width: 12,
-                  color: "var(--fg-subtle)",
-                  transform: isExpanded ? "rotate(90deg)" : "none",
-                  transition: "transform var(--motion-med) var(--ease-soft)",
-                  flexShrink: 0,
-                }}
-              >
+              <span className="klide-explorer-chevron" data-open={isExpanded}>
                 {isDir ? <ChevronRight /> : null}
               </span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  color: "var(--fg-subtle)",
-                  flexShrink: 0,
-                }}
-              >
+              <span className="klide-explorer-icon">
                 {isDir ? <FolderRow open={isExpanded} /> : <FileRow name={e.name} />}
               </span>
               {editing?.mode === "rename" && editing.path === path ? (
@@ -863,95 +863,84 @@ export function Sidebar({
                   onCancel={() => setEditing(null)}
                 />
               ) : (
-                <span
-                  style={{
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    minWidth: 0,
-                  }}
-                >
-                  {e.name}
-                </span>
+                <span className="klide-explorer-name">{e.name}</span>
               )}
               {decoration && (
                 <span
+                  className="klide-explorer-decoration"
                   title={decoration.title}
-                  style={{
-                    marginLeft: "auto",
-                    flexShrink: 0,
-                    minWidth: 14,
-                    height: 16,
-                    display: "grid",
-                    placeItems: "center",
-                    color: decoration.color,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    lineHeight: 1,
-                  }}
+                  style={{ color: decoration.color }}
                 >
                   {decoration.label}
                 </span>
               )}
             </div>
             {isDir && isExpanded && (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              <ul>
                 {isLoading ? (
-                  <li
-                    style={{
-                      padding: "3px 8px",
-                      paddingLeft: 36 + depth * 14,
-                      color: "var(--fg-dim)",
-                      fontSize: 12,
-                    }}
-                  >
-                    Loading…
+                  <li>
+                    <div
+                      className="klide-explorer-row"
+                      style={{ paddingLeft: indent + 22, cursor: "default" }}
+                    >
+                      <span className="klide-explorer-chevron" />
+                      <span className="klide-explorer-icon" />
+                      <span
+                        className="klide-explorer-name"
+                        style={{ color: "var(--fg-dim)", fontStyle: "italic" }}
+                      >
+                        Loading…
+                      </span>
+                    </div>
                   </li>
                 ) : error ? (
-                  <li
-                    title={error}
-                    onClick={async (event) => {
-                      event.stopPropagation();
-                      setLoadingDirs((cur) => new Set(cur).add(path));
-                      try {
-                        const nextChildren = await invoke<TreeEntry[]>("list_dir", { path });
-                        setChildren((cur) => ({ ...cur, [path]: nextChildren }));
-                        setDirErrors((cur) => {
-                          const { [path]: _removed, ...rest } = cur;
-                          return rest;
-                        });
-                      } finally {
-                        setLoadingDirs((cur) => {
-                          const next = new Set(cur);
-                          next.delete(path);
-                          return next;
-                        });
-                      }
-                    }}
-                    style={{
-                      padding: "3px 8px",
-                      paddingLeft: 36 + depth * 14,
-                      color: "var(--fg-dim)",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Retry folder
+                  <li>
+                    <div
+                      className="klide-explorer-row"
+                      data-clickable="true"
+                      onClick={async (event) => {
+                        event.stopPropagation();
+                        setLoadingDirs((cur) => new Set(cur).add(path));
+                        try {
+                          const nextChildren = await invoke<TreeEntry[]>("list_dir", { path });
+                          setChildren((cur) => ({ ...cur, [path]: nextChildren }));
+                          setDirErrors((cur) => {
+                            const { [path]: _removed, ...rest } = cur;
+                            return rest;
+                          });
+                        } finally {
+                          setLoadingDirs((cur) => {
+                            const next = new Set(cur);
+                            next.delete(path);
+                            return next;
+                          });
+                        }
+                      }}
+                      style={{ paddingLeft: indent + 22, color: "var(--fg-dim)", cursor: "pointer" }}
+                    >
+                      <span className="klide-explorer-chevron" />
+                      <span className="klide-explorer-icon" />
+                      <span className="klide-explorer-name" style={{ color: "var(--fg-dim)" }}>
+                        Retry folder
+                      </span>
+                    </div>
                   </li>
                 ) : nested &&
                   (nested.length > 0 ||
                     (editing?.mode === "create" && editing.parent === path)) ? (
                   renderEntries(nested, path, depth + 1)
                 ) : (
-                  <li
-                    style={{
-                      padding: "3px 8px",
-                      paddingLeft: 36 + depth * 14,
-                      color: "var(--fg-dim)",
-                      fontSize: 12,
-                    }}
-                  >
-                    Empty
+                  <li>
+                    <div
+                      className="klide-explorer-row"
+                      style={{ paddingLeft: indent + 22, cursor: "default" }}
+                    >
+                      <span className="klide-explorer-chevron" />
+                      <span className="klide-explorer-icon" />
+                      <span className="klide-explorer-name" style={{ color: "var(--fg-dim)" }}>
+                        Empty
+                      </span>
+                    </div>
                   </li>
                 )}
               </ul>
@@ -976,145 +965,104 @@ export function Sidebar({
         width: fill ? "100%" : width,
         height: fill ? "100%" : undefined,
         margin: fill ? 0 : "4px 0 4px 4px",
-        overflow: "auto",
         display: fill || visible ? "flex" : "none",
         flexDirection: "column",
         flexShrink: 0,
+        overflow: "hidden",
       }}
     >
-      <header
-        style={{
-          padding: "10px 12px 8px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          fontSize: 11,
-          color: "var(--fg-subtle)",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          fontWeight: 500,
-        }}
-      >
-        <span>Explorer</span>
-        <button
-          onClick={pickFolder}
-          title="Open folder…"
-          style={{
-            fontSize: 11,
-            color: "var(--fg-subtle)",
-            padding: "2px 6px",
-            borderRadius: "var(--radius-sm)",
-            transition:
-              "color var(--motion-med) var(--ease-out), background var(--motion-med) var(--ease-out)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = "var(--fg-strong)";
-            e.currentTarget.style.background = "var(--bg-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = "var(--fg-subtle)";
-            e.currentTarget.style.background = "transparent";
-          }}
-        >
-          Open…
-        </button>
+      {/* Linear-style header: section title (uppercase mono), workspace
+          name + parent path inline, action icons on the right. */}
+      <header className="klide-explorer-header">
+        <span className="klide-explorer-header-title">Explorer</span>
+        {root ? (
+          <div className="klide-explorer-header-workspace" title={root}>
+            <span className="klide-explorer-header-workspace-name">
+              {root.split("/").filter(Boolean).pop() ?? root}
+            </span>
+            <span className="klide-explorer-header-workspace-path">
+              {shortPath(root)}
+            </span>
+          </div>
+        ) : (
+          <div className="klide-explorer-header-workspace" />
+        )}
+        <div className="klide-explorer-header-actions">
+          {root && (
+            <>
+              <button
+                onClick={() => root && refreshGitStatus(root).then(refreshTree)}
+                title="Refresh"
+                aria-label="Refresh"
+                className="klide-explorer-action"
+              >
+                <RefreshIcon />
+              </button>
+              <button
+                onClick={() => root && setMenu({ x: 200, y: 60, path: root, isDirectory: true })}
+                title="More"
+                aria-label="More"
+                className="klide-explorer-action"
+              >
+                <KebabIcon />
+              </button>
+            </>
+          )}
+          {!root && (
+            <button
+              onClick={pickFolder}
+              title="Open folder…"
+              className="klide-explorer-action"
+            >
+              <FolderOpenSmall />
+            </button>
+          )}
+        </div>
       </header>
 
       {fsNotice && (
         <div
           onClick={() => setFsNotice(null)}
           title="Click to dismiss"
-          style={{
-            margin: "0 8px 6px",
-            padding: "5px 8px",
-            fontSize: 11,
-            lineHeight: 1.4,
-            color: "#D64545",
-            background: "color-mix(in srgb, #D64545 8%, transparent)",
-            borderRadius: "var(--radius-sm)",
-            cursor: "pointer",
-            wordBreak: "break-word",
-          }}
+          className="klide-explorer-notice"
         >
           {fsNotice}
         </div>
       )}
 
-      {root && (
-        <div
-          style={{
-            padding: "0 12px 6px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            borderBottom: "1px solid var(--border)",
-            marginBottom: 4,
-            paddingBottom: 8,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 12,
-              color: "var(--fg-strong)",
-              fontWeight: 500,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-            title={root}
-          >
-            {root.split("/").pop()}
-          </span>
-          <span
-            style={{
-              fontSize: 11,
-              color: "var(--fg-subtle)",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-            title={root}
-          >
-            {shortPath(root)}
-          </span>
-        </div>
-      )}
-
       {!root && (
-        <div
-          style={{
-            padding: "18px 14px",
-            color: "var(--fg-subtle)",
-            fontSize: 13,
-            lineHeight: 1.55,
-          }}
-        >
-          <div style={{ color: "var(--fg)", marginBottom: 6 }}>No workspace open</div>
-          <div>Open a folder to browse files, edit code, and enable agent mode.</div>
+        <div className="klide-explorer-message">
+          <div className="klide-explorer-message" data-kind="title" style={{ marginTop: 14 }}>
+            No workspace open
+          </div>
+          <div style={{ padding: "0 14px 8px" }}>
+            Open a folder to browse files, edit code, and enable agent mode.
+          </div>
+          <button
+            onClick={pickFolder}
+            className="klide-button klide-button-primary"
+            style={{ margin: "8px 14px 0", minHeight: 30, padding: "0 12px", fontSize: 12 }}
+          >
+            Open Folder…
+          </button>
         </div>
       )}
 
-      {root &&
-        entries.length === 0 &&
-        !(editing?.mode === "create" && editing.parent === root) && (
-          <div
-            style={{
-              padding: "18px 14px",
-              color: "var(--fg-subtle)",
-              fontSize: 13,
-            }}
-          >
-            This folder is empty.
-          </div>
-        )}
-
-      {root &&
-        (entries.length > 0 ||
-          (editing?.mode === "create" && editing.parent === root)) && (
-          <ul style={{ listStyle: "none", padding: "4px 4px 8px", margin: 0 }}>
-            {renderEntries(entries, root)}
-          </ul>
-        )}
+      {/* Tree container — the flex: 1 + min-height: 0 combo means the
+          <ul> inside fills the rest of the panel, with overflow:auto
+          so it scrolls. Without min-height: 0, the natural content
+          height would force the panel to grow past the workbench. */}
+      {root && (
+        <div className="klide-explorer-tree">
+          {entries.length === 0 && !(editing?.mode === "create" && editing.parent === root) ? (
+            <div className="klide-explorer-message" style={{ marginTop: 14 }}>
+              This folder is empty.
+            </div>
+          ) : (
+            <ul>{renderEntries(entries, root)}</ul>
+          )}
+        </div>
+      )}
 
       {menu && (
         <ContextMenu

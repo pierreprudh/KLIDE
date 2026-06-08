@@ -1714,3 +1714,243 @@ select.klide-field {
   color: var(--accent);
   background: var(--accent-soft);
 }
+
+/* ============================================================ Explorer */
+
+/* Header — Linear-style. Single row with: section title (uppercase
+   mono, --fg-subtle), workspace name + path, then action icons on
+   the right. The whole header is flex-shrink: 0 so the tree below
+   it fills the remaining height of the FloatingPanel. */
+.klide-explorer-header {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.klide-explorer-header-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+}
+
+.klide-explorer-header-workspace {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-strong);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+}
+
+.klide-explorer-header-workspace-name {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.klide-explorer-header-workspace-path {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.klide-explorer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.klide-explorer-action {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--fg-subtle);
+  background: transparent;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-explorer-action:hover {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+
+/* Tree container — the magic flex: 1 + min-height: 0 combo. Without
+   min-height: 0 the flex item would grow to its natural content
+   height and the FloatingPanel would expand past the workbench
+   bottom. With it, the container fills the remaining height and the
+   <ul> inside scrolls. */
+.klide-explorer-tree {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 6px 8px;
+}
+
+.klide-explorer-tree > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Tree rows. The grid is: [chevron] [icon] [name] [decoration]. 16px
+   chevron column, 16px icon column, name takes the rest and
+   truncates, decoration floats right. */
+.klide-explorer-row {
+  display: grid;
+  grid-template-columns: 16px 16px 1fr auto;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px 0 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-explorer-row:hover {
+  background: var(--bg-hover);
+}
+
+.klide-explorer-row[data-active="true"] {
+  background: var(--bg-selected);
+  color: var(--fg-strong);
+}
+
+.klide-explorer-row[data-virtual="true"] {
+  opacity: 0.7;
+}
+
+.klide-explorer-chevron {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+  transition: transform var(--motion-med) var(--ease-soft);
+}
+
+.klide-explorer-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.klide-explorer-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
+.klide-explorer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.klide-explorer-decoration {
+  flex-shrink: 0;
+  min-width: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+/* Nesting — a children <ul> sits flush against the parent's row. */
+.klide-explorer-row + ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Create row + inline input — same row geometry, with the input
+   replacing the name cell. */
+.klide-explorer-row[data-editing="true"] {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+/* Empty / error / loading rows — quieter, italic-feeling. */
+.klide-explorer-message {
+  padding: 4px 28px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.55;
+  user-select: none;
+}
+
+.klide-explorer-message[data-kind="title"] {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 2px;
+  padding: 4px 14px;
+}
+
+.klide-explorer-message[data-clickable="true"] {
+  cursor: pointer;
+}
+
+.klide-explorer-message[data-clickable="true"]:hover {
+  color: var(--fg-subtle);
+}
+
+/* FS notice — sits below the header, before the tree, and
+   auto-dismisses via JS timeout. */
+.klide-explorer-notice {
+  flex-shrink: 0;
+  margin: 8px 10px 0;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  word-break: break-word;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-explorer-chevron {
+    transition: none;
+  }
+  .klide-explorer-row {
+    transition: none;
+  }
+}
