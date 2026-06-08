@@ -4,10 +4,7 @@ import type {
   AgentMode,
   CheckpointEntry,
   DiffDecision,
-  ImportEdge,
   PermissionDecision,
-  ProjectGraph,
-  ProjectGraphWithImports,
   ProviderId,
   StartAgentRunInput,
 } from "./types";
@@ -107,17 +104,5 @@ export async function listCheckpoints(runId: string): Promise<CheckpointEntry[]>
 
 export async function revertCheckpoint(runId: string, toolCallId: string): Promise<void> {
   await invoke("agent_revert_checkpoint", { runId, toolCallId });
-}
-
-export async function fetchProjectGraph(workspaceRoot: string): Promise<ProjectGraph> {
-  return invoke<ProjectGraph>("project_graph", { workspaceRoot });
-}
-
-export async function fetchProjectGraphWithImports(workspaceRoot: string): Promise<ProjectGraphWithImports> {
-  return invoke<ProjectGraphWithImports>("project_graph_with_imports", { workspaceRoot });
-}
-
-export async function extractImports(workspaceRoot: string, paths: string[]): Promise<ImportEdge[]> {
-  return invoke<ImportEdge[]>("extract_imports", { workspaceRoot, paths });
 }
 
