@@ -125,6 +125,7 @@ Klide/
     │   │   ├── User / host info for the profile modal
     │   │   └── Tauri plugin registration
     │   ├── pty.rs                PTY management (native + delegate)
+    │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── memory.rs             Project memory markdown I/O
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop

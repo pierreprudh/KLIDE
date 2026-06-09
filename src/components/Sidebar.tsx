@@ -415,7 +415,7 @@ export function Sidebar({
   async function pickFolder() {
     const picked = await open({ directory: true });
     if (typeof picked !== "string") return;
-    setEntries(await invoke<TreeEntry[]>("list_dir", { path: picked }));
+    setEntries(await invoke<TreeEntry[]>("list_dir", { workspaceRoot: picked, path: picked }));
     setChildren({});
     setExpanded(loadExpanded(picked));
     setLoadingDirs(new Set());
@@ -434,12 +434,12 @@ export function Sidebar({
     const expandedPaths = Array.from(expanded);
     try {
       const [next, _git, refreshedChildren] = await Promise.all([
-        invoke<TreeEntry[]>("list_dir", { path: root }),
+        invoke<TreeEntry[]>("list_dir", { workspaceRoot: root, path: root }),
         refreshGitStatus(root),
         Promise.all(
           expandedPaths.map(async (path) => {
             try {
-              return [path, await invoke<TreeEntry[]>("list_dir", { path })] as const;
+              return [path, await invoke<TreeEntry[]>("list_dir", { workspaceRoot: root, path })] as const;
             } catch {
               return null;
             }
@@ -492,14 +492,14 @@ export function Sidebar({
     const refresh = async () => {
       try {
         const [next] = await Promise.all([
-          invoke<TreeEntry[]>("list_dir", { path: root }),
+          invoke<TreeEntry[]>("list_dir", { workspaceRoot: root, path: root }),
           refreshGitStatus(root),
         ]);
         const expandedPaths = Array.from(expanded);
         const refreshedChildren = await Promise.all(
           expandedPaths.map(async (path) => {
             try {
-              return [path, await invoke<TreeEntry[]>("list_dir", { path })] as const;
+              return [path, await invoke<TreeEntry[]>("list_dir", { workspaceRoot: root, path })] as const;
             } catch {
               return null;
             }
@@ -536,7 +536,7 @@ export function Sidebar({
 
   async function pick(path: string) {
     try {
-      const content = await invoke<string>("read_text_file", { path });
+      const content = await invoke<string>("read_text_file", { workspaceRoot: root, path });
       onOpen(path, content);
     } catch (e) {
       console.error("Failed to open file:", e);
@@ -564,7 +564,7 @@ export function Sidebar({
         return rest;
       });
       try {
-        const nextChildren = await invoke<TreeEntry[]>("list_dir", { path });
+        const nextChildren = await invoke<TreeEntry[]>("list_dir", { workspaceRoot: root, path });
         setChildren((cur) => ({ ...cur, [path]: nextChildren }));
         setDirErrors((cur) => {
           const { [path]: _removed, ...rest } = cur;
@@ -915,7 +915,7 @@ export function Sidebar({
                         event.stopPropagation();
                         setLoadingDirs((cur) => new Set(cur).add(path));
                         try {
-                          const nextChildren = await invoke<TreeEntry[]>("list_dir", { path });
+                          const nextChildren = await invoke<TreeEntry[]>("list_dir", { workspaceRoot: root, path });
                           setChildren((cur) => ({ ...cur, [path]: nextChildren }));
                           setDirErrors((cur) => {
                             const { [path]: _removed, ...rest } = cur;

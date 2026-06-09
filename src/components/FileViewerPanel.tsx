@@ -3,25 +3,26 @@ import { useEffect, useState } from "react";
 
 type Props = {
   filePath: string | null;
+  workspaceRoot: string | null;
   onClose: () => void;
 };
 
-export function FileViewerPanel({ filePath, onClose }: Props) {
+export function FileViewerPanel({ filePath, workspaceRoot, onClose }: Props) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!filePath) { setContent(null); setError(null); return; }
+    if (!filePath || !workspaceRoot) { setContent(null); setError(null); return; }
     let cancelled = false;
     setLoading(true);
     setError(null);
-    invoke<string>("read_text_file", { path: filePath })
+    invoke<string>("read_text_file", { workspaceRoot, path: filePath })
       .then((text) => { if (!cancelled) setContent(text); })
       .catch((e) => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [filePath]);
+  }, [filePath, workspaceRoot]);
 
   const fileName = filePath ? filePath.split("/").pop() ?? filePath : "";
 
