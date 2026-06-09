@@ -45,6 +45,12 @@ export type Layout = {
   memory?: PanelRect;
   terminal?: PanelRect;
   ai?: StoredAiPanel[];
+  // Anchored = the calm, fullscreen workbench (Ara-style): side / editor / AI
+  // columns + an optional terminal row, no floating panels, no drag/resize
+  // handles. Bento/free mode (anchored = false) keeps the legacy floating
+  // rects. New workspaces default to anchored; the user can opt back into
+  // free mode from the status-bar Layout picker.
+  anchored?: boolean;
 };
 
 export type PanelConstraints = {
@@ -84,6 +90,7 @@ export function defaultLayout(workbenchW: number, workbenchH: number): Layout {
   const explorerW = 280;
   const gitW = 280;
   return {
+    anchored: true,
     explorer: { x: 0, y: 0, w: explorerW, h: mainH },
     git:      { x: explorerW + PANEL_GAP, y: 0, w: gitW, h: mainH },
     ai:       [{ id: "ai-main", rect: { x: Math.max(0, w - aiW), y: 0, w: aiW, h: mainH } }],

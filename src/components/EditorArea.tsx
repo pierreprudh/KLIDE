@@ -44,31 +44,47 @@ export function EditorArea({
           display: "grid",
           placeItems: "center",
           minHeight: 0,
+          padding: 24,
+          background: "transparent",
         }}
       >
         <div
           style={{
-            width: "min(420px, 72vw)",
+            width: "min(360px, 72vw)",
             textAlign: "center",
             color: "var(--fg-subtle)",
-            lineHeight: 1.65,
+            lineHeight: 1.6,
           }}
         >
           <div
             style={{
-              fontSize: 24,
-              color: "var(--fg-strong)",
-              fontWeight: 500,
-              marginBottom: 8,
+              fontSize: 13,
+              color: "var(--fg-dim)",
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              marginBottom: 18,
             }}
           >
-            Klide
+            No file open
           </div>
-          <div style={{ fontSize: 14, color: "var(--fg)" }}>
-            Choose a file from the explorer to start editing.
-          </div>
-          <div style={{ marginTop: 14, fontSize: 12, color: "var(--fg-subtle)" }}>
-            Files on the left · AI on the right · Terminal below
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 12px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--border)",
+              background: "color-mix(in srgb, var(--bg-elevated) 80%, transparent)",
+              color: "var(--fg)",
+              fontSize: 12.5,
+            }}
+          >
+            <KeyCap>⌘</KeyCap>
+            <span style={{ color: "var(--fg-dim)" }}>+</span>
+            <KeyCap>P</KeyCap>
+            <span style={{ marginLeft: 4 }}>to open a file</span>
           </div>
         </div>
       </div>
@@ -111,5 +127,29 @@ export function EditorArea({
         }}
       />
     </div>
+  );
+}
+
+function KeyCap({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        display: "inline-grid",
+        placeItems: "center",
+        minWidth: 18,
+        height: 18,
+        padding: "0 5px",
+        borderRadius: 4,
+        border: "1px solid color-mix(in srgb, var(--border-strong) 80%, transparent)",
+        background: "color-mix(in srgb, var(--bg) 80%, var(--bg-elevated))",
+        color: "var(--fg)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        lineHeight: 1,
+        boxShadow: "inset 0 1px 0 var(--panel-highlight)",
+      }}
+    >
+      {children}
+    </span>
   );
 }

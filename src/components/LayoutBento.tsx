@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { panelLabel, type GridLayout } from "../gridLayouts";
 
 type Props = {
   gridLayouts: GridLayout[];
   activeGridId: string | null;
+  anchored: boolean;
   onApplyGrid: (id: string) => void;
   onExitGrid: () => void;
+  onSetAnchored: (anchored: boolean) => void;
   onOpenGrid: () => void;
 };
 
@@ -29,22 +32,97 @@ function GridIcon() {
   );
 }
 
+function AnchoredIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3.5" y="4" width="5" height="16" rx="1" />
+      <rect x="9.5" y="4" width="8" height="11" rx="1" />
+      <rect x="18.5" y="4" width="2.5" height="16" rx="0.6" />
+      <line x1="9.5" y1="16" x2="18.5" y2="16" />
+    </svg>
+  );
+}
+
+function FreeIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3.5" y="3.5" width="8" height="8" rx="1.2" />
+      <rect x="13" y="11" width="8" height="8" rx="1.2" />
+      <path d="M9.5 11.5l3.5 1" />
+    </svg>
+  );
+}
+
 export function LayoutBento({
   gridLayouts,
   activeGridId,
+  anchored,
   onApplyGrid,
   onExitGrid,
+  onSetAnchored,
   onOpenGrid,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  // Live position of the popover, measured from the trigger. Re-measured
+  // on open, on window resize, and on scroll so the popover stays glued to
+  // the trigger even if the user scrolls the workbench.
+  const [pos, setPos] = useState<{ bottom: number; right: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const measure = () => {
+      const btn = triggerRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      setPos({
+        bottom: Math.round(window.innerHeight - r.top + 8),
+        right: Math.round(window.innerWidth - r.right),
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node | null;
+      // Clicks inside the trigger or the popover itself are ignored; the
+      // popover lives in document.body via createPortal, so we check both
+      // refs explicitly rather than relying on .contains() up the tree.
+      if (triggerRef.current?.contains(target)) return;
+      if (popoverRef.current?.contains(target)) return;
+      setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -58,8 +136,9 @@ export function LayoutBento({
   }, [open]);
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", display: "flex" }}>
+    <div style={{ position: "relative", display: "flex" }}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         title="Layout"
@@ -86,35 +165,43 @@ export function LayoutBento({
         }}
       >
         <GridIcon />
-        Layout
+        {anchored && !activeGridId ? "Anchored" : "Layout"}
       </button>
 
-      {open && (
+      {open && pos && createPortal(
         <div
+          ref={popoverRef}
           role="dialog"
           aria-label="Layout"
           style={{
-            position: "absolute",
-            bottom: "calc(100% + 8px)",
-            right: 0,
+            // The popover is portaled to document.body so it escapes any
+            // ancestor stacking context (the workbench's position: relative,
+            // any FloatingPanel wrapper, etc.) and sits on top of every
+            // surface in the app.
+            position: "fixed",
+            bottom: pos.bottom,
+            right: pos.right,
             width: 224,
             padding: 12,
             borderRadius: "var(--radius-md)",
             background: "var(--bg-elevated)",
             border: "1px solid var(--border-strong)",
             boxShadow: "var(--shadow-popover, 0 8px 24px rgba(0,0,0,0.18))",
-            zIndex: 50,
+            // 9999 puts the popover above FloatingPanels (10+), AI panels
+            // (10+), Quick View (20), and any other chrome in the app.
+            zIndex: 9999,
             animation: "chrome-enter var(--motion-med) var(--ease-out)",
           }}
         >
-          {/* Normal (no grid) */}
+          {/* Anchored — the calm, fullscreen workbench (Ara-style). Default
+              for new workspaces; no drag/resize on panels. */}
           <button
             type="button"
             onClick={() => {
               setOpen(false);
-              onExitGrid();
+              onSetAnchored(true);
             }}
-            aria-pressed={!activeGridId}
+            aria-pressed={anchored && !activeGridId}
             style={{
               width: "100%",
               display: "flex",
@@ -122,22 +209,69 @@ export function LayoutBento({
               gap: 8,
               padding: "7px 8px",
               borderRadius: "var(--radius-sm)",
-              border: `1px solid ${!activeGridId ? "var(--accent)" : "var(--border)"}`,
-              background: !activeGridId ? "var(--accent-soft)" : "transparent",
-              color: !activeGridId ? "var(--accent)" : "var(--fg-strong)",
+              border: `1px solid ${anchored && !activeGridId ? "var(--accent)" : "var(--border)"}`,
+              background: anchored && !activeGridId ? "var(--accent-soft)" : "transparent",
+              color: anchored && !activeGridId ? "var(--accent)" : "var(--fg-strong)",
               fontSize: 12,
               cursor: "pointer",
               textAlign: "left",
             }}
             onMouseEnter={(e) => {
-              if (activeGridId) e.currentTarget.style.background = "var(--bg-hover)";
+              if (!(anchored && !activeGridId)) e.currentTarget.style.background = "var(--bg-hover)";
             }}
             onMouseLeave={(e) => {
-              if (activeGridId) e.currentTarget.style.background = "transparent";
+              if (!(anchored && !activeGridId)) e.currentTarget.style.background = "transparent";
             }}
           >
-            Normal layout
-            {!activeGridId ? <span style={{ marginLeft: "auto", fontSize: 10 }}>active</span> : null}
+            <AnchoredIcon />
+            <span style={{ display: "flex", flexDirection: "column" }}>
+              <span>Anchored</span>
+              <span style={{ fontSize: 9, color: "var(--fg-subtle)", marginTop: 1 }}>
+                Side / editor / AI · calm, fullscreen
+              </span>
+            </span>
+            {anchored && !activeGridId ? <span style={{ marginLeft: "auto", fontSize: 10 }}>active</span> : null}
+          </button>
+
+          {/* Free layout — opt-in: panels become draggable, resizable
+              FloatingPanels with the bento feel. */}
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onSetAnchored(false);
+              onExitGrid();
+            }}
+            aria-pressed={!anchored && !activeGridId}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: `1px solid ${!anchored && !activeGridId ? "var(--accent)" : "var(--border)"}`,
+              background: !anchored && !activeGridId ? "var(--accent-soft)" : "transparent",
+              color: !anchored && !activeGridId ? "var(--accent)" : "var(--fg-strong)",
+              fontSize: 12,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => {
+              if (!(!anchored && !activeGridId)) e.currentTarget.style.background = "var(--bg-hover)";
+            }}
+            onMouseLeave={(e) => {
+              if (!(!anchored && !activeGridId)) e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <FreeIcon />
+            <span style={{ display: "flex", flexDirection: "column" }}>
+              <span>Free layout</span>
+              <span style={{ fontSize: 9, color: "var(--fg-subtle)", marginTop: 1 }}>
+                Drag &amp; resize panels
+              </span>
+            </span>
+            {!anchored && !activeGridId ? <span style={{ marginLeft: "auto", fontSize: 10 }}>active</span> : null}
           </button>
 
           {gridLayouts.length > 0 && (
@@ -241,11 +375,13 @@ export function LayoutBento({
               {gridLayouts.length === 0 ? "build one in Settings" : "Edit grids…"}
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
 }
+
 
 function MiniGrid({ grid }: { grid: GridLayout }) {
   return (

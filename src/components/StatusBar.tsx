@@ -13,8 +13,10 @@ type Props = {
   onToggleTerminal: () => void;
   gridLayouts: GridLayout[];
   activeGridId: string | null;
+  anchoredLayout: boolean;
   onApplyGrid: (id: string) => void;
   onExitGrid: () => void;
+  onSetAnchored: (anchored: boolean) => void;
   onOpenGrid: () => void;
   theme: ThemeId;
   autoTheme: boolean;
@@ -79,8 +81,10 @@ export function StatusBar({
   onToggleTerminal,
   gridLayouts,
   activeGridId,
+  anchoredLayout,
   onApplyGrid,
   onExitGrid,
+  onSetAnchored,
   onOpenGrid,
   theme,
   autoTheme,
@@ -209,8 +213,10 @@ export function StatusBar({
       <LayoutBento
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
+        anchored={anchoredLayout}
         onApplyGrid={onApplyGrid}
         onExitGrid={onExitGrid}
+        onSetAnchored={onSetAnchored}
         onOpenGrid={onOpenGrid}
       />
       <button
