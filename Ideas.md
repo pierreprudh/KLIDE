@@ -21,7 +21,91 @@ Inspiration :
 - https://agentrq.com Worth take a look ? 
 - https://ara.so 
 - For visibility ? https://github.com/superloglabs/superlog
-- 
+
+## Research report - 2026-06-09
+
+Goal for this pass: understand the current competitor landscape, pull out product trends, and turn it into a concrete Klide implementation direction.
+
+### Positioning
+
+Klide should not try to become another Cursor-style editor. The stronger lane is:
+
+> Local-first agent control plane for coding.
+
+That means Klide is the place where Pierre can watch, resume, delegate, compare, review, and remember agent work across Codex, Claude Code, OpenRouter, local CLIs, future cloud agents, and project memory.
+
+### Competitor tour
+
+- Cursor: best reference for polished AI IDE flow. Takeaway: strong status language matters. Users need to see what is "in progress", "ready for review", and "done" without reading terminal noise.
+- Claude Code: best reference for terminal-native trust. Takeaway: make every agent action inspectable, resumable, and controllable before changes feel scary.
+- OpenAI Codex: best reference for cross-surface agent work. Takeaway: worktrees, skills, automations, and parallel agents should feel like one command center.
+- Devin: best reference for async software teammate. Takeaway: Klide needs a review queue, draft outcome summaries, and visual QA hooks, not only live chat.
+- Hermes Desktop / Ara: best reference for proactive agent OS. Takeaway: memory, subagents, and scheduled/background work should be first-class, but always with human approval.
+- Letta: best reference for memory-first agents. Takeaway: Project Memory should become a navigable knowledge graph, not only handoff markdown.
+- AgentRQ: best reference for HITL task orchestration. Takeaway: blocked / waiting / scheduled / running states should be visible and actionable.
+- Superlog: best reference for observability. Takeaway: Klide should expose agent logs, tokens, cost, files touched, commands, and decisions as structured signals.
+- Zed / Amp: best reference for premium restraint. Takeaway: the interface should feel fast, quiet, direct, and keyboard-friendly.
+- GitHub Copilot cloud agent: best reference for GitHub-native async tasks. Takeaway: issues, branches, PRs, and agent sessions should connect cleanly.
+
+### Trends
+
+1. Async agent fleets: users will run several agents at once, not one chat at a time.
+2. Background work with review queues: the valuable screen is "what needs my attention now?"
+3. Memory and skills: agents need project-specific habits, context, and reusable workflows.
+4. Human-in-the-loop approvals: premium tools make risk legible before execution.
+5. Cloud/local hybrid execution: quick local CLI tasks plus longer cloud/worktree jobs.
+6. Agent observability: tokens, cost, commands, files, diffs, and decisions should be visible.
+7. Calm premium UX: fewer noisy panels, stronger hierarchy, more progressive disclosure.
+
+### What Klide still needs
+
+Priority 1 - Mission Control v3:
+- Group runs by state: Running, Blocked, Ready for Review, Done.
+- Add an attention queue for stopped/failed/completed runs that need Pierre.
+- Add compact row summaries: delegate, model, branch/worktree, files touched, cost, last event.
+- Add one-click actions: Resume, Open in Terminal, Open in other CLI, Review Diff, Save Memory.
+
+Priority 2 - Agent Status Layer:
+- Normalize agent/run states across Codex, Claude Code, OpenRouter, local shells, and future cloud runs.
+- Add status chips that mean the same thing everywhere.
+- Surface blockers explicitly: waiting for approval, command failed, merge conflict, needs API key, stopped by user.
+
+Priority 3 - Project Memory v4:
+- Make memory entries browseable by goal, files touched, decisions, and runs.
+- Add automatic draft memory on completed/stopped runs, with a user approval step.
+- Decide repo policy: commit `.klide/memory/`, gitignore it, or support both per workspace.
+- Cross-link memory entries to files, diffs, and Mission Control runs.
+
+Priority 4 - Premium Settings:
+- Fix the settings open lag.
+- Split settings into clean sections: Providers, Accounts, Harness, Skills, Usage, Privacy.
+- Add provider details on hover for usage graphs.
+- Support multi-account setup: personal/pro, per-provider identity, and selected default route.
+
+Priority 5 - Proactive Suggestions:
+- Suggest follow-up tasks after diagnostics, failed runs, or repeated errors.
+- Suggest reusable skills when a workflow repeats.
+- Suggest memory updates when a decision or implementation summary is detected.
+
+### Premium UX direction
+
+- Make the workbench fill the screen by default, with fewer floating-window surprises.
+- Use calm surfaces, tighter spacing, and clear hierarchy over heavy decoration.
+- Favor icons with tooltips for frequent actions.
+- Keep terminal power, but summarize terminal meaning in human-readable status.
+- Make "what changed?", "what is running?", and "what needs me?" answerable in under 3 seconds.
+- Treat Project Memory, Mission Control, and Git Review as one connected workflow.
+
+### Recommended next implementation slice
+
+Start with Mission Control v3. It has the biggest strategic leverage because it turns Klide from a multi-panel agent launcher into an actual command center.
+
+Small first slice:
+1. Add shared run-state taxonomy and helpers.
+2. Update Mission Control grouping to Running / Blocked / Ready for Review / Done.
+3. Add attention badges and row-level quick actions.
+4. Link completed runs to "Save Memory" and "Review Diff".
+5. Polish visual hierarchy so this screen feels premium before adding more features.
 
 # On-Go
 
@@ -43,7 +127,7 @@ Design to always fulfill screen
 [] Cross-link memory entries back to the file graph: click a file in `filesTouched` to jump to that file in the editor.
 
 ## Known bugs
-- [] When switching away from a workbench view right after creating an AI panel, switching back creates the same AI panel (model) — the panel-preservation story is still per-view, not per-workspace.
+- [x] When switching away from a workbench view right after creating an AI panel, switching back creates the same AI panel (model) — fixed by hydrating the workspace panel layout once instead of rebuilding AI panel instances on every workbench remount.
 
 ## Basics
 [x] Control file management from Klide
