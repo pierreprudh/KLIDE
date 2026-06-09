@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { watch } from "@tauri-apps/plugin-fs";
 import { useEffect, useRef, useState } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
-import { HoverPopover } from "./HoverPopover";
 import type { GitFile, GitStatus } from "../gitTypes";
 
 type Props = {
@@ -72,18 +71,9 @@ function KebabIcon() {
   );
 }
 
-function FolderOpenSmall() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z" />
-      <path d="M3 14h5l1.5-3h7L18 14" />
-    </svg>
-  );
-}
-
 function FilePlusIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <path d="M14 2v6h6" />
       <path d="M12 11v6" />
@@ -94,7 +84,7 @@ function FilePlusIcon() {
 
 function FolderPlusIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z" />
       <path d="M12 11v6" />
       <path d="M9 14h6" />
@@ -102,13 +92,11 @@ function FolderPlusIcon() {
   );
 }
 
-function CollapseAllIcon() {
+function FolderOpenSmall() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 5h16" />
-      <path d="M6 9h12" />
-      <path d="M8 13h8" />
-      <path d="M10 17h4" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z" />
+      <path d="M3 14h5l1.5-3h7L18 14" />
     </svg>
   );
 }
@@ -204,12 +192,6 @@ function FileRow({ name }: { name: string }) {
 
 function joinPath(root: string, name: string): string {
   return `${root.replace(/\/$/, "")}/${name}`;
-}
-
-function shortPath(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  if (parts.length <= 2) return path;
-  return `.../${parts.slice(-2).join("/")}`;
 }
 
 function relativePath(root: string, path: string): string {
@@ -561,12 +543,6 @@ export function Sidebar({
     }
   }
 
-  function collapseAll() {
-    if (!root) return;
-    setExpanded(new Set());
-    localStorage.setItem(expandedStoreKey(root), JSON.stringify([]));
-  }
-
   async function toggleFolder(path: string, isVirtualFolder = false) {
     const next = new Set(expanded);
     if (next.has(path)) {
@@ -868,87 +844,50 @@ export function Sidebar({
         const isActive = activePath != null && path === activePath;
         return (
           <li key={path}>
-            <HoverPopover
-              content={(close) => (
-                <div className="klide-popover-section">
-                  <span className="klide-popover-label">
-                    {isDir ? "Folder" : isVirtual ? "Deleted file" : "File"}
-                  </span>
-                  <span className="klide-popover-path">{path}</span>
-                  <div className="klide-popover-divider" />
-                  <div className="klide-popover-actions">
-                    {isDir && !isVirtual && (
-                      <>
-                        <button
-                          className="klide-popover-action"
-                          onClick={() => { startCreate(path, false); close(); }}
-                        >
-                          <FilePlusIcon /> New file
-                        </button>
-                        <button
-                          className="klide-popover-action"
-                          onClick={() => { startCreate(path, true); close(); }}
-                        >
-                          <FolderPlusIcon /> New folder
-                        </button>
-                      </>
-                    )}
-                    <button
-                      className="klide-popover-action"
-                      data-primary="true"
-                      onClick={() => { collapseAll(); close(); }}
-                    >
-                      <CollapseAllIcon /> Collapse all
-                    </button>
-                  </div>
-                </div>
-              )}
+            <div
+              className="klide-explorer-row"
+              data-active={isActive}
+              data-virtual={isVirtual}
+              onClick={() => {
+                if (isDir) toggleFolder(path, isVirtual);
+                else if (!isVirtual) pick(path);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isVirtual) return; // deleted-file ghosts have no disk entry
+                setMenu({ x: event.clientX, y: event.clientY, path, isDirectory: isDir });
+              }}
+              style={{
+                paddingLeft: indent,
+                color: decoration ? decoration.color : isDir ? "var(--fg)" : "var(--fg-strong)",
+                cursor: isVirtual && !isDir ? "default" : "pointer",
+              }}
             >
-              <div
-                className="klide-explorer-row"
-                data-active={isActive}
-                data-virtual={isVirtual}
-                onClick={() => {
-                  if (isDir) toggleFolder(path, isVirtual);
-                  else if (!isVirtual) pick(path);
-                }}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (isVirtual) return; // deleted-file ghosts have no disk entry
-                  setMenu({ x: event.clientX, y: event.clientY, path, isDirectory: isDir });
-                }}
-                style={{
-                  paddingLeft: indent,
-                  color: decoration ? decoration.color : isDir ? "var(--fg)" : "var(--fg-strong)",
-                  cursor: isVirtual && !isDir ? "default" : "pointer",
-                }}
-              >
-                <span className="klide-explorer-chevron" data-open={isExpanded}>
-                  {isDir ? <ChevronRight /> : null}
+              <span className="klide-explorer-chevron" data-open={isExpanded}>
+                {isDir ? <ChevronRight /> : null}
+              </span>
+              <span className="klide-explorer-icon">
+                {isDir ? <FolderRow open={isExpanded} /> : <FileRow name={e.name} />}
+              </span>
+              {editing?.mode === "rename" && editing.path === path ? (
+                <InlineNameInput
+                  defaultValue={e.name}
+                  onCommit={(name) => void commitRename(path, name)}
+                  onCancel={() => setEditing(null)}
+                />
+              ) : (
+                <span className="klide-explorer-name">{e.name}</span>
+              )}
+              {decoration && (
+                <span
+                  className="klide-explorer-decoration"
+                  style={{ color: decoration.color }}
+                >
+                  {decoration.label}
                 </span>
-                <span className="klide-explorer-icon">
-                  {isDir ? <FolderRow open={isExpanded} /> : <FileRow name={e.name} />}
-                </span>
-                {editing?.mode === "rename" && editing.path === path ? (
-                  <InlineNameInput
-                    defaultValue={e.name}
-                    onCommit={(name) => void commitRename(path, name)}
-                    onCancel={() => setEditing(null)}
-                  />
-                ) : (
-                  <span className="klide-explorer-name">{e.name}</span>
-                )}
-                {decoration && (
-                  <span
-                    className="klide-explorer-decoration"
-                    style={{ color: decoration.color }}
-                  >
-                    {decoration.label}
-                  </span>
-                )}
-              </div>
-            </HoverPopover>
+              )}
+            </div>
             {isDir && isExpanded && (
               <ul>
                 {isLoading ? (
@@ -1045,25 +984,42 @@ export function Sidebar({
         overflow: "hidden",
       }}
     >
-      {/* Linear-style header: section title (uppercase mono), workspace
-          name + parent path inline, action icons on the right. */}
+      {/* Header — the workspace name is the primary object, not the
+          section label. The activity-bar icon already labels this panel
+          as "Files", so the chrome stays quiet. At-rest: workspace name
+          on the left, creation + refresh + kebab on the right. The
+          bottom edge is a gradient hairline + a 1px inset highlight for
+          depth (no flat 1px line). No path is rendered; native title
+          reveals it. */}
       <header className="klide-explorer-header">
-        <span className="klide-explorer-header-title">Explorer</span>
         {root ? (
           <div className="klide-explorer-header-workspace" title={root}>
             <span className="klide-explorer-header-workspace-name">
               {root.split("/").filter(Boolean).pop() ?? root}
             </span>
-            <span className="klide-explorer-header-workspace-path">
-              {shortPath(root)}
-            </span>
           </div>
         ) : (
-          <div className="klide-explorer-header-workspace" />
+          <div className="klide-explorer-header-workspace" data-empty="true" />
         )}
         <div className="klide-explorer-header-actions">
           {root && (
             <>
+              <button
+                onClick={() => root && startCreate(root, false)}
+                title="New file"
+                aria-label="New file"
+                className="klide-explorer-action"
+              >
+                <FilePlusIcon />
+              </button>
+              <button
+                onClick={() => root && startCreate(root, true)}
+                title="New folder"
+                aria-label="New folder"
+                className="klide-explorer-action"
+              >
+                <FolderPlusIcon />
+              </button>
               <button
                 onClick={() => root && refreshGitStatus(root).then(refreshTree)}
                 title="Refresh"
