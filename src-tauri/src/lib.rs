@@ -3234,6 +3234,39 @@ fn clean_title(s: &str) -> String {
     one.chars().take(120).collect()
 }
 
+fn extract_routine_heading(s: &str) -> Option<String> {
+    for line in s.lines() {
+        let cleaned = line
+            .trim()
+            .trim_start_matches('#')
+            .trim()
+            .trim_matches('*')
+            .trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let lower = cleaned.to_lowercase();
+        let has_cadence = lower.contains("daily")
+            || lower.contains("weekly")
+            || lower.contains("monthly")
+            || lower.contains("routine")
+            || lower.contains("recurring")
+            || lower.contains("scheduled");
+        let has_report_term = lower.contains("recap")
+            || lower.contains("review")
+            || lower.contains("check-in")
+            || lower.contains("check in")
+            || lower.contains("standup")
+            || lower.contains("status")
+            || lower.contains("digest")
+            || lower.contains("report");
+        if has_cadence && has_report_term {
+            return Some(clean_title(cleaned));
+        }
+    }
+    None
+}
+
 fn recency_status(updated_ms: i64) -> String {
     if now_ms() - updated_ms < 120_000 {
         "running".to_string()
@@ -3308,6 +3341,13 @@ fn parse_claude_run(path: &std::path::Path) -> Option<AgentRun> {
             }
             Some("assistant") => {
                 count += 1;
+                if title.is_none() {
+                    if let Some(text) = v.get("message").and_then(claude_message_text) {
+                        if let Some(heading) = extract_routine_heading(&text) {
+                            title = Some(heading);
+                        }
+                    }
+                }
                 if model.is_none() {
                     model = v
                         .get("message")

@@ -1,0 +1,590 @@
+import { type ReactNode, type RefObject, type ComponentProps } from "react";
+import type { ProviderId } from "../agent/types";
+import type { Conversation } from "./ai/types";
+import type { HarnessSettings } from "../App";
+import type { Skill } from "../skills";
+import type {
+  Layout as PanelLayout,
+  PanelRect,
+} from "../panelLayout";
+import { Sidebar } from "./Sidebar";
+import { TabBar } from "./TabBar";
+import { EditorArea } from "./EditorArea";
+import { SearchPanel } from "./SearchPanel";
+import { TerminalPanel } from "./TerminalPanel";
+import { AiPanel } from "./AiPanel";
+import { FileViewerPanel } from "./FileViewerPanel";
+import { SkillsModal } from "./SkillsModal";
+import { SplitPane } from "./SplitPane";
+import type { ThemeId } from "../theme";
+
+type Tab = {
+  path: string;
+  code: string;
+  dirty: boolean;
+  externalChanged?: boolean;
+  diskCode?: string;
+};
+type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
+type AiPanelInstance = {
+  id: string;
+  rect: PanelRect;
+  provider?: ProviderId;
+  model?: string;
+};
+
+type Props = {
+  // Layout measurement + persistence plumbing
+  workbenchRef: RefObject<HTMLDivElement | null>;
+  workbenchSize: { w: number; h: number };
+  onWorkbenchSize: (size: { w: number; h: number }) => void;
+  panelLayout: PanelLayout;
+  aiPanels: AiPanelInstance[];
+  focusedPanel: string | null;
+  zCounter: number;
+
+  // Visibility / routing
+  explorerVisible: boolean;
+  terminalVisible: boolean;
+  aiVisible: boolean;
+  sidebarSlot2: Panel | null;
+  searchVisible: boolean;
+  workspaceRoot: string | null;
+  active: Tab | null;
+  language: string | null;
+  theme: ThemeId;
+
+  // Editor
+  tabs: Tab[];
+  activeIdx: number;
+  editorFontSize: number;
+  editorLineNumbers: boolean;
+  editorWordWrap: boolean;
+  editorMinimap: boolean;
+  onSelectTab: (i: number) => void;
+  onCloseTab: (i: number) => void;
+  onChangeCode: (v: string) => void;
+  setSearchVisible: (v: boolean) => void;
+  onOpenFile: (p: string, content: string, position?: { line: number; column: number }) => void;
+  onRootChange: (p: string | null) => void;
+  onEntryRenamed: (oldPath: string, newPath: string) => void;
+  onEntryDeleted: (path: string) => void;
+  onFilePreview: (p: string | null) => void;
+  setExplorerVisible: (v: boolean | ((cur: boolean) => boolean)) => void;
+  setSidebarSlot2: (v: Panel | null | ((cur: Panel | null) => Panel | null)) => void;
+  setTerminalVisible: (v: boolean | ((cur: boolean) => boolean)) => void;
+  focusPanel: (id: string) => void;
+  onMountEditor: (editor: Parameters<NonNullable<ComponentProps<typeof EditorArea>["onEditorMount"]>>[0]) => void;
+
+  // AI panel extras
+  skills: Skill[];
+  setSkills: (s: Skill[]) => void;
+  reloadFilesystemSkills: () => Promise<void>;
+  apiKeyVersion: number;
+  requireDiffReview: boolean;
+  stopAfterRejection: boolean;
+  aiModel: string;
+  panelModels: Record<string, string[]>;
+  setPanelModels: (m: Record<string, string[]> | ((cur: Record<string, string[]>) => Record<string, string[]>)) => void;
+  onAiPanelModelChange: (id: string, model: string) => void;
+  onAiPanelProviderChange: (id: string, provider: ProviderId) => void;
+  onDuplicateAiPanel: (snapshot?: { provider: ProviderId; model: string }) => void;
+  onCloseAiPanel: (id: string) => void;
+  onAgentWrote: (path: string, content: string) => void;
+  refreshGitStatus: (root: string | null) => Promise<void>;
+  onPanelWidthChange: (panel: "explorer" | "ai", w: number) => void;
+  onPanelHeightChange: (panel: "terminal", h: number) => void;
+
+  // Mission Control handoff
+  pendingAiPanel: {
+    panelId: string;
+    provider: "claude-code" | "codex" | "opencode";
+    resumeSessionId: string | null;
+    initialTask: string | null;
+  } | null;
+  onPendingAiPanelConsumed: () => void;
+  resumeConversation: Conversation | null;
+  onResumeConsumed: () => void;
+
+  // Quick view
+  previewPath: string | null;
+  onClosePreview: () => void;
+
+  // Header actions (memory + skill) from AI panel
+  onMemoryWritten: (entry: { title: string; relPath: string }) => void;
+  onSkillGenerated: (skill: { name: string; relPath: string }) => void;
+
+  harnessSettings: HarnessSettings;
+};
+
+// Anchored workbench — the calm, fullscreen surface. A single 1px-bordered
+// frame that fills the workbench, with three columns (side | editor | ai)
+// and an optional terminal row at the bottom. No drag handles, no floating
+// panels, no resize grips. The user still resizes side/ai via the splitter
+// rails and the terminal via its drag handle, but nothing "wanders".
+export function AnchoredWorkbench(props: Props) {
+  const {
+    workbenchRef,
+    panelLayout,
+    explorerVisible,
+    sidebarSlot2,
+    terminalVisible,
+    aiVisible,
+    aiPanels,
+    tabs,
+    activeIdx,
+    workspaceRoot,
+    searchVisible,
+    onSelectTab,
+    onCloseTab,
+    onChangeCode,
+    setSearchVisible,
+    onOpenFile,
+    onRootChange,
+    onEntryRenamed,
+    onEntryDeleted,
+    onFilePreview,
+    active,
+    language,
+    theme,
+    editorFontSize,
+    editorLineNumbers,
+    editorWordWrap,
+    editorMinimap,
+    onMountEditor,
+    setSidebarSlot2,
+    skills,
+    setSkills,
+    reloadFilesystemSkills,
+    apiKeyVersion,
+    requireDiffReview,
+    stopAfterRejection,
+    aiModel,
+    panelModels,
+    setPanelModels,
+    onAiPanelModelChange,
+    onAiPanelProviderChange,
+    onDuplicateAiPanel,
+    onCloseAiPanel,
+    onAgentWrote,
+    refreshGitStatus,
+    onPanelWidthChange,
+    onPanelHeightChange,
+    pendingAiPanel,
+    onPendingAiPanelConsumed,
+    resumeConversation,
+    onResumeConsumed,
+    previewPath,
+    onClosePreview,
+    onMemoryWritten,
+    onSkillGenerated,
+    harnessSettings,
+  } = props;
+
+  const sideVisible = explorerVisible;
+  const sidePanelWidth = panelLayout.explorer?.w ?? 280;
+  const aiPanel = aiPanels[0];
+  const aiPanelWidth = aiPanel?.rect.w ?? 360;
+  const terminalHeight = panelLayout.terminal?.h ?? 220;
+  const updatePanelModels = (id: string, models: string[]) => {
+    setPanelModels((prev) => {
+      const current = prev[id] ?? [];
+      if (current.length === models.length && current.every((name, idx) => name === models[idx])) {
+        return prev;
+      }
+      return { ...prev, [id]: models };
+    });
+  };
+
+  // The side column shows explorer; ⌘+click in the activity bar can stack
+  // skills below it via a SplitPane (matches the existing behaviour).
+  const renderSide = () => {
+    if (!sideVisible) return null;
+    const explorer = (
+      <Sidebar
+        fill
+        visible
+        width={sidePanelWidth}
+        workspaceRoot={workspaceRoot}
+        onOpen={onOpenFile}
+        onRootChange={onRootChange}
+        onEntryRenamed={onEntryRenamed}
+        onEntryDeleted={onEntryDeleted}
+        onFilePreview={onFilePreview}
+        activePath={active?.path ?? null}
+      />
+    );
+    if (sidebarSlot2 === "skills") {
+      return (
+        <SplitPane
+          top={explorer}
+          bottom={
+            <SkillsModal
+              open
+              skills={skills}
+              onChange={setSkills}
+              onReloadFilesystemSkills={reloadFilesystemSkills}
+              onClose={() => setSidebarSlot2(null)}
+            />
+          }
+          defaultSplit={(sidePanelWidth) * 0.55}
+          minPane={80}
+        />
+      );
+    }
+    return explorer;
+  };
+
+  // Editor column = TabBar (when tabs exist) + SearchPanel + Monaco. The
+  // background is the workbench surface, not a tinted card — the editor
+  // sits inline with the AI column and the side panel.
+  const renderEditor = () => (
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        background: "transparent",
+      }}
+    >
+      {tabs.length > 0 && (
+        <TabBar
+          tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+          activeIdx={activeIdx}
+          onSelect={onSelectTab}
+          onClose={onCloseTab}
+          workspaceRoot={workspaceRoot}
+        />
+      )}
+      <SearchPanel
+        workspaceRoot={workspaceRoot}
+        visible={searchVisible}
+        onClose={() => setSearchVisible(false)}
+        onOpenFile={onOpenFile}
+      />
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <EditorArea
+          code={active?.code ?? ""}
+          onChange={onChangeCode}
+          language={language ?? "plaintext"}
+          hasFile={active !== null}
+          theme={theme}
+          fontSize={editorFontSize}
+          lineNumbers={editorLineNumbers}
+          wordWrap={editorWordWrap}
+          minimap={editorMinimap}
+          onEditorMount={onMountEditor}
+        />
+      </div>
+    </div>
+  );
+
+  // The AI column. In anchored mode we keep ONE AI panel per workspace — the
+  // multi-AI-panel "duplicate" feature is a bento affordance that doesn't fit
+  // the calm surface. Mission Control handoff still creates a panel and
+  // picks the first one; subsequent ones can be addressed in a follow-up.
+  //
+  // If `aiVisible` is on but `aiPanels` is empty (round-trip anchored ↔ free
+  // can momentarily drop the in-memory list), still render the panel using
+  // sensible defaults. App will re-seed `aiPanels` on the next interaction.
+  const renderAi = () => {
+    if (!aiVisible) return null;
+    // Fall back to a default id when the in-memory list is empty (transient
+    // state during the anchored ↔ free round-trip). AiPanel keys off panelId
+    // for model/provider state, so we keep the same default id the rest of
+    // the app uses (App's ensureAiRect and projectAiPanelsToRects all use
+    // "ai-main" for the first slot).
+    const safeId = aiPanel?.id ?? "ai-main";
+    const safeModel = aiPanel?.model ?? aiModel;
+    return (
+      <AiPanel
+        fill
+        visible
+        width={aiPanelWidth}
+        panelId={safeId}
+        initialProvider={
+          pendingAiPanel?.panelId === safeId
+            ? pendingAiPanel.provider
+            : aiPanel?.provider
+        }
+        initialResumeSessionId={
+          pendingAiPanel?.panelId === safeId
+            ? pendingAiPanel.resumeSessionId ?? undefined
+            : undefined
+        }
+        initialTask={
+          pendingAiPanel?.panelId === safeId
+            ? pendingAiPanel.initialTask ?? undefined
+            : undefined
+        }
+        onInitialConsumed={
+          pendingAiPanel?.panelId === safeId
+            ? onPendingAiPanelConsumed
+            : undefined
+        }
+        workspaceRoot={workspaceRoot}
+        onFileWritten={onAgentWrote}
+        onWorkspaceChanged={() =>
+          workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
+        }
+        model={safeModel}
+        onModelChange={(model) => onAiPanelModelChange(safeId, model)}
+        onProviderChange={(provider) => onAiPanelProviderChange(safeId, provider)}
+        availableModels={panelModels[safeId] ?? [safeModel]}
+        onAvailableModelsChange={(models) => updatePanelModels(safeId, models)}
+        apiKeyVersion={apiKeyVersion}
+        requireDiffReview={requireDiffReview}
+        stopAfterRejection={stopAfterRejection}
+        skills={skills}
+        harnessSettings={harnessSettings}
+        onDuplicate={onDuplicateAiPanel}
+        onClose={aiPanels.length > 1 ? () => onCloseAiPanel(safeId) : undefined}
+        resumeConversation={resumeConversation}
+        onResumeConsumed={onResumeConsumed}
+        onMemoryWritten={onMemoryWritten}
+        onSkillGenerated={onSkillGenerated}
+      />
+    );
+  };
+
+  return (
+    <div
+      ref={workbenchRef}
+      className="workbench-main"
+      data-anchored="true"
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        padding: 0,
+        position: "relative",
+        display: "flex",
+        // The whole workbench is one calm surface — no frame, no card
+        // backgrounds. Hairline gaps between regions, identical surface
+        // treatment as the surrounding chrome.
+        background: "var(--bg)",
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: "grid",
+          gridTemplateRows: terminalVisible
+            ? `minmax(0, 1fr) 1px ${terminalHeight}px`
+            : "1fr",
+          gridTemplateColumns: "1fr",
+          overflow: "hidden",
+        }}
+      >
+        {/* Top row: side | editor | ai */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: sideVisible
+              ? `${sidePanelWidth}px 1px minmax(0, 1fr)${aiVisible ? ` 1px ${aiPanelWidth}px` : ""}`
+              : aiVisible
+                ? `minmax(0, 1fr) 1px ${aiPanelWidth}px`
+                : "1fr",
+            minHeight: 0,
+            minWidth: 0,
+            overflow: "hidden",
+          }}
+        >
+          {sideVisible && (
+            <>
+              <ColumnSurface>{renderSide()}</ColumnSurface>
+              <SideSplitter
+                side="left"
+                current={sidePanelWidth}
+                onChange={(w) => onPanelWidthChange("explorer", clamp(w, 200, 520))}
+              />
+            </>
+          )}
+          <ColumnSurface>{renderEditor()}</ColumnSurface>
+          {aiVisible && (
+            <>
+              <SideSplitter
+                side="right"
+                current={aiPanelWidth}
+                onChange={(w) => onPanelWidthChange("ai", clamp(w, 300, 620))}
+              />
+              <ColumnSurface>{renderAi()}</ColumnSurface>
+            </>
+          )}
+        </div>
+
+        {/* Terminal row */}
+        {terminalVisible && (
+          <>
+            <TerminalSplitter
+              current={terminalHeight}
+              onChange={(h) => onPanelHeightChange("terminal", clamp(h, 140, 460))}
+            />
+            <ColumnSurface>
+              <TerminalPanel
+                fill
+                visible
+                theme={theme}
+                height={terminalHeight}
+                workspaceRoot={workspaceRoot}
+                onToggle={() => {}}
+              />
+            </ColumnSurface>
+          </>
+        )}
+      </div>
+
+      {/* Quick view overlay — anchored to the workbench top-right, not a
+          floating window. */}
+      {previewPath && (
+        <div
+          style={{
+            position: "absolute",
+            right: 14,
+            top: 14,
+            width: 460,
+            maxHeight: "calc(100% - 28px)",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--panel-border)",
+            borderRadius: "var(--radius-md)",
+            boxShadow: "var(--panel-shadow)",
+            zIndex: 20,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          <FileViewerPanel
+            key={previewPath}
+            filePath={previewPath}
+            onClose={onClosePreview}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColumnSurface({ children }: { children: ReactNode }) {
+  // A region inside the anchored workbench. No card, no border, no inset
+  // highlight — the whole workbench is one surface, tiles meet at hairlines.
+  return (
+    <div
+      style={{
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        background: "transparent",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// A 1px-wide draggable gutter that lives between two columns. On hover, the
+// gutter shifts to a sage accent so the user can see where to grab. On
+// drag, we read the new column width from `current + dx` (for the left
+// splitter) or `current - dx` (for the right splitter).
+function SideSplitter({
+  side,
+  current,
+  onChange,
+}: {
+  side: "left" | "right";
+  current: number;
+  onChange: (next: number) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize ${side} panel`}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const start = current;
+        const previousCursor = document.body.style.cursor;
+        const previousSelect = document.body.style.userSelect;
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+        function onMove(ev: MouseEvent) {
+          const dx = ev.clientX - startX;
+          const next = side === "left" ? start + dx : start - dx;
+          onChange(next);
+        }
+        function onUp() {
+          document.body.style.cursor = previousCursor;
+          document.body.style.userSelect = previousSelect;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        }
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      }}
+      style={{
+        background: "var(--border)",
+        cursor: "col-resize",
+        position: "relative",
+        transition: "background var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-soft)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "var(--border)")}
+    />
+  );
+}
+
+function TerminalSplitter({
+  current,
+  onChange,
+}: {
+  current: number;
+  onChange: (next: number) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize terminal"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        const startY = e.clientY;
+        const start = current;
+        const previousCursor = document.body.style.cursor;
+        const previousSelect = document.body.style.userSelect;
+        document.body.style.cursor = "row-resize";
+        document.body.style.userSelect = "none";
+        function onMove(ev: MouseEvent) {
+          const dy = ev.clientY - startY;
+          onChange(start - dy);
+        }
+        function onUp() {
+          document.body.style.cursor = previousCursor;
+          document.body.style.userSelect = previousSelect;
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+        }
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      }}
+      style={{
+        background: "var(--border)",
+        cursor: "row-resize",
+        position: "relative",
+        transition: "background var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-soft)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "var(--border)")}
+    />
+  );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}

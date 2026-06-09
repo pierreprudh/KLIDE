@@ -47,7 +47,7 @@ them.
 - [x] Editable harness settings: mode prompts, tool toggles, and tool descriptions (tool descriptions TBD).
 - [x] Checkpoint rollback: preview files changed since a turn and revert selected files.
 - [x] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
-- [ ] Project Memory v3: cross-link entries to touched files (click `filesTouched` to jump to the file). Auto-summarizer watch is parked — current model is the user-triggered "Save as skill" sparkle, which the agent uses to capture reusable patterns explicitly.
+- [x] Project Memory v3: cross-link entries to touched files (click `filesTouched` to jump to the file). Auto-summarizer watch is parked — current model is the user-triggered "Save as skill" sparkle, which the agent uses to capture reusable patterns explicitly.
 - [ ] Memory auto-summarizer: watch completed/stopped runs and write durable memory notes (the auto-generate path is already shipped for skills, this is the memory equivalent).
 
 ## Small Follow-Ups

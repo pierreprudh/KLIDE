@@ -4,6 +4,8 @@
 // edges. Layouts are saved per-workspace so switching projects keeps each
 // project's preferred arrangement.
 
+import type { ProviderId } from "./agent/types";
+
 export type PanelId =
   | "explorer"
   | "git"
@@ -24,12 +26,31 @@ export type PanelRect = {
 // box split down the middle. The "memory" panel id is kept here for
 // backward compat with stored layouts; the Memory surface itself now
 // opens as a centered modal, not a sidebar.
+// A persisted AI panel carries its rect plus the model + provider so the
+// panel can be rehydrated across sessions without losing the conversation
+// binding. The id is the runtime key the React tree is keyed by — when the
+// user creates a panel via Mission Control or duplicates an existing one
+// we mint a fresh id and store it here so view-switches and reloads both
+// resolve to the same panel.
+export type StoredAiPanel = {
+  id: string;
+  rect: PanelRect;
+  provider?: ProviderId;
+  model?: string;
+};
+
 export type Layout = {
   explorer?: PanelRect;
   git?: PanelRect;
   memory?: PanelRect;
   terminal?: PanelRect;
-  ai?: PanelRect[];
+  ai?: StoredAiPanel[];
+  // Anchored = the calm, fullscreen workbench (Ara-style): side / editor / AI
+  // columns + an optional terminal row, no floating panels, no drag/resize
+  // handles. Bento/free mode (anchored = false) keeps the legacy floating
+  // rects. New workspaces default to anchored; the user can opt back into
+  // free mode from the status-bar Layout picker.
+  anchored?: boolean;
 };
 
 export type PanelConstraints = {
@@ -69,9 +90,10 @@ export function defaultLayout(workbenchW: number, workbenchH: number): Layout {
   const explorerW = 280;
   const gitW = 280;
   return {
+    anchored: true,
     explorer: { x: 0, y: 0, w: explorerW, h: mainH },
     git:      { x: explorerW + PANEL_GAP, y: 0, w: gitW, h: mainH },
-    ai:       [{ x: Math.max(0, w - aiW), y: 0, w: aiW, h: mainH }],
+    ai:       [{ id: "ai-main", rect: { x: Math.max(0, w - aiW), y: 0, w: aiW, h: mainH } }],
     terminal: { x: 0, y: mainH + PANEL_GAP, w: Math.max(1, w - aiW - PANEL_GAP), h: terminalH },
   };
 }
@@ -108,16 +130,29 @@ export function loadLayout(workspaceRoot: string | null): Layout | null {
   return migrateLayout(raw);
 }
 
-// Old layouts stored `ai` as a single PanelRect. The new format is an
-// array so multiple AI panels can each have their own box. Wrap a
-// legacy single-rect `ai` in an array on load.
+// Old layouts stored `ai` as either a single PanelRect, or a PanelRect[]
+// without provider/model. Wrap a single rect, and backfill id+provider
+// +model for each entry so the new id-keyed join doesn't drop them.
 function migrateLayout(layout: Layout): Layout {
   if (!layout) return layout;
-  const aiRaw = (layout as unknown as { ai?: PanelRect | PanelRect[] }).ai;
-  if (aiRaw && !Array.isArray(aiRaw)) {
-    return { ...layout, ai: [aiRaw] };
+  const aiRaw = (layout as unknown as { ai?: PanelRect | PanelRect[] | StoredAiPanel[] }).ai;
+  if (!aiRaw) return layout;
+  if (Array.isArray(aiRaw) && aiRaw.length > 0 && "rect" in aiRaw[0]) {
+    return layout;
   }
-  return layout;
+  const list: StoredAiPanel[] = [];
+  if (!Array.isArray(aiRaw)) {
+    list.push({ id: "ai-main", rect: aiRaw });
+  } else {
+    aiRaw.forEach((entry, idx) => {
+      if ("rect" in entry) {
+        list.push({ id: idx === 0 ? "ai-main" : `ai-${idx}`, rect: entry.rect, provider: entry.provider, model: entry.model });
+      } else {
+        list.push({ id: idx === 0 ? "ai-main" : `ai-${idx}`, rect: entry });
+      }
+    });
+  }
+  return { ...layout, ai: list };
 }
 
 export function saveLayout(workspaceRoot: string | null, layout: Layout): void {

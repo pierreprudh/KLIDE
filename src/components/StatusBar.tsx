@@ -13,8 +13,10 @@ type Props = {
   onToggleTerminal: () => void;
   gridLayouts: GridLayout[];
   activeGridId: string | null;
+  anchoredLayout: boolean;
   onApplyGrid: (id: string) => void;
   onExitGrid: () => void;
+  onSetAnchored: (anchored: boolean) => void;
   onOpenGrid: () => void;
   theme: ThemeId;
   autoTheme: boolean;
@@ -79,8 +81,10 @@ export function StatusBar({
   onToggleTerminal,
   gridLayouts,
   activeGridId,
+  anchoredLayout,
   onApplyGrid,
   onExitGrid,
+  onSetAnchored,
   onOpenGrid,
   theme,
   autoTheme,
@@ -107,83 +111,73 @@ export function StatusBar({
         WebkitBackdropFilter: "blur(12px)",
       }}
     >
-      <span
-        title={display ?? undefined}
-        style={{
-          color: filename ? "var(--fg)" : "var(--fg-subtle)",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          maxWidth: "42vw",
-          fontWeight: filename ? 500 : 400,
-          letterSpacing: "-0.005em",
-        }}
-      >
-        {display ?? "Klide"}
-      </span>
+      {display && (
+        <span
+          title={display}
+          style={{
+            color: filename ? "var(--fg)" : "var(--fg-subtle)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "42vw",
+            fontWeight: filename ? 500 : 400,
+            letterSpacing: "-0.005em",
+          }}
+        >
+          {display}
+        </span>
+      )}
       {language && (
-        <>
-          <span className="klide-status-dot" />
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>{language}</span>
-        </>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>{language}</span>
       )}
       {workspaceRoot && (
-        <>
-          <span className="klide-status-dot" />
-          <span>{workspaceRoot.split("/").pop()}</span>
-        </>
+        <span>{workspaceRoot.split("/").pop()}</span>
       )}
       {gitStatus && (
-        <>
-          <span className="klide-status-dot" />
+        <span
+          title={`${gitStatus.branch} · ${gitStatus.files.length} ${
+            gitStatus.files.length === 1 ? "change" : "changes"
+          }`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            color: gitStatus.files.length > 0 ? "var(--accent)" : "var(--fg-subtle)",
+            minWidth: 0,
+            whiteSpace: "nowrap",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10.5,
+          }}
+        >
+          <BranchIcon />
           <span
-            title={`${gitStatus.branch} · ${gitStatus.files.length} ${
-              gitStatus.files.length === 1 ? "change" : "changes"
-            }`}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              color: gitStatus.files.length > 0 ? "var(--accent)" : "var(--fg-subtle)",
-              minWidth: 0,
-              whiteSpace: "nowrap",
-              fontFamily: "var(--font-mono)",
-              fontSize: 10.5,
-            }}
-          >
-            <BranchIcon />
-            <span
-              style={{
-                maxWidth: 140,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {gitStatus.branch}
-            </span>
-            <span style={{ color: "var(--fg-dim)" }}>·</span>
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>{gitStatus.files.length}</span>
-          </span>
-        </>
-      )}
-      {fileNotice && (
-        <>
-          <span className="klide-status-dot" />
-          <span
-            title={fileNotice}
-            style={{
-              color: fileNotice.includes("changed") || fileNotice.includes("unavailable")
-                ? "var(--warning)"
-                : "var(--fg-subtle)",
-              whiteSpace: "nowrap",
+              maxWidth: 140,
               overflow: "hidden",
               textOverflow: "ellipsis",
-              maxWidth: "22vw",
             }}
           >
-            {fileNotice}
+            {gitStatus.branch}
           </span>
-        </>
+          <span style={{ color: "var(--fg-dim)" }}>·</span>
+          <span style={{ fontVariantNumeric: "tabular-nums" }}>{gitStatus.files.length}</span>
+        </span>
+      )}
+      {fileNotice && (
+        <span
+          title={fileNotice}
+          style={{
+            color: fileNotice.includes("changed") || fileNotice.includes("unavailable")
+              ? "var(--warning)"
+              : "var(--fg-subtle)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "22vw",
+          }}
+        >
+          {fileNotice}
+        </span>
       )}
       <div style={{ flex: 1 }} />
       <button
@@ -205,7 +199,6 @@ export function StatusBar({
         />
         {autoTheme ? "Auto" : "Theme"} · {themeMeta.name}
       </button>
-      <span className="klide-status-dot" />
       <button
         onClick={onToggleTerminal}
         title="Toggle terminal (⌃`)"
@@ -217,15 +210,15 @@ export function StatusBar({
         <TerminalIcon />
         Terminal
       </button>
-      <span className="klide-status-dot" />
       <LayoutBento
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
+        anchored={anchoredLayout}
         onApplyGrid={onApplyGrid}
         onExitGrid={onExitGrid}
+        onSetAnchored={onSetAnchored}
         onOpenGrid={onOpenGrid}
       />
-      <span className="klide-status-dot" />
       <button
         onClick={onResetLayout}
         title="Reset panel layout to default"
@@ -234,9 +227,7 @@ export function StatusBar({
       >
         Reset
       </button>
-      <span className="klide-status-dot" />
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>UTF-8</span>
-      <span className="klide-status-dot" />
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>LF</span>
     </footer>
   );

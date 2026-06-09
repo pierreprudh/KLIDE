@@ -31,6 +31,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
+import { PROVIDER_GROUPS } from "./agent/providers";
 import {
   loadCustomPresets,
   saveCustomPresets,
@@ -39,6 +40,7 @@ import {
 import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts";
 import { GridWorkbench } from "./components/GridWorkbench";
 import { FloatingPanel } from "./components/FloatingPanel";
+import { AnchoredWorkbench } from "./components/AnchoredWorkbench";
 import { SplitPane } from "./components/SplitPane";
 import {
   defaultLayout as defaultPanelLayout,
@@ -50,12 +52,19 @@ import {
   type Layout as PanelLayout,
   type PanelRect,
   type PanelId as PanelLayoutId,
+  type StoredAiPanel,
 } from "./panelLayout";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
+export type HarnessSettings = {
+  chatPrompt?: string;
+  planPrompt?: string;
+  goalPrompt?: string;
+  toolOverrides?: Record<string, boolean>;
+};
 type Tab = {
   path: string;
   code: string;
@@ -87,6 +96,14 @@ function readBoolSetting(key: string, fallback: boolean): boolean {
 
 function newAiPanelId(): string {
   return `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function storedAiProvider(id: string | undefined): ProviderId | undefined {
+  if (!id) return undefined;
+  const known = PROVIDER_GROUPS.some((group) =>
+    group.items.some((item) => item.id === id)
+  );
+  return known ? (id as ProviderId) : undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -179,6 +196,7 @@ function App() {
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const [workbenchSize, setWorkbenchSize] = useState({ w: 0, h: 0 });
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => ({}));
+  const [layoutHydratedRoot, setLayoutHydratedRoot] = useState<string | null>(null);
   const [aiPanels, setAiPanels] = useState<AiPanelInstance[]>(() => [
     { id: "ai-main", rect: { x: 0, y: 0, w: 360, h: 360 } },
   ]);
@@ -208,13 +226,27 @@ function App() {
       const entry = entries[0];
       if (!entry) return;
       const { width, height } = entry.contentRect;
-      setWorkbenchSize({ w: Math.round(width), h: Math.round(height) });
+      const next = { w: Math.round(width), h: Math.round(height) };
+      setWorkbenchSize((prev) =>
+        prev.w === next.w && prev.h === next.h ? prev : next
+      );
     });
     ro.observe(el);
     const rect = el.getBoundingClientRect();
-    setWorkbenchSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+    const next = { w: Math.round(rect.width), h: Math.round(rect.height) };
+    setWorkbenchSize((prev) =>
+      prev.w === next.w && prev.h === next.h ? prev : next
+    );
     return () => ro.disconnect();
-  }, [view, workspaceRoot]);
+    // `workbenchRef` is attached to a *different* DOM node per mode:
+    // AnchoredWorkbench's root (anchored), the free-mode div (free), or
+    // nothing (grid). When the host node swaps, the old observer is left
+    // watching a detached node and `workbenchSize` goes stale — floating
+    // panels then mis-clamp on interaction and the explorer won't open.
+    // Re-run on every dimension that swaps the host so we always observe
+    // the live node. (A `view` change happened to mask this — that's why a
+    // Mission Control round-trip "fixed" it.)
+  }, [view, workspaceRoot, panelLayout.anchored]);
 
   // Load the saved layout for the current workspace (if any), otherwise
   // build a default. Migrate from the legacy per-key localStorage entries
@@ -232,33 +264,68 @@ function App() {
   }
 
   function aiPanelsFromRects(
-    rects: PanelRect[] | undefined,
+    stored: StoredAiPanel[] | undefined,
     previous: AiPanelInstance[]
   ): AiPanelInstance[] {
-    const source = rects && rects.length > 0 ? rects : [fallbackAiRect()];
-    return source.map((rect, idx) => ({
-      id: previous[idx]?.id ?? (idx === 0 ? "ai-main" : newAiPanelId()),
-      rect,
-      provider: previous[idx]?.provider,
-      model: previous[idx]?.model,
-    }));
+    const source = stored && stored.length > 0 ? stored : [{ id: "ai-main", rect: fallbackAiRect() }];
+    return source.map((entry, idx) => {
+      const prev = previous.find((p) => p.id === entry.id);
+      return {
+        id: entry.id ?? (idx === 0 ? "ai-main" : newAiPanelId()),
+        rect: entry.rect,
+        provider: storedAiProvider(entry.provider) ?? prev?.provider,
+        model: entry.model ?? prev?.model,
+      };
+    });
   }
 
-  function syncAiPanelsFromRects(rects: PanelRect[] | undefined) {
-    setAiPanels((previous) => aiPanelsFromRects(rects, previous));
+  function syncAiPanelsFromRects(stored: StoredAiPanel[] | undefined) {
+    setAiPanels((previous) => {
+      const next = aiPanelsFromRects(stored, previous);
+      if (
+        previous.length === next.length &&
+        previous.every((panel, idx) => {
+          const other = next[idx];
+          return (
+            panel.id === other.id &&
+            panel.provider === other.provider &&
+            panel.model === other.model &&
+            panel.rect.x === other.rect.x &&
+            panel.rect.y === other.rect.y &&
+            panel.rect.w === other.rect.w &&
+            panel.rect.h === other.rect.h
+          );
+        })
+      ) {
+        return previous;
+      }
+      return next;
+    });
+  }
+
+  // Project an in-memory AI panel list back onto a StoredAiPanel array.
+  // Preserves every panel's id+rect+provider+model so subsequent hydration
+  // is a no-op rather than a destructive rebuild.
+  function projectAiPanelsToRects(panels: AiPanelInstance[]): StoredAiPanel[] {
+    return panels.map((p) => ({ id: p.id, rect: p.rect, provider: p.provider, model: p.model }));
   }
 
   useEffect(() => {
     if (!workspaceRoot || workbenchSize.w === 0 || workbenchSize.h === 0) return;
+    if (layoutHydratedRoot === workspaceRoot && Object.keys(panelLayout).length > 0) {
+      return;
+    }
     const saved = loadPanelLayout(workspaceRoot);
     if (saved) {
       setPanelLayout(saved);
       syncAiPanelsFromRects(saved.ai);
+      setLayoutHydratedRoot(workspaceRoot);
       return;
     }
     if (!layoutMigrated) {
       setLayoutMigrated(true);
       const migrated: PanelLayout = {
+        anchored: true,
         explorer: {
           x: 0,
           y: 0,
@@ -272,10 +339,13 @@ function App() {
           h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
         },
         ai: [{
-          x: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620),
-          y: 0,
-          w: readNumberSetting("klide-ai-width", 380, 300, 620),
-          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+          id: "ai-main",
+          rect: {
+            x: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620),
+            y: 0,
+            w: readNumberSetting("klide-ai-width", 380, 300, 620),
+            h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+          },
         }],
         terminal: {
           x: 0,
@@ -287,13 +357,15 @@ function App() {
       setPanelLayout(migrated);
       syncAiPanelsFromRects(migrated.ai);
       savePanelLayout(workspaceRoot, migrated);
+      setLayoutHydratedRoot(workspaceRoot);
       return;
     }
     const fresh = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
     setPanelLayout(fresh);
     syncAiPanelsFromRects(fresh.ai);
     savePanelLayout(workspaceRoot, fresh);
-  }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated]);
+    setLayoutHydratedRoot(workspaceRoot);
+  }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated, layoutHydratedRoot]);
 
   // Persist layout on change (debounced via the React batched updates).
   useEffect(() => {
@@ -331,16 +403,16 @@ function App() {
       }
     }
     if (panelLayout.ai) {
-      const clampedAi: PanelRect[] = [];
+      const clampedAi: StoredAiPanel[] = [];
       let aiDirty = false;
-      panelLayout.ai.forEach((rect) => {
-        const c = clampRect(rect, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
-        clampedAi.push(c);
+      panelLayout.ai.forEach((entry) => {
+        const c = clampRect(entry.rect, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
+        clampedAi.push({ ...entry, rect: c });
         if (
-          c.x !== rect.x ||
-          c.y !== rect.y ||
-          c.w !== rect.w ||
-          c.h !== rect.h
+          c.x !== entry.rect.x ||
+          c.y !== entry.rect.y ||
+          c.w !== entry.rect.w ||
+          c.h !== entry.rect.h
         ) {
           aiDirty = true;
         }
@@ -361,8 +433,14 @@ function App() {
     setPanelLayout(fresh);
     syncAiPanelsFromRects(fresh.ai);
     savePanelLayout(workspaceRoot, fresh);
+    setLayoutHydratedRoot(workspaceRoot);
   }
   void resetPanelLayout;
+
+  function setAnchoredLayout(anchored: boolean) {
+    setPanelLayout((prev) => ({ ...prev, anchored }));
+  }
+  void setAnchoredLayout;
 
   function updatePanelRect(panelId: PanelLayoutId, next: PanelRect) {
     setPanelLayout((prev) => ({ ...prev, [panelId]: next }));
@@ -380,24 +458,17 @@ function App() {
     setPanelLayout((prev) =>
       prev.ai && prev.ai.length > 0
         ? prev
-        : { ...prev, ai: panels.map((panel) => panel.rect) }
+        : { ...prev, ai: projectAiPanelsToRects(panels) }
     );
   }
 
-  function updateAiRect(idx: number, next: PanelRect) {
+  function updateAiRect(id: string, next: PanelRect) {
     const rect = clampRect(next, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
     setAiPanels((prev) => {
-      if (idx >= prev.length) return prev;
-      return prev.map((panel, panelIdx) =>
-        panelIdx === idx ? { ...panel, rect } : panel
-      );
+      const updated = prev.map((panel) => panel.id === id ? { ...panel, rect } : panel);
+      setPanelLayout((prevLayout) => ({ ...prevLayout, ai: projectAiPanelsToRects(updated) }));
+      return updated;
     });
-    setPanelLayout((prev) => ({
-      ...prev,
-      ai: (prev.ai ?? aiPanels.map((panel) => panel.rect)).map((oldRect, panelIdx) =>
-        panelIdx === idx ? rect : oldRect
-      ),
-    }));
   }
 
   function focusPanel(panelId: string) {
@@ -433,7 +504,10 @@ function App() {
   useEffect(() => {
     if (!autoTheme) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => setTheme(mq.matches ? darkTheme : lightTheme);
+    const handler = () => {
+      const next = mq.matches ? darkTheme : lightTheme;
+      setTheme((prev) => (prev === next ? prev : next));
+    };
     handler();
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
@@ -463,12 +537,6 @@ function App() {
   const [stopAfterRejection, setStopAfterRejection] = useState(() =>
     readBoolSetting("klide.stopAfterRejection", false)
   );
-  type HarnessSettings = {
-    chatPrompt?: string;
-    planPrompt?: string;
-    goalPrompt?: string;
-    toolOverrides?: Record<string, boolean>;
-  };
   const [harnessSettings, setHarnessSettings] = useState<HarnessSettings>(() => {
     try {
       const raw = localStorage.getItem("klide.harnessSettings");
@@ -479,6 +547,17 @@ function App() {
     localStorage.setItem("klide.harnessSettings", JSON.stringify(harnessSettings));
   }, [harnessSettings]);
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
+  // Free-mode floating panels fall back to a default rect when the persisted
+  // layout never stored one. Anchored mode renders the explorer/terminal from
+  // their visibility flag alone (width falls back to a constant), so a
+  // workspace that only ever ran anchored can have `panelLayout.explorer` /
+  // `.terminal` undefined — and free mode would then silently render nothing
+  // for them (no explorer tree → can't open files either). Deriving a fallback
+  // here keeps free mode working regardless of what's been persisted; if a
+  // rect exists it's used unchanged, so there's no behaviour change otherwise.
+  const freeFallbackLayout = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
+  const explorerRect = panelLayout.explorer ?? freeFallbackLayout.explorer!;
+  const terminalRect = panelLayout.terminal ?? freeFallbackLayout.terminal!;
   // Monaco instance + the position a search-result click wants to land on.
   // The reveal runs in an effect so it fires after the tab's content commits.
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -532,9 +611,24 @@ function App() {
       if (view !== "workbench") {
         setAiVisible(true);
         if (!panelLayout.ai || panelLayout.ai.length === 0) ensureAiRect();
+        focusPanel(aiPanels[0]?.id ?? "ai-main");
       } else {
-        if (!aiVisible) ensureAiRect();
-        setAiVisible((cur) => !cur);
+        // Always ensure the in-memory list is populated, even if the
+        // persisted layout has it empty. The render path gates on both
+        // `aiVisible` AND `aiPanels.length > 0` — a stale empty list
+        // (left over from a previous session's misbehaviour) would
+        // otherwise make the panel invisible after a toggle.
+        if (aiPanels.length === 0) {
+          const fresh = [{ id: "ai-main", rect: fallbackAiRect() }];
+          setAiPanels(fresh);
+          setPanelLayout((prev) => ({
+            ...prev,
+            ai: projectAiPanelsToRects(fresh),
+          }));
+        }
+        const willShow = !aiVisible;
+        setAiVisible(willShow);
+        if (willShow) focusPanel(aiPanels[0]?.id ?? "ai-main");
       }
       return;
     }
@@ -548,8 +642,17 @@ function App() {
         if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
         if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
-        const setter = panel === "explorer" ? setExplorerVisible : setSkillsVisible;
-        setter((cur) => !cur);
+        if (panel === "explorer") {
+          const willShow = !explorerVisible;
+          setExplorerVisible(willShow);
+          // In free mode the explorer is a FloatingPanel sharing the
+          // z-stack with the AI/terminal panels. Opening it must raise it
+          // to the front, otherwise it appears "in the background" behind a
+          // panel that happens to overlap its position.
+          if (willShow) focusPanel("explorer");
+        } else {
+          setSkillsVisible((cur) => !cur);
+        }
       }
       return;
     }
@@ -678,7 +781,7 @@ function App() {
             onModelChange={(model) => updateAiPanelModel(aiPanels[0]?.id ?? "ai-main", model)}
             onProviderChange={(provider) => updateAiPanelProvider(aiPanels[0]?.id ?? "ai-main", provider)}
             availableModels={panelModels[aiPanels[0]?.id ?? "ai-main"] ?? [aiPanels[0]?.model ?? aiModel]}
-            onAvailableModelsChange={(models) => setPanelModels((prev) => ({ ...prev, [aiPanels[0]?.id ?? "ai-main"]: models }))}
+            onAvailableModelsChange={(models) => updatePanelModels(aiPanels[0]?.id ?? "ai-main", models)}
             apiKeyVersion={apiKeyVersion}
             requireDiffReview={requireDiffReview}
             stopAfterRejection={stopAfterRejection}
@@ -839,7 +942,11 @@ function App() {
     );
   }
 
-  async function refreshGitStatus(root: string) {
+  async function refreshGitStatus(root: string | null) {
+    if (!root) {
+      setGitStatus(null);
+      return;
+    }
     try {
       const next = await invoke<GitStatus>("git_status", { workspaceRoot: root });
       setGitStatus(next);
@@ -898,7 +1005,7 @@ function App() {
       const nextPanels = [...prevPanels, { id, rect, provider: opts.provider }];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
-        ai: nextPanels.map((panel) => panel.rect),
+        ai: projectAiPanelsToRects(nextPanels),
       }));
       return nextPanels;
     });
@@ -911,16 +1018,40 @@ function App() {
   }
 
   function updateAiPanelProvider(id: string, provider: ProviderId) {
-    setAiPanels((panels) =>
-      panels.map((panel) => panel.id === id ? { ...panel, provider } : panel)
-    );
+    setAiPanels((panels) => {
+      // Self-heal an empty list — see updateAiPanelModel.
+      const seed = panels.length === 0
+        ? [{ id, rect: fallbackAiRect() }]
+        : panels;
+      const next = seed.map((panel) => panel.id === id ? { ...panel, provider } : panel);
+      setPanelLayout((prev) => ({ ...prev, ai: projectAiPanelsToRects(next) }));
+      return next;
+    });
   }
 
   function updateAiPanelModel(id: string, model: string) {
-    setAiPanels((panels) =>
-      panels.map((panel) => panel.id === id ? { ...panel, model } : panel)
-    );
+    setAiPanels((panels) => {
+      // If the in-memory list is empty (e.g. the persisted layout had no
+      // AI panels, or a previous state mutation dropped them), seed the
+      // requested id with a default rect before applying the model change.
+      const seed = panels.length === 0
+        ? [{ id, rect: fallbackAiRect() }]
+        : panels;
+      const next = seed.map((panel) => panel.id === id ? { ...panel, model } : panel);
+      setPanelLayout((prev) => ({ ...prev, ai: projectAiPanelsToRects(next) }));
+      return next;
+    });
     if (id === "ai-main") setAiModel(model);
+  }
+
+  function updatePanelModels(id: string, models: string[]) {
+    setPanelModels((prev) => {
+      const current = prev[id] ?? [];
+      if (current.length === models.length && current.every((name, idx) => name === models[idx])) {
+        return prev;
+      }
+      return { ...prev, [id]: models };
+    });
   }
 
   function duplicateAiPanel(snapshot?: { provider: ProviderId; model: string }) {
@@ -953,7 +1084,7 @@ function App() {
       ];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
-        ai: nextPanels.map((panel) => panel.rect),
+        ai: projectAiPanelsToRects(nextPanels),
       }));
       return nextPanels;
     });
@@ -965,7 +1096,7 @@ function App() {
       const next = panels.filter((panel) => panel.id !== id);
       if (next.length === panels.length) return panels;
       setPanelLayout((prev) => {
-        return { ...prev, ai: next.map((panel) => panel.rect) };
+        return { ...prev, ai: projectAiPanelsToRects(next) };
       });
       return next;
     });
@@ -974,14 +1105,7 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("klide-theme", theme);
-    // When auto-theme is on and user picks a theme, update the preferred
-    // light or dark theme for this system mode.
-    if (autoTheme) {
-      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      if (isDark && theme !== darkTheme) setDarkTheme(theme);
-      if (!isDark && theme !== lightTheme) setLightTheme(theme);
-    }
-  }, [theme, autoTheme]);
+  }, [theme]);
 
   useEffect(() => {
     localStorage.setItem("klide-auto-theme", String(autoTheme));
@@ -1107,12 +1231,11 @@ function App() {
   // session exit so the sidebar decorations update the moment the user
   // finishes an interactive run.
   useEffect(() => {
+    if (!workspaceRoot || !("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | undefined;
-    if (workspaceRoot) {
-      void listen("delegate-pty:exit", () => {
-        if (workspaceRoot) refreshGitStatus(workspaceRoot);
-      }).then((u) => { unlisten = u; });
-    }
+    void listen("delegate-pty:exit", () => {
+      refreshGitStatus(workspaceRoot);
+    }).then((u) => { unlisten = u; });
     return () => { unlisten?.(); };
   }, [workspaceRoot]);
 
@@ -1265,6 +1388,7 @@ function App() {
   }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible, view]);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
     const unlisteners: (() => void)[] = [];
     void (async () => {
       unlisteners.push(await listen("menu:command-palette", () => {
@@ -1388,7 +1512,7 @@ function App() {
               if (panel === "explorer" && panelLayout.explorer) {
                 updatePanelRect("explorer", { ...panelLayout.explorer, w });
               } else if (panel === "ai" && aiPanels[0]) {
-                updateAiRect(0, { ...aiPanels[0].rect, w });
+                updateAiRect(aiPanels[0].id, { ...aiPanels[0].rect, w });
               }
             }}
             onPanelHeightChange={(panel, h) => {
@@ -1441,6 +1565,90 @@ function App() {
               />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
+            ) : panelLayout.anchored ? (
+              <AnchoredWorkbench
+                workbenchRef={workbenchRef}
+                workbenchSize={workbenchSize}
+                onWorkbenchSize={setWorkbenchSize}
+                panelLayout={panelLayout}
+                aiPanels={aiPanels}
+                focusedPanel={focusedPanel}
+                zCounter={zCounter}
+                explorerVisible={explorerVisible}
+                terminalVisible={terminalVisible}
+                aiVisible={aiVisible}
+                sidebarSlot2={sidebarSlot2}
+                tabs={tabs}
+                activeIdx={activeIdx}
+                workspaceRoot={workspaceRoot}
+                searchVisible={searchVisible}
+                active={active}
+                language={language}
+                theme={theme}
+                editorFontSize={editorFontSize}
+                editorLineNumbers={editorLineNumbers}
+                editorWordWrap={editorWordWrap}
+                editorMinimap={editorMinimap}
+                onSelectTab={setActiveIdx}
+                onCloseTab={closeTab}
+                onChangeCode={updateActiveCode}
+                setSearchVisible={setSearchVisible}
+                onOpenFile={openFile}
+                onRootChange={setWorkspaceRoot}
+                onEntryRenamed={onEntryRenamed}
+                onEntryDeleted={onEntryDeleted}
+                onFilePreview={setPreviewPath}
+                setExplorerVisible={setExplorerVisible}
+                setSidebarSlot2={setSidebarSlot2}
+                setTerminalVisible={setTerminalVisible}
+                focusPanel={focusPanel}
+                onMountEditor={(editor) => { editorRef.current = editor; }}
+                skills={skills}
+                setSkills={(next) => {
+                  setSkills(next);
+                  saveSkills(next);
+                }}
+                reloadFilesystemSkills={reloadFilesystemSkills}
+                apiKeyVersion={apiKeyVersion}
+                requireDiffReview={requireDiffReview}
+                stopAfterRejection={stopAfterRejection}
+                aiModel={aiModel}
+                panelModels={panelModels}
+                setPanelModels={setPanelModels}
+                onAiPanelModelChange={updateAiPanelModel}
+                onAiPanelProviderChange={updateAiPanelProvider}
+                onDuplicateAiPanel={duplicateAiPanel}
+                onCloseAiPanel={closeAiPanel}
+                onAgentWrote={onAgentWrote}
+                refreshGitStatus={refreshGitStatus}
+                onPanelWidthChange={(panel, w) => {
+                  if (panel === "explorer" && panelLayout.explorer) {
+                    updatePanelRect("explorer", { ...panelLayout.explorer, w });
+                  } else if (panel === "ai" && aiPanels[0]) {
+                    updateAiRect(aiPanels[0].id, { ...aiPanels[0].rect, w });
+                  }
+                }}
+                onPanelHeightChange={(panel, h) => {
+                  if (panel === "terminal" && panelLayout.terminal) {
+                    updatePanelRect("terminal", { ...panelLayout.terminal, h });
+                  }
+                }}
+                pendingAiPanel={pendingAiPanel}
+                onPendingAiPanelConsumed={() => setPendingAiPanel(null)}
+                resumeConversation={resumeConversation}
+                onResumeConsumed={() => setResumeConversation(null)}
+                previewPath={previewPath}
+                onClosePreview={() => setPreviewPath(null)}
+                onMemoryWritten={(entry) => {
+                  setMemoryRefreshKey((k) => k + 1);
+                  setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
+                }}
+                onSkillGenerated={(skill) => {
+                  void reloadFilesystemSkills();
+                  setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
+                }}
+                harnessSettings={harnessSettings}
+              />
             ) : (
               <div
                 ref={workbenchRef}
@@ -1503,10 +1711,10 @@ function App() {
                       />
                     </div>
                   </div>
-                {explorerVisible && panelLayout.explorer && (
+                {explorerVisible && (
                   <FloatingPanel
                     panelId="explorer"
-                    rect={panelLayout.explorer}
+                    rect={explorerRect}
                     workbenchW={workbenchSize.w}
                     workbenchH={workbenchSize.h}
                     zIndex={focusedPanel === "explorer" ? 10 + zCounter : 10}
@@ -1520,7 +1728,7 @@ function App() {
                           <Sidebar
                             fill
                             visible
-                            width={panelLayout.explorer.w}
+                            width={explorerRect.w}
                             workspaceRoot={workspaceRoot}
                             onOpen={openFile}
                             onRootChange={setWorkspaceRoot}
@@ -1541,14 +1749,14 @@ function App() {
                             />
                           ) : null
                         }
-                        defaultSplit={panelLayout.explorer.h * 0.45}
+                        defaultSplit={explorerRect.h * 0.45}
                         minPane={80}
                       />
                     ) : (
                       <Sidebar
                         fill
                         visible
-                        width={panelLayout.explorer.w}
+                        width={explorerRect.w}
                         workspaceRoot={workspaceRoot}
                         onOpen={openFile}
                         onRootChange={setWorkspaceRoot}
@@ -1585,10 +1793,10 @@ function App() {
                     />
                   </div>
                 )}
-                {terminalVisible && panelLayout.terminal && (
+                {terminalVisible && (
                   <FloatingPanel
                     panelId="terminal"
-                    rect={panelLayout.terminal}
+                    rect={terminalRect}
                     workbenchW={workbenchSize.w}
                     workbenchH={workbenchSize.h}
                     zIndex={focusedPanel === "terminal" ? 10 + zCounter : 10}
@@ -1600,7 +1808,7 @@ function App() {
                       fill
                       visible
                       theme={theme}
-                      height={panelLayout.terminal.h}
+                      height={terminalRect.h}
                       workspaceRoot={workspaceRoot}
                       onToggle={() => setTerminalVisible((v) => !v)}
                     />
@@ -1616,8 +1824,8 @@ function App() {
                       workbenchH={workbenchSize.h}
                       zIndex={focusedPanel === panel.id ? 10 + zCounter : 10 + idx}
                       onFocus={() => focusPanel(panel.id)}
-                      onResize={(next) => updateAiRect(idx, next)}
-                      onMove={(next) => updateAiRect(idx, next)}
+                      onResize={(next) => updateAiRect(panel.id, next)}
+                      onMove={(next) => updateAiRect(panel.id, next)}
                     >
                       <AiPanel
                         fill
@@ -1653,7 +1861,7 @@ function App() {
                         onModelChange={(model) => updateAiPanelModel(panel.id, model)}
                         onProviderChange={(provider) => updateAiPanelProvider(panel.id, provider)}
                         availableModels={panelModels[panel.id] ?? [panel.model ?? aiModel]}
-                        onAvailableModelsChange={(models) => setPanelModels((prev) => ({ ...prev, [panel.id]: models }))}
+                        onAvailableModelsChange={(models) => updatePanelModels(panel.id, models)}
                         apiKeyVersion={apiKeyVersion}
                         requireDiffReview={requireDiffReview}
                         stopAfterRejection={stopAfterRejection}
@@ -1694,8 +1902,10 @@ function App() {
         onToggleTerminal={() => setTerminalVisible((v) => !v)}
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
+        anchoredLayout={panelLayout.anchored !== false}
         onApplyGrid={applyGrid}
         onExitGrid={exitGrid}
+        onSetAnchored={setAnchoredLayout}
         onOpenGrid={openGridSettings}
         theme={statusTheme}
         autoTheme={autoTheme}
@@ -1714,6 +1924,17 @@ function App() {
         workspaceRoot={workspaceRoot}
         refreshKey={memoryRefreshKey}
         onOpenInEditor={(path: string, content: string) => openFile(path, content)}
+        onOpenTouchedFile={async (path: string) => {
+          if (!workspaceRoot) return;
+          const absolute = path.startsWith("/") ? path : `${workspaceRoot}/${path}`;
+          try {
+            const content = await readTextFile(absolute);
+            openFile(absolute, content);
+            setMemoryVisible(false);
+          } catch (err) {
+            setFileNotice(err instanceof Error ? err.message : String(err));
+          }
+        }}
         onClose={() => setMemoryVisible(false)}
       />
       <ProfileModal

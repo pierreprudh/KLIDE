@@ -155,6 +155,14 @@ function modelOptionsFor(provider: ProviderId, model: string, availableModels: s
   return options;
 }
 
+function modelLabel(name: string): string {
+  // The selector is narrow and we want the user to recognise the model at
+  // a glance. Strip noisy repo prefixes that Hugging Face / Ollama-style
+  // tags both use. Value stays the same; only the display is shortened.
+  const slash = name.indexOf("/");
+  return slash >= 0 ? name.slice(slash + 1) : name;
+}
+
 export function AiPanel({
   workspaceRoot,
   onFileWritten,
@@ -970,9 +978,6 @@ export function AiPanel({
 
   const activeMode = nextSendMode ?? agentMode;
   const effectiveMode = !modelSupportsTools && !providerDelegatesWork && activeMode === "goal" ? "chat" : activeMode;
-  const localServerNotice = isLocalProvider
-    ? serverError ?? (serverStarting ? `Starting ${providerName(provider)}...` : !serverRunning ? `${providerName(provider)} stopped` : null)
-    : null;
   const canSend = !!input.trim() && !serverStarting;
 
   return (
@@ -994,10 +999,9 @@ export function AiPanel({
             <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: 200, background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 30 }}>
               {PROVIDER_GROUPS.map((group) => (
                 <div key={group.label} style={{ marginBottom: 2 }}>
-                  <div style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg-dim)", padding: "6px 8px 3px" }}>{group.label === "Subscription" ? "Subscription · Delegate" : group.label}</div>
+                  <div style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg-dim)", padding: "6px 8px 3px" }}>{group.label}</div>
                   {group.items.map((item) => {
                     const active = item.id === provider;
-                    const delegates = isDelegateProvider(item.id);
                     return (
                       <button key={item.id} role="menuitem" disabled={!item.available} onClick={() => item.available && selectProvider(item.id)}
                         style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-sm)", background: active ? "var(--bg-hover)" : "transparent", color: item.available ? "var(--fg-strong)" : "var(--fg-dim)", cursor: item.available ? "pointer" : "default", fontSize: 12, textAlign: "left" }}
@@ -1005,9 +1009,7 @@ export function AiPanel({
                         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
                         <span style={{ display: "grid", placeItems: "center", flexShrink: 0, color: item.available ? "var(--fg-subtle)" : "var(--fg-dim)" }}><ProviderLogo id={item.id} size={15} /></span>
                         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
-                        {item.available && delegates && <span style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-subtle)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 6px" }}>Delegate</span>}
                         {active && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
-                        {!item.available && <span style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", border: "1px solid var(--border-strong)", borderRadius: 999, padding: "1px 6px" }}>Soon</span>}
                       </button>
                     );
                   })}
@@ -1016,20 +1018,29 @@ export function AiPanel({
             </div>
           )}
         </div>
-        {isLocalProvider && localServerNotice && (
+        {isLocalProvider && (serverError || serverStarting || !serverRunning) && (
           <div
-            title={localServerNotice}
+            title={serverError ?? (serverStarting ? `Starting ${providerName(provider)}` : `${providerName(provider)} stopped`)}
             style={{
-              maxWidth: 180,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              fontSize: 10,
+              justifySelf: "center",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              fontSize: 9.5,
+              letterSpacing: "0.04em",
               color: "var(--fg-dim)",
-              padding: "0 4px",
             }}
           >
-            {localServerNotice}
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background: serverError ? "var(--danger)" : "var(--fg-dim)",
+                opacity: serverStarting ? 0.45 : 0.7,
+              }}
+            />
+            {serverError ?? (serverStarting ? "Starting" : "Stopped")}
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 2, textTransform: "none", letterSpacing: 0 }}>
@@ -1303,11 +1314,11 @@ export function AiPanel({
               )}
               <div style={{ position: "relative", display: "flex", alignItems: "center", width: 118, flex: "0 1 118px", minWidth: 72 }}>
                 <select value={model} onChange={(e) => onModelChange(e.target.value)} disabled={streaming}
-                  title={`Select a ${providerName(provider)} model`}
+                  title={model}
                   style={{ appearance: "none", WebkitAppearance: "none", MozAppearance: "none", width: "100%", height: 24, color: "var(--fg-subtle)", background: "transparent", border: "none", borderRadius: "var(--radius-xs)", font: "inherit", fontSize: 11, outline: "none", padding: "0 18px 0 6px", cursor: streaming ? "default" : "pointer", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", transition: "color var(--motion-fast) var(--ease-out)" }}
                   onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
                   onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-subtle)")}>
-                  {modelOptionsFor(provider, model, availableModels).map((name) => <option key={name} value={name}>{name}</option>)}
+                  {modelOptionsFor(provider, model, availableModels).map((name) => <option key={name} value={name}>{modelLabel(name)}</option>)}
                 </select>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", right: 4, pointerEvents: "none", color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
               </div>

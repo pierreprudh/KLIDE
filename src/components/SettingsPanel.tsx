@@ -70,7 +70,7 @@ type Props = {
   // Bento layout. The user resizes panels directly in the workbench by
   // dragging their edges; the Settings sliders here are a fallback for
   // keyboard-driven / precise control. Each slider writes one rect field.
-  panelLayout: { explorer?: { w: number }; ai?: { w: number }[]; terminal?: { h: number } };
+  panelLayout: { explorer?: { w: number }; ai?: { rect: { w: number } }[]; terminal?: { h: number } };
   onPanelWidthChange: (panel: "explorer" | "ai", width: number) => void;
   onPanelHeightChange: (panel: "terminal", height: number) => void;
   editorFontSize: number;
@@ -1376,7 +1376,7 @@ export function SettingsPanel({
                     control={
                       <Range
                         label="AI panel width"
-                        value={panelLayout.ai?.[0]?.w ?? 360}
+                        value={panelLayout.ai?.[0]?.rect.w ?? 360}
                         min={280}
                         max={720}
                         onChange={(w) => onPanelWidthChange("ai", w)}
