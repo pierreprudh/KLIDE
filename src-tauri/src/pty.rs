@@ -165,9 +165,18 @@ pub fn delegate_pty_spawn(
     // tries to cd to `<cwd>/<task title>` and dies. Its `run` subcommand is
     // the non-interactive mode that *does* take a message. Claude and Codex
     // both have TUIs that accept the task as the first arg directly, so
-    // they don't need the `run` prefix. In resume mode we always use the
-    // TUI (no `run`) so the user can keep interacting after the resume.
-    let prefix = if provider == "opencode" && resume.is_none() {
+    // they don't need the `run` prefix.
+    //
+    // `run` is only injected when we're actually feeding it a message
+    // (`task.is_some()`) — without a message the CLI errors out with
+    // "You must provide a message or a command". In resume mode or with
+    // no task we always use the bare TUI so the user can interact.
+    let has_task = task
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .is_some();
+    let prefix = if provider == "opencode" && resume.is_none() && has_task {
         format!("{base} run")
     } else {
         base.to_string()
