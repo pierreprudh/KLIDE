@@ -10,6 +10,8 @@ type Props = {
   workspaceRoot: string | null;
   /** Open a memory entry's raw markdown as an editor tab. */
   onOpenInEditor?: (path: string, content: string) => void;
+  /** Open a source file referenced by a memory entry. */
+  onOpenTouchedFile?: (path: string) => void;
   /** Bumped when the AI panel writes a new entry, to force a refresh. */
   refreshKey?: number;
   width: number;
@@ -215,6 +217,7 @@ function pillStyle(): React.CSSProperties {
 export function MemoryPanel({
   workspaceRoot,
   onOpenInEditor,
+  onOpenTouchedFile,
   refreshKey = 0,
   width: _width,
   visible,
@@ -569,6 +572,7 @@ export function MemoryPanel({
               rawContent={rawContent}
               rawLoading={rawLoading}
               onOpenInEditor={() => void openInEditor(selected)}
+              onOpenTouchedFile={onOpenTouchedFile}
             />
           )}
         </div>
@@ -586,6 +590,7 @@ function MemoryDetail({
   rawContent,
   rawLoading,
   onOpenInEditor,
+  onOpenTouchedFile,
 }: {
   entry: MemoryEntry;
   rawView: boolean;
@@ -593,6 +598,7 @@ function MemoryDetail({
   rawContent: string | null;
   rawLoading: boolean;
   onOpenInEditor: () => void;
+  onOpenTouchedFile?: (path: string) => void;
 }) {
   return (
     <div style={{ padding: "22px 26px", maxWidth: 760 }}>
@@ -794,7 +800,7 @@ function MemoryDetail({
                   }}
                 >
                   {entry.filesTouched.map((path) => (
-                    <FileChip key={path} path={path} />
+                    <FileChip key={path} path={path} onOpen={onOpenTouchedFile} />
                   ))}
                 </div>
               </Section>
@@ -887,10 +893,19 @@ function Section({
   );
 }
 
-function FileChip({ path }: { path: string }) {
+function FileChip({
+  path,
+  onOpen,
+}: {
+  path: string;
+  onOpen?: (path: string) => void;
+}) {
+  const clickable = !!onOpen;
+  const Element = clickable ? "button" : "span";
   return (
-    <span
+    <Element
       title={path}
+      onClick={clickable ? () => onOpen(path) : undefined}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -906,11 +921,24 @@ function FileChip({ path }: { path: string }) {
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
+        cursor: clickable ? "pointer" : "default",
+      }}
+      onMouseEnter={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.color = "var(--fg-strong)";
+        e.currentTarget.style.borderColor = "var(--border-strong)";
+        e.currentTarget.style.background = "var(--bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        if (!clickable) return;
+        e.currentTarget.style.color = "var(--fg-subtle)";
+        e.currentTarget.style.borderColor = "var(--border)";
+        e.currentTarget.style.background = "var(--bg-elevated)";
       }}
     >
       <FileIcon />
       {path}
-    </span>
+    </Element>
   );
 }
 

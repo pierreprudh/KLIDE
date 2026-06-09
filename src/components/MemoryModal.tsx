@@ -8,6 +8,8 @@ type Props = {
   refreshKey?: number;
   /** Open a memory entry's raw markdown as an editor tab. */
   onOpenInEditor?: (path: string, content: string) => void;
+  /** Open a source file referenced by a memory entry. */
+  onOpenTouchedFile?: (path: string) => void;
   onClose: () => void;
 };
 
@@ -53,6 +55,7 @@ export function MemoryModal({
   workspaceRoot,
   refreshKey = 0,
   onOpenInEditor,
+  onOpenTouchedFile,
   onClose,
 }: Props) {
   useEffect(() => {
@@ -176,6 +179,7 @@ export function MemoryModal({
             workspaceRoot={workspaceRoot}
             refreshKey={refreshKey}
             onOpenInEditor={onOpenInEditor}
+            onOpenTouchedFile={onOpenTouchedFile}
           />
         </div>
       </div>

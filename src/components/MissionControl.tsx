@@ -24,20 +24,27 @@ import {
 } from "../klideConvos";
 import type { ThemeId } from "../theme";
 import {
+  BOARD_SECTION_HINT,
+  BOARD_SECTION_LABEL,
+  BOARD_SECTION_ORDER,
+  boardSectionForRun,
   fetchAgentRuns,
   fetchRunMessages,
+  runNeedsAttention,
+  runRoutineInfo,
   seedRuns,
   relativeTime,
   SOURCE_COLOR,
   SOURCE_LABEL,
   STATUS_COLOR,
   STATUS_LABEL,
-  STATUS_ORDER,
   type Run,
+  type RunBoardSection,
   type RunKind,
   type RunMessage,
   type RunSource,
   type RunStatus,
+  type RunToolCall,
 } from "../runs";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
@@ -129,6 +136,71 @@ function StatusDot({
           status === "running" ? "klide-pulse 1.6s ease-in-out infinite" : undefined,
       }}
     />
+  );
+}
+
+function RunAttentionBadge({ run, compact }: { run: Run; compact?: boolean }) {
+  if (compact) return <StatusDot status={run.status} />;
+  const section = boardSectionForRun(run);
+  if (section === "ready_for_review") return null;
+  return (
+    <span
+      title={BOARD_SECTION_LABEL[boardSectionForRun(run)]}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        width: 7,
+        height: 7,
+      }}
+    >
+      <StatusDot status={run.status} size={7} />
+    </span>
+  );
+}
+
+function runTokenSummary(run: Run): string | null {
+  const total = (run.inputTokens ?? 0) + (run.outputTokens ?? 0);
+  if (total <= 0) return null;
+  if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M tok`;
+  if (total >= 1_000) return `${Math.round(total / 100) / 10}k tok`;
+  return `${total} tok`;
+}
+
+function RoutineBadge({ run }: { run: Pick<Run, "title"> }) {
+  const routine = runRoutineInfo(run);
+  if (!routine) return null;
+  return (
+    <span
+      title={routine.label}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        flexShrink: 0,
+        height: 16,
+        padding: "0 5px",
+        borderRadius: 999,
+        border: "1px solid color-mix(in srgb, var(--accent) 24%, var(--border))",
+        background: "color-mix(in srgb, var(--accent-soft) 30%, transparent)",
+        color: "var(--fg-subtle)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 9,
+        lineHeight: 1,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 4,
+          height: 4,
+          borderRadius: "50%",
+          background: "var(--accent)",
+        }}
+      />
+      {routine.cadence === "routine" ? "Routine" : routine.cadence}
+    </span>
   );
 }
 
@@ -242,6 +314,7 @@ function ZaiLogo({ size = 13 }: { size?: number }) {
 }
 
 type LogoComp = typeof DeepSeekLogo;
+type AppUserInfo = { username: string; hostname: string; homeDir: string };
 
 // Regex-based model → logo mapping. Keys are tested as RegExp against the model name.
 // The first match wins, so order matters (more specific patterns first).
@@ -380,6 +453,22 @@ function RunRow({
   compact?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const tokenSummary = runTokenSummary(run);
+  const rightRail = action ? (
+    <span
+      style={{
+        width: 24,
+        height: 24,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+      }}
+    >
+      {hovered ? action : <RunAttentionBadge run={run} compact={compact || run.status === "running"} />}
+    </span>
+  ) : (
+    <RunAttentionBadge run={run} compact={compact} />
+  );
   return (
     <button
       onClick={onSelect}
@@ -430,6 +519,7 @@ function RunRow({
               Task
             </span>
           )}
+          <RoutineBadge run={run} />
           <span
             style={{
               fontSize: 13,
@@ -477,11 +567,12 @@ function RunRow({
               </>
             )}
             {run.branch ? ` · ${run.branch}` : ""}
+            {tokenSummary ? ` · ${tokenSummary}` : ""}
             {" · "}
             {relativeTime(run.updatedMs)}
           </span>
       </span>
-      {action && hovered ? action : <StatusDot status={run.status} />}
+      {rightRail}
     </button>
   );
 }
@@ -717,6 +808,9 @@ function DetailLabel({ children }: { children: React.ReactNode }) {
 
 function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage[] }) {
   const [messages, setMessages] = useState<RunMessage[]>([]);
+  const [profileName, setProfileName] = useState("Me");
+  const [showTools, setShowTools] = useState(false);
+  const [showProcessNotes, setShowProcessNotes] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
@@ -747,10 +841,38 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
     };
   }, [run.id, run.path, run.source, preloaded]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<AppUserInfo>("app_user_info")
+      .then((info) => {
+        if (!cancelled && info.username?.trim()) setProfileName(info.username.trim());
+      })
+      .catch(() => {
+        if (!cancelled) setProfileName("Me");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const muted = { fontSize: 12, color: "var(--fg-subtle)" } as const;
   if (loading) return <div style={muted}>Loading conversation…</div>;
   if (error) return <div style={muted}>Couldn't read this session.</div>;
   if (messages.length === 0) return <div style={muted}>No readable messages.</div>;
+
+  const conversationItems = compactConversationMessages(messages);
+  const reviewStats = conversationItems.reduce(
+    (acc, item) => {
+      if (item.type === "process") {
+        acc.notes += item.notes.length;
+      } else {
+        acc.turns += 1;
+        acc.tools += item.tools.length;
+      }
+      return acc;
+    },
+    { turns: 0, tools: 0, notes: 0 }
+  );
 
   function copyAsMarkdown() {
     const parts = messages.map((m) => {
@@ -762,7 +884,16 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <ConversationReviewBar
+          turns={reviewStats.turns}
+          tools={reviewStats.tools}
+          notes={reviewStats.notes}
+          showTools={showTools}
+          showNotes={showProcessNotes}
+          onToggleTools={() => setShowTools((v) => !v)}
+          onToggleNotes={() => setShowProcessNotes((v) => !v)}
+        />
         <button
           onClick={copyAsMarkdown}
           title="Copy conversation as Markdown"
@@ -780,57 +911,496 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
           Copy as MD
         </button>
       </div>
-      {messages.map((m, i) => (
-        <div key={i}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              marginBottom: 6,
-            }}
-          >
-            <span
-              aria-hidden
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 22,
+          maxWidth: 1040,
+        }}
+      >
+        {conversationItems.map((item, i) => {
+          if (item.type === "process") {
+            return showProcessNotes ? <ProcessNoteStack key={`process-${i}`} notes={item.notes} /> : null;
+          }
+          const { message: m } = item;
+          const isUser = m.role === "user";
+          return (
+            <div
+              key={`message-${i}`}
               style={{
-                width: 5,
-                height: 5,
-                borderRadius: "50%",
-                background:
-                  m.role === "user" ? "var(--accent)" : SOURCE_COLOR[run.source],
-                boxShadow: `0 0 0 3px ${
-                  m.role === "user"
-                    ? "color-mix(in srgb, var(--accent) 18%, transparent)"
-                    : `color-mix(in srgb, ${SOURCE_COLOR[run.source]} 18%, transparent)`
-                }`,
-              }}
-            />
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                fontFamily: "var(--font-mono)",
-                color: m.role === "user" ? "var(--accent)" : "var(--fg-subtle)",
+                display: "grid",
+                gridTemplateColumns: isUser ? "minmax(0, 1fr) minmax(260px, 620px) 42px" : "42px minmax(280px, 660px) minmax(0, 1fr)",
+                columnGap: 12,
+                alignItems: "end",
               }}
             >
-              {m.role === "user" ? "You" : SOURCE_LABEL[run.source]}
-            </span>
-          </div>
-          <div
-            style={{
-              fontSize: 13,
-              color: "var(--fg)",
-              lineHeight: 1.6,
-              wordBreak: "break-word",
-            }}
-          >
-            {renderMessageBody(m.text)}
-          </div>
+              {!isUser && (
+                <ConversationAvatar source={run.source} label={SOURCE_LABEL[run.source]} model={run.model} />
+              )}
+              <div
+                style={{
+                  gridColumn: isUser ? "2" : "2",
+                  justifySelf: isUser ? "end" : "start",
+                  width: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "var(--fg)",
+                    lineHeight: 1.6,
+                    wordBreak: "break-word",
+                    padding: isUser ? "10px 12px" : "12px 14px",
+                    borderRadius: isUser ? "16px 16px 5px 16px" : "16px 16px 16px 5px",
+                    border: "1px solid var(--border)",
+                    background: isUser
+                      ? "color-mix(in srgb, var(--accent-soft) 55%, var(--bg-elevated))"
+                      : "color-mix(in srgb, var(--bg-elevated) 88%, var(--bg))",
+                  }}
+                >
+                  {renderMessageBody(item.text)}
+                </div>
+                {!isUser && showTools && item.tools.length > 0 && (
+                  <ToolStack tools={item.tools} />
+                )}
+              </div>
+              {isUser && <ConversationAvatar source="klide" label={profileName} user />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ConversationReviewBar({
+  turns,
+  tools,
+  notes,
+  showTools,
+  showNotes,
+  onToggleTools,
+  onToggleNotes,
+}: {
+  turns: number;
+  tools: number;
+  notes: number;
+  showTools: boolean;
+  showNotes: boolean;
+  onToggleTools: () => void;
+  onToggleNotes: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        minWidth: 0,
+        color: "var(--fg-dim)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 10,
+      }}
+    >
+      <span style={{ color: "var(--fg-subtle)" }}>Review</span>
+      <span>{turns} turns</span>
+      {tools > 0 && (
+        <ReviewToggle
+          active={showTools}
+          label={`${tools} tools`}
+          title={showTools ? "Hide tool activity" : "Show tool activity"}
+          onClick={onToggleTools}
+        />
+      )}
+      {notes > 0 && (
+        <ReviewToggle
+          active={showNotes}
+          label={`${notes} notes`}
+          title={showNotes ? "Hide working notes" : "Show working notes"}
+          onClick={onToggleNotes}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReviewToggle({
+  active,
+  label,
+  title,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      style={{
+        fontSize: 10,
+        fontFamily: "var(--font-mono)",
+        padding: "2px 7px",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        background: active ? "var(--bg-selected)" : "transparent",
+        color: active ? "var(--fg-strong)" : "var(--fg-dim)",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+type ConversationItem =
+  | { type: "message"; message: RunMessage; text: string; tools: RunToolCall[] }
+  | { type: "process"; notes: string[] };
+
+function compactConversationMessages(messages: RunMessage[]): ConversationItem[] {
+  const items: ConversationItem[] = [];
+  let notes: string[] = [];
+  const flush = () => {
+    if (notes.length === 0) return;
+    items.push({ type: "process", notes });
+    notes = [];
+  };
+  const appendToolsToPreviousAssistant = (tools: RunToolCall[]) => {
+    if (tools.length === 0) return false;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item.type === "process") continue;
+      if (item.message.role !== "assistant") return false;
+      item.tools.push(...tools);
+      return true;
+    }
+    return false;
+  };
+  for (const message of messages) {
+    const parsed = splitToolCalls(message.text);
+    const text = parsed.text.trim();
+    const messageTools = [...(message.tools ?? []), ...parsed.tools];
+    if (message.role === "assistant" && text && isProcessNote(text)) {
+      if (messageTools.length > 0) appendToolsToPreviousAssistant(messageTools);
+      notes.push(text);
+      continue;
+    }
+    if (!text) {
+      if (message.role === "assistant" && appendToolsToPreviousAssistant(messageTools)) {
+        continue;
+      }
+      if (messageTools.length > 0) {
+        flush();
+        items.push({ type: "process", notes: [`Tool activity · ${messageTools.length}`] });
+      }
+      continue;
+    }
+    flush();
+    items.push({ type: "message", message, text, tools: messageTools });
+  }
+  flush();
+  return items;
+}
+
+function isProcessNote(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.length > 900) return false;
+  return /^(I('|’)?m|I('|’)?ll|I will|I found|I caught|I noticed|I’m|I’ll|Fresh server|Build|TypeScript|Final compile|Final browser|Okay,|Interesting:|One more|That native|The browser|The auto-theme|Again there|A new|The type mismatch|The local-only|The Tauri|Diff shape|Whitespace|Frontend build|Server is up|Port `?\d+|Done\. I took)/i.test(t);
+}
+
+function ProcessNoteStack({ notes }: { notes: string[] }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "42px minmax(280px, 660px) minmax(0, 1fr)",
+        columnGap: 12,
+        alignItems: "start",
+      }}
+    >
+      <div />
+      <details
+        style={{
+          width: "min(360px, 100%)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          background: "transparent",
+          color: "var(--fg-dim)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+        }}
+      >
+        <summary
+          style={{
+            cursor: "pointer",
+            listStyle: "none",
+            padding: "5px 10px",
+            textAlign: "center",
+          }}
+        >
+          Working notes · {notes.length}
+        </summary>
+        <div
+          style={{
+            borderTop: "1px solid var(--border)",
+            padding: "7px 10px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            color: "var(--fg-subtle)",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {notes.map((note, idx) => (
+            <div key={idx}>{note}</div>
+          ))}
         </div>
+      </details>
+    </div>
+  );
+}
+
+function ConversationAvatar({
+  source,
+  label,
+  model,
+  user,
+}: {
+  source: RunSource;
+  label: string;
+  model?: string | null;
+  user?: boolean;
+}) {
+  const initials = user ? initialsOf(label || "Me") : null;
+  const hue = user ? hueFromName(label || "Me") : 0;
+  const modelLogoRule =
+    source === "opencode" && model
+      ? MODEL_LOGO_RULES.find((r) => r.pattern.test(model))
+      : null;
+  const ModelLogo = modelLogoRule?.Comp;
+  const logo =
+    source === "claude-code" ? (
+      <ClaudeCodeLogo size={21} />
+    ) : source === "codex" ? (
+      <CodexLogo size={21} />
+    ) : source === "opencode" && ModelLogo ? (
+      <ModelLogo size={21} />
+    ) : (
+      <SourceLogo source={source} size={21} />
+    );
+  return (
+    <div
+      title={label}
+      style={{
+        width: 34,
+        height: 34,
+        borderRadius: "50%",
+        background: user
+          ? `linear-gradient(140deg, oklch(0.78 0.10 ${hue}), oklch(0.62 0.12 ${(hue + 40) % 360}))`
+          : "transparent",
+        color: user ? "var(--bg-elevated)" : SOURCE_COLOR[source],
+        display: "grid",
+        placeItems: "center",
+        fontSize: user ? 12 : undefined,
+        fontFamily: user ? "var(--font-ui)" : undefined,
+        fontWeight: user ? 650 : undefined,
+        justifySelf: user ? "start" : "end",
+        boxShadow: user ? "inset 0 1px 0 rgba(255,255,255,0.2)" : undefined,
+      }}
+    >
+      {user ? initials : logo}
+    </div>
+  );
+}
+
+function initialsOf(name: string): string {
+  const cleaned = name.replace(/[^a-zA-Z0-9]+/g, " ").trim();
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function hueFromName(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function splitToolCalls(text: string): { text: string; tools: RunToolCall[] } {
+  const tools: RunToolCall[] = [];
+  const lines = text.split("\n");
+  const kept = lines.filter((line) => {
+    const tool = line.match(/^\[tool:\s*([^\]]+)\]\s*$/);
+    if (!tool) return true;
+    tools.push(toolFromMarker(tool[1]));
+    return false;
+  });
+  return { text: kept.join("\n").trim(), tools };
+}
+
+function toolFromMarker(marker: string): RunToolCall {
+  const raw = marker.trim();
+  const match = raw.match(/^([^\s(:]+)(?:\s+(.+))?$/);
+  return {
+    name: match?.[1] ?? (raw || "tool"),
+    summary: match?.[2]?.trim(),
+    status: "unknown",
+  };
+}
+
+function compactToolValue(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "string") return value.trim() || null;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function toolStatusLabel(tool: RunToolCall): string | null {
+  if (tool.status === "finished") return tool.ok === false ? "failed" : "done";
+  if (tool.status === "started") return "running";
+  return null;
+}
+
+function ToolDetailBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "grid", gap: 3 }}>
+      <div
+        style={{
+          color: "var(--fg-dim)",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          fontSize: 9,
+        }}
+      >
+        {label}
+      </div>
+      <pre
+        style={{
+          margin: 0,
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          color: "var(--fg-subtle)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          lineHeight: 1.45,
+        }}
+      >
+        {value}
+      </pre>
+    </div>
+  );
+}
+
+function ToolStack({ tools }: { tools: RunToolCall[] }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        marginLeft: 18,
+        paddingLeft: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          left: 0,
+          top: -8,
+          bottom: 10,
+          width: 1,
+          background: "color-mix(in srgb, var(--border) 82%, transparent)",
+        }}
+      />
+      {tools.map((tool, idx) => (
+        <ToolDisclosure key={`${tool.id ?? tool.name}-${idx}`} tool={tool} />
       ))}
     </div>
+  );
+}
+
+function ToolDisclosure({ tool }: { tool: RunToolCall }) {
+  const input = compactToolValue(tool.input);
+  const result = compactToolValue(tool.result);
+  const status = toolStatusLabel(tool);
+  const hasDetails = Boolean(tool.summary || input || result);
+  return (
+    <details
+      style={{
+        width: "min(420px, 100%)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        background: "transparent",
+        color: "var(--fg-dim)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 10,
+      }}
+    >
+      <summary
+        style={{
+          cursor: "pointer",
+          listStyle: "none",
+          padding: "4px 9px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "var(--fg-dim)",
+          }}
+        >
+          {tool.name || "tool"}
+        </span>
+        {status && (
+          <span
+            style={{
+              flexShrink: 0,
+              color: status === "failed" ? "var(--danger)" : "var(--fg-subtle)",
+            }}
+          >
+            {status}
+          </span>
+        )}
+      </summary>
+      <div
+        style={{
+          borderTop: "1px solid var(--border)",
+          padding: "7px 9px 8px",
+          display: "grid",
+          gap: 8,
+        }}
+      >
+        {tool.summary && <ToolDetailBlock label="summary" value={tool.summary} />}
+        {input && <ToolDetailBlock label="input" value={input} />}
+        {result && <ToolDetailBlock label="result" value={result} />}
+        {!hasDetails && (
+          <div style={{ color: "var(--fg-subtle)", lineHeight: 1.45 }}>
+            Details were not captured in this session log.
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -934,42 +1504,49 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-// The Claude-Code-style tool call card. The opencode message flattener
-// emits a `[tool: <name>]` line for every tool invocation; we lift that
-// out of the prose stream and render it as a pill with a status dot.
+// Keep tool calls available without letting them dominate the transcript.
+// The opencode message flattener emits `[tool: <name>]`; we render it as a
+// collapsed activity row so the conversation remains the primary surface.
 function ToolCard({ name }: { name: string }) {
+  const tool = toolFromMarker(name);
   return (
-    <div
+    <details
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 7,
-        padding: "3px 9px 3px 7px",
+        display: "block",
+        width: "fit-content",
         margin: "4px 0",
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)",
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: 10,
         lineHeight: 1.3,
-        color: "var(--fg-subtle)",
-        verticalAlign: "middle",
+        color: "var(--fg-dim)",
       }}
     >
-      <span
-        aria-hidden
+      <summary
         style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "var(--accent)",
-          boxShadow: "0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          cursor: "pointer",
+          listStyle: "none",
         }}
-      />
-      <span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>{name}</span>
-      <span style={{ color: "var(--fg-dim)" }}>·</span>
-      <span style={{ color: "var(--fg-dim)", fontSize: 10 }}>tool</span>
-    </div>
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: "50%",
+            background: "var(--fg-dim)",
+          }}
+        />
+        <span>{tool.name}</span>
+      </summary>
+      {tool.summary && (
+        <div style={{ marginTop: 3, paddingLeft: 11, color: "var(--fg-subtle)" }}>
+          {tool.summary}
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -1931,9 +2508,12 @@ function RunDetail({
         </div>
       </div>
 
-      <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--fg-strong)", margin: "0 0 14px" }}>
-        {run.title}
-      </h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 14px", flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--fg-strong)", margin: 0 }}>
+          {run.title}
+        </h2>
+        <RoutineBadge run={run} />
+      </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <CopyButton value={run.path || null} label="Copy log path" />
@@ -2108,7 +2688,7 @@ function RefreshIcon() {
   );
 }
 
-const PAGE = 10;
+const PAGE = 20;
 
 export function MissionControl({
   workspaceRoot,
@@ -2235,15 +2815,13 @@ export function MissionControl({
   }, [linkedRuns, sourceFilter]);
 
   const grouped = useMemo(() => {
-    const by: Record<RunStatus, Run[]> = {
+    const by: Record<RunBoardSection, Run[]> = {
       running: [],
-      waiting: [],
-      queued: [],
+      blocked: [],
+      ready_for_review: [],
       done: [],
-      cancelled: [],
-      error: [],
     };
-    for (const r of filtered) by[r.status].push(r);
+    for (const r of filtered) by[boardSectionForRun(r)].push(r);
     return by;
   }, [filtered]);
 
@@ -2251,9 +2829,10 @@ export function MissionControl({
   useEffect(() => {
     if (pinnedId && allRuns.some((r) => r.id === pinnedId)) return;
     if (filtered.length === 0) {
-      setSelectedId(null);
+      if (selectedId !== null) setSelectedId(null);
     } else if (!filtered.some((r) => r.id === selectedId)) {
-      setSelectedId(filtered[0].id);
+      const nextSelectedId = filtered[0].id;
+      if (selectedId !== nextSelectedId) setSelectedId(nextSelectedId);
     }
   }, [filtered, selectedId, pinnedId, allRuns]);
 
@@ -2271,11 +2850,11 @@ export function MissionControl({
   // a fresh delegate session if the user opens this run in another CLI.
   useEffect(() => {
     if (!selected || selected.source !== "klide" || selected.kind !== "run") {
-      setFirstUserMessage(null);
+      setFirstUserMessage((current) => (current === null ? current : null));
       return;
     }
     let cancelled = false;
-    setFirstUserMessage(null);
+    setFirstUserMessage((current) => (current === null ? current : null));
     fetchRunMessages(selected)
       .then((msgs) => {
         if (cancelled) return;
@@ -2299,8 +2878,8 @@ export function MissionControl({
     }
   }
 
-  const activeCount =
-    grouped.running.length + grouped.waiting.length + grouped.queued.length;
+  const attentionCount = filtered.filter(runNeedsAttention).length;
+  const runningCount = grouped.running.length;
 
   return (
     <div style={{ flex: 1, display: "flex", minWidth: 0, background: "var(--bg)" }}>
@@ -2349,7 +2928,9 @@ export function MissionControl({
             <span
               style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}
             >
-              {loading ? "loading…" : `${activeCount} active · ${runs.length} loaded`}
+              {loading
+                ? "loading…"
+                : `${attentionCount} attention · ${runningCount} running`}
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2411,9 +2992,8 @@ export function MissionControl({
             // This ensures children know their parent exists even when the parent
             // is hidden by the source filter (e.g. showing only "subagent").
             const childrenByParent = new Map<string, Run[]>();
-            const parentIds = new Set<string>();
+            const visibleParentIds = new Set(filtered.map((r) => r.id));
             for (const r of linkedRuns) {
-              parentIds.add(r.id);
               if (r.parentId) {
                 const kids = childrenByParent.get(r.parentId) ?? [];
                 kids.push(r);
@@ -2421,16 +3001,16 @@ export function MissionControl({
               }
             }
             const hasChildren = (id: string) => (childrenByParent.get(id)?.length ?? 0) > 0;
-            return STATUS_ORDER.map((status) => {
-              const list = grouped[status];
+            return BOARD_SECTION_ORDER.map((section) => {
+              const list = grouped[section];
               if (list.length === 0) return null;
               // Hide children whose parent is in the visible list (they render nested).
               // Keep children whose parent is filtered out as flat items so
               // they don't vanish in subagent-only view.
-              const visible = list.filter((r) => !r.parentId || !parentIds.has(r.parentId));
+              const visible = list.filter((r) => !r.parentId || !visibleParentIds.has(r.parentId));
               if (visible.length === 0) return null;
               return (
-                <div key={status} style={{ marginBottom: 14 }}>
+                <div key={section} style={{ marginBottom: 14 }}>
                   <div
                     style={{
                       display: "flex",
@@ -2443,8 +3023,9 @@ export function MissionControl({
                       color: "var(--fg-subtle)",
                       fontFamily: "var(--font-mono)",
                     }}
+                    title={BOARD_SECTION_HINT[section]}
                   >
-                    {STATUS_LABEL[status]}
+                    {BOARD_SECTION_LABEL[section]}
                     <span style={{ opacity: 0.7 }}>{visible.length}</span>
                   </div>
                   {visible.map((run) => {

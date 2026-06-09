@@ -7,12 +7,17 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type RunSource = "claude-code" | "codex" | "opencode" | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
+export type RunBoardSection = "running" | "blocked" | "ready_for_review" | "done";
 
 // What this row actually represents on the board. Tasks are Mission Control
 // todos (queued or dispatched to an external agent); convos are Klide's own
 // AI panel chat sessions; runs are on-disk sessions pulled from
 // ~/.claude, ~/.codex, or the opencode DB.
 export type RunKind = "task" | "convo" | "run";
+export type RunRoutineInfo = {
+  cadence: "daily" | "weekly" | "monthly" | "routine";
+  label: string;
+};
 
 export type Run = {
   id: string;
@@ -37,8 +42,22 @@ export type Run = {
   parentId?: string;
 };
 
+export type RunToolCall = {
+  id?: string;
+  name: string;
+  input?: unknown;
+  summary?: string;
+  result?: string;
+  ok?: boolean;
+  status?: "started" | "finished" | "unknown";
+};
+
 // One readable turn of a run's conversation (from `read_agent_run`).
-export type RunMessage = { role: "user" | "assistant"; text: string };
+export type RunMessage = {
+  role: "user" | "assistant";
+  text: string;
+  tools?: RunToolCall[];
+};
 
 // Shape returned by the Rust command (serde camelCase).
 type AgentRunDto = {
@@ -77,6 +96,58 @@ export const STATUS_LABEL: Record<RunStatus, string> = {
   cancelled: "Stopped",
   error: "Failed",
 };
+
+export const BOARD_SECTION_ORDER: RunBoardSection[] = [
+  "running",
+  "blocked",
+  "ready_for_review",
+  "done",
+];
+
+export const BOARD_SECTION_LABEL: Record<RunBoardSection, string> = {
+  running: "Running",
+  blocked: "Blocked",
+  ready_for_review: "Ready for Review",
+  done: "Done",
+};
+
+export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
+  running: "Active or queued work",
+  blocked: "Needs a decision or repair",
+  ready_for_review: "Completed delegate output to inspect",
+  done: "Completed Klide conversations",
+};
+
+export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "source">): RunBoardSection {
+  if (run.status === "running" || run.status === "queued") return "running";
+  if (run.status === "waiting" || run.status === "error") return "blocked";
+  if (run.kind === "task" || run.source !== "klide") return "ready_for_review";
+  return "done";
+}
+
+export function runNeedsAttention(run: Pick<Run, "status" | "kind" | "source">): boolean {
+  return boardSectionForRun(run) !== "done";
+}
+
+export function runRoutineInfo(run: Pick<Run, "title">): RunRoutineInfo | null {
+  const title = run.title.trim().toLowerCase();
+  if (!title) return null;
+  const hasReportTerm = /\b(recap|review|check[- ]?in|standup|status|digest|report)\b/.test(title);
+  const explicitRoutine = /\b(routine|recurring|scheduled)\b/.test(title);
+  if (/\bdaily\b/.test(title) && hasReportTerm) {
+    return { cadence: "daily", label: "Daily routine" };
+  }
+  if (/\bweekly\b/.test(title) && hasReportTerm) {
+    return { cadence: "weekly", label: "Weekly routine" };
+  }
+  if (/\bmonthly\b/.test(title) && hasReportTerm) {
+    return { cadence: "monthly", label: "Monthly routine" };
+  }
+  if (explicitRoutine && hasReportTerm) {
+    return { cadence: "routine", label: "Routine" };
+  }
+  return null;
+}
 
 // Quiet, theme-aware tones. Amber matches the AI panel's context meter; danger
 // reuses the existing token; success is a restrained desaturated green.
@@ -229,23 +300,82 @@ export function invalidateAgentRunsCache() {
 export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
   if (run.source === "klide") {
     const events = await invoke<any[]>("agent_read_run", { runId: run.id });
-    return events
-      .flatMap((event): RunMessage[] => {
-        if (event.type === "user_message") {
-          return [{ role: "user", text: event.text ?? "" }];
+    const rows: RunMessage[] = [];
+    const findTool = (toolCallId: string): RunToolCall | null => {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const found = rows[i].tools?.find((tool) => tool.id === toolCallId);
+        if (found) return found;
+      }
+      return null;
+    };
+    const lastAssistant = (): RunMessage | null => {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].role === "assistant") return rows[i];
+      }
+      return null;
+    };
+    const attachTool = (tool: RunToolCall) => {
+      const target = lastAssistant();
+      if (!target) {
+        rows.push({ role: "assistant", text: "", tools: [tool] });
+        return;
+      }
+      target.tools = [...(target.tools ?? []), tool];
+    };
+
+    for (const event of events) {
+      if (event.type === "user_message") {
+        rows.push({ role: "user", text: event.text ?? "" });
+        continue;
+      }
+      if (event.type === "assistant_message") {
+        const content = Array.isArray(event.content) ? event.content : [];
+        const text = content
+          .filter((block: any) => block?.type === "text")
+          .map((block: any) => String(block.text ?? ""))
+          .join("");
+        const tools = content
+          .filter((block: any) => block?.type === "tool_call")
+          .map((block: any): RunToolCall => ({
+            id: String(block.toolCallId ?? ""),
+            name: String(block.name ?? "tool"),
+            input: block.input,
+            status: "unknown",
+          }));
+        if (text.trim() || tools.length > 0) {
+          rows.push({ role: "assistant", text, tools: tools.length ? tools : undefined });
         }
-        if (event.type === "assistant_message") {
-          const text = Array.isArray(event.content)
-            ? event.content
-                .filter((block: any) => block?.type === "text")
-                .map((block: any) => String(block.text ?? ""))
-                .join("")
-            : "";
-          return text.trim() ? [{ role: "assistant", text }] : [];
+        continue;
+      }
+      if (event.type === "tool_call_started") {
+        const existing = findTool(String(event.toolCallId ?? ""));
+        if (existing) {
+          existing.name = String(event.name ?? existing.name);
+          existing.input = event.input;
+          existing.summary = event.summary;
+          existing.status = "started";
+        } else {
+          attachTool({
+            id: String(event.toolCallId ?? ""),
+            name: String(event.name ?? "tool"),
+            input: event.input,
+            summary: event.summary,
+            status: "started",
+          });
         }
-        return [];
-      })
-      .filter((m) => m.text.trim());
+        continue;
+      }
+      if (event.type === "tool_call_finished") {
+        const existing = findTool(String(event.toolCallId ?? ""));
+        if (existing) {
+          existing.result = String(event.result?.content ?? "");
+          existing.ok = Boolean(event.result?.ok);
+          existing.status = "finished";
+        }
+      }
+    }
+
+    return rows.filter((m) => m.text.trim() || (m.tools?.length ?? 0) > 0);
   }
   if (run.source === "opencode") {
     // OpenCode stores its history in SQLite (opencode.db), so the read path

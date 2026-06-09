@@ -154,3 +154,6 @@ Design to always fulfill screen
 
 
 # ERRORS
+
+- fix Claude code routine design in mission control
+- missing sub agents on claude convos (desktop screenshot)
