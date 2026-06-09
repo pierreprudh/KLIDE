@@ -31,6 +31,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
+import { PROVIDER_GROUPS } from "./agent/providers";
 import {
   loadCustomPresets,
   saveCustomPresets,
@@ -50,6 +51,7 @@ import {
   type Layout as PanelLayout,
   type PanelRect,
   type PanelId as PanelLayoutId,
+  type StoredAiPanel,
 } from "./panelLayout";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
@@ -87,6 +89,14 @@ function readBoolSetting(key: string, fallback: boolean): boolean {
 
 function newAiPanelId(): string {
   return `ai-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function storedAiProvider(id: string | undefined): ProviderId | undefined {
+  if (!id) return undefined;
+  const known = PROVIDER_GROUPS.some((group) =>
+    group.items.some((item) => item.id === id)
+  );
+  return known ? (id as ProviderId) : undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -179,6 +189,7 @@ function App() {
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const [workbenchSize, setWorkbenchSize] = useState({ w: 0, h: 0 });
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => ({}));
+  const [layoutHydratedRoot, setLayoutHydratedRoot] = useState<string | null>(null);
   const [aiPanels, setAiPanels] = useState<AiPanelInstance[]>(() => [
     { id: "ai-main", rect: { x: 0, y: 0, w: 360, h: 360 } },
   ]);
@@ -208,11 +219,17 @@ function App() {
       const entry = entries[0];
       if (!entry) return;
       const { width, height } = entry.contentRect;
-      setWorkbenchSize({ w: Math.round(width), h: Math.round(height) });
+      const next = { w: Math.round(width), h: Math.round(height) };
+      setWorkbenchSize((prev) =>
+        prev.w === next.w && prev.h === next.h ? prev : next
+      );
     });
     ro.observe(el);
     const rect = el.getBoundingClientRect();
-    setWorkbenchSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+    const next = { w: Math.round(rect.width), h: Math.round(rect.height) };
+    setWorkbenchSize((prev) =>
+      prev.w === next.w && prev.h === next.h ? prev : next
+    );
     return () => ro.disconnect();
   }, [view, workspaceRoot]);
 
@@ -232,28 +249,42 @@ function App() {
   }
 
   function aiPanelsFromRects(
-    rects: PanelRect[] | undefined,
+    stored: StoredAiPanel[] | undefined,
     previous: AiPanelInstance[]
   ): AiPanelInstance[] {
-    const source = rects && rects.length > 0 ? rects : [fallbackAiRect()];
-    return source.map((rect, idx) => ({
-      id: previous[idx]?.id ?? (idx === 0 ? "ai-main" : newAiPanelId()),
-      rect,
-      provider: previous[idx]?.provider,
-      model: previous[idx]?.model,
-    }));
+    const source = stored && stored.length > 0 ? stored : [{ id: "ai-main", rect: fallbackAiRect() }];
+    return source.map((entry, idx) => {
+      const prev = previous.find((p) => p.id === entry.id);
+      return {
+        id: entry.id ?? (idx === 0 ? "ai-main" : newAiPanelId()),
+        rect: entry.rect,
+        provider: storedAiProvider(entry.provider) ?? prev?.provider,
+        model: entry.model ?? prev?.model,
+      };
+    });
   }
 
-  function syncAiPanelsFromRects(rects: PanelRect[] | undefined) {
-    setAiPanels((previous) => aiPanelsFromRects(rects, previous));
+  function syncAiPanelsFromRects(stored: StoredAiPanel[] | undefined) {
+    setAiPanels((previous) => aiPanelsFromRects(stored, previous));
+  }
+
+  // Project an in-memory AI panel list back onto a StoredAiPanel array.
+  // Preserves every panel's id+rect+provider+model so subsequent hydration
+  // is a no-op rather than a destructive rebuild.
+  function projectAiPanelsToRects(panels: AiPanelInstance[]): StoredAiPanel[] {
+    return panels.map((p) => ({ id: p.id, rect: p.rect, provider: p.provider, model: p.model }));
   }
 
   useEffect(() => {
     if (!workspaceRoot || workbenchSize.w === 0 || workbenchSize.h === 0) return;
+    if (layoutHydratedRoot === workspaceRoot && Object.keys(panelLayout).length > 0) {
+      return;
+    }
     const saved = loadPanelLayout(workspaceRoot);
     if (saved) {
       setPanelLayout(saved);
       syncAiPanelsFromRects(saved.ai);
+      setLayoutHydratedRoot(workspaceRoot);
       return;
     }
     if (!layoutMigrated) {
@@ -272,10 +303,13 @@ function App() {
           h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
         },
         ai: [{
-          x: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620),
-          y: 0,
-          w: readNumberSetting("klide-ai-width", 380, 300, 620),
-          h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+          id: "ai-main",
+          rect: {
+            x: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620),
+            y: 0,
+            w: readNumberSetting("klide-ai-width", 380, 300, 620),
+            h: workbenchSize.h - readNumberSetting("klide-terminal-height", 240, 140, 460) - 6,
+          },
         }],
         terminal: {
           x: 0,
@@ -287,13 +321,15 @@ function App() {
       setPanelLayout(migrated);
       syncAiPanelsFromRects(migrated.ai);
       savePanelLayout(workspaceRoot, migrated);
+      setLayoutHydratedRoot(workspaceRoot);
       return;
     }
     const fresh = defaultPanelLayout(workbenchSize.w, workbenchSize.h);
     setPanelLayout(fresh);
     syncAiPanelsFromRects(fresh.ai);
     savePanelLayout(workspaceRoot, fresh);
-  }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated]);
+    setLayoutHydratedRoot(workspaceRoot);
+  }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated, layoutHydratedRoot]);
 
   // Persist layout on change (debounced via the React batched updates).
   useEffect(() => {
@@ -331,16 +367,16 @@ function App() {
       }
     }
     if (panelLayout.ai) {
-      const clampedAi: PanelRect[] = [];
+      const clampedAi: StoredAiPanel[] = [];
       let aiDirty = false;
-      panelLayout.ai.forEach((rect) => {
-        const c = clampRect(rect, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
-        clampedAi.push(c);
+      panelLayout.ai.forEach((entry) => {
+        const c = clampRect(entry.rect, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
+        clampedAi.push({ ...entry, rect: c });
         if (
-          c.x !== rect.x ||
-          c.y !== rect.y ||
-          c.w !== rect.w ||
-          c.h !== rect.h
+          c.x !== entry.rect.x ||
+          c.y !== entry.rect.y ||
+          c.w !== entry.rect.w ||
+          c.h !== entry.rect.h
         ) {
           aiDirty = true;
         }
@@ -361,6 +397,7 @@ function App() {
     setPanelLayout(fresh);
     syncAiPanelsFromRects(fresh.ai);
     savePanelLayout(workspaceRoot, fresh);
+    setLayoutHydratedRoot(workspaceRoot);
   }
   void resetPanelLayout;
 
@@ -380,24 +417,17 @@ function App() {
     setPanelLayout((prev) =>
       prev.ai && prev.ai.length > 0
         ? prev
-        : { ...prev, ai: panels.map((panel) => panel.rect) }
+        : { ...prev, ai: projectAiPanelsToRects(panels) }
     );
   }
 
-  function updateAiRect(idx: number, next: PanelRect) {
+  function updateAiRect(id: string, next: PanelRect) {
     const rect = clampRect(next, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
     setAiPanels((prev) => {
-      if (idx >= prev.length) return prev;
-      return prev.map((panel, panelIdx) =>
-        panelIdx === idx ? { ...panel, rect } : panel
-      );
+      const updated = prev.map((panel) => panel.id === id ? { ...panel, rect } : panel);
+      setPanelLayout((prevLayout) => ({ ...prevLayout, ai: projectAiPanelsToRects(updated) }));
+      return updated;
     });
-    setPanelLayout((prev) => ({
-      ...prev,
-      ai: (prev.ai ?? aiPanels.map((panel) => panel.rect)).map((oldRect, panelIdx) =>
-        panelIdx === idx ? rect : oldRect
-      ),
-    }));
   }
 
   function focusPanel(panelId: string) {
@@ -433,7 +463,10 @@ function App() {
   useEffect(() => {
     if (!autoTheme) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => setTheme(mq.matches ? darkTheme : lightTheme);
+    const handler = () => {
+      const next = mq.matches ? darkTheme : lightTheme;
+      setTheme((prev) => (prev === next ? prev : next));
+    };
     handler();
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
@@ -898,7 +931,7 @@ function App() {
       const nextPanels = [...prevPanels, { id, rect, provider: opts.provider }];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
-        ai: nextPanels.map((panel) => panel.rect),
+        ai: projectAiPanelsToRects(nextPanels),
       }));
       return nextPanels;
     });
@@ -911,15 +944,19 @@ function App() {
   }
 
   function updateAiPanelProvider(id: string, provider: ProviderId) {
-    setAiPanels((panels) =>
-      panels.map((panel) => panel.id === id ? { ...panel, provider } : panel)
-    );
+    setAiPanels((panels) => {
+      const next = panels.map((panel) => panel.id === id ? { ...panel, provider } : panel);
+      setPanelLayout((prev) => ({ ...prev, ai: projectAiPanelsToRects(next) }));
+      return next;
+    });
   }
 
   function updateAiPanelModel(id: string, model: string) {
-    setAiPanels((panels) =>
-      panels.map((panel) => panel.id === id ? { ...panel, model } : panel)
-    );
+    setAiPanels((panels) => {
+      const next = panels.map((panel) => panel.id === id ? { ...panel, model } : panel);
+      setPanelLayout((prev) => ({ ...prev, ai: projectAiPanelsToRects(next) }));
+      return next;
+    });
     if (id === "ai-main") setAiModel(model);
   }
 
@@ -953,7 +990,7 @@ function App() {
       ];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
-        ai: nextPanels.map((panel) => panel.rect),
+        ai: projectAiPanelsToRects(nextPanels),
       }));
       return nextPanels;
     });
@@ -965,7 +1002,7 @@ function App() {
       const next = panels.filter((panel) => panel.id !== id);
       if (next.length === panels.length) return panels;
       setPanelLayout((prev) => {
-        return { ...prev, ai: next.map((panel) => panel.rect) };
+        return { ...prev, ai: projectAiPanelsToRects(next) };
       });
       return next;
     });
@@ -974,14 +1011,7 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("klide-theme", theme);
-    // When auto-theme is on and user picks a theme, update the preferred
-    // light or dark theme for this system mode.
-    if (autoTheme) {
-      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      if (isDark && theme !== darkTheme) setDarkTheme(theme);
-      if (!isDark && theme !== lightTheme) setLightTheme(theme);
-    }
-  }, [theme, autoTheme]);
+  }, [theme]);
 
   useEffect(() => {
     localStorage.setItem("klide-auto-theme", String(autoTheme));
@@ -1107,12 +1137,11 @@ function App() {
   // session exit so the sidebar decorations update the moment the user
   // finishes an interactive run.
   useEffect(() => {
+    if (!workspaceRoot || !("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | undefined;
-    if (workspaceRoot) {
-      void listen("delegate-pty:exit", () => {
-        if (workspaceRoot) refreshGitStatus(workspaceRoot);
-      }).then((u) => { unlisten = u; });
-    }
+    void listen("delegate-pty:exit", () => {
+      refreshGitStatus(workspaceRoot);
+    }).then((u) => { unlisten = u; });
     return () => { unlisten?.(); };
   }, [workspaceRoot]);
 
@@ -1265,6 +1294,7 @@ function App() {
   }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible, view]);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
     const unlisteners: (() => void)[] = [];
     void (async () => {
       unlisteners.push(await listen("menu:command-palette", () => {
@@ -1388,7 +1418,7 @@ function App() {
               if (panel === "explorer" && panelLayout.explorer) {
                 updatePanelRect("explorer", { ...panelLayout.explorer, w });
               } else if (panel === "ai" && aiPanels[0]) {
-                updateAiRect(0, { ...aiPanels[0].rect, w });
+                updateAiRect(aiPanels[0].id, { ...aiPanels[0].rect, w });
               }
             }}
             onPanelHeightChange={(panel, h) => {
@@ -1616,8 +1646,8 @@ function App() {
                       workbenchH={workbenchSize.h}
                       zIndex={focusedPanel === panel.id ? 10 + zCounter : 10 + idx}
                       onFocus={() => focusPanel(panel.id)}
-                      onResize={(next) => updateAiRect(idx, next)}
-                      onMove={(next) => updateAiRect(idx, next)}
+                      onResize={(next) => updateAiRect(panel.id, next)}
+                      onMove={(next) => updateAiRect(panel.id, next)}
                     >
                       <AiPanel
                         fill
@@ -1714,6 +1744,17 @@ function App() {
         workspaceRoot={workspaceRoot}
         refreshKey={memoryRefreshKey}
         onOpenInEditor={(path: string, content: string) => openFile(path, content)}
+        onOpenTouchedFile={async (path: string) => {
+          if (!workspaceRoot) return;
+          const absolute = path.startsWith("/") ? path : `${workspaceRoot}/${path}`;
+          try {
+            const content = await readTextFile(absolute);
+            openFile(absolute, content);
+            setMemoryVisible(false);
+          } catch (err) {
+            setFileNotice(err instanceof Error ? err.message : String(err));
+          }
+        }}
         onClose={() => setMemoryVisible(false)}
       />
       <ProfileModal
