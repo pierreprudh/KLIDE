@@ -967,6 +967,12 @@ select.klide-field {
   filter: none;
 }
 
+/* Inherently-colored marks (e.g. Claude Code's orange mascot): never invert,
+   so the brand color is preserved in every theme. */
+.color-logo-img {
+  filter: none;
+}
+
 :root[data-theme="cursor-dark"] .provider-logo-img,
 :root[data-theme="dark"] .provider-logo-img,
 :root[data-theme="vscode-dark"] .provider-logo-img,

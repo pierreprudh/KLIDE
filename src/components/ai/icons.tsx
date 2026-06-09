@@ -18,10 +18,10 @@ const BRAND_LOGO_PATHS: Partial<Record<ProviderId, string>> = {
   openrouter: OPENROUTER_PATH,
 };
 
-const LOGO_ALIAS: Partial<Record<ProviderId, ProviderId>> = {
-  "claude-code": "anthropic",
-  codex: "openai",
-};
+// Claude Code and Codex are distinct *products*, not just the Anthropic /
+// OpenAI providers — render their own brand marks instead of aliasing to the
+// provider SVGs (see PROVIDER_LOGO_IMAGE below).
+const LOGO_ALIAS: Partial<Record<ProviderId, ProviderId>> = {};
 
 const PROVIDER_LOGO_COLOR: Partial<Record<ProviderId, string>> = {
   anthropic: "#D97757",
@@ -37,6 +37,17 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<ProviderId, string>> = {
   ollama: "/ollama-logo.png",
   gemini: "/gemini-logo.png",
   mistral: "/mistral-logo.png",
+  "claude-code": "/claude-code-logo.png",
+  codex: "/codex-logo.png",
+};
+
+// How each image mark reacts to theme:
+// - "provider-logo-img" (default): dark mark, inverted to white on dark themes.
+// - "color-logo-img": inherently colored, never inverted (keeps brand color).
+// - "white-logo-img": white mark, inverted to dark on light themes.
+const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<ProviderId, string>> = {
+  "claude-code": "color-logo-img",
+  codex: "white-logo-img",
 };
 
 export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number }) {
@@ -61,7 +72,7 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
   if (image) {
     return (
       <img
-        className="provider-logo-img"
+        className={PROVIDER_LOGO_IMAGE_CLASS[id] ?? "provider-logo-img"}
         src={image}
         alt=""
         aria-hidden="true"
