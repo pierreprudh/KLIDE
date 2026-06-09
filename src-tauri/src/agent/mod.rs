@@ -916,8 +916,8 @@ pub(crate) fn revert_checkpoint_at(
 
     // Resolve against the workspace the edit was applied in, with the same
     // containment guard as the write tools.
-    let workspace_root = Path::new(&entry.workspace_root);
-    let full = crate::agent::tools::resolve_new_path(workspace_root, &entry.path)?;
+    let ws = crate::workspace::Workspace::new(&entry.workspace_root)?;
+    let full = ws.resolve_new(&entry.path)?;
 
     if entry.is_create {
         std::fs::remove_file(&full).map_err(|e| format!("Cannot remove {}: {e}", entry.path))?;

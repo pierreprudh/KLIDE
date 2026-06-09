@@ -1,6 +1,7 @@
 mod agent;
 mod memory;
 mod pty;
+mod workspace;
 use memory::{memory_list, memory_read, memory_write};
 use pty::{
     delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
@@ -1990,7 +1991,9 @@ async fn anthropic_chat(
 }
 
 #[tauri::command]
-fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
+fn list_dir(workspace_root: String, path: String) -> Result<Vec<FsEntry>, String> {
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let path = ws.resolve_abs_read(&path)?;
     let entries = std::fs::read_dir(path).map_err(|e| format!("Unable to read folder: {e}"))?;
 
     let mut out = Vec::new();
@@ -2009,31 +2012,16 @@ fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
 }
 
 #[tauri::command]
-fn read_text_file(path: String) -> Result<String, String> {
+fn read_text_file(workspace_root: String, path: String) -> Result<String, String> {
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let path = ws.resolve_abs_read(&path)?;
     std::fs::read_to_string(&path).map_err(|e| format!("Unable to read file: {e}"))
-}
-
-/// Guard for explorer file operations: the entry's parent directory must
-/// resolve inside the opened workspace. Canonicalizing both sides defeats
-/// `..` segments and symlink tricks.
-fn assert_in_workspace(workspace_root: &str, path: &std::path::Path) -> Result<(), String> {
-    let root = std::fs::canonicalize(workspace_root)
-        .map_err(|e| format!("Invalid workspace root: {e}"))?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "Path has no parent folder".to_string())?;
-    let parent = std::fs::canonicalize(parent).map_err(|e| format!("Invalid path: {e}"))?;
-    if parent.starts_with(&root) {
-        Ok(())
-    } else {
-        Err("Path is outside the open workspace".to_string())
-    }
 }
 
 #[tauri::command]
 fn create_entry(workspace_root: String, path: String, is_directory: bool) -> Result<(), String> {
-    let target = std::path::PathBuf::from(&path);
-    assert_in_workspace(&workspace_root, &target)?;
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let target = ws.resolve_abs_entry(&path)?;
     if target.exists() {
         return Err("An entry with that name already exists".to_string());
     }
@@ -2046,10 +2034,9 @@ fn create_entry(workspace_root: String, path: String, is_directory: bool) -> Res
 
 #[tauri::command]
 fn rename_entry(workspace_root: String, from: String, to: String) -> Result<(), String> {
-    let from_path = std::path::PathBuf::from(&from);
-    let to_path = std::path::PathBuf::from(&to);
-    assert_in_workspace(&workspace_root, &from_path)?;
-    assert_in_workspace(&workspace_root, &to_path)?;
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let from_path = ws.resolve_abs_entry(&from)?;
+    let to_path = ws.resolve_abs_entry(&to)?;
     if to_path.exists() {
         return Err("An entry with that name already exists".to_string());
     }
@@ -2058,8 +2045,8 @@ fn rename_entry(workspace_root: String, from: String, to: String) -> Result<(), 
 
 #[tauri::command]
 fn delete_entry(workspace_root: String, path: String) -> Result<(), String> {
-    let target = std::path::PathBuf::from(&path);
-    assert_in_workspace(&workspace_root, &target)?;
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let target = ws.resolve_abs_entry(&path)?;
     // symlink_metadata: delete a symlink itself, never follow it.
     let meta =
         std::fs::symlink_metadata(&target).map_err(|e| format!("Unable to read entry: {e}"))?;
@@ -4074,9 +4061,11 @@ fn parse_skill_md(raw: &str, folder: &str) -> (String, String, String) {
 /// (author, repository) — both are best-effort and may be empty. We
 /// support the flat `metadata:` block that `npx skills` packages use:
 ///
-///     metadata:
-///       author: vercel
-///       version: "1.0.0"
+/// ```text
+/// metadata:
+///   author: vercel
+///   version: "1.0.0"
+/// ```
 fn parse_skill_provenance(raw: &str) -> (String, String) {
     let Some(stripped) = raw.strip_prefix("---\n") else {
         return (String::new(), String::new());

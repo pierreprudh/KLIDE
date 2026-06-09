@@ -1,5 +1,6 @@
 use super::todo;
 use super::types::{AgentMode, DiffProposal, ToolResult};
+use crate::workspace::Workspace;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,9 +28,11 @@ pub enum ToolKind {
     Write,
 }
 
-type ReadToolFn = fn(root: &str, input: &serde_json::Value) -> ToolResult;
+// Tool executions receive a `Workspace`, never a raw root string — resolving
+// a path without going through the Workspace-rooted checks is unrepresentable.
+type ReadToolFn = fn(ws: &Workspace, input: &serde_json::Value) -> ToolResult;
 type WritePreviewFn =
-    fn(root: &str, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult>;
+    fn(ws: &Workspace, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult>;
 
 struct ToolEntry {
     kind: ToolKind,
@@ -65,7 +68,7 @@ fn registry() -> Vec<ToolEntry> {
             schema: schema("read_file", "Read the full text contents of a file in the workspace.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative file path." } }),
                 &["path"]),
-            run_read: Some(|root, input| read_file(root, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
+            run_read: Some(|ws, input| read_file(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
         },
         ToolEntry {
@@ -73,7 +76,7 @@ fn registry() -> Vec<ToolEntry> {
             schema: schema("list_dir", "List entries in a workspace directory.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative directory path. Use . for the root." } }),
                 &["path"]),
-            run_read: Some(|root, input| list_dir(root, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
+            run_read: Some(|ws, input| list_dir(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
         },
         ToolEntry {
@@ -84,7 +87,7 @@ fn registry() -> Vec<ToolEntry> {
                     "path": { "type": "string", "description": "Optional workspace-relative directory to search from." }
                 }),
                 &["pattern"]),
-            run_read: Some(|root, input| glob(root, input)),
+            run_read: Some(|ws, input| glob(ws, input)),
             run_write_preview: None,
         },
         ToolEntry {
@@ -96,14 +99,14 @@ fn registry() -> Vec<ToolEntry> {
                     "maxResults": { "type": "number", "description": "Optional cap on returned matches." }
                 }),
                 &["pattern"]),
-            run_read: Some(|root, input| grep(root, input)),
+            run_read: Some(|ws, input| grep(ws, input)),
             run_write_preview: None,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
             schema: schema("get_git_status", "Return git branch and changed files for the workspace.",
                 serde_json::json!({}), &[]),
-            run_read: Some(|root, _input| get_git_status(root)),
+            run_read: Some(|ws, _input| get_git_status(ws.root())),
             run_write_preview: None,
         },
         ToolEntry {
@@ -114,7 +117,7 @@ fn registry() -> Vec<ToolEntry> {
                     "staged": { "type": "boolean", "description": "Whether to read staged diff." }
                 }),
                 &[]),
-            run_read: Some(|root, input| get_git_diff(root, input)),
+            run_read: Some(|ws, input| get_git_diff(ws.root(), input)),
             run_write_preview: None,
         },
         ToolEntry {
@@ -124,7 +127,7 @@ fn registry() -> Vec<ToolEntry> {
                     "ids": { "type": "array", "description": "List of tool_call_ids to clean from the current turn." }
                 }),
                 &["ids"]),
-            run_read: Some(|_root, input| {
+            run_read: Some(|_ws, input| {
                 let ids: Vec<String> = input.get("ids")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -140,7 +143,7 @@ fn registry() -> Vec<ToolEntry> {
                     "query": { "type": "string", "description": "The search query." }
                 }),
                 &["query"]),
-            run_read: Some(|_root, input| web_search(input)),
+            run_read: Some(|_ws, input| web_search(input)),
             run_write_preview: None,
         },
         ToolEntry {
@@ -150,15 +153,16 @@ fn registry() -> Vec<ToolEntry> {
                     "url": { "type": "string", "description": "The URL to fetch." }
                 }),
                 &["url"]),
-            run_read: Some(|_root, input| web_fetch(input)),
+            run_read: Some(|_ws, input| web_fetch(input)),
             run_write_preview: None,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
             schema: schema("get_todo_list", "Read the current TODO list. Each item has an id (e.g. T1, T2) and a done/pending status. Returns empty if no todos exist.",
                 serde_json::json!({}), &[]),
-            run_read: Some(|root, _input| {
-                match todo::list_todos_text(root) {
+            run_read: Some(|ws, _input| {
+                let root = ws.root().to_string_lossy();
+                match todo::list_todos_text(&root) {
                     Some(text) => ok(format!("TODO list:\n{text}")),
                     None => ok("No todos yet. Use update_todo_list to add one.".to_string()),
                 }
@@ -178,7 +182,8 @@ fn registry() -> Vec<ToolEntry> {
                     "text": { "type": "string", "description": "Task text. Required for add and edit." }
                 }),
                 &["action"]),
-            run_read: Some(|root, input| {
+            run_read: Some(|ws, input| {
+                let root = &ws.root().to_string_lossy();
                 let action = match input.get("action").and_then(|v| v.as_str()) {
                     Some(a) => a,
                     None => return err("update_todo_list requires an action.".to_string()),
@@ -243,7 +248,7 @@ fn registry() -> Vec<ToolEntry> {
                 }),
                 &["path", "old_str", "new_str"]),
             run_read: None,
-            run_write_preview: Some(|root, input, run_id| preview_write_file(root, input, run_id)),
+            run_write_preview: Some(|ws, input, run_id| preview_write_file(ws, input, run_id)),
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -254,7 +259,7 @@ fn registry() -> Vec<ToolEntry> {
                 }),
                 &["path", "contents"]),
             run_read: None,
-            run_write_preview: Some(|root, input, run_id| preview_create_file(root, input, run_id)),
+            run_write_preview: Some(|ws, input, run_id| preview_create_file(ws, input, run_id)),
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -267,7 +272,7 @@ fn registry() -> Vec<ToolEntry> {
                 }),
                 &["name", "title", "instructions"]),
             run_read: None,
-            run_write_preview: Some(|root, input, run_id| preview_create_skill(root, input, run_id)),
+            run_write_preview: Some(|ws, input, run_id| preview_create_skill(ws, input, run_id)),
         },
     ]
 }
@@ -327,11 +332,15 @@ pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResu
         return result;
     }
     // Then built-in registry
+    let ws = match Workspace::new(root) {
+        Ok(ws) => ws,
+        Err(e) => return err(e),
+    };
     let entry = registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));
     match entry.and_then(|e| e.run_read) {
-        Some(f) => f(root, &call.input),
+        Some(f) => f(&ws, &call.input),
         None => err(format!("Unknown tool: {}", call.name)),
     }
 }
@@ -341,13 +350,14 @@ pub fn execute_write_tool_preview(
     call: &NormalizedToolCall,
     run_id: &str,
 ) -> Result<DiffProposal, ToolResult> {
+    let ws = Workspace::new(root).map_err(|e| err(e))?;
     let entry = registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));
     match entry.and_then(|e| e.run_write_preview) {
         // Key the proposal to the tool call's id (unique per call), not the
         // file path — two edits to the same file in one run must not collide.
-        Some(f) => f(root, &call.input, run_id).map(|mut proposal| {
+        Some(f) => f(&ws, &call.input, run_id).map(|mut proposal| {
             proposal.tool_call_id = call.id.clone();
             proposal.id = format!("diff_{}_{}", run_id, call.id);
             proposal
@@ -567,82 +577,10 @@ fn usize_arg(input: &serde_json::Value, key: &str, fallback: usize) -> usize {
         .unwrap_or(fallback)
 }
 
-fn display_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .ok()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| ".".to_string())
-}
-
-fn clean_user_path(user_path: &str) -> String {
-    let trimmed = user_path.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        ".".to_string()
-    } else {
-        trimmed.trim_start_matches('/').to_string()
-    }
-}
-
-fn resolve_existing_path(root: &Path, user_path: &str) -> Result<PathBuf, String> {
-    let root_real = root
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
-    let cleaned = clean_user_path(user_path);
-    let candidate = if cleaned == "." {
-        root_real.clone()
-    } else {
-        root.join(cleaned)
-    };
-    let real = candidate
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
-    if !real.starts_with(&root_real) {
-        return Err(format!("Path \"{user_path}\" is outside the workspace"));
-    }
-    Ok(real)
-}
-
-/// Resolve a path that may not exist yet (create_file, apply_write), verifying
-/// it stays inside the workspace. canonicalize() fails on non-existent paths,
-/// so instead we reject any `..`/absolute component outright, then canonicalize
-/// the deepest existing ancestor so a symlinked directory can't smuggle the
-/// write outside the root.
-pub(crate) fn resolve_new_path(root: &Path, user_path: &str) -> Result<PathBuf, String> {
-    use std::path::Component;
-    let root_real = root
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve workspace root: {e}"))?;
-    let cleaned = clean_user_path(user_path);
-    let rel = Path::new(&cleaned);
-    if rel
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
-    {
-        return Err(format!("Path \"{user_path}\" is outside the workspace"));
-    }
-    let candidate = root_real.join(rel);
-    let mut ancestor = candidate.clone();
-    while !ancestor.exists() {
-        match ancestor.parent() {
-            Some(p) => ancestor = p.to_path_buf(),
-            None => return Err(format!("Path \"{user_path}\" is outside the workspace")),
-        }
-    }
-    let ancestor_real = ancestor
-        .canonicalize()
-        .map_err(|e| format!("Unable to resolve path \"{user_path}\": {e}"))?;
-    if !ancestor_real.starts_with(&root_real) {
-        return Err(format!("Path \"{user_path}\" is outside the workspace"));
-    }
-    Ok(candidate)
-}
-
 // ── Read-only tools ─────────────────────────────────────────────────────
 
-fn read_file(root: &str, path: &str) -> ToolResult {
-    let root = Path::new(root);
-    let full = match resolve_existing_path(root, path) {
+fn read_file(ws: &Workspace, path: &str) -> ToolResult {
+    let full = match ws.resolve_existing(path) {
         Ok(p) => p,
         Err(e) => return err(e),
     };
@@ -651,12 +589,12 @@ fn read_file(root: &str, path: &str) -> ToolResult {
         Err(e) => return err(format!("Unable to read metadata: {e}")),
     };
     if !metadata.is_file() {
-        return err(format!("{} is not a file", display_path(root, &full)));
+        return err(format!("{} is not a file", ws.display(&full)));
     }
     if metadata.len() > MAX_FILE_BYTES {
         return err(format!(
             "{} is too large to read safely ({} bytes, max {})",
-            display_path(root, &full),
+            ws.display(&full),
             metadata.len(),
             MAX_FILE_BYTES
         ));
@@ -664,25 +602,24 @@ fn read_file(root: &str, path: &str) -> ToolResult {
     match std::fs::read_to_string(&full) {
         Ok(content) => ok(format!(
             "Contents of {} ({} chars):\n```\n{}\n```",
-            display_path(root, &full),
+            ws.display(&full),
             content.len(),
             content
         )),
         Err(e) => err(format!(
             "Unable to read {} as text: {e}",
-            display_path(root, &full)
+            ws.display(&full)
         )),
     }
 }
 
-fn list_dir(root: &str, path: &str) -> ToolResult {
-    let root = Path::new(root);
-    let full = match resolve_existing_path(root, path) {
+fn list_dir(ws: &Workspace, path: &str) -> ToolResult {
+    let full = match ws.resolve_existing(path) {
         Ok(p) => p,
         Err(e) => return err(e),
     };
     if !full.is_dir() {
-        return err(format!("{} is not a directory", display_path(root, &full)));
+        return err(format!("{} is not a directory", ws.display(&full)));
     }
     let entries = match std::fs::read_dir(&full) {
         Ok(e) => e,
@@ -701,7 +638,7 @@ fn list_dir(root: &str, path: &str) -> ToolResult {
     rows.sort();
     ok(format!(
         "Entries in {}:\n{}",
-        display_path(root, &full),
+        ws.display(&full),
         if rows.is_empty() {
             "(empty)".to_string()
         } else {
@@ -779,24 +716,22 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
-fn glob(root: &str, input: &serde_json::Value) -> ToolResult {
+fn glob(ws: &Workspace, input: &serde_json::Value) -> ToolResult {
     let pattern = match trimmed_arg(input, "pattern") {
         Some(p) => p,
         None => return err("glob requires a string pattern".to_string()),
     };
     let start_arg = trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string());
-    let root = Path::new(root);
-    let start = match resolve_existing_path(root, &start_arg) {
+    let start = match ws.resolve_existing(&start_arg) {
         Ok(p) => p,
         Err(e) => return err(e),
     };
     let mut files = Vec::new();
-    walk_files(root, &start, &mut files);
-    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    walk_files(ws.root(), &start, &mut files);
     let mut matches: Vec<String> = files
         .into_iter()
         .filter_map(|path| {
-            let rel = display_path(&root_real, &path);
+            let rel = ws.display(&path);
             if wildcard_match(&pattern, &rel) || wildcard_match(&pattern.replace("**/", ""), &rel) {
                 Some(rel)
             } else {
@@ -816,7 +751,7 @@ fn glob(root: &str, input: &serde_json::Value) -> ToolResult {
     ))
 }
 
-fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
+fn grep(ws: &Workspace, input: &serde_json::Value) -> ToolResult {
     // Grep patterns keep their whitespace (a leading space can be the point),
     // but an empty pattern would match every line.
     let pattern = match string_arg(input, "pattern").filter(|p| !p.is_empty()) {
@@ -825,8 +760,7 @@ fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
     };
     let max = usize_arg(input, "maxResults", MAX_SEARCH_RESULTS).min(MAX_SEARCH_RESULTS);
     let path_arg = trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string());
-    let root = Path::new(root);
-    let start = match resolve_existing_path(root, &path_arg) {
+    let start = match ws.resolve_existing(&path_arg) {
         Ok(p) => p,
         Err(e) => return err(e),
     };
@@ -834,9 +768,8 @@ fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
     if start.is_file() {
         files.push(start);
     } else {
-        walk_files(root, &start, &mut files);
+        walk_files(ws.root(), &start, &mut files);
     }
-    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut rows = Vec::new();
     for file in files {
         if rows.len() >= max {
@@ -855,7 +788,7 @@ fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
             if line.contains(&pattern) {
                 rows.push(format!(
                     "{}:{}: {}",
-                    display_path(&root_real, &file),
+                    ws.display(&file),
                     idx + 1,
                     line
                 ));
@@ -875,7 +808,7 @@ fn grep(root: &str, input: &serde_json::Value) -> ToolResult {
     ))
 }
 
-fn git_output(root: &str, args: &[&str]) -> Result<String, String> {
+fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -889,14 +822,14 @@ fn git_output(root: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
-fn get_git_status(root: &str) -> ToolResult {
+fn get_git_status(root: &Path) -> ToolResult {
     match git_output(root, &["status", "--short", "--branch"]) {
         Ok(o) => ok(format!("Git status:\n{}", o.trim())),
         Err(e) => err(e),
     }
 }
 
-fn get_git_diff(root: &str, input: &serde_json::Value) -> ToolResult {
+fn get_git_diff(root: &Path, input: &serde_json::Value) -> ToolResult {
     let staged = bool_arg(input, "staged");
     let path = trimmed_arg(input, "path");
     let mut args = vec!["diff"];
@@ -1300,7 +1233,7 @@ fn unified_diff_lines(old: &str, new: &str) -> String {
 }
 
 fn preview_write_file(
-    root: &str,
+    ws: &Workspace,
     input: &serde_json::Value,
     run_id: &str,
 ) -> Result<DiffProposal, ToolResult> {
@@ -1312,9 +1245,8 @@ fn preview_write_file(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err("write_file requires old_str".to_string()))?;
     let new_str = string_arg(input, "new_str").unwrap_or_default();
-    let root = Path::new(root);
-    let full = resolve_existing_path(root, &path).map_err(|e| err(e))?;
-    let rel = display_path(root, &full);
+    let full = ws.resolve_existing(&path).map_err(|e| err(e))?;
+    let rel = ws.display(&full);
     let current =
         std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
     let occurrences = current.matches(&old_str).count();
@@ -1352,7 +1284,7 @@ fn preview_write_file(
 }
 
 fn preview_create_file(
-    root: &str,
+    ws: &Workspace,
     input: &serde_json::Value,
     run_id: &str,
 ) -> Result<DiffProposal, ToolResult> {
@@ -1361,9 +1293,8 @@ fn preview_create_file(
     // Contents are raw (may legitimately be empty or whitespace-only).
     let contents = string_arg(input, "contents")
         .ok_or_else(|| err("create_file requires string contents".to_string()))?;
-    let root = Path::new(root);
-    let candidate = resolve_new_path(root, &path).map_err(err)?;
-    let rel = clean_user_path(&path);
+    let candidate = ws.resolve_new(&path).map_err(err)?;
+    let rel = ws.display(&candidate);
     if candidate.exists() {
         return Err(err(format!(
             "{rel} already exists. Use write_file to modify an existing file."
@@ -1400,7 +1331,7 @@ fn preview_create_file(
 }
 
 fn preview_create_skill(
-    root: &str,
+    ws: &Workspace,
     input: &serde_json::Value,
     run_id: &str,
 ) -> Result<DiffProposal, ToolResult> {
@@ -1416,8 +1347,7 @@ fn preview_create_skill(
         .trim_matches('-')
         .to_string();
     let rel = format!(".agents/skills/{safe_name}/SKILL.md");
-    let root_path = Path::new(root);
-    let full = root_path.join(&rel);
+    let full = ws.resolve_new(&rel).map_err(err)?;
     if full.exists() {
         return Err(err(format!(
             "{rel} already exists. Use write_file to edit it."
@@ -1449,16 +1379,16 @@ fn preview_create_skill(
 }
 
 pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolResult> {
-    let root_path = Path::new(root);
+    let ws = Workspace::new(root).map_err(err)?;
     // Re-validate at apply time: never trust a proposal path blindly.
-    let full = resolve_new_path(root_path, &diff.path).map_err(err)?;
+    let full = ws.resolve_new(&diff.path).map_err(err)?;
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| err(format!("Cannot create directory: {e}")))?;
     }
     std::fs::write(&full, &diff.new_content)
         .map_err(|e| err(format!("Cannot write {}: {e}", diff.path)))?;
-    let rel = display_path(root_path, &full);
+    let rel = ws.display(&full);
     if diff.is_create {
         Ok(ok(format!(
             "Applied: created {rel} ({} chars).",
@@ -1508,14 +1438,7 @@ mod tests {
         assert_eq!(trimmed_arg(&input, "blank"), None);
     }
 
-    #[test]
-    fn resolve_new_path_rejects_traversal() {
-        let root = std::env::temp_dir();
-        assert!(resolve_new_path(&root, "../escape.txt").is_err());
-        assert!(resolve_new_path(&root, "a/../../escape.txt").is_err());
-        assert!(resolve_new_path(&root, "/etc/passwd").is_ok()); // leading '/' is stripped → etc/passwd inside root
-        assert!(resolve_new_path(&root, "sub/dir/new.txt").is_ok());
-    }
+    // Path-containment tests live with the Workspace module (src/workspace.rs).
 
     #[test]
     fn unified_diff_reports_real_positions() {

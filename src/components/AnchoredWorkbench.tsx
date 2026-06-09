@@ -461,6 +461,7 @@ export function AnchoredWorkbench(props: Props) {
           <FileViewerPanel
             key={previewPath}
             filePath={previewPath}
+            workspaceRoot={workspaceRoot}
             onClose={onClosePreview}
           />
         </div>

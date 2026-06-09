@@ -31,6 +31,7 @@ export function TodoStrip({ workspaceRoot }: { workspaceRoot: string | null }) {
     async function load() {
       try {
         const raw = await invoke<string>("read_text_file", {
+          workspaceRoot,
           path: `${workspaceRoot}/.agents/todos.json`,
         });
         const store: TodoStore = JSON.parse(raw);

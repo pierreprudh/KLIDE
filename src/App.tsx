@@ -1789,6 +1789,7 @@ function App() {
                     <FileViewerPanel
                       key={previewPath}
                       filePath={previewPath}
+                      workspaceRoot={workspaceRoot}
                       onClose={() => setPreviewPath(null)}
                     />
                   </div>

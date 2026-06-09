@@ -32,6 +32,11 @@ them.
 - [x] Profile modal — local IDE profile (avatar + identity + workspace line, no account stuff).
 - [x] Project Memory v2 — `find_install_skills` Rust command groups by author/repo metadata into "Vercel / Matt Pocock / Anthropic / Personal / Workspace" sections in the modal loader.
 
+## Architecture deepening (started 2026-06-10)
+
+- [x] Workspace module (`src-tauri/src/workspace.rs`) — one home for the Workspace-rooted invariant. Agent tool executions take `&Workspace` (not a root string); explorer commands resolve through `resolve_abs_entry`; `read_text_file` / `list_dir` now enforce containment too. Replaced `assert_in_workspace` + `resolve_existing_path` / `resolve_new_path`.
+- [ ] Phase 2 — close the plugin-fs bypass: migrate `@tauri-apps/plugin-fs` call sites (App.tsx save, AiPanel, SearchPanel, CommandPalette, summarize.ts, workspaceFiles.ts) to workspace-checked Rust commands, then drop the unscoped `fs:allow-*` permissions from `capabilities/default.json`. Until then, frontend reads/writes can still go around the Workspace seam.
+
 ## Refactoring (completed 2026-06-04)
 
 - [x] Split AiPanel.tsx (3809 → 902 lines) — extracted 9 sub-modules into `src/components/ai/`

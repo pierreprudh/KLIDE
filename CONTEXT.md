@@ -11,7 +11,7 @@ The single folder open in Klide. The root of all file access — nothing is read
 _Avoid_: project, folder, root dir
 
 **Workspace-rooted**:
-The invariant that a path resolves inside the workspace, checked before any mutation. Every tool and file command must hold it.
+The invariant that a path resolves inside the workspace, checked before any read or mutation. Enforced by the Workspace module (`src-tauri/src/workspace.rs`): commands and tools receive a `Workspace` value and resolve paths through it — there is no other sanctioned way to touch the filesystem from a path string.
 _Avoid_: sandboxed, path-validated
 
 ### Agent execution
