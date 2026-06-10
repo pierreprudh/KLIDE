@@ -531,6 +531,184 @@ pub fn parse_tool_calls(raw: &[serde_json::Value]) -> Vec<NormalizedToolCall> {
         .collect()
 }
 
+/// Some local models — notably LFM2 / LFM2.5 — emit tool calls as literal text
+/// in the content stream wrapped in `<|tool_call_start|> … <|tool_call_end|>`
+/// special tokens instead of populating the structured `tool_calls` field.
+/// When that happens the harness sees no tool calls and ends the turn early,
+/// rendering the raw tokens to the user. This scans the content for those
+/// blocks and recovers the calls, returning them alongside the content with
+/// the blocks stripped out. Returns an empty vec (and the content unchanged)
+/// when there is nothing to recover — the common case for well-behaved models.
+pub fn recover_text_tool_calls(content: &str) -> (Vec<NormalizedToolCall>, String) {
+    const START: &str = "<|tool_call_start|>";
+    const END: &str = "<|tool_call_end|>";
+    let mut calls = Vec::new();
+    let mut cleaned = String::new();
+    let mut rest = content;
+    while let Some(s) = rest.find(START) {
+        cleaned.push_str(&rest[..s]);
+        let after = &rest[s + START.len()..];
+        let Some(e) = after.find(END) else {
+            // Unterminated block — keep the remainder verbatim and stop.
+            cleaned.push_str(&rest[s..]);
+            rest = "";
+            break;
+        };
+        for (name, input) in parse_pythonic_calls(after[..e].trim()) {
+            let idx = calls.len();
+            calls.push(NormalizedToolCall {
+                id: format!("tool_{idx}"),
+                name,
+                input,
+            });
+        }
+        rest = &after[e + END.len()..];
+    }
+    cleaned.push_str(rest);
+    (calls, cleaned.trim().to_string())
+}
+
+/// Parse the LFM2 "pythonic" tool-call payload found between the special
+/// tokens, e.g. `[read_file(path='x.md'), grep(query="harness", n=20)]`.
+/// Falls back gracefully: anything it can't parse is skipped rather than
+/// surfaced as a bogus call. Also accepts a JSON object/array payload
+/// (`{"name":…,"arguments":{…}}`) emitted by some other local models.
+fn parse_pythonic_calls(block: &str) -> Vec<(String, serde_json::Value)> {
+    // JSON payload variant — try it first; it's unambiguous when it parses.
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(block) {
+        let objs = match &value {
+            serde_json::Value::Array(items) => items.clone(),
+            other => vec![other.clone()],
+        };
+        let parsed: Vec<(String, serde_json::Value)> = objs
+            .iter()
+            .filter_map(|o| {
+                let name = o.get("name").and_then(|v| v.as_str())?;
+                let input = o
+                    .get("arguments")
+                    .or_else(|| o.get("parameters"))
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                Some((name.to_string(), input))
+            })
+            .collect();
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+
+    // Pythonic variant: strip the optional surrounding list brackets, then
+    // split the top-level calls apart respecting nesting and quotes.
+    let inner = block.trim();
+    let inner = inner.strip_prefix('[').unwrap_or(inner);
+    let inner = inner.strip_suffix(']').unwrap_or(inner);
+    split_top_level(inner, ',')
+        .into_iter()
+        .filter_map(|call| {
+            let call = call.trim();
+            let open = call.find('(')?;
+            if !call.ends_with(')') {
+                return None;
+            }
+            let name = call[..open].trim();
+            if name.is_empty() {
+                return None;
+            }
+            let args_str = &call[open + 1..call.len() - 1];
+            let mut input = serde_json::Map::new();
+            for pair in split_top_level(args_str, ',') {
+                let pair = pair.trim();
+                if pair.is_empty() {
+                    continue;
+                }
+                let Some(eq) = pair.find('=') else { continue };
+                let key = pair[..eq].trim();
+                if key.is_empty() {
+                    continue;
+                }
+                input.insert(key.to_string(), parse_pythonic_value(pair[eq + 1..].trim()));
+            }
+            Some((name.to_string(), serde_json::Value::Object(input)))
+        })
+        .collect()
+}
+
+/// Split `s` on `sep` only at the top level — commas inside quotes or nested
+/// `()[]{}` are left intact.
+fn split_top_level(s: &str, sep: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut buf = String::new();
+    let mut prev = '\0';
+    for ch in s.chars() {
+        match quote {
+            Some(q) => {
+                buf.push(ch);
+                if ch == q && prev != '\\' {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    buf.push(ch);
+                }
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    buf.push(ch);
+                }
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    buf.push(ch);
+                }
+                c if c == sep && depth == 0 => {
+                    parts.push(std::mem::take(&mut buf));
+                }
+                _ => buf.push(ch),
+            },
+        }
+        prev = ch;
+    }
+    if !buf.trim().is_empty() || !parts.is_empty() {
+        parts.push(buf);
+    }
+    parts
+}
+
+/// Coerce a single pythonic argument value into JSON. Quoted strings lose their
+/// quotes; bare `true`/`false`/`null`/numbers map to their JSON kinds; anything
+/// else stays a string.
+fn parse_pythonic_value(raw: &str) -> serde_json::Value {
+    let raw = raw.trim();
+    if raw.len() >= 2 {
+        let bytes = raw.as_bytes();
+        let first = bytes[0] as char;
+        if (first == '\'' || first == '"') && raw.ends_with(first) {
+            let unquoted = &raw[1..raw.len() - 1];
+            return serde_json::Value::String(unquoted.replace("\\'", "'").replace("\\\"", "\""));
+        }
+    }
+    match raw {
+        "true" | "True" => return serde_json::Value::Bool(true),
+        "false" | "False" => return serde_json::Value::Bool(false),
+        "none" | "None" | "null" => return serde_json::Value::Null,
+        _ => {}
+    }
+    if let Ok(i) = raw.parse::<i64>() {
+        return serde_json::Value::from(i);
+    }
+    if let Ok(f) = raw.parse::<f64>() {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return serde_json::Value::Number(n);
+        }
+    }
+    // Fall back to a JSON value if it parses (handles nested objects/arrays),
+    // otherwise keep the raw text as a string.
+    serde_json::from_str::<serde_json::Value>(raw)
+        .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()))
+}
+
 // ── Execution helpers ────────────────────────────────────────────────────
 
 fn ok(content: String) -> ToolResult {
@@ -1464,5 +1642,85 @@ mod tests {
     #[test]
     fn unified_diff_identical_inputs_is_empty() {
         assert_eq!(unified_diff_lines("same\n", "same\n"), "");
+    }
+
+    #[test]
+    fn recovers_lfm2_text_tool_call() {
+        // The exact shape seen leaking into the chat from LFM2.5.
+        let content = "I'll read the file.\n\
+            <|tool_call_start|>[read_file(path='KLIDE_AGENT_HARNESS_IMPLEMENTATION.md')]<|tool_call_end|>";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(
+            calls[0].input,
+            serde_json::json!({ "path": "KLIDE_AGENT_HARNESS_IMPLEMENTATION.md" })
+        );
+        // The special-token block is stripped from the user-visible content.
+        assert_eq!(cleaned, "I'll read the file.");
+    }
+
+    #[test]
+    fn recovers_multiple_calls_with_mixed_arg_types() {
+        let content =
+            "<|tool_call_start|>[grep(query=\"harness\", limit=20, regex=true), list_dir(path='.')]<|tool_call_end|>";
+        let (calls, _) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(
+            calls[0].input,
+            serde_json::json!({ "query": "harness", "limit": 20, "regex": true })
+        );
+        assert_eq!(calls[1].name, "list_dir");
+        assert_eq!(calls[1].input, serde_json::json!({ "path": "." }));
+    }
+
+    #[test]
+    fn recovers_json_payload_variant() {
+        let content =
+            "<|tool_call_start|>{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.rs\"}}<|tool_call_end|>";
+        let (calls, _) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].input, serde_json::json!({ "path": "a.rs" }));
+    }
+
+    #[test]
+    fn no_recovery_for_plain_content() {
+        let content = "Just a normal answer with no tool calls.";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert!(calls.is_empty());
+        assert_eq!(cleaned, content);
+    }
+
+    #[test]
+    fn recovered_calls_round_trip_through_synthesized_payload() {
+        // The run loop recovers calls, synthesizes a structured `tool_calls`
+        // payload from them, then replays that payload to the model on later
+        // turns via `parse_tool_calls`. This guards that round-trip so the
+        // assistant turn stays coherent (call → result) for the next turn.
+        let content = "<|tool_call_start|>[read_file(path='a.rs'), grep(query=\"x\", limit=5)]<|tool_call_end|>";
+        let (recovered, _) = recover_text_tool_calls(content);
+
+        let synthesized: Vec<serde_json::Value> = recovered
+            .iter()
+            .map(|c| serde_json::json!({ "function": { "name": c.name, "arguments": c.input } }))
+            .collect();
+
+        let reparsed = parse_tool_calls(&synthesized);
+        assert_eq!(reparsed.len(), recovered.len());
+        for (a, b) in recovered.iter().zip(reparsed.iter()) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.input, b.input);
+        }
+    }
+
+    #[test]
+    fn unterminated_block_is_left_intact() {
+        // A truncated stream must not drop content or invent a call.
+        let content = "text <|tool_call_start|>[read_file(path='x";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert!(calls.is_empty());
+        assert_eq!(cleaned, content);
     }
 }

@@ -48,6 +48,7 @@ import {
 } from "../runs";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
+import { modelBrand } from "../modelBrand";
 
 // Mission Control — KIDE's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
@@ -327,11 +328,35 @@ const MODEL_LOGO_RULES: { pattern: RegExp; Comp: LogoComp }[] = [
   { pattern: /glm|z-?ai/i, Comp: ZaiLogo },
 ];
 
-function ModelBadge({ model, size = 13 }: { model: string; size?: number }) {
+// Resolve the logo for a model name → the model's provider/brand mark.
+// Brand marks first (DeepSeek, Claude, OpenAI/gpt, …), then provider-image
+// fallbacks, then the local-runtime (Ollama) mark for known on-device
+// families (lfm2.5, llama, qwen, gemma, …). Returns null when unrecognized so
+// callers can fall back to the Klide spark.
+function resolveModelLogo(model: string, size: number): React.ReactElement | null {
+  // Maker brand first (LiquidAI, Qwen, Llama, Mistral, Hugging Face) so a
+  // model wears its own company's mark, not the runtime's.
+  const brand = modelBrand(model);
+  if (brand) {
+    const Logo = brand.Logo;
+    return <Logo size={size} />;
+  }
   const rule = MODEL_LOGO_RULES.find((r) => r.pattern.test(model));
-  if (!rule) return null;
-  const Logo = rule.Comp;
-  return <Logo size={size} />;
+  if (rule) {
+    const Logo = rule.Comp;
+    return <Logo size={size} />;
+  }
+  if (/gemini/i.test(model)) return <ProviderLogo id="gemini" size={size} />;
+  if (/grok/i.test(model)) return <ProviderLogo id="xai" size={size} />;
+  // Remaining on-device families (gemma, phi, nomic, …) served through
+  // Ollama — wear the runtime's mark.
+  if (/gemma|phi-?\d|nomic|mxbai|granite|smollm|starcoder/i.test(model))
+    return <ProviderLogo id="ollama" size={size} />;
+  return null;
+}
+
+function ModelBadge({ model, size = 13 }: { model: string; size?: number }) {
+  return resolveModelLogo(model, size);
 }
 
 // Company marks for the main run avatar (Simple Icons, single-path,
@@ -352,10 +377,12 @@ const TASK_AVATAR_PATH =
 function SourceLogo({
   source,
   kind,
+  model,
   size = 14,
 }: {
   source: RunSource;
   kind?: RunKind;
+  model?: string | null;
   size?: number;
 }) {
   // Tasks always wear the task mark — even after dispatch — so a row reads
@@ -406,7 +433,20 @@ function SourceLogo({
       </span>
     );
   }
-  // Klide's own runs — a quiet spark.
+  // Klide's own runs wear the logo of the model they used — Ollama for local
+  // lfm2.5/llama, OpenAI for gpt, Anthropic for claude, etc. — so the board
+  // reads as "which model ran this". Falls back to the quiet spark when the
+  // model is unknown or absent.
+  if (model) {
+    const logo = resolveModelLogo(model, size);
+    if (logo) {
+      return (
+        <span style={{ width: size, height: size, display: "grid", placeItems: "center", flexShrink: 0 }}>
+          {logo}
+        </span>
+      );
+    }
+  }
   return (
     <svg
       width={size}
@@ -428,14 +468,16 @@ function SourceLogo({
 function RunAvatar({
   source,
   kind,
+  model,
   size = 22,
 }: {
   source: RunSource;
   kind?: RunKind;
+  model?: string | null;
   size?: number;
 }) {
   return (
-    <SourceLogo source={source} kind={kind} size={size} />
+    <SourceLogo source={source} kind={kind} model={model} size={size} />
   );
 }
 
@@ -490,7 +532,7 @@ function RunRow({
         transition: "background var(--motion-fast) var(--ease-out)",
       }}
     >
-      {!compact && <RunAvatar source={run.source} kind={run.kind} />}
+      {!compact && <RunAvatar source={run.source} kind={run.kind} model={run.model} />}
       <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
         <span
           style={{
@@ -547,7 +589,11 @@ function RunRow({
               gap: 5,
             }}
           >
-            {run.model ? (
+            {/* Klide rows carry the model logo on the avatar already, so the
+                subtitle badge would just repeat it — skip it there (except in
+                compact rows, which have no avatar). External runs keep their
+                product/model mark inline. */}
+            {run.source === "klide" && !compact ? null : run.model ? (
               <ModelBadge model={run.model} size={13} />
             ) : run.source === "claude-code" ? (
               <ClaudeCodeLogo size={13} />
@@ -2609,7 +2655,11 @@ function RunDetail({
             </>
           ) : run.model ? (
             <>
-              <ProviderLogo id={run.source as any} size={13} />
+              {/* Klide rows show the model's own provider logo; external
+                  product runs (claude-code/codex) keep their product mark. */}
+              {run.source === "klide"
+                ? resolveModelLogo(run.model, 13) ?? <ProviderLogo id={run.source as any} size={13} />
+                : <ProviderLogo id={run.source as any} size={13} />}
               {run.model}
             </>
           ) : null}
@@ -2769,35 +2819,29 @@ export function MissionControl({
   }, []);
 
   // Your todos lead the board, then Klide's own conversations, then runs
-  // pulled off disk from the external CLIs.
-  const allRuns = useMemo(
-    () => [...tasks.map(taskToRun), ...convos.map(convoToRun), ...runs],
-    [tasks, convos, runs]
-  );
+  // pulled off disk from the external CLIs. A Klide chat shares one id across
+  // the live in-memory convo and its on-disk transcript (the AI panel keys the
+  // harness run by the convo id), so drop the convo whenever its on-disk twin
+  // is loaded — the on-disk run carries the full transcript and supports
+  // resume, while the convo is a lossy snapshot. The convo survives only until
+  // its transcript shows up in the runs list.
+  const allRuns = useMemo(() => {
+    const diskIds = new Set(runs.map((r) => r.id));
+    return [
+      ...tasks.map(taskToRun),
+      ...convos.map(convoToRun).filter((c) => !diskIds.has(c.id)),
+      ...runs,
+    ];
+  }, [tasks, convos, runs]);
 
-  // Heuristic: link delegate runs (opencode/claude-code/codex) to a parent
-  // Klide run/conversation by matching project + time proximity. Sub-agents
-  // are detected by title pattern (@explore, @general, etc.) and get a wider
-  // 30-minute window to find their parent.
-  const linkedRuns = useMemo(() => {
-    const klideParents = allRuns.filter((r) => r.source === "klide" && r.createdMs > 0);
-    return allRuns.map((r) => {
-      if (r.parentId || r.source === "klide" || r.kind !== "run" || !r.project) {
-        return r;
-      }
-      // Sub-agents have titles like "(@explore subagent)" — use wider window
-      const isSubagent = /\(@[^)]+\)/.test(r.title);
-      const windowMs = isSubagent ? 1_800_000 : 600_000;
-      const runStart = r.createdMs > 0 ? r.createdMs : r.updatedMs;
-      const parent = klideParents.find(
-        (k) =>
-          k.project === r.project &&
-          k.createdMs <= runStart &&
-          runStart - k.createdMs < windowMs,
-      );
-      return parent ? { ...r, parentId: parent.id } : r;
-    });
-  }, [allRuns]);
+  // Parent links come exclusively from the Rust spawn mapping
+  // (`by_delegate`/`by_external` in list_agent_runs), which records a real
+  // parentId only when Klide actually spawned the delegate. We deliberately
+  // do NOT infer parents from project + time proximity: a user's own Claude
+  // Code / Codex sessions share the workspace and overlap in time with Klide
+  // conversations, and a fuzzy heuristic wrongly adopted them as children of
+  // unrelated Klide runs. Separate conversations stay separate.
+  const linkedRuns = allRuns;
 
   // Which source chips to show — only sources actually present.
   const presentSources = useMemo(() => {
@@ -2837,9 +2881,14 @@ export function MissionControl({
   }, [filtered, selectedId, pinnedId, allRuns]);
 
   const selectedTask = tasks.find((t) => t.id === selectedId) ?? null;
-  const selectedConvo = selectedTask
-    ? null
-    : convos.find((c) => c.id === selectedId) ?? null;
+  // Prefer the on-disk run over the in-memory convo for the same id: it has the
+  // full transcript and a working resume. The convo only renders when no
+  // on-disk twin exists yet (e.g. a brand-new chat before the runs list
+  // refreshes).
+  const selectedConvo =
+    selectedTask || runs.some((r) => r.id === selectedId)
+      ? null
+      : convos.find((c) => c.id === selectedId) ?? null;
   const selected =
     selectedTask || selectedConvo
       ? null
@@ -3213,8 +3262,11 @@ export function MissionControl({
           <RunDetail
             run={convoToRun(selectedConvo)}
             messages={selectedConvo.messages}
-            firstUserMessage={null}
+            firstUserMessage={
+              selectedConvo.messages.find((m) => m.role === "user")?.text ?? null
+            }
             onOpenInAiPanel={onOpenInAiPanel}
+            onResumeKlide={onResumeKlideRun}
           />
         ) : selected ? (
           <RunDetail

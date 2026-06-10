@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import type { ProviderId } from "../../agent/types";
 
 const OPENROUTER_PATH =
@@ -278,5 +279,143 @@ export function AssistantPlaceholderLoader() {
       <span />
       <span />
     </span>
+  );
+}
+
+// 3×3 dot-grid loader — sweeps the grid in reverse while a tool executes.
+// Sized for inline use next to 11px mono text (default 13px box).
+export function DotGridLoader({ size = 13, color = "var(--accent)" }: { size?: number; color?: string }) {
+  const dot = Math.max(2, Math.round(size / 4.5));
+  return (
+    <span
+      aria-label="Tool running"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, 1fr)",
+        gap: Math.max(1, Math.round(size / 14)),
+        width: size,
+        height: size,
+        flexShrink: 0,
+        color,
+      }}
+    >
+      {Array.from({ length: 9 }, (_, i) => (
+        <span
+          key={i}
+          style={{
+            width: dot,
+            height: dot,
+            borderRadius: "50%",
+            background: "currentColor",
+            placeSelf: "center",
+            animation: "klide-dotgrid 1.4s ease-in-out infinite",
+            animationDelay: `${(8 - i) * 0.1}s`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+
+// Per-tool glyphs for the agent tool rows. 12px quiet stroke icons keyed by
+// the Rust registry's tool names; unknown tools fall back to a wrench.
+const TOOL_ICON_PATHS: Record<string, ReactElement> = {
+  read_file: (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+    </>
+  ),
+  create_file: (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6M12 12v6M9 15h6" />
+    </>
+  ),
+  write_file: (
+    <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" />
+  ),
+  list_dir: (
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  ),
+  glob: (
+    <path d="M12 5v14M5.4 8.5l13.2 7M18.6 8.5l-13.2 7" />
+  ),
+  grep: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </>
+  ),
+  get_git_status: (
+    <>
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M6 9v3a3 3 0 0 0 3 3h6" />
+    </>
+  ),
+  get_git_diff: (
+    <>
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M6 9v3a3 3 0 0 0 3 3h6" />
+    </>
+  ),
+  web_search: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
+    </>
+  ),
+  web_fetch: (
+    <>
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+    </>
+  ),
+  get_todo_list: (
+    <>
+      <path d="M9 6h12M9 12h12M9 18h12" />
+      <path d="m3.5 5.5 1 1 2-2M3.5 11.5l1 1 2-2M3.5 17.5l1 1 2-2" />
+    </>
+  ),
+  update_todo_list: (
+    <>
+      <path d="M9 6h12M9 12h12M9 18h12" />
+      <path d="m3.5 5.5 1 1 2-2M3.5 11.5l1 1 2-2M3.5 17.5l1 1 2-2" />
+    </>
+  ),
+  clean_context: (
+    <>
+      <path d="m19 11-8-8-8 8 8 8z" />
+      <path d="m5 13 6 6M2 21h20" />
+    </>
+  ),
+  create_skill: (
+    <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z" />
+  ),
+};
+
+const TOOL_ICON_FALLBACK = (
+  <path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6l-2.8 2.8-2.5-.5-.5-2.5z" />
+);
+
+export function ToolIcon({ name, size = 12 }: { name: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      {TOOL_ICON_PATHS[name] ?? TOOL_ICON_FALLBACK}
+    </svg>
   );
 }

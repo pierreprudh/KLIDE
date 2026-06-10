@@ -27,9 +27,15 @@ export function eventsToMsgs(events: AgentEvent[]): Msg[] {
     }
   }
 
+  // Transcript events carry real timestamps — derive each turn's duration
+  // from the gap between the previous user/tool event and the assistant
+  // message, so replayed runs show the same meta footer as live ones.
+  let turnStartTs: number | undefined;
+
   for (const event of events) {
     switch (event.type) {
       case "user_message":
+        turnStartTs = event.ts;
         msgs.push({
           role: "user",
           content: event.text,
@@ -41,6 +47,22 @@ export function eventsToMsgs(events: AgentEvent[]): Msg[] {
         const text = textBlocks.map((b) => b.text).join("");
         const thinkingBlock = event.content.find((b): b is { type: "thinking"; text: string } => b.type === "thinking");
         const toolBlocks = event.content.filter((b): b is { type: "tool_call"; toolCallId: string; name: string; input: unknown } => b.type === "tool_call");
+        const ms = turnStartTs !== undefined && event.ts >= turnStartTs ? event.ts - turnStartTs : undefined;
+        turnStartTs = event.ts;
+        const estimated = Math.round((text.length + (thinkingBlock?.text.length ?? 0)) / 4);
+        // Replay prefers the provider's real count when the transcript
+        // carries one — old transcripts (pre-usage) will be replayed with
+        // the estimate, which matches the behavior those runs had live.
+        const usage = event.usage;
+        const tokens = usage?.completionTokens !== undefined ? usage.completionTokens : estimated;
+        let tps: number | undefined;
+        if (
+          usage?.completionTokens !== undefined &&
+          usage?.evalDurationMs !== undefined &&
+          usage.evalDurationMs > 0
+        ) {
+          tps = Math.round(usage.completionTokens / (usage.evalDurationMs / 1000));
+        }
         msgs.push({
           role: "assistant",
           content: text,
@@ -48,6 +70,7 @@ export function eventsToMsgs(events: AgentEvent[]): Msg[] {
           toolCalls: toolBlocks.length
             ? toolBlocks.map((t) => ({ id: t.toolCallId, name: t.name, args: JSON.stringify(t.input) }))
             : undefined,
+          meta: ms !== undefined || tokens || tps ? { ms, tokens: tokens || undefined, tps, exact: usage?.completionTokens !== undefined } : undefined,
         });
         break;
       }

@@ -45,6 +45,13 @@ pub struct AgentContextSnapshot {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRunRequest {
+    /// Client-supplied run id. When present, the harness keys the transcript,
+    /// supervisor handle, and events under this id instead of minting its own —
+    /// so the AI panel's conversation id, the on-disk transcript, and the
+    /// Mission Control row all share one id. Falls back to a fresh id when
+    /// absent (older callers, delegate spawns).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     pub workspace_root: Option<String>,
     pub mode: AgentMode,
     pub provider: String,
@@ -139,6 +146,27 @@ pub struct ToolResult {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// Real token accounting reported by the provider (Ollama eval counts,
+/// OpenAI/Anthropic usage blocks). All fields optional — adapters fill
+/// what their wire format exposes; the UI falls back to estimates when
+/// absent. Mirrors `crate::AiUsage` but lives in the agent protocol so the
+/// frontend can decode it without depending on a private provider type.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsage {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub completion_tokens: Option<u64>,
+    /// Time spent generating the completion, ms (Ollama eval_duration).
+    /// The frontend prefers this over wall-clock when computing tok/s.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub eval_duration_ms: Option<u64>,
+    /// Time spent processing the prompt, ms (Ollama prompt_eval_duration).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prompt_eval_duration_ms: Option<u64>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentError {
@@ -202,6 +230,12 @@ pub enum AgentEvent {
         run_id: String,
         message_id: String,
         content: Vec<AgentContentBlock>,
+        /// Real provider-reported token accounting for this turn. The UI
+        /// uses `completion_tokens` to replace the rough length/4 estimate
+        /// and `eval_duration_ms` to compute an honest tok/s instead of
+        /// wall-clock decode.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        usage: Option<AgentUsage>,
         ts: i64,
     },
     ToolCallStarted {
@@ -263,4 +297,92 @@ pub enum AgentEvent {
         error: AgentError,
         ts: i64,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    //! Serde round-trips for the new wire types. These are tiny but they
+    //! catch the easy regressions: a field renamed to snake_case would
+    //! break the frontend's camelCase decoder, and dropping `default` on
+    //! an Option would break transcripts written by older builds.
+    use super::*;
+
+    #[test]
+    fn agent_usage_serializes_camel_case_and_omits_nones() {
+        let u = AgentUsage {
+            prompt_tokens: Some(120),
+            completion_tokens: None,
+            eval_duration_ms: Some(450),
+            prompt_eval_duration_ms: None,
+        };
+        let v = serde_json::to_value(&u).expect("serialize");
+        assert_eq!(v["promptTokens"], 120);
+        assert_eq!(v["evalDurationMs"], 450);
+        // None fields must not appear on the wire — keeps the channel
+        // shape stable for older frontend builds that ignore unknown
+        // keys but log warnings on unexpected ones.
+        assert!(v.get("completionTokens").is_none());
+        assert!(v.get("promptEvalDurationMs").is_none());
+    }
+
+    #[test]
+    fn agent_usage_deserializes_missing_fields_as_none() {
+        // Old transcripts (pre-usage) won't have the block; the
+        // `#[serde(default)]` on every field lets them decode cleanly
+        // into `AgentUsage { .., None, None, None, None }`.
+        let v = serde_json::json!({});
+        let u: AgentUsage = serde_json::from_value(v).expect("deserialize empty");
+        assert!(u.prompt_tokens.is_none());
+        assert!(u.completion_tokens.is_none());
+        assert!(u.eval_duration_ms.is_none());
+        assert!(u.prompt_eval_duration_ms.is_none());
+    }
+
+    #[test]
+    fn assistant_message_with_usage_round_trips() {
+        // The full event must serialize usage as camelCase and survive
+        // a deserialize round-trip. Catches accidental field renames
+        // that would otherwise only surface in the running app.
+        let event = AgentEvent::AssistantMessage {
+            run_id: "r1".into(),
+            message_id: "m1".into(),
+            content: vec![AgentContentBlock::Text {
+                text: "hi".into(),
+            }],
+            usage: Some(AgentUsage {
+                prompt_tokens: Some(10),
+                completion_tokens: Some(5),
+                eval_duration_ms: Some(200),
+                prompt_eval_duration_ms: None,
+            }),
+            ts: 1_700_000_000,
+        };
+        let v = serde_json::to_value(&event).expect("serialize event");
+        assert_eq!(v["type"], "assistant_message");
+        assert_eq!(v["usage"]["completionTokens"], 5);
+        assert_eq!(v["usage"]["evalDurationMs"], 200);
+        let back: AgentEvent = serde_json::from_value(v).expect("deserialize event");
+        match back {
+            AgentEvent::AssistantMessage { usage, .. } => {
+                assert_eq!(usage.and_then(|u| u.completion_tokens), Some(5));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn assistant_message_without_usage_omits_field() {
+        // The new field is optional. When the provider doesn't report
+        // usage (subscription CLIs, old transcripts), the event must
+        // not carry a `"usage": null` key on the wire.
+        let event = AgentEvent::AssistantMessage {
+            run_id: "r1".into(),
+            message_id: "m1".into(),
+            content: vec![],
+            usage: None,
+            ts: 0,
+        };
+        let v = serde_json::to_value(&event).expect("serialize");
+        assert!(v.get("usage").is_none(), "got: {v}");
+    }
 }

@@ -5,7 +5,7 @@ pub mod types;
 
 use self::tools::{
     apply_write, clean_context_ids, execute_read_only_tool, execute_write_tool_preview,
-    is_write_tool, parse_tool_calls, schemas_for_mode, NormalizedToolCall,
+    is_write_tool, parse_tool_calls, recover_text_tool_calls, schemas_for_mode, NormalizedToolCall,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -13,10 +13,10 @@ use self::transcripts::{
 };
 use self::types::{
     AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
-    AgentRunSummary, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
+    AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
-use crate::{ai_chat, StreamChunk};
+use crate::{ai_chat, AiUsage, StreamChunk};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -172,6 +172,134 @@ fn tool_provider_message(call: &NormalizedToolCall, result: &ToolResult) -> serd
     })
 }
 
+/// Replay a prior run's transcript back into provider-shaped messages so
+/// the new run starts with the same context the user already saw on
+/// screen.
+///
+/// Earlier versions of this function emitted the same wire shape the
+/// loop uses at runtime — `assistant` with a `tool_calls` array plus
+/// `role: "tool"` messages with `name` / `tool_call_id`. That worked
+/// for OpenAI and Anthropic (which normalise / translate the shape)
+/// but broke Ollama, whose chat API wants `tool_calls[*].function
+/// .arguments` as a JSON object (not the OpenAI-encoded string) and
+/// has no `tool_call_id` field on tool results. Once the replay started
+/// feeding prior turns' tool flow back into Ollama, the local server
+/// rejected the request with `Value looks like object, but can't find
+/// closing '}' symbol`.
+///
+/// The simplest fix that's also the most portable: keep user and
+/// assistant text, fold the tool flow into the next assistant
+/// message's content. The model still sees the conversation, the wire
+/// shape is just `{role, content}` for every provider, and the tool
+/// results are marked inline so the assistant's answer stays
+/// grounded in what the tool returned.
+///
+///   user  →  { role: "user", content: text [+ attached files] }
+///   assistant_message
+///         →  { role: "assistant", content: text [+ folded tool results] }
+///   tool_call_finished
+///         →  buffered; folded into the next assistant_message
+///
+/// Thinking blocks are dropped — the model already consumed them.
+/// Compaction that already ran in the parent is preserved as-is.
+fn reconstruct_prior_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    // Tool results waiting to be folded into the next assistant turn.
+    // They don't carry across a user message — a tool result from a
+    // finished turn is meaningless once the user has moved on.
+    let mut pending_tool_results: Vec<String> = Vec::new();
+
+    let flush_tool_results =
+        |pending: &mut Vec<String>, text: &mut String, prefix: &str| {
+            if pending.is_empty() {
+                return;
+            }
+            let folded = pending
+                .iter()
+                .map(|r| format!("\n{prefix}{r}\n{prefix}:end"))
+                .collect::<String>();
+            pending.clear();
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&folded);
+        };
+
+    for event in prior_events {
+        match event {
+            AgentEvent::UserMessage {
+                text, attachments, ..
+            } => {
+                let mut content = text.clone();
+                if !attachments.is_empty() {
+                    let attached = attachments
+                        .iter()
+                        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    if !attached.is_empty() {
+                        content.push_str("\n\n[Files attached for context]\n");
+                        content.push_str(&attached);
+                    }
+                }
+                out.push(serde_json::json!({ "role": "user", "content": content }));
+                // A new user turn invalidates any straggler tool
+                // results from the previous turn — the model shouldn't
+                // see them on the wrong side of the turn boundary.
+                pending_tool_results.clear();
+            }
+            AgentEvent::AssistantMessage { content, .. } => {
+                let mut text: String = content
+                    .iter()
+                    .filter_map(|b| match b {
+                        AgentContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                // Fold the buffered tool results inline so the model
+                // sees what the tools returned, attached to the same
+                // assistant turn that called them.
+                flush_tool_results(&mut pending_tool_results, &mut text, "[tool_result]\n");
+                out.push(serde_json::json!({ "role": "assistant", "content": text }));
+            }
+            AgentEvent::ToolCallFinished { result, .. } => {
+                pending_tool_results.push(result.content.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // Any tool results that never got folded (turn ended with a tool
+    // call and no closing assistant turn) are dropped. Re-emitting
+    // them as a bare `role: "tool"` message would re-introduce the
+    // Ollama parse error, and the next assistant turn never saw them
+    // anyway in the live run.
+    let _ = pending_tool_results;
+
+    out
+}
+
+/// Map the private provider-side `AiUsage` into the wire-format
+/// `AgentUsage` so the frontend can decode it without depending on a
+/// private type. Cheap (four `Option<u64>`s); done on every turn.
+fn agent_usage_from(usage: Option<AiUsage>) -> Option<AgentUsage> {
+    let u = usage?;
+    let is_empty = u.prompt_tokens.is_none()
+        && u.completion_tokens.is_none()
+        && u.eval_duration_ms.is_none()
+        && u.prompt_eval_duration_ms.is_none();
+    if is_empty {
+        return None;
+    }
+    Some(AgentUsage {
+        prompt_tokens: u.prompt_tokens,
+        completion_tokens: u.completion_tokens,
+        eval_duration_ms: u.eval_duration_ms,
+        prompt_eval_duration_ms: u.prompt_eval_duration_ms,
+    })
+}
+
 fn no_workspace_result() -> ToolResult {
     ToolResult {
         ok: false,
@@ -244,7 +372,14 @@ pub async fn agent_start_run(
     on_event: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
     let runs_dir = app_runs_dir(&app)?;
-    let id = run_id();
+    // Reuse the client's conversation id when supplied so the transcript on
+    // disk shares the AI panel's id (deduped against the in-memory convo in
+    // Mission Control); otherwise mint a fresh one.
+    let id = request
+        .run_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(run_id);
     let cancel = CancellationToken::new();
 
     state
@@ -291,8 +426,19 @@ async fn run_agent_loop(
     cancel: CancellationToken,
 ) -> Result<(), String> {
     let cwd = request.workspace_root.clone();
+    // A reused id means this is a follow-up turn in an existing conversation
+    // (the AI panel keys runs by its convo id). Continue the transcript instead
+    // of restarting it: pick up `seq` where we left off, skip the one-time
+    // RunStarted/ContextSnapshot preamble, and offset tool-call ids past the
+    // turns already on disk so checkpoint files never collide across turns.
+    let prior_events = read_events(&runs_dir, &id).unwrap_or_default();
+    let resuming = !prior_events.is_empty();
+    let prior_turns = prior_events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))
+        .count();
     let created_ms = now_ms();
-    let mut seq = 0_u64;
+    let mut seq = prior_events.len() as u64;
     let event_channel = on_event.clone();
 
     let mut emit = |event: AgentEvent| -> Result<(), String> {
@@ -322,19 +468,21 @@ async fn run_agent_loop(
     };
     write_summary(&runs_dir, &summary)?;
 
-    emit(AgentEvent::RunStarted {
-        run_id: id.clone(),
-        cwd: cwd.clone(),
-        mode: request.mode.clone(),
-        provider: request.provider.clone(),
-        model: request.model.clone(),
-        ts: now_ms(),
-    })?;
-    emit(AgentEvent::ContextSnapshot {
-        run_id: id.clone(),
-        snapshot: snapshot_for(&request),
-        ts: now_ms(),
-    })?;
+    if !resuming {
+        emit(AgentEvent::RunStarted {
+            run_id: id.clone(),
+            cwd: cwd.clone(),
+            mode: request.mode.clone(),
+            provider: request.provider.clone(),
+            model: request.model.clone(),
+            ts: now_ms(),
+        })?;
+        emit(AgentEvent::ContextSnapshot {
+            run_id: id.clone(),
+            snapshot: snapshot_for(&request),
+            ts: now_ms(),
+        })?;
+    }
     emit(AgentEvent::UserMessage {
         run_id: id.clone(),
         message_id: message_id("user"),
@@ -345,8 +493,25 @@ async fn run_agent_loop(
 
     let system = base_system_prompt(&request);
     let mut messages = provider_messages(&request, system);
+    // When this run id was used before, the on-disk transcript holds the
+    // whole prior conversation. Replay it into `messages` between the
+    // system prompt and the new user turn, so the model sees the same
+    // context the user does on screen. Without this, every follow-up
+    // turn would arrive as a fresh chat — the "agent has no memory"
+    // bug the user kept hitting.
+    if resuming {
+        let prior = reconstruct_prior_messages(&prior_events);
+        // `provider_messages` always returns `[..., user]` with the new
+        // turn at the tail. Pop it, splice the history in, push it back.
+        if let Some(new_user) = messages.pop() {
+            messages.extend(prior);
+            messages.push(new_user);
+        }
+    }
     let tools = schemas_for_mode(&request.mode, &request.disabled_tools);
-    let mut message_count = 1_u32;
+    // Count this turn's user message on top of the turns already on disk so
+    // the Mission Control "Messages" tally reflects the whole conversation.
+    let mut message_count = prior_turns as u32 + 1;
     let mut completed = false;
     const MAX_TURNS: usize = 8;
     const COMPACT_AFTER: usize = 14;
@@ -464,20 +629,43 @@ async fn run_agent_loop(
         };
 
         let mut tool_calls = parse_tool_calls(&response.tool_calls);
+        let mut raw_tool_calls = response.tool_calls.clone();
+        let mut content_text = response.content.clone();
+        // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
+        // `<|tool_call_start|>…<|tool_call_end|>` text instead of the structured
+        // field. Only attempt it when the structured field came back empty so we
+        // never second-guess a well-behaved provider.
+        if tool_calls.is_empty() {
+            let (recovered, cleaned) = recover_text_tool_calls(&response.content);
+            if !recovered.is_empty() {
+                // Synthesize a structured tool_calls payload so the assistant
+                // turn we replay back to the model is coherent (tool call →
+                // tool result), and strip the raw tokens from the content.
+                raw_tool_calls = recovered
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "function": { "name": c.name, "arguments": c.input }
+                        })
+                    })
+                    .collect();
+                tool_calls = recovered;
+                content_text = cleaned;
+            }
+        }
         // Fallback ids ("tool_<idx>") are only unique within one response —
         // stamp the turn so ids stay unique across the whole run (checkpoints
-        // and the frontend reducer key on them).
+        // and the frontend reducer key on them). Offset by the turns already on
+        // disk so follow-up turns in a reused conversation don't reuse an id
+        // from an earlier turn and clobber its checkpoint file.
+        let turn_label = prior_turns + turn;
         for call in tool_calls.iter_mut() {
             if call.id.starts_with("tool_") {
-                call.id = format!("turn{turn}_{}", call.id);
+                call.id = format!("turn{turn_label}_{}", call.id);
             }
         }
         let tool_calls = tool_calls;
-        let raw_tool_calls = response.tool_calls.clone();
-        messages.push(assistant_provider_message(
-            &response.content,
-            &raw_tool_calls,
-        ));
+        messages.push(assistant_provider_message(&content_text, &raw_tool_calls));
         message_count += 1;
 
         if tool_calls.is_empty() {
@@ -486,12 +674,13 @@ async fn run_agent_loop(
                 content.push(AgentContentBlock::Thinking { text: thinking });
             }
             content.push(AgentContentBlock::Text {
-                text: response.content.clone(),
+                text: content_text.clone(),
             });
             emit(AgentEvent::AssistantMessage {
                 run_id: id.clone(),
                 message_id: assistant_id,
                 content,
+                usage: agent_usage_from(response.usage.clone()),
                 ts: now_ms(),
             })?;
             emit(AgentEvent::RunResult {
@@ -514,9 +703,9 @@ async fn run_agent_loop(
         }
 
         let mut content = Vec::new();
-        if !response.content.trim().is_empty() {
+        if !content_text.trim().is_empty() {
             content.push(AgentContentBlock::Text {
-                text: response.content.clone(),
+                text: content_text.clone(),
             });
         }
         for call in &tool_calls {
@@ -530,6 +719,7 @@ async fn run_agent_loop(
             run_id: id.clone(),
             message_id: assistant_id,
             content,
+            usage: agent_usage_from(response.usage.clone()),
             ts: now_ms(),
         })?;
 
@@ -951,6 +1141,204 @@ pub async fn agent_revert_checkpoint(
 ) -> Result<(), String> {
     let runs_dir = app_runs_dir(&app)?;
     revert_checkpoint_at(&runs_dir, &run_id, &tool_call_id)
+}
+
+#[cfg(test)]
+mod replay_tests {
+    //! The "agent has memory" fix lives in `reconstruct_prior_messages`:
+    //! given a transcript, it has to produce provider-shaped messages that
+    //! replay the user / assistant / tool turns in order. These tests
+    //! pin the wire format and the edge cases (no events, no content
+    //! blocks, malformed tool calls).
+
+    use super::*;
+    use crate::agent::types::AgentContentBlock;
+
+    fn user_msg(text: &str) -> AgentEvent {
+        AgentEvent::UserMessage {
+            run_id: "r".into(),
+            message_id: "u".into(),
+            text: text.into(),
+            attachments: Vec::new(),
+            ts: 1,
+        }
+    }
+
+    fn assistant_text(text: &str) -> AgentEvent {
+        AgentEvent::AssistantMessage {
+            run_id: "r".into(),
+            message_id: "a".into(),
+            content: vec![AgentContentBlock::Text { text: text.into() }],
+            usage: None,
+            ts: 2,
+        }
+    }
+
+    fn assistant_with_tool_call() -> AgentEvent {
+        AgentEvent::AssistantMessage {
+            run_id: "r".into(),
+            message_id: "a".into(),
+            content: vec![
+                AgentContentBlock::Text { text: "let me read that".into() },
+                AgentContentBlock::ToolCall {
+                    tool_call_id: "tc1".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({ "path": "README.md" }),
+                },
+            ],
+            usage: None,
+            ts: 2,
+        }
+    }
+
+    fn tool_result(id: &str, content: &str) -> AgentEvent {
+        AgentEvent::ToolCallFinished {
+            run_id: "r".into(),
+            tool_call_id: id.into(),
+            result: ToolResult { ok: true, content: content.into(), metadata: None },
+            ts: 3,
+        }
+    }
+
+    #[test]
+    fn empty_events_produces_empty_messages() {
+        assert!(reconstruct_prior_messages(&[]).is_empty());
+    }
+
+    #[test]
+    fn user_message_becomes_user_role() {
+        let out = reconstruct_prior_messages(&[user_msg("hello")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], "hello");
+    }
+
+    #[test]
+    fn assistant_text_becomes_assistant_role_with_content() {
+        let out = reconstruct_prior_messages(&[assistant_text("hi back")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[0]["content"], "hi back");
+        // No `tool_calls` array — the replay never emits the OpenAI
+        // shape that Ollama's chat API rejects.
+        assert!(out[0].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn assistant_with_tool_call_drops_call_keeps_text() {
+        // Tool calls are folded into the next assistant turn as
+        // inline tool results, not surfaced as a structured array.
+        let out = reconstruct_prior_messages(&[assistant_with_tool_call()]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "assistant");
+        assert!(out[0]["content"]
+            .as_str()
+            .expect("content is string")
+            .contains("let me read that"));
+        assert!(out[0].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn tool_result_folds_into_next_assistant_message() {
+        // The orphan tool_call_finished event from a prior turn is
+        // not emitted as its own message; it waits for the closing
+        // assistant turn and gets appended to that text.
+        let out = reconstruct_prior_messages(&[
+            assistant_text("let me check"),
+            tool_result("tc1", "file contents"),
+            assistant_text("done"),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[0]["content"], "let me check");
+        // The closing assistant turn carries the folded tool result.
+        assert_eq!(out[1]["role"], "assistant");
+        let content = out[1]["content"].as_str().expect("content is string");
+        assert!(content.contains("done"), "got: {content}");
+        assert!(
+            content.contains("file contents"),
+            "tool result content was dropped: {content}"
+        );
+        assert!(content.contains("[tool_result]"), "result marker missing");
+    }
+
+    #[test]
+    fn full_conversation_replays_in_order() {
+        let events = vec![
+            user_msg("read the readme"),
+            assistant_with_tool_call(),
+            tool_result("tc1", "hello world"),
+            assistant_text("the readme says hi"),
+        ];
+        let out = reconstruct_prior_messages(&events);
+        // 1 user + 1 pre-tool assistant + 1 closing assistant with the
+        // tool result folded in = 3 messages. The tool_call_finished
+        // was folded into the closing turn, the ToolCall block on
+        // `assistant_with_tool_call` was dropped.
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], "read the readme");
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["content"], "let me read that");
+        assert_eq!(out[2]["role"], "assistant");
+        let closing = out[2]["content"].as_str().expect("content is string");
+        assert!(closing.contains("the readme says hi"), "got: {closing}");
+        assert!(closing.contains("hello world"), "tool result dropped: {closing}");
+    }
+
+    #[test]
+    fn tool_results_at_turn_end_are_dropped() {
+        // A turn that ends with a tool call (no closing assistant
+        // message) has its orphan tool result dropped. Re-emitting it
+        // as `role: "tool"` is exactly the Ollama parse-error case
+        // we just fixed.
+        let out = reconstruct_prior_messages(&[
+            user_msg("ping"),
+            tool_result("tc1", "pong"),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+    }
+
+    #[test]
+    fn tool_results_do_not_carry_across_user_turns() {
+        // A buffered tool result from a previous turn must not leak
+        // into the next user turn — the model shouldn't see a
+        // tool result on the wrong side of a user message.
+        let out = reconstruct_prior_messages(&[
+            user_msg("first turn"),
+            tool_result("tc1", "stale result"),
+            user_msg("second turn"),
+            assistant_text("second answer"),
+        ]);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], "first turn");
+        assert_eq!(out[1]["role"], "user");
+        assert_eq!(out[1]["content"], "second turn");
+        assert_eq!(out[2]["role"], "assistant");
+        assert_eq!(out[2]["content"], "second answer");
+    }
+
+    #[test]
+    fn preamble_events_are_skipped() {
+        // RunStarted / ContextSnapshot / the other framing events
+        // must not become messages — they're not provider-shaped.
+        let events = vec![
+            AgentEvent::RunStarted {
+                run_id: "r".into(),
+                cwd: None,
+                mode: AgentMode::Chat,
+                provider: "ollama".into(),
+                model: "x".into(),
+                ts: 0,
+            },
+            user_msg("hi"),
+        ];
+        let out = reconstruct_prior_messages(&events);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+    }
 }
 
 #[cfg(test)]

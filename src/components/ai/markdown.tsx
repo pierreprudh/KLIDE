@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react";
+import { useState, type CSSProperties, type ReactElement } from "react";
 
 type MdNode = string | ReactElement;
 
@@ -333,6 +333,89 @@ function renderProse(text: string, keyBase: string): MdNode[] {
     list = null;
   };
 
+  // GFM table: a run of `| … |` lines whose second line is the `---`
+  // separator row. Anything that doesn't validate flows back into the
+  // paragraph buffer untouched.
+  let tableBuf: string[] | null = null;
+  const splitRow = (line: string): string[] =>
+    line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  const flushTable = () => {
+    if (!tableBuf) return;
+    const buf = tableBuf;
+    tableBuf = null;
+    const sepRe = /^:?-{2,}:?$/;
+    const isSep = buf.length >= 2 && splitRow(buf[1]).every((c) => sepRe.test(c));
+    if (!isSep) {
+      para.push(...buf);
+      return;
+    }
+    const header = splitRow(buf[0]);
+    const aligns = splitRow(buf[1]).map((c) =>
+      c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : "left"
+    ) as Array<"left" | "center" | "right">;
+    const rows = buf.slice(2).map(splitRow);
+    const cellStyle = (col: number): CSSProperties => ({
+      padding: "5px 12px",
+      fontSize: 12,
+      lineHeight: 1.5,
+      textAlign: aligns[col] ?? "left",
+      verticalAlign: "top",
+    });
+    blocks.push(
+      <div
+        key={`${keyBase}-table-${k++}`}
+        style={{
+          margin: "8px 0",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-md)",
+          overflowX: "auto",
+        }}
+      >
+        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "max-content" }}>
+          <thead>
+            <tr style={{ background: "color-mix(in srgb, var(--bg-elevated) 80%, var(--bg))" }}>
+              {header.map((cell, ci) => (
+                <th
+                  key={ci}
+                  style={{
+                    ...cellStyle(ci),
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: "0.07em",
+                    textTransform: "uppercase",
+                    color: "var(--fg-subtle)",
+                    fontFamily: "var(--font-mono)",
+                    borderBottom: "1px solid var(--border)",
+                  }}
+                >
+                  {renderInline(cell, `${keyBase}-th${k}-${ci}`)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr key={ri}>
+                {header.map((_, ci) => (
+                  <td
+                    key={ci}
+                    style={{
+                      ...cellStyle(ci),
+                      color: "var(--fg)",
+                      borderTop: ri > 0 ? "1px solid var(--border)" : "none",
+                    }}
+                  >
+                    {renderInline(row[ci] ?? "", `${keyBase}-td${k}-${ri}-${ci}`)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
   let inBlockquote = false;
   let bqBuf: string[] = [];
   const flushBlockquote = () => {
@@ -355,6 +438,19 @@ function renderProse(text: string, keyBase: string): MdNode[] {
   };
 
   for (const line of lines) {
+    // Table lines (`| a | b |`). Collect the run; flushTable validates the
+    // separator row and falls back to plain text when it isn't a table.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      if (!tableBuf) {
+        flushPara();
+        flushList();
+        tableBuf = [];
+      }
+      tableBuf.push(line);
+      continue;
+    } else if (tableBuf) {
+      flushTable();
+    }
     // Blockquote lines (`> text`).
     if (/^>\s?/.test(line)) {
       flushPara();
@@ -441,6 +537,7 @@ function renderProse(text: string, keyBase: string): MdNode[] {
     flushList();
     para.push(line);
   }
+  flushTable();
   flushPara();
   flushList();
   flushBlockquote();
@@ -464,6 +561,80 @@ export function splitThinking(raw: string): { thinking: string; content: string 
     rest = after.slice(close + CLOSE.length);
   }
   return { thinking, content: content.replace(/^\s+/, "") };
+}
+
+type StrippedPlan = { thinking: string; content: string };
+
+/**
+ * Some local chat models (qwen, gemma, smaller ollama weights) emit a
+ * structured "plan" JSON in their visible text — `{ analysis, plan,
+ * commands }` — instead of the `<think>…</think>` format. The
+ * `commands` field is a would-be tool call (read_file, get_git_status,
+ * etc.) that chat mode doesn't honour, so the JSON is pure noise to
+ * the reader. Lift the analysis + plan into the thinking channel and
+ * leave the user-visible text empty; the UI's existing "I'm in chat
+ * mode" reasoning block carries the answer.
+ *
+ * The detector is intentionally conservative:
+ *   - the entire response must be a single JSON object (after a trim),
+ *   - the object must carry at least one of the known plan keys.
+ *
+ * A "here's the answer, and here's a JSON plan after it" reply is left
+ * alone — the JSON is part of the user's answer in that case, not
+ * reasoning.
+ */
+export function stripPlanJson(raw: string): StrippedPlan {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return { thinking: "", content: raw };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { thinking: "", content: raw };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { thinking: "", content: raw };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const analysis = typeof obj.analysis === "string" ? obj.analysis : "";
+  const plan = typeof obj.plan === "string" ? obj.plan : "";
+  const commands = Array.isArray(obj.commands) ? obj.commands : [];
+  const hasPlanShape =
+    analysis.length > 0 || plan.length > 0 || commands.length > 0;
+  if (!hasPlanShape) {
+    return { thinking: "", content: raw };
+  }
+  // Render the analysis + plan + command list in the thinking channel.
+  // Commands are summarised as a short list so the user can see what
+  // the model *wanted* to do — useful when they're trying to figure
+  // out why the model went silent in chat mode.
+  const parts: string[] = [];
+  if (analysis) parts.push(analysis);
+  if (plan) parts.push(plan);
+  if (commands.length > 0) {
+    const cmds = commands
+      .slice(0, 8)
+      .map((c) => {
+        if (!c || typeof c !== "object") return "- (invalid command)";
+        const o = c as Record<string, unknown>;
+        const name = typeof o.tool_name === "string" ? o.tool_name : "tool";
+        const args = o.arguments;
+        const argText =
+          args && typeof args === "object"
+            ? " " +
+              Object.entries(args as Record<string, unknown>)
+                .slice(0, 3)
+                .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                .join(" ")
+            : "";
+        return `- ${name}${argText}`;
+      })
+      .join("\n");
+    parts.push(`Would have called:\n${cmds}`);
+  }
+  return { thinking: parts.join("\n\n"), content: "" };
 }
 
 export function renderMarkdown(text: string): MdNode[] {

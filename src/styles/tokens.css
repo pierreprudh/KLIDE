@@ -516,74 +516,378 @@ select.klide-field {
   box-shadow: inset 0 1px 0 var(--panel-highlight);
 }
 
-.klide-welcome-ascii-city {
+/* ──────────────────────────────────────────────────────────────────────────
+   Welcome screen — an immersive dark cosmos, independent of the app theme.
+   A procedurally shaded ASCII planet emerges full-width from the bottom
+   edge; glass cards float over a deep-space gradient. Content fades up in
+   one staggered wave on mount, then stillness. The scope sets its own
+   fixed dark palette so glassmorphism reads regardless of the active
+   theme. */
+.klide-welcome {
+  --w-fg:          #eef2f8;
+  --w-dim:         rgba(238, 242, 248, 0.56);
+  --w-faint:       rgba(238, 242, 248, 0.34);
+  --w-ghost:       rgba(238, 242, 248, 0.20);
+  --w-glass:       rgba(255, 255, 255, 0.045);
+  --w-glass-hover: rgba(255, 255, 255, 0.085);
+  --w-border:      rgba(255, 255, 255, 0.10);
+  --w-atmos:       #6f9bff;
+  background:
+    radial-gradient(135% 78% at 50% 128%, rgba(0, 155, 235, 0.13), transparent 58%),
+    radial-gradient(90% 58% at 18% 8%, rgba(65, 130, 180, 0.045), transparent 60%),
+    linear-gradient(180deg, #010204 0%, #050810 50%, #070d18 100%);
+  container-type: size;
+  isolation: isolate;
+}
+
+/* The cosmos fills the whole surface. A single monochrome earth layer
+   (its form carried by glyph weight + density) plus a separate dim
+   starfield, anchored bottom-centre and cropped so the horizon stays
+   centred at any width. */
+.klide-welcome-cosmos {
   position: absolute;
-  top: 50%;
-  right: clamp(-170px, -9vw, -64px);
-  width: min(720px, 58vw);
-  height: min(560px, 82vh);
-  color: var(--fg-dim);
-  opacity: 0.88;
-  transform: translateY(-50%);
-  mask-image:
-    linear-gradient(90deg, transparent 0%, black 35%, black 100%),
-    linear-gradient(180deg, transparent 0%, black 12%, black 84%, transparent 100%);
+  inset: 0;
+  overflow: hidden;
   pointer-events: none;
   user-select: none;
 }
 
-.klide-welcome-ascii-city::before {
-  content: "";
+/* Atmospheric glow hugging the horizon line. */
+.klide-cosmos-glow {
   position: absolute;
-  inset: 7% 0 4% 18%;
-  background:
-    radial-gradient(ellipse at 64% 26%, color-mix(in srgb, #00d7ff 24%, transparent), transparent 34%),
-    radial-gradient(ellipse at 72% 58%, color-mix(in srgb, #ff4fe3 20%, transparent), transparent 38%),
-    linear-gradient(120deg, transparent, color-mix(in srgb, var(--accent-soft) 18%, transparent), transparent);
-  filter: blur(22px);
-  opacity: 0.88;
+  left: 50%;
+  top: var(--earth-glow-top);
+  width: var(--earth-glow-width);
+  height: var(--earth-glow-height);
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse at 50% 0%,
+    color-mix(in srgb, var(--w-atmos) 18%, transparent) 0%,
+    color-mix(in srgb, var(--w-atmos) 7%, transparent) 28%,
+    transparent 58%
+  );
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  filter: blur(28px);
+  opacity: 0.28;
 }
 
-.klide-ascii-city-layer {
+.klide-cosmos-layer {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: var(--cosmos-top);
   margin: 0;
-  padding: 0;
+  transform: translateX(-50%);
   font-family: var(--font-mono);
-  font-size: clamp(8.5px, 0.82vw, 12px);
-  font-weight: 400;
-  line-height: 1.04;
+  font-size: var(--cosmos-font);
+  line-height: 1.0;
   letter-spacing: 0;
   white-space: pre;
 }
 
-.klide-ascii-city-layer.is-base {
-  color: color-mix(in srgb, var(--fg-subtle) 58%, transparent);
-  opacity: 0.3;
-  text-shadow: 0 0 20px color-mix(in srgb, var(--fg-subtle) 12%, transparent);
+.klide-cosmos-layer.is-earth {
+  color: rgba(205, 220, 230, 0.6);
+  opacity: 0.7;
+  transform: translate(-50%, var(--earth-sink));
+  clip-path: inset(39% 0 0 0);
+  /* Keep the planet as a low horizon band. When the window is compressed,
+     the sparse rim otherwise climbs into the controls and reads as loose
+     punctuation instead of a surface. */
+  mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.35) 50%, white 70%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.35) 50%, white 70%);
 }
 
-.klide-ascii-city-layer.is-cyan {
-  color: #36e7ff;
-  opacity: 0.28;
-  mix-blend-mode: screen;
+.klide-cosmos-layer.is-earth-glow {
+  color: rgba(36, 184, 255, 0.88);
+  opacity: 0.78;
+  transform: translate(-50%, var(--earth-sink));
+  clip-path: inset(39% 0 0 0);
   text-shadow:
-    0 0 12px color-mix(in srgb, #36e7ff 70%, transparent),
-    0 0 34px color-mix(in srgb, #36e7ff 34%, transparent);
+    0 0 7px rgba(0, 180, 255, 0.4),
+    0 0 17px rgba(0, 140, 255, 0.18);
+  mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.58) 50%, white 74%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.58) 50%, white 74%);
 }
 
-.klide-ascii-city-layer.is-magenta {
-  color: #ff4fe3;
-  opacity: 0.22;
-  mix-blend-mode: screen;
+.klide-cosmos-layer.is-galaxy {
+  color: rgba(55, 160, 225, 0.62);
+  opacity: 0.34;
   text-shadow:
-    0 0 12px color-mix(in srgb, #ff4fe3 70%, transparent),
-    0 0 34px color-mix(in srgb, #ff4fe3 34%, transparent);
+    0 0 7px rgba(20, 145, 230, 0.2),
+    0 0 18px rgba(120, 195, 245, 0.1);
+  mask-image: linear-gradient(90deg, transparent 0%, transparent 38%, rgba(255, 255, 255, 0.35) 50%, white 68%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, transparent 38%, rgba(255, 255, 255, 0.35) 50%, white 68%);
 }
 
-.klide-welcome-ascii-city::selection,
-.klide-ascii-city-layer::selection {
-  background: transparent;
+.klide-cosmos-layer.is-stars {
+  color: rgba(42, 116, 165, 0.72);
+  opacity: 0.58;
+  text-shadow: 0 0 5px rgba(0, 120, 230, 0.18);
+}
+
+.klide-cosmos-layer.is-bright-stars {
+  color: rgba(218, 232, 240, 0.68);
+  opacity: 0.7;
+  text-shadow:
+    0 0 5px rgba(180, 225, 255, 0.28),
+    0 0 14px rgba(0, 135, 255, 0.18);
+}
+
+/* Glass action button — translucent, blurred, hairline border. */
+.klide-welcome-glass-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 11px;
+  background: var(--w-glass);
+  border: 1px solid var(--w-border);
+  color: var(--w-fg);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 10px 34px rgba(0, 0, 0, 0.34);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-welcome-glass-btn:hover {
+  background: var(--w-glass-hover);
+  border-color: rgba(255, 255, 255, 0.20);
+  transform: translateY(-1px);
+}
+
+.klide-welcome-glass-btn:active {
+  transform: translateY(0) scale(0.985);
+}
+
+.klide-welcome-glass-btn:focus-visible,
+.klide-welcome-rrow button:focus-visible,
+.klide-welcome-rrow-remove:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(111, 155, 255, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.klide-welcome-glass-btn[data-primary="true"] {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.klide-welcome-glass-btn[data-primary="true"]:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Glass recent row — same material, list geometry. */
+.klide-welcome-rrow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  height: 46px;
+  padding: 0 12px 0 15px;
+  border-radius: 11px;
+  background: var(--w-glass);
+  border: 1px solid var(--w-border);
+  color: var(--w-fg);
+  text-align: left;
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 26px rgba(0, 0, 0, 0.26);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-welcome-rrow:hover {
+  background: var(--w-glass-hover);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.klide-welcome-rrow.is-placeholder {
+  opacity: 0.6;
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.035), transparent),
+    rgba(255, 255, 255, 0.026);
+  border-color: rgba(255, 255, 255, 0.075);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.klide-welcome-rrow.is-placeholder:hover {
+  transform: none;
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.035), transparent),
+    rgba(255, 255, 255, 0.026);
+  border-color: rgba(255, 255, 255, 0.075);
+}
+
+.klide-welcome-rrow-index {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--w-faint);
+  letter-spacing: 0.04em;
+}
+
+.klide-welcome-rrow-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--w-fg);
+  flex-shrink: 0;
+  letter-spacing: -0.005em;
+}
+
+.klide-welcome-rrow-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--w-faint);
+  letter-spacing: 0.02em;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.klide-welcome-rrow-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--w-faint);
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-welcome-rrow:hover .klide-welcome-rrow-remove {
+  opacity: 1;
+}
+
+.klide-welcome-rrow-remove:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #ff8b80;
+}
+
+/* Recent section header — label + hairline, on dark. */
+.klide-welcome-rlabel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--w-dim);
+  margin-bottom: 14px;
+}
+
+.klide-welcome-rlabel .line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--w-border), transparent);
+}
+
+@media (max-width: 720px) {
+  .klide-welcome {
+    background:
+      radial-gradient(150% 72% at 54% 122%, rgba(111, 155, 255, 0.18), transparent 58%),
+      linear-gradient(180deg, #080b12 0%, #0a0e18 52%, #0b1120 100%);
+  }
+
+  .klide-welcome-glass-btn {
+    flex: 1 1 170px;
+    justify-content: center;
+  }
+
+  .klide-welcome-rrow {
+    height: 48px;
+    padding-left: 13px;
+  }
+
+  .klide-welcome-rrow-path {
+    display: none;
+  }
+}
+
+/* Each content block fades up 10px with a touch of blur. The component
+   sets --welcome-delay inline to cascade the wave top-to-bottom. */
+.klide-welcome-rise {
+  animation: klide-welcome-rise 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--welcome-delay, 0ms);
+}
+
+@keyframes klide-welcome-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* Spec line — middot-separated stats set like a colophon. */
+.klide-welcome-spec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.klide-welcome-spec b {
+  font-weight: 500;
+  color: var(--fg-subtle);
+}
+
+/* Ambient shortcut furniture — the quiet last line of the column. */
+.klide-welcome-keys {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.klide-welcome-keys b {
+  font-weight: 400;
+  color: var(--fg-subtle);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-welcome-rise {
+    animation: none;
+  }
 }
 
 .settings-range {
@@ -880,6 +1184,31 @@ select.klide-field {
   }
   50% {
     opacity: 0.35;
+  }
+}
+
+/* Per-message meta footer (duration · tokens) — barely-there until the
+   reader actually wants it. */
+.klide-msg-meta {
+  opacity: 0.45;
+  transition: opacity var(--motion-fast, 0.15s) ease;
+}
+.klide-msg-meta:hover {
+  opacity: 1;
+}
+
+/* Dot-grid loader — a 3×3 wave that sweeps the grid in reverse order while
+   a tool is executing. Each dot staggers via inline animation-delay. */
+@keyframes klide-dotgrid {
+  0%,
+  60%,
+  100% {
+    opacity: 0.12;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.1);
   }
 }
 

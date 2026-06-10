@@ -1,7 +1,10 @@
 mod agent;
 mod memory;
+mod providers;
 mod pty;
 mod workspace;
+
+use crate::providers::ProviderKeyStatus;
 use memory::{memory_list, memory_read, memory_write};
 use pty::{
     delegate_pty_resize, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
@@ -22,7 +25,7 @@ use tokio::time::timeout;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
 const MLX_DEFAULT_MODEL: &str = "mlx-community/Llama-3.1-8B-Instruct-4bit";
-const MLX_MODEL_PRESETS: [&str; 3] = [
+pub(crate) const MLX_MODEL_PRESETS: &[&str] = &[
     MLX_DEFAULT_MODEL,
     "Qwen/Qwen3-4B-MLX-4bit",
     "mlx-community/gemma-2-9b-it-4bit",
@@ -197,12 +200,41 @@ struct PullRequestDetails {
     updated_at_ms: i64,
 }
 
+// Real token accounting reported by the provider (Ollama eval counts,
+// OpenAI/Anthropic usage blocks). All fields optional — adapters fill what
+// their wire format exposes; the UI falls back to estimates when absent.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AiUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) completion_tokens: Option<u64>,
+    /// Time spent generating the completion, ms (Ollama eval_duration).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) eval_duration_ms: Option<u64>,
+    /// Time spent processing the prompt, ms (Ollama prompt_eval_duration).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) prompt_eval_duration_ms: Option<u64>,
+}
+
+impl AiUsage {
+    fn is_empty(&self) -> bool {
+        self.prompt_tokens.is_none()
+            && self.completion_tokens.is_none()
+            && self.eval_duration_ms.is_none()
+            && self.prompt_eval_duration_ms.is_none()
+    }
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AiChatResponse {
     pub(crate) content: String,
     pub(crate) thinking: Option<String>,
     pub(crate) tool_calls: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) usage: Option<AiUsage>,
 }
 
 // One streamed delta pushed to the frontend through the per-request Channel.
@@ -226,157 +258,48 @@ struct AiConnectionStatus {
     login_options: Vec<String>,
 }
 
-// Keychain service name — all Klide API keys are stored under this service,
-// keyed by provider id (the "account"). Keys never touch the React webview.
-const KEYCHAIN_SERVICE: &str = "com.klide.app";
+// Keychain service name lives in `providers` (single source of truth for
+// key storage). `KEYCHAIN_SERVICE` was moved when the registry absorbed
+// the keychain helpers.
 
 // Anthropic requires this header on every Messages API call; pinning a known
 // version keeps the request/response shape stable as the API evolves.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-fn env_key(name: &str) -> Result<String, String> {
-    std::env::var(name).map_err(|_| format!("{name} is not set"))
-}
-
-// Environment variable each provider reads as a fallback when no key has been
-// saved to the keychain. Kept so an existing shell-based dev setup still works.
-fn provider_env_name(provider: &str) -> Option<&'static str> {
-    match provider {
-        "openai" => Some("OPENAI_API_KEY"),
-        "mistral" => Some("MISTRAL_API_KEY"),
-        "xai" => Some("XAI_API_KEY"),
-        "anthropic" => Some("ANTHROPIC_API_KEY"),
-        _ => None,
-    }
-}
-
-fn keyring_entry(provider: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(|e| e.to_string())
-}
-
-// Look up a saved key, treating "no entry" and blank values as absent.
-fn keyring_lookup(provider: &str) -> Option<String> {
-    let value = keyring_entry(provider).ok()?.get_password().ok()?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-// Env fallback — keychain misses fall through to the provider's env var (and
-// xAI also accepts the legacy GROK_API_KEY name).
-fn env_fallback(provider: &str) -> Option<String> {
-    if let Some(name) = provider_env_name(provider) {
-        if let Ok(value) = env_key(name) {
-            return Some(value);
-        }
-    }
-    if provider == "xai" {
-        if let Ok(value) = env_key("GROK_API_KEY") {
-            return Some(value);
-        }
-    }
-    None
-}
-
+// Thin lib.rs-side wrappers around the registry. The lookup, the env-var
+// fallback, and the local-vs-hosted decision all live in
+// `providers::provider_key`; these are kept so call-sites in this file
+// can stay one short line and don't have to reach into the module.
 fn provider_key(provider: &str) -> Result<Option<String>, String> {
-    match provider {
-        "ollama" | "mlx" => Ok(None),
-        "openai" | "mistral" | "xai" | "anthropic" => {
-            match keyring_lookup(provider).or_else(|| env_fallback(provider)) {
-                Some(key) => Ok(Some(key)),
-                None => Err(format!("No API key saved for {provider}")),
-            }
-        }
-        _ => Err(format!("Provider \"{provider}\" is not wired yet")),
-    }
+    providers::provider_key(provider)
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderKeyStatus {
-    has_key: bool,
-    source: String, // "keychain" | "env" | "none"
-}
-
+// The `ProviderKeyStatus` struct lives in `providers` (single source of
+// truth for the registry); this command is a thin shim that returns the
+// registry's status unchanged.
+//
 // Report whether a usable key exists and where it comes from — never returns
 // the key itself, so the value stays inside the Rust side.
 #[tauri::command]
 fn ai_provider_key_status(provider: String) -> ProviderKeyStatus {
-    if keyring_lookup(&provider).is_some() {
-        ProviderKeyStatus {
-            has_key: true,
-            source: "keychain".to_string(),
-        }
-    } else if env_fallback(&provider).is_some() {
-        ProviderKeyStatus {
-            has_key: true,
-            source: "env".to_string(),
-        }
-    } else {
-        ProviderKeyStatus {
-            has_key: false,
-            source: "none".to_string(),
-        }
-    }
+    providers::key_status(&provider).unwrap_or(ProviderKeyStatus {
+        has_key: false,
+        source: "none".to_string(),
+    })
 }
 
 #[tauri::command]
 fn ai_set_provider_key(provider: String, key: String) -> Result<(), String> {
-    let trimmed = key.trim();
-    if trimmed.is_empty() {
-        return Err("API key is empty".to_string());
-    }
-    keyring_entry(&provider)?
-        .set_password(trimmed)
-        .map_err(|e| e.to_string())
+    providers::set_keychain_key(&provider, &key)
 }
 
 #[tauri::command]
 fn ai_clear_provider_key(provider: String) -> Result<(), String> {
-    match keyring_entry(&provider)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    providers::clear_keychain_key(&provider)
 }
 
 fn is_subscription_provider(provider: &str) -> bool {
-    matches!(provider, "claude-code" | "codex" | "opencode")
-}
-
-fn subscription_command(provider: &str) -> Result<&'static str, String> {
-    match provider {
-        "claude-code" => Ok("claude"),
-        "codex" => Ok("codex"),
-        "opencode" => Ok("opencode"),
-        _ => Err(format!("Provider \"{provider}\" is not a subscription CLI")),
-    }
-}
-
-fn provider_chat_url(provider: &str) -> Result<&'static str, String> {
-    match provider {
-        "openai" => Ok("https://api.openai.com/v1/chat/completions"),
-        "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
-        "xai" => Ok("https://api.x.ai/v1/chat/completions"),
-        "mlx" => Ok("http://127.0.0.1:8080/v1/chat/completions"),
-        "openrouter" => Ok("https://openrouter.ai/api/v1/chat/completions"),
-        _ => Err(format!(
-            "Provider \"{provider}\" has no chat-completions endpoint"
-        )),
-    }
-}
-
-fn provider_models_url(provider: &str) -> Result<&'static str, String> {
-    match provider {
-        "openai" => Ok("https://api.openai.com/v1/models"),
-        "mistral" => Ok("https://api.mistral.ai/v1/models"),
-        "xai" => Ok("https://api.x.ai/v1/models"),
-        "mlx" => Ok("http://127.0.0.1:8080/v1/models"),
-        "openrouter" => Ok("https://openrouter.ai/api/v1/models"),
-        _ => Err(format!("Provider \"{provider}\" has no models endpoint")),
-    }
+    providers::is_subscription(provider)
 }
 
 fn response_error(provider: &str, status: reqwest::StatusCode, body: &str) -> String {
@@ -404,73 +327,95 @@ fn normalize_model_ids(value: &serde_json::Value) -> Vec<String> {
 
 #[tauri::command]
 async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
-    if is_subscription_provider(&provider) {
-        return subscription_models(&provider);
+    let entry = providers::lookup(&provider)
+        .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+
+    if let Some(spec) = entry.subscription {
+        return subscription_models(&spec);
     }
 
-    if provider == "ollama" {
-        {
-            let cache = OLLAMA_MODELS_CACHE.lock().unwrap();
-            if let Some((ts, names)) = cache.as_ref() {
-                if ts.elapsed() < Duration::from_secs(10) {
-                    return Ok(names.clone());
+    match entry.models {
+        providers::ModelsHandler::Subscription => {
+            // Defensive: subscription rows should be caught above.
+            unreachable!("subscription rows are handled before the models match")
+        }
+        providers::ModelsHandler::OllamaTags => fetch_ollama_tags().await,
+        providers::ModelsHandler::AnthropicModels => fetch_anthropic_models().await,
+        providers::ModelsHandler::OpenAiModels => {
+            let openai = match entry.wire {
+                providers::WireFormat::OpenAi(cfg) => cfg,
+                _ => {
+                    return Err(format!(
+                        "Provider \"{}\" declares OpenAi models but a non-OpenAI wire",
+                        provider
+                    ))
                 }
+            };
+            fetch_openai_compatible_models(entry.id, openai.models_url).await
+        }
+        providers::ModelsHandler::StaticPresets(presets) => {
+            Ok(presets.iter().map(|m| (*m).to_string()).collect())
+        }
+    }
+}
+
+/// `GET {OLLAMA_URL}/api/tags` with a 10-second in-process cache.
+async fn fetch_ollama_tags() -> Result<Vec<String>, String> {
+    {
+        let cache = OLLAMA_MODELS_CACHE.lock().unwrap();
+        if let Some((ts, names)) = cache.as_ref() {
+            if ts.elapsed() < Duration::from_secs(10) {
+                return Ok(names.clone());
             }
         }
-        let res = reqwest::get(format!("{OLLAMA_URL}/api/tags"))
-            .await
-            .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-        let status = res.status();
-        let body = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(response_error("Ollama", status, &body));
-        }
-        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        let names: Vec<String> = value
-            .get("models")
-            .and_then(|models| models.as_array())
-            .map(|models| {
-                models
-                    .iter()
-                    .filter_map(|m| m.get("name").and_then(|name| name.as_str()))
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-        *OLLAMA_MODELS_CACHE.lock().unwrap() = Some((Instant::now(), names.clone()));
-        return Ok(names);
     }
-
-    if provider == "anthropic" {
-        let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
-        let res = reqwest::Client::new()
-            .get("https://api.anthropic.com/v1/models")
-            .header("x-api-key", key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .send()
-            .await
-            .map_err(|e| format!("Unable to reach Anthropic: {e}"))?;
-        let status = res.status();
-        let body = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(response_error("Anthropic", status, &body));
-        }
-        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        return Ok(normalize_model_ids(&value));
+    let res = reqwest::get(format!("{OLLAMA_URL}/api/tags"))
+        .await
+        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(response_error("Ollama", status, &body));
     }
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let names: Vec<String> = value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|m| m.get("name").and_then(|name| name.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    *OLLAMA_MODELS_CACHE.lock().unwrap() = Some((Instant::now(), names.clone()));
+    Ok(names)
+}
 
-    if provider == "mlx" {
-        // mlx_lm.server's /v1/models endpoint is expensive/noisy and can
-        // interfere with prompt processing. Klide treats MLX model selection
-        // as an explicit configured value instead of polling the server.
-        return Ok(MLX_MODEL_PRESETS
-            .iter()
-            .map(|model| (*model).to_string())
-            .collect());
+async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
+    let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
+    let res = reqwest::Client::new()
+        .get("https://api.anthropic.com/v1/models")
+        .header("x-api-key", key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach Anthropic: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(response_error("Anthropic", status, &body));
     }
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    Ok(normalize_model_ids(&value))
+}
 
-    let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
-    let url = provider_models_url(&provider)?;
+async fn fetch_openai_compatible_models(
+    provider: &str,
+    url: &'static str,
+) -> Result<Vec<String>, String> {
+    let key = provider_key(provider)?.ok_or_else(|| "Missing API key".to_string())?;
     let res = reqwest::Client::new()
         .get(url)
         .bearer_auth(key)
@@ -480,38 +425,28 @@ async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
     let status = res.status();
     let body = res.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(response_error(&provider, status, &body));
+        return Err(response_error(provider, status, &body));
     }
     let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     Ok(normalize_model_ids(&value))
 }
 
-fn subscription_models(provider: &str) -> Result<Vec<String>, String> {
-    ensure_command_available(subscription_command(provider)?)?;
-    let models = match provider {
-        "claude-code" => claude_cached_models().unwrap_or_else(|| {
-            vec![
-                "claude-sonnet-4-6".to_string(),
-                "claude-opus-4-6".to_string(),
-                "claude-haiku-4-5-20251001".to_string(),
-            ]
-        }),
-        "codex" => codex_cached_models().unwrap_or_else(|| {
-            vec![
-                "gpt-5.5".to_string(),
-                "gpt-5.4".to_string(),
-                "gpt-5.4-mini".to_string(),
-                "gpt-5.3-codex".to_string(),
-                "gpt-5.2".to_string(),
-            ]
-        }),
-        "opencode" => opencode_cached_models().unwrap_or_else(|| vec!["opencode".to_string()]),
-        _ => return Err(format!("Provider \"{provider}\" is not a subscription CLI")),
-    };
-    Ok(models)
+fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<Vec<String>, String> {
+    // Confirm the CLI is reachable before returning any model list.
+    // Without this guard, a "Check the Claude Code install" UI
+    // (or the AiPanel's provider chip) would happily display a stale
+    // cache from a Claude install that's been moved or uninstalled.
+    ensure_command_available(spec.cmd)?;
+    let cached = (spec.cached_models)();
+    Ok(cached.unwrap_or_else(|| {
+        spec.default_models
+            .iter()
+            .map(|m| (*m).to_string())
+            .collect()
+    }))
 }
 
-fn opencode_cached_models() -> Option<Vec<String>> {
+pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
     let cli = resolve_command("opencode").ok()?;
     let output = std::process::Command::new(cli)
         .arg("models")
@@ -532,7 +467,7 @@ fn opencode_cached_models() -> Option<Vec<String>> {
     }
 }
 
-fn claude_cached_models() -> Option<Vec<String>> {
+pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
     let home = std::env::var("HOME").ok()?;
     let claude_dir = std::path::Path::new(&home).join(".claude");
     let mut models = Vec::new();
@@ -621,7 +556,7 @@ fn claude_model_rank(model: &str) -> usize {
     }
 }
 
-fn codex_cached_models() -> Option<Vec<String>> {
+pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
     let home = std::env::var("HOME").ok()?;
     let path = std::path::Path::new(&home).join(".codex/models_cache.json");
     let text = std::fs::read_to_string(path).ok()?;
@@ -746,8 +681,13 @@ async fn ai_context_window(provider: String, model: String) -> Result<usize, Str
 
 #[tauri::command]
 fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String> {
-    let command = subscription_command(&provider)?;
-    let resolved = resolve_command(command);
+    let entry = providers::lookup(&provider)
+        .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+    let spec = entry
+        .subscription
+        .as_ref()
+        .ok_or_else(|| format!("Provider \"{provider}\" is not a subscription CLI"))?;
+    let resolved = resolve_command(spec.cmd);
     let command_path = resolved.as_ref().ok().cloned();
     let installed = resolved.is_ok();
 
@@ -773,7 +713,7 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
             provider,
             installed: false,
             connected: false,
-            detail: format!("{command} CLI is not installed or not on PATH"),
+            detail: format!("{} CLI is not installed or not on PATH", spec.cmd),
             command_path: None,
             login_options,
         });
@@ -781,7 +721,7 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
 
     let (connected, detail) = match provider.as_str() {
         "claude-code" => {
-            let output = Command::new(command_path.as_deref().unwrap_or(command))
+            let output = Command::new(command_path.as_deref().unwrap_or(spec.cmd))
                 .args(["auth", "status"])
                 .output()
                 .map_err(|e| format!("Unable to check Claude auth: {e}"))?;
@@ -812,7 +752,7 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
             )
         }
         "codex" => {
-            let output = Command::new(command_path.as_deref().unwrap_or(command))
+            let output = Command::new(command_path.as_deref().unwrap_or(spec.cmd))
                 .args(["login", "status"])
                 .output()
                 .map_err(|e| format!("Unable to check Codex login: {e}"))?;
@@ -866,19 +806,23 @@ async fn ai_model_supports_tools(provider: String, model: String) -> Result<bool
         }
         let value: serde_json::Value =
             serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
-        let details = value.get("details");
-        let family = details
+        // Ollama reports capabilities as a top-level array of strings, e.g.
+        // ["tools", "thinking", "completion"]. The model supports tool calling
+        // iff that array contains "tools". (Older code looked for a nested
+        // `details.capabilities.tools` bool, which never existed — so every
+        // tool-capable model except the hard-coded qwen2/deepseek families was
+        // wrongly treated as tool-less and run in degraded chat mode.)
+        if let Some(caps) = value.get("capabilities").and_then(|v| v.as_array()) {
+            let has_tools = caps.iter().any(|c| c.as_str() == Some("tools"));
+            return Ok(has_tools);
+        }
+        // Fallback for Ollama versions old enough not to report capabilities:
+        // trust the known tool-capable families.
+        let family = value
+            .get("details")
             .and_then(|d| d.get("family"))
             .and_then(|v| v.as_str());
-        if family == Some("deepseek") || family == Some("qwen2") {
-            return Ok(true);
-        }
-        let has_tools = details
-            .and_then(|d| d.get("capabilities"))
-            .and_then(|c| c.get("tools"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        return Ok(has_tools);
+        return Ok(matches!(family, Some("deepseek") | Some("qwen2")));
     }
 
     if provider == "mlx" {
@@ -1042,22 +986,30 @@ async fn ai_chat(
     workspace_root: Option<String>,
     on_chunk: Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    if is_subscription_provider(&provider) {
-        return subscription_cli_chat(provider, model, messages, workspace_root, &on_chunk).await;
+    let entry = providers::lookup(&provider)
+        .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+
+    // Subscription CLIs route first — the per-wire match is for
+    // streaming backends only. The `wire` field on subscription rows
+    // is a placeholder that's never reached.
+    if let Some(spec) = entry.subscription {
+        return subscription_cli_chat(&spec, model, messages, workspace_root, &on_chunk).await;
     }
-    if provider == "ollama" {
-        return ollama_chat(model, messages, tools, &on_chunk).await;
+
+    match entry.wire {
+        providers::WireFormat::Ollama => {
+            ollama_chat(model, messages, tools, &on_chunk).await
+        }
+        providers::WireFormat::Anthropic => {
+            anthropic_chat(model, messages, tools, &on_chunk).await
+        }
+        providers::WireFormat::OpenAi(cfg) => {
+            openai_compatible_chat(entry.id, cfg, model, messages, tools, &on_chunk).await
+        }
     }
-    if provider == "anthropic" {
-        return anthropic_chat(model, messages, tools, &on_chunk).await;
-    }
-    if provider == "mlx" {
-        return mlx_chat(model, messages, tools, &on_chunk).await;
-    }
-    openai_compatible_chat(provider, model, messages, tools, &on_chunk).await
 }
 
-fn resolve_command(command: &str) -> Result<String, String> {
+pub(crate) fn resolve_command(command: &str) -> Result<String, String> {
     let output = Command::new("sh")
         .arg("-lc")
         .arg(format!("command -v {command}"))
@@ -1093,7 +1045,7 @@ fn resolve_command(command: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{command} CLI is not installed or not on PATH"))
 }
 
-fn ensure_command_available(command: &str) -> Result<(), String> {
+pub(crate) fn ensure_command_available(command: &str) -> Result<(), String> {
     resolve_command(command).map(|_| ())
 }
 
@@ -1234,7 +1186,7 @@ async fn run_cli_with_stdin(
 }
 
 async fn subscription_cli_chat(
-    provider: String,
+    spec: &providers::SubscriptionSpec,
     model: String,
     messages: Vec<serde_json::Value>,
     workspace_root: Option<String>,
@@ -1242,50 +1194,13 @@ async fn subscription_cli_chat(
 ) -> Result<AiChatResponse, String> {
     let prompt = prompt_from_messages(&messages);
     let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
-
-    let content = match provider.as_str() {
-        "claude-code" => {
-            let cli = resolve_command("claude")?;
-            let mut command = TokioCommand::new(cli);
-            command
-                .current_dir(&cwd)
-                .arg("-p")
-                .arg("--model")
-                .arg(model)
-                .arg("--permission-mode")
-                .arg("acceptEdits")
-                .arg("--output-format")
-                .arg("text");
-            run_cli_with_stdin(command, prompt, "Claude Code", on_chunk).await?
-        }
-        "codex" => {
-            let cli = resolve_command("codex")?;
-            let mut command = TokioCommand::new(cli);
-            command
-                .arg("exec")
-                .arg("-m")
-                .arg(model)
-                .arg("-s")
-                .arg("workspace-write")
-                .arg("-C")
-                .arg(&cwd)
-                .arg("--skip-git-repo-check")
-                .arg("--color")
-                .arg("never")
-                .arg("-");
-            run_cli_with_stdin(command, prompt, "Codex", on_chunk).await?
-        }
-        "opencode" => {
-            ensure_command_available("opencode")?;
-            return Err("OpenCode is available as an interactive PTY delegate.".to_string());
-        }
-        _ => return Err(format!("Provider \"{provider}\" is not wired yet")),
-    };
-
+    let command = (spec.build_invocation)(&cwd, &model)?;
+    let content = run_cli_with_stdin(command, prompt, spec.label, on_chunk).await?;
     Ok(AiChatResponse {
         content,
         thinking: None,
         tool_calls: Vec::new(),
+        usage: None,
     })
 }
 
@@ -1311,7 +1226,10 @@ trait StreamingProvider {
         on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String>;
 
+    /// Takes `self` so adapters can attach usage stats accumulated while
+    /// parsing the stream (final Ollama frame, OpenAI/Anthropic usage blocks).
     fn finalize_response(
+        self,
         content: String,
         thinking: String,
         tools: Self::ToolAccumulator,
@@ -1369,7 +1287,7 @@ async fn stream_provider<S: StreamingProvider>(
         provider.parse_line(&line, &mut content, &mut thinking, &mut tools, &send)?;
     }
 
-    Ok(S::finalize_response(content, thinking, tools))
+    Ok(provider.finalize_response(content, thinking, tools))
 }
 
 // ── Ollama adapter ──
@@ -1378,6 +1296,7 @@ struct OllamaAdapter {
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
+    usage: AiUsage,
 }
 
 impl StreamingProvider for OllamaAdapter {
@@ -1392,6 +1311,13 @@ impl StreamingProvider for OllamaAdapter {
             "model": self.model,
             "messages": self.messages,
             "stream": true,
+            // Ollama defaults num_ctx to 4096 regardless of what the model can
+            // actually handle. Agent turns (system prompt + tool schemas + a
+            // few messages) blow past that instantly, and Ollama then returns
+            // a 400 "exceeds the available context size" error. Raise it to a
+            // generous window; Ollama clamps to the model's trained max, so
+            // this is safe even for smaller-context models.
+            "options": { "num_ctx": 32768 },
         });
         if let Some(tools) = &self.tools {
             body["tools"] = serde_json::Value::Array(tools.clone());
@@ -1439,10 +1365,22 @@ impl StreamingProvider for OllamaAdapter {
         if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
             tools.extend(calls.iter().cloned());
         }
+        // The final frame (done: true) carries the real token accounting.
+        // Durations are nanoseconds on the wire.
+        if value.get("done").and_then(|v| v.as_bool()) == Some(true) {
+            let count = |k: &str| value.get(k).and_then(|v| v.as_u64());
+            self.usage = AiUsage {
+                prompt_tokens: count("prompt_eval_count"),
+                completion_tokens: count("eval_count"),
+                eval_duration_ms: count("eval_duration").map(|ns| ns / 1_000_000),
+                prompt_eval_duration_ms: count("prompt_eval_duration").map(|ns| ns / 1_000_000),
+            };
+        }
         Ok(())
     }
 
     fn finalize_response(
+        self,
         content: String,
         thinking: String,
         tools: Self::ToolAccumulator,
@@ -1455,6 +1393,7 @@ impl StreamingProvider for OllamaAdapter {
                 Some(thinking)
             },
             tool_calls: tools,
+            usage: if self.usage.is_empty() { None } else { Some(self.usage) },
         }
     }
 }
@@ -1469,6 +1408,7 @@ async fn ollama_chat(
         model,
         messages,
         tools,
+        usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -1483,28 +1423,44 @@ struct OpenAiToolAcc {
 }
 
 struct OpenAiAdapter {
-    provider: String,
+    /// Provider id, used for error messages (`"openai error: …"`).
+    provider: &'static str,
+    /// Resolved by the registry — the adapter never has to look up the
+    /// endpoint by string match.
+    chat_url: &'static str,
+    /// Whether to include `tools` in the request body. MLX's local
+    /// server doesn't honour them the same way; everyone else does.
+    /// Comes from `OpenAiConfig::include_tools` in the registry.
+    include_tools: bool,
+    /// Whether to set `stream_options.include_usage`. The hosted OpenAI
+    /// family honours it; local proxies may reject the field, so we
+    /// leave it off there. Comes from `OpenAiConfig::include_usage_in_stream`.
+    include_usage_in_stream: bool,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: Option<String>,
+    usage: AiUsage,
 }
 
 impl StreamingProvider for OpenAiAdapter {
     type ToolAccumulator = Vec<OpenAiToolAcc>;
 
     fn name(&self) -> &str {
-        &self.provider
+        self.provider
     }
 
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
-        let body = openai_chat_body(
+        let mut body = openai_chat_body(
             &self.model,
             self.messages.clone(),
             self.tools.clone(),
-            self.provider != "mlx",
+            self.include_tools,
         );
-        let mut req = client.post(provider_chat_url(&self.provider)?).json(&body);
+        if self.include_usage_in_stream {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+        let mut req = client.post(self.chat_url).json(&body);
         if let Some(key) = &self.key {
             req = req.bearer_auth(key);
         }
@@ -1535,6 +1491,20 @@ impl StreamingProvider for OpenAiAdapter {
                 .and_then(|v| v.as_str())
                 .unwrap_or("stream error");
             return Err(format!("{} error: {message}", self.provider));
+        }
+        // Usage arrives on the final chunk (or a trailing choices-less chunk
+        // when stream_options.include_usage is set). Parse it wherever it
+        // appears — OpenRouter and Mistral attach it without being asked.
+        if let Some(usage) = value.get("usage").filter(|u| u.is_object()) {
+            let count = |k: &str| usage.get(k).and_then(|v| v.as_u64());
+            if count("prompt_tokens").is_some() || count("completion_tokens").is_some() {
+                self.usage = AiUsage {
+                    prompt_tokens: count("prompt_tokens"),
+                    completion_tokens: count("completion_tokens"),
+                    eval_duration_ms: None,
+                    prompt_eval_duration_ms: None,
+                };
+            }
         }
         let Some(delta) = value
             .get("choices")
@@ -1577,6 +1547,7 @@ impl StreamingProvider for OpenAiAdapter {
     }
 
     fn finalize_response(
+        self,
         content: String,
         _thinking: String,
         tools: Self::ToolAccumulator,
@@ -1600,6 +1571,7 @@ impl StreamingProvider for OpenAiAdapter {
                 Some(thinking)
             },
             tool_calls,
+            usage: if self.usage.is_empty() { None } else { Some(self.usage) },
         }
     }
 }
@@ -1650,35 +1622,30 @@ fn split_thinking_tags(raw: &str) -> (String, String) {
 }
 
 async fn openai_compatible_chat(
-    provider: String,
+    provider: &'static str,
+    cfg: providers::OpenAiConfig,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let key = provider_key(&provider)?.ok_or_else(|| "Missing API key".to_string())?;
+    // Local OpenAI-wire providers (MLX, LM Studio) have no key;
+    // hosted ones (OpenAI / Mistral / xAI / OpenRouter) must have one.
+    let key = match provider_key(provider) {
+        Ok(Some(k)) => Some(k),
+        Ok(None) => None,
+        Err(e) => return Err(e),
+    };
     let adapter = OpenAiAdapter {
         provider,
+        chat_url: cfg.chat_url,
+        include_tools: cfg.include_tools,
+        include_usage_in_stream: cfg.include_usage_in_stream,
         model,
         messages,
         tools,
-        key: Some(key),
-    };
-    stream_provider(adapter, on_chunk).await
-}
-
-async fn mlx_chat(
-    model: String,
-    messages: Vec<serde_json::Value>,
-    tools: Option<Vec<serde_json::Value>>,
-    on_chunk: &Channel<StreamChunk>,
-) -> Result<AiChatResponse, String> {
-    let adapter = OpenAiAdapter {
-        provider: "mlx".to_string(),
-        model,
-        messages,
-        tools,
-        key: None,
+        key,
+        usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -1827,6 +1794,7 @@ struct AnthropicAdapter {
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: String,
+    usage: AiUsage,
 }
 
 impl StreamingProvider for AnthropicAdapter {
@@ -1879,6 +1847,20 @@ impl StreamingProvider for AnthropicAdapter {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return Ok(());
         };
+        // Token accounting: message_start carries usage.input_tokens, the
+        // closing message_delta carries cumulative usage.output_tokens.
+        if let Some(usage) = value
+            .get("message")
+            .and_then(|m| m.get("usage"))
+            .or_else(|| value.get("usage"))
+        {
+            if let Some(n) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+                self.usage.prompt_tokens = Some(n);
+            }
+            if let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                self.usage.completion_tokens = Some(n);
+            }
+        }
         match value
             .get("type")
             .and_then(|v| v.as_str())
@@ -1949,6 +1931,7 @@ impl StreamingProvider for AnthropicAdapter {
     }
 
     fn finalize_response(
+        self,
         content: String,
         _thinking: String,
         tools: Self::ToolAccumulator,
@@ -1970,6 +1953,7 @@ impl StreamingProvider for AnthropicAdapter {
             content,
             thinking: None,
             tool_calls,
+            usage: if self.usage.is_empty() { None } else { Some(self.usage) },
         }
     }
 }
@@ -1986,6 +1970,7 @@ async fn anthropic_chat(
         messages,
         tools,
         key,
+        usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -4563,6 +4548,7 @@ mod tests {
             model: "test".to_string(),
             messages: vec![],
             tools: None,
+            usage: AiUsage::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -4616,6 +4602,7 @@ mod tests {
             model: "test".to_string(),
             messages: vec![],
             tools: None,
+            usage: AiUsage::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -4642,11 +4629,15 @@ mod tests {
         Vec<StreamChunk>,
     ) {
         let mut adapter = OpenAiAdapter {
-            provider: "openai".to_string(),
+            provider: "openai",
+            chat_url: "https://api.openai.com/v1/chat/completions",
+            include_tools: true,
+            include_usage_in_stream: true,
             model: "gpt-4.1".to_string(),
             messages: vec![],
             tools: None,
             key: Some("sk-test".to_string()),
+            usage: AiUsage::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -4663,7 +4654,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let response = OpenAiAdapter::finalize_response(content, thinking, tools);
+        let response = adapter.finalize_response(content, thinking, tools);
         (
             response.content,
             response.thinking,
@@ -4812,11 +4803,15 @@ mod tests {
     #[test]
     fn openai_surfaces_mid_stream_error() {
         let mut adapter = OpenAiAdapter {
-            provider: "mistral".to_string(),
+            provider: "mistral",
+            chat_url: "https://api.mistral.ai/v1/chat/completions",
+            include_tools: true,
+            include_usage_in_stream: false,
             model: "mistral-large".to_string(),
             messages: vec![],
             tools: None,
             key: Some("k".to_string()),
+            usage: AiUsage::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -4841,6 +4836,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "sk-ant-test".to_string(),
+            usage: AiUsage::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -4857,7 +4853,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let response = AnthropicAdapter::finalize_response(content, thinking, tools);
+        let response = adapter.finalize_response(content, thinking, tools);
         (response.content, response.tool_calls, rec.record())
     }
 
@@ -4907,6 +4903,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
+            usage: AiUsage::default(),
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -4928,10 +4925,17 @@ mod tests {
     #[test]
     fn anthropic_finalize_skips_empty_tool_blocks() {
         // A text-only response must not surface a phantom tool call.
+        let adapter = AnthropicAdapter {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![],
+            tools: None,
+            key: "k".to_string(),
+            usage: AiUsage::default(),
+        };
         let content = String::new();
         let thinking = String::new();
         let tools: Vec<AnthropicToolAcc> = vec![AnthropicToolAcc::default()];
-        let response = AnthropicAdapter::finalize_response(content, thinking, tools);
+        let response = adapter.finalize_response(content, thinking, tools);
         assert!(response.tool_calls.is_empty());
     }
 }

@@ -86,6 +86,24 @@ function humanizeToolId(id: string): string {
 }
 
 const SKILLS_KEY = "klide-skills";
+// Which filesystem-loaded skills the user has explicitly turned on. Filesystem
+// skills are re-read from disk on every launch, so their enabled state can't
+// live in the skill objects themselves — it would be overwritten. We persist
+// just the set of enabled ids here and re-apply it in loadFilesystemSkills.
+const ENABLED_FS_KEY = "klide-enabled-fs-skills";
+
+function loadEnabledFsSkillIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(ENABLED_FS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr)
+      ? new Set(arr.filter((x): x is string => typeof x === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
 
 export function genSkillId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -140,6 +158,10 @@ export function loadSkills(): Skill[] {
 export function saveSkills(list: Skill[]): void {
   try {
     localStorage.setItem(SKILLS_KEY, JSON.stringify(list));
+    // Persist which filesystem skills are on, so the choice survives the
+    // disk re-read on next launch (see loadFilesystemSkills).
+    const enabledFs = list.filter((s) => s.fromFile && s.enabled).map((s) => s.id);
+    localStorage.setItem(ENABLED_FS_KEY, JSON.stringify(enabledFs));
   } catch {
     /* storage full or unavailable — skip */
   }
@@ -188,13 +210,19 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
   // ship rarely enumerates an allowlist.
   const available = await getAvailableTools();
   const allIds = available.map((t) => t.id);
+  // Default OFF. Every enabled skill's full instructions get folded into the
+  // system prompt of every turn, so auto-enabling ~40 global skills bloated
+  // the prompt to tens of thousands of tokens (and overflowed small local
+  // model context windows). The user opts skills in via the Skills modal;
+  // their choice is persisted in ENABLED_FS_KEY and re-applied here.
+  const enabledIds = loadEnabledFsSkillIds();
   return raw.map((s) => ({
     id: s.id,
     name: s.name,
     description: s.description,
     instructions: s.instructions,
     tools: allIds,
-    enabled: true,
+    enabled: enabledIds.has(s.id),
     fromFile: s.fromFile,
     group: s.group,
   }));

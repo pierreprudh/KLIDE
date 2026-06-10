@@ -57,6 +57,20 @@ export type ToolResult = {
   metadata?: Record<string, unknown>;
 };
 
+/** Real token accounting reported by the provider, carried on
+ *  `assistant_message` events. All fields optional — adapters fill what
+ *  their wire format exposes; the UI falls back to estimates when absent. */
+export type AgentUsage = {
+  promptTokens?: number;
+  completionTokens?: number;
+  /** Time spent generating the completion, ms (Ollama eval_duration).
+   *  The live panel uses this to compute an honest tok/s instead of
+   *  wall-clock decode. */
+  evalDurationMs?: number;
+  /** Time spent processing the prompt, ms (Ollama prompt_eval_duration). */
+  promptEvalDurationMs?: number;
+};
+
 export type PermissionOption = {
   id: string;
   label: string;
@@ -152,6 +166,8 @@ export type AgentEvent =
       runId: string;
       messageId: string;
       content: AgentContentBlock[];
+      /** Real provider-reported token accounting for this turn. */
+      usage?: AgentUsage;
       ts: number;
     }
   | {
@@ -219,6 +235,9 @@ export type CheckpointEntry = {
 };
 
 export type StartAgentRunInput = {
+  /** Client-supplied run id. The AI panel passes its conversation id so the
+   *  on-disk transcript shares the convo id and Mission Control can dedupe. */
+  runId?: string;
   workspaceRoot: string | null;
   mode: AgentMode;
   provider: ProviderId;

@@ -10,6 +10,7 @@ import type {
 } from "./types";
 
 type StartRunRequest = {
+  runId?: string;
   workspaceRoot: string | null;
   mode: AgentMode;
   provider: ProviderId;
@@ -50,6 +51,7 @@ export async function startAgentRun(
   // progress streams through the channel until run_result / run_error.
   const response = await invoke<StartRunResponse>("agent_start_run", {
     request: {
+      runId: input.runId,
       workspaceRoot: input.workspaceRoot,
       mode: input.mode,
       provider: input.provider,

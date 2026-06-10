@@ -22,6 +22,10 @@ export type Msg =
       thinking?: string;
       delegateConsole?: boolean;
       delegateProvider?: string;
+      /** Quiet per-message footer: duration, tokens, time to first token,
+       *  and decode speed. `exact` is true when token/speed numbers come
+       *  from the provider's own usage block rather than a length estimate. */
+      meta?: { ms?: number; tokens?: number; ttftMs?: number; tps?: number; exact?: boolean };
     }
   | { role: "system"; content: string }
   | { role: "tool"; content: string; toolName: string; toolCallId?: string; tool_call_id?: string };

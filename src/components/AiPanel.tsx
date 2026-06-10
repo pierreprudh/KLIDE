@@ -19,7 +19,6 @@ import { startAgentRun, stopAgentRun, resolveDiff } from "../agent/client";
 import { TodoStrip } from "./TodoStrip";
 import {
   DEFAULT_MODELS,
-  MLX_MODEL_PRESETS,
   MODE_OPTIONS,
   PROVIDER_GROUPS,
   isDelegateProvider,
@@ -39,6 +38,7 @@ import { ProviderLogo, AssistantPlaceholderLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { renderMessageBody } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
+import { ModelPicker } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { summarizeAndHandoff, detectAndGenerateSkill } from "./ai/summarize";
 import {
@@ -144,25 +144,6 @@ function storedModelForProvider(id: ProviderId): string {
   return stored || DEFAULT_MODELS[id];
 }
 
-function modelOptionsFor(provider: ProviderId, model: string, availableModels: string[]): string[] {
-  const options = [...availableModels];
-  if (model && !options.includes(model)) options.unshift(model);
-  if (provider === "mlx") {
-    for (const preset of MLX_MODEL_PRESETS) {
-      if (!options.includes(preset)) options.push(preset);
-    }
-  }
-  return options;
-}
-
-function modelLabel(name: string): string {
-  // The selector is narrow and we want the user to recognise the model at
-  // a glance. Strip noisy repo prefixes that Hugging Face / Ollama-style
-  // tags both use. Value stays the same; only the display is shortened.
-  const slash = name.indexOf("/");
-  return slash >= 0 ? name.slice(slash + 1) : name;
-}
-
 export function AiPanel({
   workspaceRoot,
   onFileWritten,
@@ -194,10 +175,15 @@ export function AiPanel({
   onSkillGenerated,
 }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
   void activity;
+  // Declared near the top because the publish effect below (which keeps
+  // Mission Control's "running" / "waiting" row alive) closes over it.
+  // Was further down; the view-switch bug surfaced when we replaced a
+  // random UUID with this stable id and TypeScript started complaining.
+  const [currentId, setCurrentId] = useState<string>(() => panelId ?? genId());
+  const [input, setInput] = useState("");
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
@@ -205,24 +191,30 @@ export function AiPanel({
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
 
-  const convoIdRef = useRef<string | null>(null);
   const lastPublishRef = useRef({ count: -1, streaming: false });
   useEffect(() => {
     if (msgs.length === 0) {
-      if (convoIdRef.current) settleKlideConvo(convoIdRef.current);
-      convoIdRef.current = null;
+      // Active chat is empty — explicitly settle the MC row for this
+      // panel so a user-initiated "new chat" doesn't leave a stale
+      // "running" entry behind. View switches don't hit this branch
+      // (msgs stays non-empty in the persisted store), so they no
+      // longer kill the live row.
+      settleKlideConvo(currentId);
       lastPublishRef.current = { count: -1, streaming: false };
       return;
     }
     const last = lastPublishRef.current;
     if (streaming && last.streaming && last.count === msgs.length) return;
     lastPublishRef.current = { count: msgs.length, streaming };
-    if (!convoIdRef.current) convoIdRef.current = crypto.randomUUID();
     const firstUser = msgs.find((m) => m.role === "user");
     publishKlideConvo({
-      id: convoIdRef.current,
+      id: currentId,
+      // An idle convo that finished its turn is "done", not "waiting" — a
+      // genuine pause (diff approval) keeps `streaming` true, so non-streaming
+      // always means the turn completed. Marking it "waiting" wrongly filed
+      // every answered chat under Mission Control's "Blocked / Needs you".
       title: (firstUser?.content.trim() || "Untitled chat").slice(0, 120),
-      status: streaming ? "running" : "waiting",
+      status: streaming ? "running" : "done",
       model: model ?? null,
       cwd: workspaceRoot,
       messages: msgs.flatMap((m) =>
@@ -232,8 +224,7 @@ export function AiPanel({
       ),
       updatedMs: Date.now(),
     });
-  }, [msgs, streaming, model, workspaceRoot]);
-  useEffect(() => () => { if (convoIdRef.current) settleKlideConvo(convoIdRef.current); }, []);
+  }, [msgs, streaming, model, workspaceRoot, currentId]);
 
   const [contextLimit, setContextLimit] = useState(128_000);
   const [contextMode] = useState<ProjectContextMode>(
@@ -425,7 +416,6 @@ export function AiPanel({
   const contextTone = contextRatio > 0.85 ? "var(--danger, #B42318)" : contextRatio > 0.65 ? "#A15C00" : "var(--accent)";
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
-  const [currentId, setCurrentId] = useState<string>(() => panelId ?? genId());
   const [historyOpen, setHistoryOpen] = useState(false);
   const msgsRef = useRef<Msg[]>([]);
   const queueRef = useRef<QueuedTurn[]>([]);
@@ -458,6 +448,25 @@ export function AiPanel({
 
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
+  // Restore the persisted conversation for `currentId` on first mount so a
+  // view switch back from Mission Control / Settings / Git Review re-opens
+  // the same chat, not an empty panel. The persist effect below keeps this
+  // fresh during streaming too. Ref-guarded so loading a different chat
+  // from history (which mutates currentId) is not undone on remount.
+  const initialRestoreRef = useRef(false);
+  useEffect(() => {
+    if (initialRestoreRef.current) return;
+    initialRestoreRef.current = true;
+    const saved = loadConversations<Conversation>().find((c) => c.id === currentId);
+    if (saved && saved.msgs.length > 0) {
+      setMsgs(saved.msgs);
+      msgsRef.current = saved.msgs;
+    }
+    // Intentionally only the *initial* currentId matters — subsequent
+    // edits (loadConversation, newConversation) own the active id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!actionsOpen) return;
     function onDown(e: MouseEvent) {
@@ -471,6 +480,10 @@ export function AiPanel({
 
   function newConversation() {
     if (providerDelegatesWork) { void invoke("delegate_pty_stop", { sessionId: `${currentId}:${provider}` }); }
+    // Mark the previous chat as done on Mission Control so a "new chat"
+    // doesn't leave a stale "running" row. View switches no longer hit
+    // this path (the panel just unmounts/remounts).
+    settleKlideConvo(currentId);
     setHistoryOpen(false);
     abortActiveHarnessRun();
     setMsgs([]);
@@ -482,7 +495,14 @@ export function AiPanel({
     setStreaming(false);
     setActivity(null);
     setInput("");
-    setCurrentId(panelId ?? genId());
+    // Fresh id per chat — the prior "reset to panelId" pattern was
+    // re-threading the previous transcript into the new run via the
+    // agent harness's replay path, so "new conversation" silently
+    // inherited the old one's memory. The first conversation in a
+    // panel still uses `panelId` (see the `useState` initialiser
+    // above) so the panel's persistent identity survives reloads;
+    // every subsequent chat gets its own transcript.
+    setCurrentId(genId());
   }
 
   // Write a structured memory note to .klide/memory/. Delegates to
@@ -595,7 +615,7 @@ export function AiPanel({
   }, [input]);
 
   useEffect(() => {
-    if (streaming || msgs.length === 0) return;
+    if (msgs.length === 0) return;
     const lastMsg = msgs[msgs.length - 1];
     if (lastMsg.role === "assistant" && lastMsg.content === "" && !lastMsg.thinking && !lastMsg.toolCalls) return;
     setConversations((prev) => {
@@ -604,7 +624,34 @@ export function AiPanel({
       saveConversations(next);
       return next;
     });
-  }, [msgs, streaming, currentId]);
+  }, [msgs, currentId]);
+
+  // Flush whatever the latest commit was on unmount so a view switch
+  // mid-stream doesn't drop the in-flight conversation. `msgsRef` is
+  // already kept in sync above, and the persist effect above will
+  // have run for the most recent state when React re-rendered.
+  useEffect(() => () => {
+    const snapshot = msgsRef.current;
+    if (snapshot.length === 0) return;
+    const lastMsg = snapshot[snapshot.length - 1];
+    if (lastMsg.role === "assistant" && lastMsg.content === "" && !lastMsg.thinking && !lastMsg.toolCalls) return;
+    const raw = (() => {
+      try { return localStorage.getItem("klide.conversations"); } catch { return null; }
+    })();
+    let list: Conversation[] = [];
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) list = parsed as Conversation[];
+      } catch { /* corrupt store — overwrite below */ }
+    }
+    const conv: Conversation = { id: currentId, title: deriveTitle(snapshot), msgs: snapshot, updatedAt: Date.now() };
+    const next = [conv, ...list.filter((c) => c.id !== currentId)];
+    saveConversations(next);
+    // Intentionally only currentId at unmount matters; msgsRef is the
+    // fresh source of truth for the snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -705,12 +752,59 @@ export function AiPanel({
 
     let harnessError: Error | null = null;
     let nextAssistantIdx = assistantIndex;
+    // Wall-clock start of the current turn, for the per-message meta footer.
+    // Reset after each assistant_message so multi-turn runs time each turn.
+    let turnStartedAt = Date.now();
+    // First streamed token of the current turn → TTFT. Null until the first
+    // assistant_delta of the turn arrives.
+    let firstTokenAt: number | null = null;
 
     // Throttle assistant_delta state updates to ~20 fps — avoids flooding
     // React with one setState per token (60+/s), which clones the whole msgs
     // array and re-renders the entire message list on every chunk.
     let pendingDelta = { content: "", thinking: "" };
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // All event handling transforms msgsRef.current (the single source of
+    // truth, kept in sync by enqueueTurn too) and pushes plain values via
+    // commit(). Never use functional setMsgs updaters with side effects
+    // here: StrictMode double-invokes updaters, which double-incremented
+    // nextAssistantIdx and left tool rows stuck on "Running…" forever.
+    const commit = (next: Msg[]) => {
+      msgsRef.current = next;
+      setMsgs(next);
+    };
+
+    // Locate the assistant bubble for the current turn inside `next`,
+    // creating one when the previous turn ended in tool calls. After a
+    // tool_call_started splice, nextAssistantIdx points at a tool card —
+    // the old guard (`role !== "assistant" → drop`) silently discarded
+    // every assistant update from that point on, so multi-turn tool runs
+    // never showed their final answer (the transcript had it; the live
+    // view threw it away). Walk past tool cards and insert a fresh bubble
+    // for the new turn instead.
+    const locateAssistant = (next: Msg[]): number => {
+      let i = nextAssistantIdx;
+      while (next[i]?.role === "tool") i += 1;
+      if (next[i]?.role === "assistant") {
+        nextAssistantIdx = i;
+        return i;
+      }
+      next.splice(i, 0, { role: "assistant", content: "", delegateConsole, delegateProvider });
+      nextAssistantIdx = i;
+      return i;
+    };
+
+    const appendPendingDelta = (c: string, t: string) => {
+      const next = [...msgsRef.current];
+      const i = locateAssistant(next);
+      const existing = next[i] as Msg & { role: "assistant" };
+      const newContent = (existing.content || "") + c;
+      const newThinking = [existing.thinking, t].filter(Boolean).join("") || undefined;
+      next[i] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
+      commit(next);
+    };
+
     const flushDelta = () => {
       if (flushTimer) return;
       flushTimer = setTimeout(() => {
@@ -718,26 +812,16 @@ export function AiPanel({
         const c = pendingDelta.content;
         const t = pendingDelta.thinking;
         pendingDelta = { content: "", thinking: "" };
-        if (c || t) {
-          setMsgs((prev) => {
-            const next = [...prev];
-            if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
-            const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
-            const newContent = (existing.content || "") + c;
-            const newThinking = [existing.thinking, t].filter(Boolean).join("") || undefined;
-            next[nextAssistantIdx] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
-            return next;
-          });
-        }
+        if (c || t) appendPendingDelta(c, t);
       }, 50);
     };
 
     const handleEvent = (event: AgentEvent) => {
       if (queueGenerationRef.current !== generation) return;
-      const cur = msgsRef.current;
 
       switch (event.type) {
         case "assistant_delta": {
+          if (firstTokenAt === null) firstTokenAt = Date.now();
           pendingDelta.content += event.text;
           pendingDelta.thinking += event.thinking ?? "";
           flushDelta();
@@ -747,51 +831,73 @@ export function AiPanel({
           if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
           // Flush any pending delta before finalising
           if (pendingDelta.content || pendingDelta.thinking) {
-            setMsgs((prev) => {
-              const next = [...prev];
-              if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
-              const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
-              const newContent = (existing.content || "") + pendingDelta.content;
-              const newThinking = [existing.thinking, pendingDelta.thinking].filter(Boolean).join("") || undefined;
-              next[nextAssistantIdx] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
-              return next;
-            });
+            appendPendingDelta(pendingDelta.content, pendingDelta.thinking);
           }
           pendingDelta = { content: "", thinking: "" };
           const text = event.content.filter((b) => b.type === "text").map((b) => b.text).join("");
           const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("").trim();
           const tcBlocks = event.content.filter((b) => b.type === "tool_call");
           const tcCalls = tcBlocks.map((b) => ({ id: ("toolCallId" in b ? b.toolCallId : "") as string, name: "name" in b ? b.name as string : "", args: "input" in b ? b.input : {} }));
-          const msgContent = text || (cur[nextAssistantIdx] as Msg & { role: "assistant" })?.content || "";
-          setMsgs((prev) => {
-            const next = [...prev];
-            if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
-            next[nextAssistantIdx] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider };
-            return next;
-          });
+          const now = Date.now();
+          const turnMs = now - turnStartedAt;
+          const ttftMs = firstTokenAt !== null ? firstTokenAt - turnStartedAt : undefined;
+          turnStartedAt = now;
+          firstTokenAt = null;
+          const next = [...msgsRef.current];
+          const i = locateAssistant(next);
+          const existing = next[i] as Msg & { role: "assistant" };
+          // Empty text with streamed deltas → keep the streamed content.
+          const msgContent = text || existing.content || "";
+          const estimatedTokens = estimateTokens(msgContent) + estimateTokens(thinking);
+          // Prefer the provider's real counts when present — Ollama reports
+          // eval_count + eval_duration on the final frame, OpenAI/Anthropic
+          // send a usage block. The estimate stays as a fallback for
+          // providers that don't (e.g. subscription CLIs).
+          const usage = event.usage;
+          const tokens =
+            usage?.completionTokens !== undefined ? usage.completionTokens : estimatedTokens;
+          // tok/s over decode time (turn minus TTFT) — the rate users feel.
+          // Prefer the provider's own eval_duration when available: it's
+          // pure decode time, wall-clock can be dragged out by tool calls
+          // and rendering, which makes local models look slower than they
+          // are. Anthropic and OpenAI don't send a duration, so we fall
+          // back to the wall-clock decode window.
+          const decodeMs = ttftMs !== undefined ? turnMs - ttftMs : turnMs;
+          let tps: number | undefined;
+          if (
+            usage?.completionTokens !== undefined &&
+            usage?.evalDurationMs !== undefined &&
+            usage.evalDurationMs > 0
+          ) {
+            tps = Math.round(usage.completionTokens / (usage.evalDurationMs / 1000));
+          } else if (tokens > 0 && decodeMs > 100) {
+            tps = Math.round(tokens / (decodeMs / 1000));
+          }
+          const exact = usage?.completionTokens !== undefined;
+          next[i] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider, meta: { ms: turnMs, tokens, ttftMs, tps, exact } };
+          commit(next);
           break;
         }
         case "tool_call_started": {
-          setMsgs((prev) => {
-            const next = [...prev];
-            next.splice(nextAssistantIdx + 1, 0, { role: "tool", content: `Running ${event.name}...`, toolName: event.name, toolCallId: event.toolCallId, tool_call_id: event.toolCallId });
-            nextAssistantIdx += 1;
-            return next;
-          });
+          const next = [...msgsRef.current];
+          next.splice(nextAssistantIdx + 1, 0, { role: "tool", content: `Running ${event.name}...`, toolName: event.name, toolCallId: event.toolCallId, tool_call_id: event.toolCallId });
+          nextAssistantIdx += 1;
+          commit(next);
           break;
         }
         case "tool_call_finished": {
-          setMsgs((prev) => {
-            const next = [...prev];
-            for (let i = nextAssistantIdx + 1; i < next.length; i++) {
-              const msg = next[i];
-              if (msg.role === "tool" && (msg.toolCallId === event.toolCallId || msg.tool_call_id === event.toolCallId)) {
-                next[i] = { role: "tool" as const, content: event.result.content, toolName: msg.toolName, toolCallId: event.toolCallId, tool_call_id: event.toolCallId };
-                break;
-              }
+          // Match by id over the whole list — ids are unique per run, and
+          // searching from nextAssistantIdx+1 used to skip the very row the
+          // result belongs to.
+          const next = [...msgsRef.current];
+          for (let i = 0; i < next.length; i++) {
+            const msg = next[i];
+            if (msg.role === "tool" && (msg.toolCallId === event.toolCallId || msg.tool_call_id === event.toolCallId)) {
+              next[i] = { role: "tool" as const, content: event.result.content, toolName: msg.toolName, toolCallId: event.toolCallId, tool_call_id: event.toolCallId };
+              break;
             }
-            return next;
-          });
+          }
+          commit(next);
           break;
         }
         case "diff_proposed": {
@@ -819,13 +925,11 @@ export function AiPanel({
           break;
         }
         case "run_result": {
-          const existingUser = cur[userIndex];
+          const next = [...msgsRef.current];
+          const existingUser = next[userIndex];
           if (existingUser?.role === "user") {
-            setMsgs((prev) => {
-              const next = [...prev];
-              next[userIndex] = { ...existingUser, queueState: undefined, queueId: undefined };
-              return next;
-            });
+            next[userIndex] = { ...existingUser, queueState: undefined, queueId: undefined };
+            commit(next);
           }
           break;
         }
@@ -840,8 +944,6 @@ export function AiPanel({
           break;
         }
       }
-      // Keep msgsRef in sync with latest msgs
-      msgsRef.current = cur;
     };
 
     try {
@@ -849,9 +951,12 @@ export function AiPanel({
       const overrides = harnessSettings?.toolOverrides;
       const disabledTools = overrides ? Object.keys(overrides).filter((k) => overrides[k] === false) : undefined;
       const systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
-        ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.`
+        ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
+
+Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
         : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings);
       const session = await startAgentRun({
+        runId: currentId,
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
         text: turn.text, attachments: turn.attachments,
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
@@ -863,25 +968,17 @@ export function AiPanel({
       if (harnessError) throw harnessError;
     } catch (e) {
       if (queueGenerationRef.current !== generation) return;
-      setMsgs((prev) => {
-        const next = [...prev];
-        if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
-        const failedUser = next[userIndex];
-        if (failedUser?.role === "user") next[userIndex] = { ...failedUser, queueState: undefined, queueId: undefined };
-        next[nextAssistantIdx] = { role: "assistant", content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.` };
-        return next;
-      });
+      const next = [...msgsRef.current];
+      const i = locateAssistant(next);
+      const failedUser = next[userIndex];
+      if (failedUser?.role === "user") next[userIndex] = { ...failedUser, queueState: undefined, queueId: undefined };
+      next[i] = { role: "assistant", content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.` };
+      commit(next);
     }
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     // Flush any pending delta that hasn't been rendered yet
     if (pendingDelta.content || pendingDelta.thinking) {
-      setMsgs((prev) => {
-        const next = [...prev];
-        if (!next[nextAssistantIdx] || next[nextAssistantIdx].role !== "assistant") return prev;
-        const existing = next[nextAssistantIdx] as Msg & { role: "assistant" };
-        next[nextAssistantIdx] = { ...existing, content: (existing.content || "") + pendingDelta.content, thinking: existing.thinking ? existing.thinking + (pendingDelta.thinking ?? "") : pendingDelta.thinking || undefined, delegateConsole, delegateProvider };
-        return next;
-      });
+      appendPendingDelta(pendingDelta.content, pendingDelta.thinking);
     }
     setStreaming(false);
     setActivity(null);
@@ -1191,14 +1288,24 @@ export function AiPanel({
           }
 
           if (m.role === "tool") {
-            return <div key={i} className="ai-msg-in" style={{ margin: "8px 0 8px 32px" }}>{renderMessageBody(m)}</div>;
+            return <div key={i} className="ai-msg-in" style={{ margin: "0 0 2px 32px" }}>{renderMessageBody(m, streaming)}</div>;
           }
 
+          // One avatar per response: multi-turn tool runs produce several
+          // consecutive assistant/tool messages — only the first assistant
+          // bubble after a user message carries the K mark, the rest get a
+          // spacer so bodies stay column-aligned.
+          const prevMsg = msgs[i - 1];
+          const showAvatar = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: "16px 0" }}>
-              <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
-                <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
-              </div>
+            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "16px 0" : "4px 0" }}>
+              {showAvatar ? (
+                <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
+                  <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
+                </div>
+              ) : (
+                <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
+              )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {isAssistantPlaceholder ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
               </div>
@@ -1218,7 +1325,7 @@ export function AiPanel({
             </span>
           </div>
         )}
-        <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-md)", background: "var(--bg)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 1px 2px rgba(38, 38, 32, 0.05)" : "0 1px 2px rgba(38, 38, 32, 0.04)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
+        <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)", overflow: "hidden" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
               {slashMatches.map((cmd, idx) => (
@@ -1273,9 +1380,9 @@ export function AiPanel({
             onBlur={() => { setComposerFocused(false); setMention(null); setSlash(null); }}
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : "Ask anything, @ to attach a file…"}
             rows={1}
-            style={{ width: "100%", minHeight: 38, maxHeight: 160, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13, lineHeight: 1.5, padding: "10px 10px 2px", outline: "none", display: "block" }}
+            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block" }}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "2px 6px 6px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
               {providerDelegatesWork ? (
                 <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "color-mix(in srgb, var(--panel) 88%, transparent)", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 560, flexShrink: 0 }}>
@@ -1312,16 +1419,15 @@ export function AiPanel({
                   )}
                 </div>
               )}
-              <div style={{ position: "relative", display: "flex", alignItems: "center", width: 118, flex: "0 1 118px", minWidth: 72 }}>
-                <select value={model} onChange={(e) => onModelChange(e.target.value)} disabled={streaming}
-                  title={model}
-                  style={{ appearance: "none", WebkitAppearance: "none", MozAppearance: "none", width: "100%", height: 24, color: "var(--fg-subtle)", background: "transparent", border: "none", borderRadius: "var(--radius-xs)", font: "inherit", fontSize: 11, outline: "none", padding: "0 18px 0 6px", cursor: streaming ? "default" : "pointer", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", transition: "color var(--motion-fast) var(--ease-out)" }}
-                  onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-subtle)")}>
-                  {modelOptionsFor(provider, model, availableModels).map((name) => <option key={name} value={name}>{modelLabel(name)}</option>)}
-                </select>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", right: 4, pointerEvents: "none", color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
-              </div>
+              <ModelPicker
+                provider={provider}
+                model={model}
+                availableModels={availableModels}
+                disabled={streaming}
+                onChange={onModelChange}
+              />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
               <button type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { setContextHover(true); e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -1338,22 +1444,22 @@ export function AiPanel({
                   </div>
                 )}
               </button>
+              {streaming ? (
+                <button onClick={stopCurrentStream} aria-label="Stop generation" title="Stop (Esc)"
+                  style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+                </button>
+              ) : (
+                <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
+                  style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "#fff" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
+                  onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
+                  onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
+                </button>
+              )}
             </div>
-            {streaming ? (
-              <button onClick={stopCurrentStream} aria-label="Stop generation" title="Stop (Esc)"
-                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
-              </button>
-            ) : (
-              <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
-                style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "#fff" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
-                onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
-                onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
-              </button>
-            )}
           </div>
         </div>
       </div>
