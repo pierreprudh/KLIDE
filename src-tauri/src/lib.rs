@@ -1173,8 +1173,7 @@ async fn run_cli_with_stdin(
         ))
     })
     .await
-    .map_err(|_| format!("{label} timed out after 180 seconds"))?
-    .map_err(|e| e)?;
+    .map_err(|_| format!("{label} timed out after 180 seconds"))??;
 
     if status.success() {
         Ok(if stdout.is_empty() { stderr } else { stdout })
@@ -3412,8 +3411,8 @@ fn parse_codex_run(
                     }
                 }
             }
-            Some("turn_context") => {
-                if model.is_none() {
+            Some("turn_context")
+                if model.is_none() => {
                     if let Some(m) = payload
                         .and_then(|p| p.get("model"))
                         .and_then(|m| m.as_str())
@@ -3423,7 +3422,6 @@ fn parse_codex_run(
                         }
                     }
                 }
-            }
             Some("response_item") => count += 1,
             Some("event_msg") => {
                 // `token_count` events carry a *cumulative* total for the

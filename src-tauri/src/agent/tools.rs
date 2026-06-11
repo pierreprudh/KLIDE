@@ -87,7 +87,7 @@ fn registry() -> Vec<ToolEntry> {
                     "path": { "type": "string", "description": "Optional workspace-relative directory to search from." }
                 }),
                 &["pattern"]),
-            run_read: Some(|ws, input| glob(ws, input)),
+            run_read: Some(glob),
             run_write_preview: None,
         },
         ToolEntry {
@@ -99,7 +99,7 @@ fn registry() -> Vec<ToolEntry> {
                     "maxResults": { "type": "number", "description": "Optional cap on returned matches." }
                 }),
                 &["pattern"]),
-            run_read: Some(|ws, input| grep(ws, input)),
+            run_read: Some(grep),
             run_write_preview: None,
         },
         ToolEntry {
@@ -248,7 +248,7 @@ fn registry() -> Vec<ToolEntry> {
                 }),
                 &["path", "old_str", "new_str"]),
             run_read: None,
-            run_write_preview: Some(|ws, input, run_id| preview_write_file(ws, input, run_id)),
+            run_write_preview: Some(preview_write_file),
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -259,7 +259,7 @@ fn registry() -> Vec<ToolEntry> {
                 }),
                 &["path", "contents"]),
             run_read: None,
-            run_write_preview: Some(|ws, input, run_id| preview_create_file(ws, input, run_id)),
+            run_write_preview: Some(preview_create_file),
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -272,7 +272,7 @@ fn registry() -> Vec<ToolEntry> {
                 }),
                 &["name", "title", "instructions"]),
             run_read: None,
-            run_write_preview: Some(|ws, input, run_id| preview_create_skill(ws, input, run_id)),
+            run_write_preview: Some(preview_create_skill),
         },
     ]
 }
@@ -287,7 +287,7 @@ pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Valu
     let mut tools: Vec<serde_json::Value> = reg
         .iter()
         .filter(|e| {
-            let kind_ok = kind_filter.map_or(true, |k| e.kind == k);
+            let kind_ok = kind_filter.is_none_or(|k| e.kind == k);
             if !kind_ok {
                 return false;
             }
@@ -350,7 +350,7 @@ pub fn execute_write_tool_preview(
     call: &NormalizedToolCall,
     run_id: &str,
 ) -> Result<DiffProposal, ToolResult> {
-    let ws = Workspace::new(root).map_err(|e| err(e))?;
+    let ws = Workspace::new(root).map_err(err)?;
     let entry = registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));
@@ -1423,7 +1423,7 @@ fn preview_write_file(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err("write_file requires old_str".to_string()))?;
     let new_str = string_arg(input, "new_str").unwrap_or_default();
-    let full = ws.resolve_existing(&path).map_err(|e| err(e))?;
+    let full = ws.resolve_existing(&path).map_err(err)?;
     let rel = ws.display(&full);
     let current =
         std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
@@ -1440,7 +1440,7 @@ fn preview_write_file(
     }
     let new_content = current.replacen(&old_str, &new_str, 1);
     if new_content.len() as u64 > MAX_WRITE_BYTES {
-        return Err(err(format!("Resulting file would be too large")));
+        return Err(err("Resulting file would be too large".to_string()));
     }
     Ok(DiffProposal {
         id: format!(
@@ -1479,7 +1479,7 @@ fn preview_create_file(
         )));
     }
     if contents.len() as u64 > MAX_WRITE_BYTES {
-        return Err(err(format!("Contents too large")));
+        return Err(err("Contents too large".to_string()));
     }
     Ok(DiffProposal {
         id: format!(

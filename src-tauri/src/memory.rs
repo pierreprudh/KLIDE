@@ -343,8 +343,8 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64;
     let doy =
-        ((153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day as i64 - 1) as u64;
-    let doe = yoe as u64 * 365 + yoe / 4 - yoe / 100 + doy;
+        ((153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1) as u64;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe as i64 - 719_468;
     Some((days * 86_400 + hour * 3600 + min * 60 + sec) * 1000)
 }
