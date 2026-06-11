@@ -55,7 +55,7 @@ A queued todo on Mission Control. Starts as a plain item; "send an agent" dispat
 _Avoid_: ticket, issue, todo
 
 **Delegate**:
-An external CLI agent (Claude Code, Codex) dispatched into the workspace through a PTY session. Klide observes its output; it does not drive its loop.
+An external CLI agent (Claude Code, Codex, OpenCode) dispatched into the workspace through a PTY session. Klide observes its output; it does not drive its loop. All per-CLI knowledge — spawn syntax, resume flags, session-id detection, transcript parsing — lives in the Delegate module (`src-tauri/src/delegate/`), one adapter per CLI; pty.rs and Mission Control consume the interface and know nothing CLI-specific.
 _Avoid_: external agent, subprocess, CLI tool
 
 **Klide convo**:

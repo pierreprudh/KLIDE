@@ -91,9 +91,10 @@ pub enum ModelsHandler {
     Subscription,
 }
 
-/// Per-subscription-CLI spec. Two of the fields are fn pointers because
-/// each CLI has its own argument shape and its own model cache file —
-/// the parts that can't be expressed declaratively.
+/// Per-subscription-CLI spec: the models concern only (cache + fallback +
+/// label). How the CLI is *invoked* — one-shot chat, PTY dispatch, resume —
+/// is Delegate knowledge and lives behind the Delegate seam
+/// (`src/delegate/`), one adapter per CLI.
 #[derive(Clone, Copy)]
 pub struct SubscriptionSpec {
     /// Binary name as resolved by `resolve_command` (PATH + common
@@ -106,10 +107,6 @@ pub struct SubscriptionSpec {
     /// Read the CLI's on-disk model cache. Returns None if the file
     /// isn't there yet.
     pub cached_models: fn() -> Option<Vec<String>>,
-    /// Build the one-shot `TokioCommand` for `run_cli_with_stdin`.
-    /// Returns Err for PTY-delegate CLIs (OpenCode today) — the error
-    /// string is surfaced to the caller verbatim.
-    pub build_invocation: fn(cwd: &str, model: &str) -> Result<tokio::process::Command, String>,
 }
 
 /// One row of the registry. The whole provider lives here.
@@ -264,26 +261,8 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: Some(SubscriptionSpec {
             cmd: "claude",
             label: "Claude Code",
-            default_models: &[
-                "claude-sonnet-4-6",
-                "claude-opus-4-6",
-                "claude-haiku-4-5",
-            ],
-            cached_models: crate::claude_cached_models,
-            build_invocation: |cwd, model| {
-                let cli = crate::resolve_command("claude")?;
-                let mut command = tokio::process::Command::new(cli);
-                command
-                    .current_dir(cwd)
-                    .arg("-p")
-                    .arg("--model")
-                    .arg(model)
-                    .arg("--permission-mode")
-                    .arg("acceptEdits")
-                    .arg("--output-format")
-                    .arg("text");
-                Ok(command)
-            },
+            default_models: &["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
+            cached_models: crate::models::claude_cached_models,
         }),
     },
     ProviderEntry {
@@ -295,24 +274,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             cmd: "codex",
             label: "Codex",
             default_models: &["gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini"],
-            cached_models: crate::codex_cached_models,
-            build_invocation: |cwd, model| {
-                let cli = crate::resolve_command("codex")?;
-                let mut command = tokio::process::Command::new(cli);
-                command
-                    .arg("exec")
-                    .arg("-m")
-                    .arg(model)
-                    .arg("-s")
-                    .arg("workspace-write")
-                    .arg("-C")
-                    .arg(cwd)
-                    .arg("--skip-git-repo-check")
-                    .arg("--color")
-                    .arg("never")
-                    .arg("-");
-                Ok(command)
-            },
+            cached_models: crate::models::codex_cached_models,
         }),
     },
     ProviderEntry {
@@ -324,17 +286,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             cmd: "opencode",
             label: "OpenCode",
             default_models: &["opencode"],
-            cached_models: crate::opencode_cached_models,
-            // OpenCode runs as an interactive PTY delegate, not a
-            // one-shot stdin invocation. The build_invocation returns
-            // an error to surface that fact to the caller.
-            build_invocation: |_cwd, _model| {
-                crate::ensure_command_available("opencode")?;
-                Err(
-                    "OpenCode is available as an interactive PTY delegate."
-                        .to_string(),
-                )
-            },
+            cached_models: crate::models::opencode_cached_models,
         }),
     },
 ];
@@ -388,7 +340,9 @@ pub fn provider_key(id: &str) -> Result<Option<String>, String> {
         KeySource::Hosted { .. } => {
             let keychain = keyring_lookup(id);
             let (env, env_legacy) = env_fallback_names(entry);
-            let from_env = env.and_then(env_var).or_else(|| env_legacy.and_then(env_var));
+            let from_env = env
+                .and_then(env_var)
+                .or_else(|| env_legacy.and_then(env_var));
             match keychain.or(from_env) {
                 Some(key) => Ok(Some(key)),
                 None => Err(format!("No API key saved for {id}")),
@@ -507,11 +461,7 @@ mod tests {
     fn registry_ids_are_unique() {
         let mut seen = std::collections::HashSet::new();
         for entry in PROVIDERS {
-            assert!(
-                seen.insert(entry.id),
-                "duplicate registry id: {}",
-                entry.id
-            );
+            assert!(seen.insert(entry.id), "duplicate registry id: {}", entry.id);
         }
     }
 
@@ -548,7 +498,14 @@ mod tests {
         // ollama, mlx, lmstudio, and the subscription CLIs never
         // ask for a key — the old `provider_key` special-cased this
         // via a 2-arm match; the registry makes it a property.
-        for id in ["ollama", "mlx", "lmstudio", "claude-code", "codex", "opencode"] {
+        for id in [
+            "ollama",
+            "mlx",
+            "lmstudio",
+            "claude-code",
+            "codex",
+            "opencode",
+        ] {
             let entry = lookup(id).expect(id);
             assert!(
                 matches!(entry.key, KeySource::Local),
@@ -592,7 +549,16 @@ mod tests {
                 "{id} missing subscription spec"
             );
         }
-        for id in ["ollama", "mlx", "anthropic", "openai", "mistral", "xai", "openrouter", "lmstudio"] {
+        for id in [
+            "ollama",
+            "mlx",
+            "anthropic",
+            "openai",
+            "mistral",
+            "xai",
+            "openrouter",
+            "lmstudio",
+        ] {
             assert!(!is_subscription(id), "{id} must not be subscription");
         }
     }
@@ -633,8 +599,14 @@ mod tests {
         let entry = lookup("lmstudio").expect("lmstudio must be in the registry");
         match entry.wire {
             WireFormat::OpenAi(cfg) => {
-                assert!(cfg.chat_url.contains("1234"), "LM Studio default port is 1234");
-                assert!(!cfg.include_usage_in_stream, "LM Studio rejects stream_options");
+                assert!(
+                    cfg.chat_url.contains("1234"),
+                    "LM Studio default port is 1234"
+                );
+                assert!(
+                    !cfg.include_usage_in_stream,
+                    "LM Studio rejects stream_options"
+                );
             }
             other => panic!("lmstudio must be OpenAI-wire, got {other:?}"),
         }
@@ -646,7 +618,14 @@ mod tests {
         // ollama / mlx / lmstudio have no key — provider_key returns
         // Ok(None), not Err. The old code had a 2-arm match that did
         // this; the registry makes it a property of the row.
-        for id in ["ollama", "mlx", "lmstudio", "claude-code", "codex", "opencode"] {
+        for id in [
+            "ollama",
+            "mlx",
+            "lmstudio",
+            "claude-code",
+            "codex",
+            "opencode",
+        ] {
             let key = provider_key(id).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(key.is_none(), "{id} should have no key, got {key:?}");
         }

@@ -50,11 +50,13 @@ Klide/
 ├── Ideas.md                   Future ideas + inspiration
 ├── src/                       React + TypeScript frontend
 │   ├── main.tsx                 React boot
-│   ├── App.tsx                  Root layout
+│   ├── App.tsx                  Root layout — composes view/panel/editor state; threads props
 │   ├── theme.ts                 5 themes + Monaco theme defs
 │   ├── styles/tokens.css        CSS custom properties + design primitives
 │   ├── hooks/
-│   │   └── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
+│   │   ├── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
+│   │   ├── useEditorTabs.ts    Open tabs: open/edit/save/close/rename, external-change watch, reveal
+│   │   └── usePanelLayout.ts   Workbench size + panel rects + AI-panel list (hydrate/persist/clamp)
 │   ├── components/
 │   │   ├── ActivityBar.tsx      Left rail — top zone (6 tools, FLIP) + bottom zone (Settings + Profile, dock dot)
 │   │   ├── AiPanel.tsx          AI chat panel (post-split, ~1300 lines)
@@ -111,22 +113,16 @@ Klide/
     ├── Cargo.toml
     ├── src/
     │   ├── main.rs               Entry point
-    │   ├── lib.rs                Tauri commands
-    │   │   ├── AI chat dispatch (Ollama, OpenAI, Anthropic, Mistral, xAI)
-    │   │   ├── Provider streaming trait + 3 adapters
-    │   │   ├── Subscription CLI delegates (Claude Code, Codex, OpenCode)
-    │   │   ├── File system ops + git commands
-    │   │   ├── Memory read/write/list (project handoff notes)
-    │   │   ├── Agent run listing (Claude Code, Codex, OpenCode, Klide)
-    │   │   ├── Keychain-backed API key management
-    │   │   ├── Tool list + find-in-files commands
-    │   │   ├── Skill install + uninstall (npx skills add)
-    │   │   ├── Filesystem-skill loader (4 dirs, provenance grouping)
-    │   │   ├── User / host info for the profile modal
-    │   │   └── Tauri plugin registration
-    │   ├── pty.rs                PTY management (native + delegate)
+    │   ├── lib.rs                Command registration + thin Tauri glue, AI chat dispatch, keychain keys, fs ops, find-in-files, profile info, shared helpers
+    │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
+    │   ├── models.rs             Model discovery — list models, context windows, tool support
+    │   ├── git.rs                Git + gh commands (status/diff/log/stash/PR)
+    │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
+    │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
+    │   ├── pty.rs                PTY plumbing (native shell + delegate spawn)
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── memory.rs             Project memory markdown I/O
+    │   ├── delegate/             Delegate seam — adapter per CLI (mod.rs trait+registry+run-listing; claude_code/codex/opencode; runs.rs shared types)
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── tools.rs           Tool registry (schema + execution)

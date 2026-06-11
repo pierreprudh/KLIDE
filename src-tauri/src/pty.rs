@@ -1,3 +1,4 @@
+use crate::delegate::{self, shell_quote};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -85,10 +86,6 @@ pub fn pty_spawn(
     Ok(())
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 #[tauri::command]
 pub fn pty_write(state: State<PtyState>, data: String) -> Result<(), String> {
     if let Some(w) = state.writer.lock().unwrap().as_mut() {
@@ -150,65 +147,15 @@ pub fn delegate_pty_spawn(
         })
         .map_err(|e| e.to_string())?;
 
-    let base = delegate_command(&provider)?;
-    // Resume mode: opencode's TUI supports `-s <session-id>` to continue a
-    // specific past session. The positional `[project]` arg is ignored when
-    // -s is set, so the TUI comes up in the run's cwd with that session's
-    // history loaded — the user picks up where they left off.
-    let resume = resume_session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-
-    // Opencode's TUI treats the first positional arg as a project path
-    // (`opencode [project]`), not a prompt — so `opencode '<task title>'`
-    // tries to cd to `<cwd>/<task title>` and dies. Its `run` subcommand is
-    // the non-interactive mode that *does* take a message. Claude and Codex
-    // both have TUIs that accept the task as the first arg directly, so
-    // they don't need the `run` prefix.
-    //
-    // `run` is only injected when we're actually feeding it a message
-    // (`task.is_some()`) — without a message the CLI errors out with
-    // "You must provide a message or a command". In resume mode or with
-    // no task we always use the bare TUI so the user can interact.
-    let has_task = task
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .is_some();
-    let prefix = if provider == "opencode" && resume.is_none() && has_task {
-        format!("{base} run")
-    } else {
-        base.to_string()
-    };
-    // Each CLI takes the model with a different flag. We only insert the flag
-    // when the caller actually picked a model — leaving the CLI to fall back
-    // to its own default otherwise. The same flag handling is used by the
-    // ai_chat path (lib.rs::subscription_cli_chat), so dispatch and chat
-    // behaviour stay in lockstep.
-    let model_arg = model
-        .as_deref()
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .map(|m| match provider.as_str() {
-            "claude-code" => format!(" --model {}", shell_quote(m)),
-            "codex" | "opencode" => format!(" -m {}", shell_quote(m)),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
-    // Resume: `opencode -s <sessionId>` — the TUI continues that session.
-    // Dispatch: `claude -m <m> '<prompt>'` (or `opencode run -m <m> '<prompt>'`)
-    // — the CLI runs the prompt and the PTY surfaces the streamed response.
-    let resume_arg = match (provider.as_str(), resume) {
-        ("opencode", Some(id)) => format!(" -s {}", shell_quote(id)),
-        ("claude-code", Some(id)) => format!(" --resume {}", shell_quote(id)),
-        ("codex", Some(id)) => format!(" resume {}", shell_quote(id)),
-        _ => String::new(),
-    };
-    let command = match task.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        Some(t) => format!("{prefix}{resume_arg}{model_arg} {}", shell_quote(t)),
-        None => format!("{prefix}{resume_arg}{model_arg}"),
-    };
+    // All per-CLI knowledge (spawn syntax, resume flags, model flags) lives
+    // behind the Delegate seam — this command only does PTY plumbing.
+    let adapter = delegate::lookup(&provider)
+        .ok_or_else(|| format!("No delegate PTY command for provider: {provider}"))?;
+    let command = adapter.spawn_command(
+        task.as_deref(),
+        model.as_deref(),
+        resume_session_id.as_deref(),
+    );
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.arg("-lc");
@@ -245,10 +192,10 @@ pub fn delegate_pty_spawn(
                 break;
             }
             let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-            // Try to detect OpenCode's session ID from startup output.
-            // OpenCode outputs "Using session: <id>" or similar when it starts.
+            // Try to detect the CLI's own session ID from startup output
+            // (only OpenCode announces one today).
             if !matched_external_id {
-                if let Some(capt) = extract_opencode_session(&chunk) {
+                if let Some(capt) = adapter.extract_session_id(&chunk) {
                     let _ = set_delegate_external_id(&app, &session_id, &capt);
                     matched_external_id = true;
                 }
@@ -334,15 +281,6 @@ struct DelegatePtyChunk {
 #[serde(rename_all = "camelCase")]
 struct DelegatePtyExit {
     session_id: String,
-}
-
-fn delegate_command(provider: &str) -> Result<&'static str, String> {
-    match provider {
-        "claude-code" => Ok("claude"),
-        "codex" => Ok("codex"),
-        "opencode" => Ok("opencode"),
-        _ => Err(format!("No delegate PTY command for provider: {provider}")),
-    }
 }
 
 // ── Delegate session parent tracking ──────────────────────────────────────────
@@ -464,41 +402,4 @@ pub fn get_delegate_parent(app: &tauri::AppHandle, delegate_id: &str) -> Option<
     read_delegate_sessions(app)
         .get(delegate_id)
         .map(|m| m.parent_id.clone())
-}
-
-/// Try to extract OpenCode's session ID from PTY output. OpenCode outputs
-/// "Using session: <id>" when starting a new session run.
-fn extract_opencode_session(output: &str) -> Option<String> {
-    // Pattern: "Using session: <id>" where id might be "oss-..." or similar
-    for line in output.lines() {
-        let line = line.trim();
-        if line.contains("Using session:")
-            || line.contains("Session ID:")
-            || line.contains("session:")
-        {
-            // Extract the ID after the colon
-            if let Some(colon_pos) = line.rfind(':') {
-                let after = line[colon_pos + 1..].trim();
-                // Session IDs are typically alphanumeric with dashes
-                if after.len() > 3
-                    && after
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-                {
-                    return Some(after.to_string());
-                }
-            }
-            // Try to find "oss-" prefix which is common in OpenCode
-            if let Some(pos) = line.find("oss-") {
-                let candidate = &line[pos..];
-                let end = candidate
-                    .find(|c: char| !c.is_alphanumeric() && c != '-')
-                    .unwrap_or(candidate.len());
-                if end > 3 {
-                    return Some(candidate[..end].to_string());
-                }
-            }
-        }
-    }
-    None
 }

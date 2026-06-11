@@ -63,6 +63,15 @@ pub struct StartRunRequest {
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,
+    /// Context window (num_ctx) for local models — the frontend resolves each
+    /// model's real trained window (or a user override) and passes it here.
+    /// `None` lets the provider adapter fall back to its default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_ctx: Option<usize>,
+    /// Max read-only tool calls to run concurrently within one turn. `None`
+    /// or `Some(1)` keeps execution sequential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_parallel_tools: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
@@ -346,9 +355,7 @@ mod tests {
         let event = AgentEvent::AssistantMessage {
             run_id: "r1".into(),
             message_id: "m1".into(),
-            content: vec![AgentContentBlock::Text {
-                text: "hi".into(),
-            }],
+            content: vec![AgentContentBlock::Text { text: "hi".into() }],
             usage: Some(AgentUsage {
                 prompt_tokens: Some(10),
                 completion_tokens: Some(5),

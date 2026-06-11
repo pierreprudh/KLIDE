@@ -1,0 +1,992 @@
+// Git — every git/gh interaction Klide makes, all shell-outs with an
+// explicit `-C <workspace_root>` (no libgit2). Status/stage/commit for the
+// sidebar and Git Review, log/branch/stash for the workbench, and the
+// gh-backed PR commands. Read-only data is parsed into the structs below
+// and serialized camelCase for the frontend.
+
+use std::process::Command;
+
+#[derive(serde::Serialize)]
+pub(crate) struct GitFile {
+    path: String,
+    status: String,
+    staged: bool,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct GitStatus {
+    branch: String,
+    files: Vec<GitFile>,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct GitDiff {
+    path: String,
+    diff: String,
+    additions: usize,
+    deletions: usize,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitCommit {
+    hash: String,
+    short_hash: String,
+    subject: String,
+    author: String,
+    author_email: String,
+    /// Seconds since unix epoch.
+    timestamp: i64,
+    refs: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitBranch {
+    name: String,
+    is_current: bool,
+    is_remote: bool,
+    /// Commits ahead of the upstream tracking branch (-).
+    ahead: i32,
+    /// Commits behind the upstream tracking branch (+).
+    behind: i32,
+    last_subject: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitLog {
+    branch: String,
+    upstream: Option<String>,
+    ahead: i32,
+    behind: i32,
+    /// ISO-8601 timestamp of the last `git fetch`.
+    last_fetch_ms: Option<i64>,
+    commits: Vec<GitCommit>,
+    branches: Vec<GitBranch>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitStash {
+    index: u32,
+    branch: String,
+    message: String,
+    /// ISO-8601 timestamp.
+    timestamp: i64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PullRequest {
+    number: u32,
+    title: String,
+    state: String,
+    is_draft: bool,
+    author: String,
+    head_ref: String,
+    base_ref: String,
+    url: String,
+    additions: i64,
+    deletions: i64,
+    changed_files: i32,
+    /// ISO-8601 updated timestamp.
+    updated_at_ms: i64,
+    /// "open" | "merged" | "closed" | "draft" — derived for the badge.
+    badge: String,
+    /// True if this PR targets the current branch.
+    is_current_branch: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PullRequestDetails {
+    number: u32,
+    title: String,
+    body: String,
+    state: String,
+    is_draft: bool,
+    author: String,
+    head_ref: String,
+    base_ref: String,
+    url: String,
+    additions: i64,
+    deletions: i64,
+    changed_files: i32,
+    /// "open" | "merged" | "closed" | "draft" — derived for the badge.
+    badge: String,
+    mergeable: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+pub(crate) fn git_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn count_diff_lines(diff: &str) -> (usize, usize) {
+    let mut additions = 0;
+    let mut deletions = 0;
+
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            additions += 1;
+        } else if line.starts_with('-') {
+            deletions += 1;
+        }
+    }
+
+    (additions, deletions)
+}
+
+#[tauri::command]
+pub(crate) fn git_status(workspace_root: String) -> Result<GitStatus, String> {
+    let output = Command::new("git")
+        .args(["-C", &workspace_root, "status", "--short", "--branch"])
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut branch = "unknown".to_string();
+    let mut files = Vec::new();
+
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            branch = rest.split("...").next().unwrap_or(rest).trim().to_string();
+            continue;
+        }
+
+        if line.len() < 4 {
+            continue;
+        }
+
+        let staged = &line[0..1] != " " && &line[0..1] != "?";
+        let status = line[0..2].trim().to_string();
+        let path = line[3..].trim().to_string();
+        files.push(GitFile {
+            path,
+            status,
+            staged,
+        });
+    }
+
+    Ok(GitStatus { branch, files })
+}
+
+#[tauri::command]
+pub(crate) fn git_stage(workspace_root: String, path: String) -> Result<(), String> {
+    run_git(&workspace_root, &["add", "--", &path])
+}
+
+#[tauri::command]
+pub(crate) fn git_unstage(workspace_root: String, path: String) -> Result<(), String> {
+    run_git(&workspace_root, &["restore", "--staged", "--", &path])
+}
+
+#[tauri::command]
+pub(crate) fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return Err("Commit message cannot be empty".to_string());
+    }
+    run_git(&workspace_root, &["commit", "-m", trimmed])
+}
+
+#[tauri::command]
+pub(crate) fn create_pr(
+    workspace_root: String,
+    title: String,
+    body: Option<String>,
+) -> Result<String, String> {
+    // Create a branch from the current changes. Cap the name at 50 chars —
+    // truncate() takes a BYTE index and panics mid-char on non-ASCII titles
+    // (is_alphanumeric keeps accented/Unicode letters), so count chars instead.
+    let branch: String = format!(
+        "klide/{}",
+        title
+            .to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+            .trim_matches('-')
+    )
+    .chars()
+    .take(50)
+    .collect();
+
+    // Check if gh CLI is available
+    let gh_check = Command::new("gh").arg("--version").output();
+    if gh_check.is_err() || !gh_check.unwrap().status.success() {
+        return Err(
+            "GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string(),
+        );
+    }
+
+    // Stage all changes
+    run_git(&workspace_root, &["add", "-A"])?;
+
+    // Check if there's anything to commit
+    let status = Command::new("git")
+        .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
+        .status()
+        .map_err(|e| format!("Failed to check git status: {e}"))?;
+    if status.success() {
+        return Err("No changes to commit".to_string());
+    }
+
+    // Create and switch to new branch
+    run_git(&workspace_root, &["checkout", "-b", &branch])?;
+
+    // Commit the staged changes before pushing; otherwise the PR branch has no
+    // new commits for GitHub to compare against the base branch.
+    run_git(&workspace_root, &["commit", "-m", title.trim()])?;
+
+    let push = Command::new("git")
+        .args([
+            "-C",
+            &workspace_root,
+            "push",
+            "-u",
+            "origin",
+            branch.as_str(),
+        ])
+        .output()
+        .map_err(|e| format!("Failed to push: {e}"))?;
+    if !push.status.success() {
+        let err = String::from_utf8_lossy(&push.stderr);
+        let _ = Command::new("git")
+            .args(["-C", &workspace_root, "checkout", "-"])
+            .status();
+        let _ = Command::new("git")
+            .args(["-C", &workspace_root, "branch", "-D", branch.as_str()])
+            .status();
+        return Err(format!("Push failed: {}", err.trim()));
+    }
+
+    let mut gh_args = vec!["pr", "create", "--title", &title, "--head", branch.as_str()];
+    let body_str;
+    if let Some(b) = &body {
+        body_str = b.clone();
+        gh_args.push("--body");
+        gh_args.push(&body_str);
+    }
+
+    let pr = Command::new("gh")
+        .args(gh_args)
+        .current_dir(&workspace_root)
+        .output()
+        .map_err(|e| format!("Failed to create PR: {e}"))?;
+
+    if pr.status.success() {
+        let url = String::from_utf8_lossy(&pr.stdout).trim().to_string();
+        Ok(if url.is_empty() {
+            format!("PR created on branch '{branch}'")
+        } else {
+            url
+        })
+    } else {
+        let err = String::from_utf8_lossy(&pr.stderr);
+        Err(format!("PR creation failed: {}", err.trim()))
+    }
+}
+
+#[tauri::command]
+pub(crate) fn create_worktree(workspace_root: String, name: String) -> Result<String, String> {
+    let safe = name
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+        .trim_matches('-')
+        .to_string();
+    let branch = format!("feature/{safe}");
+    let worktree_path = format!("{}-{}", workspace_root.trim_end_matches('/'), safe);
+
+    run_git(&workspace_root, &["checkout", "-b", &branch])?;
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &workspace_root,
+            "worktree",
+            "add",
+            worktree_path.as_str(),
+            &branch,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to create worktree: {e}"))?;
+
+    if !output.status.success() {
+        let _ = run_git(&workspace_root, &["checkout", "-"]);
+        let _ = run_git(&workspace_root, &["branch", "-D", &branch]);
+        return Err(format!(
+            "Worktree creation failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(worktree_path)
+}
+
+#[tauri::command]
+pub(crate) fn git_diff(
+    workspace_root: String,
+    path: String,
+    staged: bool,
+) -> Result<GitDiff, String> {
+    let diff = if staged {
+        git_output(&workspace_root, &["diff", "--cached", "--", &path])?
+    } else {
+        git_output(&workspace_root, &["diff", "--", &path])?
+    };
+
+    let diff = if diff.trim().is_empty() && !staged {
+        let untracked = git_output(
+            &workspace_root,
+            &["ls-files", "--others", "--exclude-standard", "--", &path],
+        )?;
+        if untracked.lines().any(|line| line == path) {
+            let full_path = std::path::Path::new(&workspace_root).join(&path);
+            let content = std::fs::read_to_string(&full_path)
+                .map_err(|e| format!("Unable to read untracked file: {e}"))?;
+            let mut out = format!(
+                "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+            );
+            for line in content.lines() {
+                out.push('+');
+                out.push_str(line);
+                out.push('\n');
+            }
+            if content.ends_with('\n') {
+                // content.lines() omits the final empty segment; no extra line is needed.
+            }
+            out
+        } else {
+            diff
+        }
+    } else {
+        diff
+    };
+
+    let (additions, deletions) = count_diff_lines(&diff);
+    Ok(GitDiff {
+        path,
+        diff,
+        additions,
+        deletions,
+    })
+}
+
+// -----------------------------------------------------------------------------
+// Git Review — full-window view: history, branches, sync, stash, PRs.
+// -----------------------------------------------------------------------------
+
+fn parse_porcelain_timestamp(s: &str) -> i64 {
+    // `git log --format=%ct` returns a unix timestamp in seconds.
+    s.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String> {
+    // Branches — current, local, remote. We grab them with `for-each-ref` so
+    // we can pull ahead/behind and the subject of the tip commit in one shot.
+    let branch_out = git_output(
+        workspace_root,
+        &[
+            "for-each-ref",
+            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(ahead:integer)/%(behind:integer)%00%(subject)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )?;
+    let mut branches: Vec<GitBranch> = Vec::new();
+    for line in branch_out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let is_current = parts[0] == "*";
+        let name = parts[1].to_string();
+        // Skip the HEAD remote pointer (e.g. "origin/main" pointing to where
+        // origin/main currently is on the remote); the user wants real refs.
+        let is_remote = name.contains('/');
+        let (ahead, behind) = if parts[3] == "-" {
+            (0, 0)
+        } else {
+            let mut split = parts[3].split('/');
+            (
+                split.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+                split.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+            )
+        };
+        branches.push(GitBranch {
+            name,
+            is_current,
+            is_remote,
+            ahead,
+            behind,
+            last_subject: parts[4].to_string(),
+        });
+    }
+    // Local branches first, then remotes — but keep the current branch pinned
+    // at the very top of the local group.
+    branches.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
+
+    // Commits — use a custom format so we can pull refs (tags, branch tips) in
+    // the same pass.
+    let log_out = git_output(
+        workspace_root,
+        &[
+            "log",
+            &format!("-n{limit}"),
+            "--date=unix",
+            "--decorate=short",
+            "--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ct%x00%d",
+        ],
+    )?;
+    let mut commits: Vec<GitCommit> = Vec::new();
+    for line in log_out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        // The decorate field looks like " (HEAD -> main, origin/main, tag: v1)"
+        // — strip the parens and the leading "HEAD ->" marker, then split on
+        // commas and trim. Filter to refs that are real names.
+        let refs: Vec<String> = parts[6]
+            .trim()
+            .trim_matches('(')
+            .trim_matches(')')
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "HEAD")
+            .collect();
+        commits.push(GitCommit {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            subject: parts[2].to_string(),
+            author: parts[3].to_string(),
+            author_email: parts[4].to_string(),
+            timestamp: parse_porcelain_timestamp(parts[5]),
+            refs,
+        });
+    }
+
+    // Current branch + upstream.
+    let branch = git_output(workspace_root, &["branch", "--show-current"])?;
+    let branch = branch.trim().to_string();
+    let branch = if branch.is_empty() {
+        "HEAD".to_string()
+    } else {
+        branch
+    };
+    let upstream = git_output(
+        workspace_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok();
+    let upstream = upstream
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // ahead/behind relative to upstream.
+    let (ahead, behind) = match &upstream {
+        Some(up) => {
+            let ab = git_output(
+                workspace_root,
+                &[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    &format!("{up}...HEAD"),
+                ],
+            )
+            .unwrap_or_default();
+            let mut it = ab.split_whitespace();
+            (
+                it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+                it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
+            )
+        }
+        None => (0, 0),
+    };
+
+    // Last fetch — use the mtime of .git/FETCH_HEAD. We never write that
+    // ourselves; it only ever gets touched by `git fetch`.
+    let last_fetch_ms = std::path::Path::new(workspace_root)
+        .join(".git")
+        .join("FETCH_HEAD")
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64);
+
+    Ok(GitLog {
+        branch,
+        upstream,
+        ahead,
+        behind,
+        last_fetch_ms,
+        commits,
+        branches,
+    })
+}
+
+#[tauri::command]
+pub(crate) fn git_log(workspace_root: String, limit: Option<usize>) -> Result<GitLog, String> {
+    let limit = limit.unwrap_or(60).clamp(5, 500);
+    resolve_git_log(&workspace_root, limit)
+}
+
+#[tauri::command]
+pub(crate) fn git_checkout_branch(workspace_root: String, branch: String) -> Result<(), String> {
+    if branch.is_empty() {
+        return Err("Branch name is required".to_string());
+    }
+    run_git(&workspace_root, &["checkout", &branch])
+}
+
+#[tauri::command]
+pub(crate) fn git_fetch(workspace_root: String, remote: Option<String>) -> Result<String, String> {
+    let remote = remote.unwrap_or_else(|| "--all".to_string());
+    run_git(&workspace_root, &["fetch", &remote])?;
+    Ok(format!("Fetched {remote}"))
+}
+
+#[tauri::command]
+pub(crate) fn git_pull(workspace_root: String) -> Result<String, String> {
+    run_git(&workspace_root, &["pull", "--ff-only"])?;
+    Ok("Pulled (fast-forward)".to_string())
+}
+
+#[tauri::command]
+pub(crate) fn git_push(workspace_root: String) -> Result<String, String> {
+    // `git push` follows the upstream if configured; if not, this errors and
+    // the UI surfaces a clear message. The user can set upstream via
+    // `git push -u origin <branch>` if needed.
+    run_git(&workspace_root, &["push"])?;
+    Ok("Pushed".to_string())
+}
+
+#[tauri::command]
+pub(crate) fn git_discard(workspace_root: String, path: String) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("Path is required".to_string());
+    }
+    // `git checkout -- <path>` restores the working tree to the index. For
+    // untracked files we just remove them.
+    if path == "." {
+        run_git(&workspace_root, &["checkout", "--", "."])?;
+        run_git(&workspace_root, &["clean", "-fd"])?;
+    } else {
+        run_git(&workspace_root, &["checkout", "--", &path])?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn git_stash(
+    workspace_root: String,
+    action: String,
+    message: Option<String>,
+) -> Result<String, String> {
+    match action.as_str() {
+        "push" => {
+            let msg = message.unwrap_or_else(|| "WIP".to_string());
+            run_git(&workspace_root, &["stash", "push", "-m", &msg])?;
+            Ok(format!("Stashed as '{msg}'"))
+        }
+        "pop" => {
+            run_git(&workspace_root, &["stash", "pop"])?;
+            Ok("Stash popped".to_string())
+        }
+        "apply" => {
+            run_git(&workspace_root, &["stash", "apply"])?;
+            Ok("Stash applied".to_string())
+        }
+        "drop" => {
+            run_git(&workspace_root, &["stash", "drop"])?;
+            Ok("Stash dropped".to_string())
+        }
+        "list" => git_output(&workspace_root, &["stash", "list"]),
+        _ => Err(format!("Unknown stash action: {action}")),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn git_stash_list(workspace_root: String) -> Result<Vec<GitStash>, String> {
+    // Format: "stash@{0}|branch|message" — but messages can contain pipes, so
+    // we use a 0x1f separator (unit separator) which is never in a commit
+    // subject.
+    let out = git_output(&workspace_root, &["stash", "list", "--format=%gd|%s|%ct"])?;
+    let mut stashes: Vec<GitStash> = Vec::new();
+    for line in out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '|');
+        let ref_name = parts.next().unwrap_or("").to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        let ts = parts.next().unwrap_or("0");
+        let index = ref_name
+            .trim_start_matches("stash@{")
+            .trim_end_matches('}')
+            .parse::<u32>()
+            .unwrap_or(0);
+        // The "branch" half is everything before the first ":" in the
+        // default stash subject ("WIP on main: abc1234 subject").
+        let branch = subject
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .replace("WIP on ", "")
+            .replace("On ", "")
+            .trim()
+            .to_string();
+        stashes.push(GitStash {
+            index,
+            branch,
+            message: subject,
+            timestamp: ts.parse().unwrap_or(0),
+        });
+    }
+    Ok(stashes)
+}
+
+#[tauri::command]
+pub(crate) fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, String> {
+    let json = git_output(
+        &workspace_root,
+        &[
+            "pr",
+            "list",
+            "--json",
+            "number,title,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,updatedAt",
+        ],
+    )?;
+    let raw: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("Could not parse `gh pr list` output: {e}"))?;
+    let arr = raw.as_array().cloned().unwrap_or_default();
+    let current_branch = git_output(&workspace_root, &["branch", "--show-current"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let mut prs: Vec<PullRequest> = Vec::with_capacity(arr.len());
+    for v in arr {
+        let obj = match v.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let number = obj.get("number").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        let title = obj
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let state = obj
+            .get("state")
+            .and_then(|x| x.as_str())
+            .unwrap_or("OPEN")
+            .to_string();
+        let is_draft = obj
+            .get("isDraft")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let author = obj
+            .get("author")
+            .and_then(|x| x.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let head_ref = obj
+            .get("headRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let base_ref = obj
+            .get("baseRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let url = obj
+            .get("url")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let additions = obj.get("additions").and_then(|x| x.as_i64()).unwrap_or(0);
+        let deletions = obj.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0);
+        let changed_files = obj
+            .get("changedFiles")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0) as i32;
+        let updated_at_ms = obj
+            .get("updatedAt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0);
+        let badge = if is_draft {
+            "draft".to_string()
+        } else {
+            state.to_lowercase()
+        };
+        prs.push(PullRequest {
+            number,
+            title,
+            state,
+            is_draft,
+            author,
+            head_ref: head_ref.clone(),
+            base_ref,
+            url,
+            additions,
+            deletions,
+            changed_files,
+            updated_at_ms,
+            badge,
+            is_current_branch: !current_branch.is_empty() && head_ref == current_branch,
+        });
+    }
+    Ok(prs)
+}
+
+#[tauri::command]
+pub(crate) fn git_pr_view(
+    workspace_root: String,
+    number: u32,
+) -> Result<PullRequestDetails, String> {
+    let json = git_output(
+        &workspace_root,
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,mergeable,createdAt,updatedAt",
+        ],
+    )?;
+    let obj: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("Could not parse `gh pr view` output: {e}"))?;
+    let obj = match obj.as_object() {
+        Some(o) => o,
+        None => return Err(format!("PR #{number} not found")),
+    };
+    let state = obj
+        .get("state")
+        .and_then(|x| x.as_str())
+        .unwrap_or("OPEN")
+        .to_string();
+    let is_draft = obj
+        .get("isDraft")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let badge = if is_draft {
+        "draft".to_string()
+    } else {
+        state.to_lowercase()
+    };
+    Ok(PullRequestDetails {
+        number: obj.get("number").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+        title: obj
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        body: obj
+            .get("body")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        state,
+        is_draft,
+        author: obj
+            .get("author")
+            .and_then(|x| x.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        head_ref: obj
+            .get("headRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        base_ref: obj
+            .get("baseRefName")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        url: obj
+            .get("url")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        additions: obj.get("additions").and_then(|x| x.as_i64()).unwrap_or(0),
+        deletions: obj.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0),
+        changed_files: obj
+            .get("changedFiles")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0) as i32,
+        badge,
+        mergeable: obj
+            .get("mergeable")
+            .and_then(|x| x.as_str())
+            .unwrap_or("UNKNOWN")
+            .to_string(),
+        created_at_ms: obj
+            .get("createdAt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0),
+        updated_at_ms: obj
+            .get("updatedAt")
+            .and_then(|x| x.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn git_pr_checkout(workspace_root: String, number: u32) -> Result<String, String> {
+    let out = git_output(&workspace_root, &["pr", "checkout", &number.to_string()])?;
+    Ok(out.trim().to_string())
+}
+
+#[tauri::command]
+pub(crate) fn git_pr_merge(
+    workspace_root: String,
+    number: u32,
+    method: Option<String>,
+) -> Result<String, String> {
+    let method = method.unwrap_or_else(|| "merge".to_string());
+    let flag = match method.as_str() {
+        "merge" => "--merge",
+        "squash" => "--squash",
+        "rebase" => "--rebase",
+        other => return Err(format!("Unknown merge method: {other}")),
+    };
+    let out = git_output(
+        &workspace_root,
+        &["pr", "merge", &number.to_string(), flag, "--delete-branch"],
+    )?;
+    Ok(out.trim().to_string())
+}
+
+#[tauri::command]
+pub(crate) fn git_pr_open(workspace_root: String, number: u32) -> Result<String, String> {
+    // `gh pr view --web` opens the PR in the default browser; we return the
+    // resolved URL so the UI can show a toast.
+    let url = git_output(
+        &workspace_root,
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "url",
+            "-q",
+            ".url",
+        ],
+    )?;
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err(format!("PR #{number} has no URL"));
+    }
+    Command::new("open")
+        .arg(&url)
+        .output()
+        .or_else(|_| Command::new("xdg-open").arg(&url).output())
+        .map_err(|e| format!("Failed to open browser: {e}"))?;
+    Ok(url)
+}
+
+#[tauri::command]
+pub(crate) fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool, String> {
+    // `gh pr view <n> --json merged -q .merged` is the cheapest signal.
+    let raw = git_output(
+        &workspace_root,
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--json",
+            "merged",
+            "-q",
+            ".merged",
+        ],
+    )?;
+    Ok(raw.trim().eq_ignore_ascii_case("true"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_diff_lines_ignores_file_headers() {
+        let diff = "\
+diff --git a/f b/f
+--- a/f
++++ b/f
+@@ -1,2 +1,3 @@
+ context line
+-removed line
++added one
++added two";
+        // The +++/--- file headers must not be counted as additions/deletions;
+        // the @@ hunk header and the context line count as neither.
+        assert_eq!(count_diff_lines(diff), (2, 1));
+    }
+
+    #[test]
+    fn count_diff_lines_empty_diff_is_zero() {
+        assert_eq!(count_diff_lines(""), (0, 0));
+    }
+
+    #[test]
+    fn porcelain_timestamp_parses_seconds_and_tolerates_junk() {
+        assert_eq!(parse_porcelain_timestamp("1700000000"), 1_700_000_000);
+        assert_eq!(parse_porcelain_timestamp("  123 "), 123); // trimmed
+        assert_eq!(parse_porcelain_timestamp(""), 0); // empty → 0
+        assert_eq!(parse_porcelain_timestamp("not-a-number"), 0); // junk → 0
+    }
+}
