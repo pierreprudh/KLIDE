@@ -247,6 +247,11 @@ export type StartAgentRunInput = {
   context?: AgentContextSnapshot;
   systemPrompt?: string;
   disabledTools?: string[];
+  /** Context window (num_ctx) for local models — resolved per model from the
+   *  detected window or a user override. Omit to use the adapter default. */
+  numCtx?: number;
+  /** Max read-only tool calls to run concurrently in one turn (1 = sequential). */
+  maxParallelTools?: number;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };

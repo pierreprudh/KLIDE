@@ -20,6 +20,8 @@ type StartRunRequest = {
   context?: StartAgentRunInput["context"];
   systemPrompt?: string;
   disabledTools?: string[];
+  numCtx?: number;
+  maxParallelTools?: number;
   parentId?: string;
 };
 
@@ -61,6 +63,8 @@ export async function startAgentRun(
       context: input.context,
       systemPrompt: input.systemPrompt,
       disabledTools: input.disabledTools,
+      numCtx: input.numCtx,
+      maxParallelTools: input.maxParallelTools,
       parentId: input.parentId,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
