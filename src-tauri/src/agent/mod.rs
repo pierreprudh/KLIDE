@@ -209,21 +209,20 @@ fn reconstruct_prior_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Va
     // finished turn is meaningless once the user has moved on.
     let mut pending_tool_results: Vec<String> = Vec::new();
 
-    let flush_tool_results =
-        |pending: &mut Vec<String>, text: &mut String, prefix: &str| {
-            if pending.is_empty() {
-                return;
-            }
-            let folded = pending
-                .iter()
-                .map(|r| format!("\n{prefix}{r}\n{prefix}:end"))
-                .collect::<String>();
-            pending.clear();
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str(&folded);
-        };
+    let flush_tool_results = |pending: &mut Vec<String>, text: &mut String, prefix: &str| {
+        if pending.is_empty() {
+            return;
+        }
+        let folded = pending
+            .iter()
+            .map(|r| format!("\n{prefix}{r}\n{prefix}:end"))
+            .collect::<String>();
+        pending.clear();
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&folded);
+    };
 
     for event in prior_events {
         match event {
@@ -307,6 +306,38 @@ fn no_workspace_result() -> ToolResult {
             .to_string(),
         metadata: None,
     }
+}
+
+/// Run read-only tool calls concurrently, capped at `max_parallel` at a time,
+/// and return their results keyed by call id. Each call runs on a blocking
+/// thread (the tools are synchronous filesystem/network ops). A task that
+/// panics is simply absent from the map; the caller falls back to inline
+/// execution for any missing id, so a dropped result never silently vanishes.
+async fn run_read_tools_parallel(
+    root: &str,
+    calls: Vec<NormalizedToolCall>,
+    max_parallel: usize,
+) -> std::collections::HashMap<String, ToolResult> {
+    let mut results = std::collections::HashMap::new();
+    for chunk in calls.chunks(max_parallel.max(1)) {
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|call| {
+                let root = root.to_string();
+                let call = call.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = execute_read_only_tool(&root, &call);
+                    (call.id, result)
+                })
+            })
+            .collect();
+        for handle in handles {
+            if let Ok((id, result)) = handle.await {
+                results.insert(id, result);
+            }
+        }
+    }
+    results
 }
 
 fn tool_summary(call: &NormalizedToolCall) -> String {
@@ -596,6 +627,7 @@ async fn run_agent_loop(
                 messages.clone(),
                 tools.clone(),
                 request.workspace_root.clone(),
+                request.num_ctx,
                 stream,
             ) => result,
         };
@@ -631,12 +663,32 @@ async fn run_agent_loop(
         let mut tool_calls = parse_tool_calls(&response.tool_calls);
         let mut raw_tool_calls = response.tool_calls.clone();
         let mut content_text = response.content.clone();
+        let mut thinking_text = response.thinking.clone();
         // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
         // `<|tool_call_start|>…<|tool_call_end|>` text instead of the structured
-        // field. Only attempt it when the structured field came back empty so we
-        // never second-guess a well-behaved provider.
+        // field — and route that text into *either* the content or the
+        // reasoning/thinking channel (LFM2.5 emits into thinking). Scan the
+        // content first, then the thinking, so the call is recovered wherever
+        // it lands. Only attempt it when the structured field came back empty
+        // so we never second-guess a well-behaved provider.
         if tool_calls.is_empty() {
-            let (recovered, cleaned) = recover_text_tool_calls(&response.content);
+            // Try content; if nothing there, try thinking and clean *it*
+            // instead so the recovered tokens don't surface as raw reasoning.
+            let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
+            if recovered.is_empty() {
+                if let Some(th) = thinking_text.as_deref() {
+                    let (rt, cleaned_thinking) = recover_text_tool_calls(th);
+                    if !rt.is_empty() {
+                        recovered = rt;
+                        cleaned_content = content_text.clone();
+                        thinking_text = if cleaned_thinking.is_empty() {
+                            None
+                        } else {
+                            Some(cleaned_thinking)
+                        };
+                    }
+                }
+            }
             if !recovered.is_empty() {
                 // Synthesize a structured tool_calls payload so the assistant
                 // turn we replay back to the model is coherent (tool call →
@@ -650,7 +702,7 @@ async fn run_agent_loop(
                     })
                     .collect();
                 tool_calls = recovered;
-                content_text = cleaned;
+                content_text = cleaned_content;
             }
         }
         // Fallback ids ("tool_<idx>") are only unique within one response —
@@ -670,12 +722,22 @@ async fn run_agent_loop(
 
         if tool_calls.is_empty() {
             let mut content = Vec::new();
-            if let Some(thinking) = response.thinking.filter(|t| !t.trim().is_empty()) {
-                content.push(AgentContentBlock::Thinking { text: thinking });
-            }
-            content.push(AgentContentBlock::Text {
-                text: content_text.clone(),
-            });
+            // Thinking models (LFM2.5) can route the entire final answer into
+            // the reasoning channel and leave `content` empty. An empty answer
+            // helps no one and renders as an open "thought process" with no
+            // body — so when content is empty, promote the thinking to the
+            // answer. Models that separate reasoning from answer (non-empty
+            // content) keep thinking as its own disclosure, unchanged.
+            let thinking = thinking_text.filter(|t| !t.trim().is_empty());
+            let answer_text = if content_text.trim().is_empty() {
+                thinking.clone().unwrap_or_default()
+            } else {
+                if let Some(t) = thinking.clone() {
+                    content.push(AgentContentBlock::Thinking { text: t });
+                }
+                content_text.clone()
+            };
+            content.push(AgentContentBlock::Text { text: answer_text });
             emit(AgentEvent::AssistantMessage {
                 run_id: id.clone(),
                 message_id: assistant_id,
@@ -722,6 +784,29 @@ async fn run_agent_loop(
             usage: agent_usage_from(response.usage.clone()),
             ts: now_ms(),
         })?;
+
+        // Parallel read-only tools: when the user opts in (cap > 1) and a turn
+        // requests several read-only calls, run them concurrently up front and
+        // serve the results into the sequential loop below. The loop's
+        // structure — emit order, message append order, the diff-review pause
+        // for writes, clean_context handling — is untouched; only the read-only
+        // result *source* changes. With cap 1 (the default) this is skipped and
+        // every call executes inline exactly as before.
+        let max_parallel = request.max_parallel_tools.unwrap_or(1).max(1);
+        let mut precomputed: std::collections::HashMap<String, ToolResult> =
+            std::collections::HashMap::new();
+        if max_parallel > 1 {
+            if let Some(root) = request.workspace_root.as_deref() {
+                let read_calls: Vec<NormalizedToolCall> = tool_calls
+                    .iter()
+                    .filter(|c| !is_write_tool(&c.name))
+                    .cloned()
+                    .collect();
+                if read_calls.len() > 1 {
+                    precomputed = run_read_tools_parallel(root, read_calls, max_parallel).await;
+                }
+            }
+        }
 
         for call in tool_calls {
             if cancel.is_cancelled() {
@@ -862,7 +947,12 @@ async fn run_agent_loop(
                 }
             } else {
                 tool_result = match request.workspace_root.as_deref() {
-                    Some(root) => execute_read_only_tool(root, &call),
+                    // Use the concurrently-computed result when present (cap > 1);
+                    // otherwise execute inline (sequential default, or a write
+                    // tool that slipped the filter — it can't, but be safe).
+                    Some(root) => precomputed
+                        .remove(&call.id)
+                        .unwrap_or_else(|| execute_read_only_tool(root, &call)),
                     None => no_workspace_result(),
                 };
             }
@@ -1179,7 +1269,9 @@ mod replay_tests {
             run_id: "r".into(),
             message_id: "a".into(),
             content: vec![
-                AgentContentBlock::Text { text: "let me read that".into() },
+                AgentContentBlock::Text {
+                    text: "let me read that".into(),
+                },
                 AgentContentBlock::ToolCall {
                     tool_call_id: "tc1".into(),
                     name: "read_file".into(),
@@ -1195,7 +1287,11 @@ mod replay_tests {
         AgentEvent::ToolCallFinished {
             run_id: "r".into(),
             tool_call_id: id.into(),
-            result: ToolResult { ok: true, content: content.into(), metadata: None },
+            result: ToolResult {
+                ok: true,
+                content: content.into(),
+                metadata: None,
+            },
             ts: 3,
         }
     }
@@ -1283,7 +1379,10 @@ mod replay_tests {
         assert_eq!(out[2]["role"], "assistant");
         let closing = out[2]["content"].as_str().expect("content is string");
         assert!(closing.contains("the readme says hi"), "got: {closing}");
-        assert!(closing.contains("hello world"), "tool result dropped: {closing}");
+        assert!(
+            closing.contains("hello world"),
+            "tool result dropped: {closing}"
+        );
     }
 
     #[test]
@@ -1292,10 +1391,7 @@ mod replay_tests {
         // message) has its orphan tool result dropped. Re-emitting it
         // as `role: "tool"` is exactly the Ollama parse-error case
         // we just fixed.
-        let out = reconstruct_prior_messages(&[
-            user_msg("ping"),
-            tool_result("tc1", "pong"),
-        ]);
+        let out = reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
     }

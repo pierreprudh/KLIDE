@@ -784,10 +784,7 @@ fn read_file(ws: &Workspace, path: &str) -> ToolResult {
             content.len(),
             content
         )),
-        Err(e) => err(format!(
-            "Unable to read {} as text: {e}",
-            ws.display(&full)
-        )),
+        Err(e) => err(format!("Unable to read {} as text: {e}", ws.display(&full))),
     }
 }
 
@@ -964,12 +961,7 @@ fn grep(ws: &Workspace, input: &serde_json::Value) -> ToolResult {
         };
         for (idx, line) in content.lines().enumerate() {
             if line.contains(&pattern) {
-                rows.push(format!(
-                    "{}:{}: {}",
-                    ws.display(&file),
-                    idx + 1,
-                    line
-                ));
+                rows.push(format!("{}:{}: {}", ws.display(&file), idx + 1, line));
                 if rows.len() >= max {
                     break;
                 }
@@ -1658,6 +1650,19 @@ mod tests {
         );
         // The special-token block is stripped from the user-visible content.
         assert_eq!(cleaned, "I'll read the file.");
+    }
+
+    #[test]
+    fn recovers_no_arg_call() {
+        // A tool with no parameters, exactly as LFM2.5 emits it:
+        // `get_git_status()` with empty parens. Earlier coverage only had
+        // calls *with* args, so the empty-arg path went untested.
+        let content = "<|tool_call_start|>[get_git_status()]<|tool_call_end|>";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "get_git_status");
+        assert_eq!(calls[0].input, serde_json::json!({}));
+        assert_eq!(cleaned, "");
     }
 
     #[test]

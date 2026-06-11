@@ -28,8 +28,8 @@ impl Workspace {
         if root.trim().is_empty() {
             return Err("No workspace is open".to_string());
         }
-        let root = std::fs::canonicalize(root)
-            .map_err(|e| format!("Invalid workspace root: {e}"))?;
+        let root =
+            std::fs::canonicalize(root).map_err(|e| format!("Invalid workspace root: {e}"))?;
         Ok(Self { root })
     }
 
@@ -91,8 +91,7 @@ impl Workspace {
     /// list_dir). Follows symlinks: the canonical target must stay inside the
     /// root. Returns the canonical path.
     pub fn resolve_abs_read(&self, path: &str) -> Result<PathBuf, String> {
-        let real =
-            std::fs::canonicalize(path).map_err(|e| format!("Invalid path: {e}"))?;
+        let real = std::fs::canonicalize(path).map_err(|e| format!("Invalid path: {e}"))?;
         if !real.starts_with(&self.root) {
             return Err("Path is outside the open workspace".to_string());
         }

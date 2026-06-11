@@ -77,7 +77,7 @@ type Props = {
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> };
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number };
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
   onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
@@ -955,6 +955,20 @@ export function AiPanel({
 
 Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
         : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings);
+      // Context window: num_ctx only matters for Ollama (other adapters
+      // ignore it). Prefer an explicit per-model override from settings,
+      // else the model's detected trained window (contextLimit), so each
+      // model runs at its real size instead of a hardcoded floor.
+      const ctxOverride = harnessSettings?.contextWindows?.[turn.model];
+      const numCtx =
+        turn.provider === "ollama"
+          ? ctxOverride && ctxOverride > 0
+            ? ctxOverride
+            : contextLimit > 0
+              ? contextLimit
+              : undefined
+          : undefined;
+      const maxParallelTools = harnessSettings?.maxParallelTools;
       const session = await startAgentRun({
         runId: currentId,
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
@@ -962,6 +976,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
         systemPrompt,
         disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
+        numCtx,
+        maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
@@ -1025,7 +1041,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
 
     setServerStarting(true);
     try {
-      const started = await invoke<boolean>("ai_local_server_start", { provider, model });
+      const started = await invoke<boolean>("ai_local_server_start", { provider, model, concurrency: harnessSettings?.serverConcurrency });
       setServerRunning(started);
       setConnected(started);
       if (!started) {

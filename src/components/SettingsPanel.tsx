@@ -88,8 +88,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean> }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -197,6 +197,78 @@ function Row({
         </div>
       </div>
       {control}
+    </div>
+  );
+}
+
+// A segmented pill control — one-click choice across a small ladder of
+// options, the premium alternative to a free-text number field. The first
+// option is the "off / auto / default" sentinel (value `undefined`); the
+// active pill is lifted with the accent tint.
+function Segmented({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { label: string; value: number | undefined }[];
+  value: number | undefined;
+  onChange: (value: number | undefined) => void;
+  label: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      style={{
+        display: "inline-flex",
+        gap: 2,
+        padding: 2,
+        borderRadius: 999,
+        border: "1px solid var(--border-strong)",
+        background: "color-mix(in srgb, var(--panel) 88%, transparent)",
+      }}
+    >
+      {options.map((opt) => {
+        const active = opt.value === value;
+        return (
+          <button
+            key={opt.label}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(opt.value)}
+            style={{
+              height: 26,
+              minWidth: 38,
+              padding: "0 11px",
+              borderRadius: 999,
+              border: "none",
+              cursor: "pointer",
+              fontSize: 11.5,
+              fontWeight: active ? 600 : 500,
+              letterSpacing: "0.01em",
+              color: active ? "var(--accent)" : "var(--fg-subtle)",
+              background: active
+                ? "color-mix(in srgb, var(--accent-soft) 60%, transparent)"
+                : "transparent",
+              boxShadow: active
+                ? "inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent)"
+                : "none",
+              transition:
+                "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+            }}
+            onMouseEnter={(e) => {
+              if (!active) e.currentTarget.style.color = "var(--fg-strong)";
+            }}
+            onMouseLeave={(e) => {
+              if (!active) e.currentTarget.style.color = "var(--fg-subtle)";
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1203,6 +1275,71 @@ export function SettingsPanel({
                       onChange={onAiModelChange}
                       options={availableAiModels.length > 0 ? availableAiModels : [aiModel]}
                       label="AI model"
+                    />
+                  }
+                />
+              </Panel>
+            </SettingBlock>
+
+            <SettingBlock title="Inference">
+              <Panel>
+                <Row
+                  title="Context window"
+                  description={`How much context ${aiModel} runs with. Auto uses the model's full detected window — pick a smaller size only if you're tight on memory. Local (Ollama) models.`}
+                  control={
+                    <Segmented
+                      label="Context window"
+                      value={harnessSettings?.contextWindows?.[aiModel]}
+                      options={[
+                        { label: "Auto", value: undefined },
+                        { label: "16K", value: 16384 },
+                        { label: "32K", value: 32768 },
+                        { label: "64K", value: 65536 },
+                        { label: "128K", value: 131072 },
+                      ]}
+                      onChange={(v) => {
+                        const next = { ...(harnessSettings?.contextWindows ?? {}) };
+                        if (v === undefined) delete next[aiModel];
+                        else next[aiModel] = v;
+                        onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
+                      }}
+                    />
+                  }
+                />
+                <Row
+                  title="Parallel tool calls"
+                  description="When the agent asks for several read-only tools in one step, run them at once instead of one-by-one. File edits always stay sequential for diff review."
+                  control={
+                    <Segmented
+                      label="Parallel tool calls"
+                      value={harnessSettings?.maxParallelTools}
+                      options={[
+                        { label: "Off", value: undefined },
+                        { label: "2", value: 2 },
+                        { label: "4", value: 4 },
+                        { label: "8", value: 8 },
+                      ]}
+                      onChange={(v) =>
+                        onHarnessSettingsChange?.({ ...harnessSettings, maxParallelTools: v })
+                      }
+                    />
+                  }
+                />
+                <Row
+                  title="Concurrent requests"
+                  description="How many requests a Klide-launched Ollama serves at once — raise it to run several AI panels in parallel. Restart the local server to apply."
+                  control={
+                    <Segmented
+                      label="Concurrent requests"
+                      value={harnessSettings?.serverConcurrency}
+                      options={[
+                        { label: "Default", value: undefined },
+                        { label: "2", value: 2 },
+                        { label: "4", value: 4 },
+                      ]}
+                      onChange={(v) =>
+                        onHarnessSettingsChange?.({ ...harnessSettings, serverConcurrency: v })
+                      }
                     />
                   }
                 />
