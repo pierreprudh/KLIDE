@@ -1,6 +1,6 @@
 // ProfileModal — a centered, SkillsModal-style overlay that surfaces
 // "you, the person using this IDE" with the smallest possible surface:
-// avatar + username + hostname + the active workspace line. Intentionally
+// avatar + username + hostname + whether a workspace is active. Intentionally
 // a *local* profile — no account stuff, no sign out, no actions. This is
 // a desktop tool, not a web app.
 
@@ -40,11 +40,6 @@ function initialsOf(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function shortenHome(p: string, home: string): string {
-  if (home && p.startsWith(home + "/")) return "~" + p.slice(home.length);
-  return p;
-}
-
 /* ============================================================ the modal ===*/
 
 export function ProfileModal({ open, workspaceRoot, onClose }: Props) {
@@ -77,9 +72,7 @@ export function ProfileModal({ open, workspaceRoot, onClose }: Props) {
 
   const username = user?.username || "you";
   const hostname = user?.hostname || "";
-  const home = user?.homeDir || "";
-  const wsName = workspaceRoot ? workspaceRoot.split("/").filter(Boolean).pop() ?? "—" : "—";
-  const wsShort = workspaceRoot ? shortenHome(workspaceRoot, home) : null;
+  const hasWorkspace = Boolean(workspaceRoot);
 
   return (
     <div
@@ -129,8 +122,8 @@ export function ProfileModal({ open, workspaceRoot, onClose }: Props) {
               )}
             </div>
             <div style={{ fontSize: 12, color: "var(--fg-subtle)", marginTop: 4, letterSpacing: "-0.005em" }}>
-              {workspaceRoot
-                ? <>Working in <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>{wsName}</span><span style={{ color: "var(--fg-dim)" }}> · {wsShort}</span></>
+              {hasWorkspace
+                ? <>Workspace open</>
                 : <>No workspace open</>}
             </div>
           </div>

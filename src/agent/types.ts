@@ -26,7 +26,11 @@ export type ProviderId =
   | "gemini"
   | "mistral"
   | "xai"
-  | "openrouter";
+  | "openrouter"
+  // Self-hosted (custom) OpenAI-compatible endpoints. The id is minted at
+  // runtime (`custom:<slug>`); config lives in the Rust custom-provider
+  // store, not the static registry. See src/customProviders.ts.
+  | `custom:${string}`;
 
 export type AgentAttachment = {
   path: string;
@@ -187,7 +191,9 @@ export type AgentEvent =
   | { type: "diff_resolved"; runId: string; proposalId: string; decision: DiffDecision; ts: number }
   | { type: "file_changed"; runId: string; path: string; oldHash: string; newHash: string; ts: number }
   | { type: "run_result"; runId: string; result: AgentRunResult; ts: number }
-  | { type: "run_error"; runId: string; error: AgentError; ts: number };
+  | { type: "run_error"; runId: string; error: AgentError; ts: number }
+  | { type: "user_question_requested"; runId: string; requestId: string; question: string; ts: number }
+  | { type: "user_question_resolved"; runId: string; requestId: string; answer: string; ts: number };
 
 export type AgentMessageView = {
   id: string;

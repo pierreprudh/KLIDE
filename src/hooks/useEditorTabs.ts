@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { type OnMount } from "@monaco-editor/react";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { readTextFile, watch, writeTextFile } from "@tauri-apps/plugin-fs";
+import { readWorkspaceTextFile, writeWorkspaceTextFile } from "../workspaceFs";
 
 // One open file in the editor. `diskCode` is the last content loaded from /
 // saved to disk — the baseline for deciding whether a watch event is a real
@@ -26,8 +26,8 @@ function filename(path: string): string {
  * externally-changed files. The host passes a `notify` sink for status-bar
  * messages; everything else about a file's lifecycle lives here.
  */
-export function useEditorTabs(opts: { notify: (msg: string) => void }) {
-  const { notify } = opts;
+export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRoot: string | null }) {
+  const { notify, workspaceRoot } = opts;
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
@@ -122,7 +122,7 @@ export function useEditorTabs(opts: { notify: (msg: string) => void }) {
   }
 
   async function saveActive() {
-    if (!active) return;
+    if (!active || !workspaceRoot) return;
     try {
       if (active.externalChanged) {
         const ok = await confirm(
@@ -131,7 +131,7 @@ export function useEditorTabs(opts: { notify: (msg: string) => void }) {
         );
         if (!ok) return;
       }
-      await writeTextFile(active.path, active.code);
+      await writeWorkspaceTextFile(workspaceRoot, active.path, active.code);
       setTabs((cur) =>
         cur.map((t, i) =>
           i === activeIdx
@@ -157,69 +157,60 @@ export function useEditorTabs(opts: { notify: (msg: string) => void }) {
     );
   }
 
-  // Watch every open file for external edits. A change reloads clean tabs in
+  // Poll every open file for external edits. A change reloads clean tabs in
   // place; for dirty tabs it raises a flag (resolved on the next save). The
   // diskCode baseline filters out our own writes and renames.
   useEffect(() => {
+    if (!workspaceRoot) return;
     const openPaths = Array.from(new Set(tabs.map((t) => t.path)));
     if (openPaths.length === 0) return;
 
-    let unwatch: (() => void) | undefined;
     let cancelled = false;
 
-    watch(
-      openPaths,
-      (event) => {
-        const changedPaths = openPaths.filter((path) => event.paths.includes(path));
-        for (const path of changedPaths) {
-          readTextFile(path)
-            .then((diskCode) => {
-              if (cancelled) return;
-              setTabs((cur) =>
-                cur.map((tab) => {
-                  if (tab.path !== path) return tab;
-                  // Same as the last disk content we know about? Then this
-                  // event is noise (our own save, or a rename) — not an edit.
-                  if (diskCode === (tab.diskCode ?? tab.code)) {
-                    return { ...tab, diskCode, externalChanged: false };
-                  }
-                  if (tab.dirty) {
-                    notify(`${filename(path)} changed on disk`);
-                    return { ...tab, diskCode, externalChanged: true };
-                  }
-                  notify(`Reloaded ${filename(path)}`);
-                  return { ...tab, code: diskCode, diskCode, externalChanged: false };
-                })
+    const poll = () => {
+      for (const path of openPaths) {
+        readWorkspaceTextFile(workspaceRoot, path)
+          .then((diskCode) => {
+            if (cancelled) return;
+            setTabs((cur) =>
+              cur.map((tab) => {
+                if (tab.path !== path) return tab;
+                // Same as the last disk content we know about? Then this
+                // event is noise (our own save, or a rename) — not an edit.
+                if (diskCode === (tab.diskCode ?? tab.code)) {
+                  return { ...tab, diskCode, externalChanged: false };
+                }
+                if (tab.dirty) {
+                  notify(`${filename(path)} changed on disk`);
+                  return { ...tab, diskCode, externalChanged: true };
+                }
+                notify(`Reloaded ${filename(path)}`);
+                return { ...tab, code: diskCode, diskCode, externalChanged: false };
+              })
+            );
+          })
+          .catch(() => {
+            if (cancelled) return;
+            setTabs((cur) => {
+              // Tab may have been renamed or closed already (e.g. via the
+              // explorer context menu) — don't raise a false alarm.
+              if (!cur.some((tab) => tab.path === path)) return cur;
+              notify(`${filename(path)} is unavailable on disk`);
+              return cur.map((tab) =>
+                tab.path === path ? { ...tab, externalChanged: true } : tab
               );
-            })
-            .catch(() => {
-              if (cancelled) return;
-              setTabs((cur) => {
-                // Tab may have been renamed or closed already (e.g. via the
-                // explorer context menu) — don't raise a false alarm.
-                if (!cur.some((tab) => tab.path === path)) return cur;
-                notify(`${filename(path)} is unavailable on disk`);
-                return cur.map((tab) =>
-                  tab.path === path ? { ...tab, externalChanged: true } : tab
-                );
-              });
             });
-        }
-      },
-      { delayMs: 150 }
-    )
-      .then((un) => {
-        if (cancelled) un();
-        else unwatch = un;
-      })
-      .catch((e) => console.error("open tab watch failed:", e));
+          });
+      }
+    };
+    const interval = window.setInterval(poll, 2_000);
 
     return () => {
       cancelled = true;
-      unwatch?.();
+      window.clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs.map((t) => t.path).join("\n")]);
+  }, [workspaceRoot, tabs.map((t) => t.path).join("\n")]);
 
   return {
     tabs,

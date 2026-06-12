@@ -1,6 +1,5 @@
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { watch } from "@tauri-apps/plugin-fs";
 import { useEffect, useRef, useState } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
 import type { GitFile, GitStatus } from "../gitTypes";
@@ -486,7 +485,6 @@ export function Sidebar({
 
   useEffect(() => {
     if (!root) return;
-    let unwatch: (() => void) | undefined;
     let cancelled = false;
 
     const refresh = async () => {
@@ -517,20 +515,15 @@ export function Sidebar({
           }));
         }
       } catch (e) {
-        console.error("readDir failed during watch refresh:", e);
+        console.error("readDir failed during periodic refresh:", e);
       }
     };
 
-    watch(root, refresh, { recursive: true, delayMs: 100 })
-      .then((un) => {
-        if (cancelled) un();
-        else unwatch = un;
-      })
-      .catch((e) => console.error("fs.watch failed:", e));
+    const interval = window.setInterval(refresh, 3_000);
 
     return () => {
       cancelled = true;
-      unwatch?.();
+      window.clearInterval(interval);
     };
   }, [root, expanded]);
 
@@ -604,8 +597,7 @@ export function Sidebar({
         path: target,
         isDirectory,
       });
-      // Optimistically add the node — the plugin-fs watcher can't refresh us
-      // (no fs:scope), so insert into local state ourselves. Render sorts.
+      // Optimistically add the node; the periodic refresh will reconcile later.
       const newEntry: TreeEntry = { name, isDirectory };
       if (parent === root) {
         setEntries((cur) =>
@@ -634,9 +626,8 @@ export function Sidebar({
     if (target === path) return;
     try {
       await invoke("rename_entry", { workspaceRoot: root, from: path, to: target });
-      // Optimistically rename the node in local state (the plugin-fs watcher
-      // can't refresh us — no fs:scope). Re-key any loaded child listings that
-      // lived under the old path so expanded folders survive the rename.
+      // Optimistically rename the node in local state. Re-key any loaded child
+      // listings that lived under the old path so expanded folders survive it.
       const parent = path.slice(0, path.lastIndexOf("/"));
       const oldName = path.split("/").pop() ?? path;
       if (parent === root) {
@@ -688,9 +679,8 @@ export function Sidebar({
     if (!ok) return;
     try {
       await invoke("delete_entry", { workspaceRoot: root, path });
-      // Optimistically prune the tree. We can't rely on the plugin-fs watcher
-      // to refresh (it has no fs:scope, so watch() silently fails) — so splice
-      // the node out of local state ourselves, the way commitRename does.
+      // Optimistically prune the tree; the periodic refresh will reconcile
+      // later. Splice the node out of local state the way commitRename does.
       const parent = path.slice(0, path.lastIndexOf("/"));
       if (parent === root) {
         setEntries((cur) => cur.filter((e) => joinPath(root, e.name) !== path));
@@ -984,10 +974,9 @@ export function Sidebar({
         overflow: "hidden",
       }}
     >
-      {/* Header — the workspace name is the primary object, not the
-          section label. The activity-bar icon already labels this panel
-          as "Files", so the chrome stays quiet. At-rest: workspace name
-          on the left, creation + refresh + kebab on the right. The
+      {/* Header — the panel name stays stable while the full workspace path
+          remains available in the native title. At-rest: section name on
+          the left, creation + refresh + kebab on the right. The
           bottom edge is a gradient hairline + a 1px inset highlight for
           depth (no flat 1px line). No path is rendered; native title
           reveals it. */}
@@ -995,7 +984,7 @@ export function Sidebar({
         {root ? (
           <div className="klide-explorer-header-workspace" title={root}>
             <span className="klide-explorer-header-workspace-name">
-              {root.split("/").filter(Boolean).pop() ?? root}
+              Explorer
             </span>
           </div>
         ) : (

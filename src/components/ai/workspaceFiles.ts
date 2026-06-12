@@ -1,4 +1,4 @@
-import { readDir } from "@tauri-apps/plugin-fs";
+import { listWorkspaceDir } from "../../workspaceFs";
 
 const WALK_IGNORE = new Set([
   "node_modules", ".git", "target", "dist", "build", ".next", ".turbo",
@@ -8,11 +8,11 @@ const WALK_IGNORE = new Set([
 export async function listWorkspaceFiles(root: string): Promise<string[]> {
   const MAX = 4000;
   const out: string[] = [];
-  async function walk(abs: string, rel: string, depth: number) {
+  async function walk(rel: string, depth: number) {
     if (out.length >= MAX || depth > 8) return;
     let entries;
     try {
-      entries = await readDir(abs);
+      entries = await listWorkspaceDir(root, rel || root);
     } catch {
       return;
     }
@@ -20,12 +20,12 @@ export async function listWorkspaceFiles(root: string): Promise<string[]> {
       if (out.length >= MAX) return;
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory) {
-        if (!WALK_IGNORE.has(e.name)) await walk(`${abs}/${e.name}`, childRel, depth + 1);
+        if (!WALK_IGNORE.has(e.name)) await walk(childRel, depth + 1);
       } else {
         out.push(childRel);
       }
     }
   }
-  await walk(root, "", 0);
+  await walk("", 0);
   return out.sort();
 }

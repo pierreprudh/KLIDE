@@ -5,7 +5,8 @@ pub mod types;
 
 use self::tools::{
     apply_write, clean_context_ids, execute_read_only_tool, execute_write_tool_preview,
-    is_write_tool, parse_tool_calls, recover_text_tool_calls, schemas_for_mode, NormalizedToolCall,
+    is_user_question_tool, is_write_tool, parse_tool_calls, recover_text_tool_calls,
+    schemas_for_mode, NormalizedToolCall,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -17,6 +18,7 @@ use self::types::{
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
 use crate::{ai_chat, AiUsage, StreamChunk};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -33,6 +35,10 @@ pub struct AgentRunHandle {
     /// When the loop pauses for a diff review, it stores a oneshot sender
     /// here so agent_resolve_diff can unblock it.
     pub pending_diff: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
+    /// Same pattern as `pending_diff`, but for the `userAnswerQuestion` tool.
+    /// The agent_resolve_question command sends the user's typed answer
+    /// through the channel, which the run loop awaits before continuing.
+    pub pending_question: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
 }
 
 pub struct AgentSupervisorState {
@@ -423,6 +429,7 @@ pub async fn agent_start_run(
                 status: AgentRunStatus::Running,
                 cancel: cancel.clone(),
                 pending_diff: std::sync::Mutex::new(None),
+                pending_question: std::sync::Mutex::new(None),
             },
         );
 
@@ -824,7 +831,70 @@ async fn run_agent_loop(
 
             let tool_result: ToolResult;
 
-            if is_write_tool(&call.name) {
+            if is_user_question_tool(&call.name) {
+                // Pause for a typed Q&A. The question is read from the tool
+                // input; the answer comes back through `agent_resolve_question`,
+                // which sends via the oneshot we stash in `pending_question`.
+                // Skip = a special sentinel the model can use to bail out
+                // gracefully when the user has nothing to say. We keep the
+                // raw answer text in the result so the model sees verbatim
+                // what the user wrote, including blank lines.
+                let question = call
+                    .input
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(empty question)")
+                    .to_string();
+                let request_id = format!("q_{}_{}", id, call.id);
+
+                set_run_status(&app, &id, AgentRunStatus::WaitingForPermission);
+                let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+                {
+                    let state = app.state::<AgentSupervisorState>();
+                    let mut runs = state
+                        .runs
+                        .lock()
+                        .map_err(|_| "Agent state unavailable".to_string())?;
+                    if let Some(handle) = runs.get_mut(&id) {
+                        *handle.pending_question.lock().unwrap() = Some(tx);
+                    }
+                }
+
+                emit(AgentEvent::UserQuestionRequested {
+                    run_id: id.clone(),
+                    request_id: request_id.clone(),
+                    question: question.clone(),
+                    ts: now_ms(),
+                })?;
+
+                let answer = tokio::select! {
+                    _ = cancel.cancelled() => {
+                        set_run_status(&app, &id, AgentRunStatus::Running);
+                        finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                        return Ok(());
+                    }
+                    result = rx => result.unwrap_or_else(|_| "(skipped)".to_string()),
+                };
+
+                set_run_status(&app, &id, AgentRunStatus::Running);
+
+                emit(AgentEvent::UserQuestionResolved {
+                    run_id: id.clone(),
+                    request_id: request_id.clone(),
+                    answer: answer.clone(),
+                    ts: now_ms(),
+                })?;
+
+                tool_result = ToolResult {
+                    ok: true,
+                    content: if answer == "(skipped)" {
+                        "[user skipped this question]".to_string()
+                    } else {
+                        answer
+                    },
+                    metadata: None,
+                };
+            } else if is_write_tool(&call.name) {
                 let root = match request.workspace_root.as_deref() {
                     Some(root) => root,
                     None => {
@@ -1046,6 +1116,45 @@ pub async fn agent_resolve_diff(
                 Ok(())
             } else {
                 Err("No pending diff review for this run.".to_string())
+            }
+        }
+        None => Err(format!("No known run with id {}", decision.run_id)),
+    }
+}
+
+/// Wire shape for `agent_resolve_question`. The answer is whatever the user
+/// typed (or the literal "(skipped)" sentinel that the UI sends when they
+/// bail). Empty strings are passed through unchanged so the model can
+/// distinguish "I have nothing to say" from "I chose to skip the question".
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserQuestionDecisionRequest {
+    pub run_id: String,
+    /// Echoed by the frontend so future validation (e.g. reject if a
+    /// different question is now pending) has something to key on. Not
+    /// read today — the run is single-question-at-a-time by construction.
+    #[allow(dead_code)]
+    pub request_id: String,
+    pub answer: String,
+}
+
+#[tauri::command]
+pub async fn agent_resolve_question(
+    state: tauri::State<'_, AgentSupervisorState>,
+    decision: UserQuestionDecisionRequest,
+) -> Result<(), String> {
+    let runs = state
+        .runs
+        .lock()
+        .map_err(|_| "Agent state is unavailable".to_string())?;
+    match runs.get(&decision.run_id) {
+        Some(handle) => {
+            let sender = handle.pending_question.lock().unwrap().take();
+            if let Some(tx) = sender {
+                let _ = tx.send(decision.answer);
+                Ok(())
+            } else {
+                Err("No pending question for this run.".to_string())
             }
         }
         None => Err(format!("No known run with id {}", decision.run_id)),

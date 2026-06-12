@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
+import { readWorkspaceTextFile } from "../workspaceFs";
 
 type CommandItem = {
   id: string;
@@ -137,8 +138,8 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
         saveRecentFile(f.path);
         void (async () => {
           try {
-            const { readTextFile } = await import("@tauri-apps/plugin-fs");
-            const content = await readTextFile(`${workspaceRoot}/${f.path}`);
+            if (!workspaceRoot) return;
+            const content = await readWorkspaceTextFile(workspaceRoot, f.path);
             onOpenFile(f.path, content);
             window.dispatchEvent(new CustomEvent("command-palette-close"));
           } catch {}

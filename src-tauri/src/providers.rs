@@ -24,6 +24,8 @@
 //!   each CLI has its own argument shape.
 
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 /// Streaming wire format the provider speaks. Drives `ai_chat` dispatch.
 ///
@@ -338,7 +340,7 @@ pub fn provider_key(id: &str) -> Result<Option<String>, String> {
     match entry.key {
         KeySource::Local => Ok(None),
         KeySource::Hosted { .. } => {
-            let keychain = keyring_lookup(id);
+            let keychain = cached_keyring_lookup(id);
             let (env, env_legacy) = env_fallback_names(entry);
             let from_env = env
                 .and_then(env_var)
@@ -354,14 +356,34 @@ pub fn provider_key(id: &str) -> Result<Option<String>, String> {
 /// Public version of the key status — used by `ai_provider_key_status`
 /// to report where the key came from without revealing the value.
 pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
-    let entry = lookup(id).ok_or_else(|| format!("Provider \"{id}\" is not wired yet"))?;
+    let Some(entry) = lookup(id) else {
+        // Custom (self-hosted) provider — not in the static registry. Env
+        // var first, then keychain, matching `custom_token` so the status
+        // never triggers a keychain prompt when an env var is configured.
+        if env_var(&custom_env_var_name(id)).is_some() {
+            return Ok(ProviderKeyStatus {
+                has_key: true,
+                source: "env".to_string(),
+            });
+        }
+        if cached_keyring_lookup(id).is_some() {
+            return Ok(ProviderKeyStatus {
+                has_key: true,
+                source: "keychain".to_string(),
+            });
+        }
+        return Ok(ProviderKeyStatus {
+            has_key: false,
+            source: "none".to_string(),
+        });
+    };
     if let KeySource::Local = entry.key {
         return Ok(ProviderKeyStatus {
             has_key: false,
             source: "none".to_string(),
         });
     }
-    if keyring_lookup(id).is_some() {
+    if cached_keyring_lookup(id).is_some() {
         return Ok(ProviderKeyStatus {
             has_key: true,
             source: "keychain".to_string(),
@@ -384,6 +406,16 @@ pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
 
 const KEYCHAIN_SERVICE: &str = "com.klide.app";
 
+// Resolved-token cache, keyed by provider id. The keychain `get_password`
+// call is what triggers macOS's "allow access" prompt, and `ai_chat` reads
+// the token on every request — so we read each provider's keychain entry at
+// most once per app launch and serve the rest from memory. `None` (no entry)
+// is cached too, so a tokenless local endpoint doesn't re-prompt either.
+// Invalidated whenever the entry is written or cleared. In-memory only —
+// never persisted, never crosses into the webview.
+static TOKEN_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 fn keyring_entry(provider: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(|e| e.to_string())
 }
@@ -397,8 +429,65 @@ fn keyring_lookup(provider: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// Set or clear the keychain entry for a provider. `set` writes
-/// (after rejecting empty values); `clear` deletes.
+/// Keychain read, memoised for the process lifetime (see `TOKEN_CACHE`).
+fn cached_keyring_lookup(provider: &str) -> Option<String> {
+    if let Some(hit) = TOKEN_CACHE.lock().unwrap().get(provider) {
+        return hit.clone();
+    }
+    let value = keyring_lookup(provider);
+    TOKEN_CACHE
+        .lock()
+        .unwrap()
+        .insert(provider.to_string(), value.clone());
+    value
+}
+
+/// Drop a provider's cached token so the next read re-hits the keychain.
+fn invalidate_token_cache(provider: &str) {
+    TOKEN_CACHE.lock().unwrap().remove(provider);
+}
+
+/// Env-var name holding a custom provider's bearer token:
+/// `KLIDE_TOKEN_<SLUG>`, where SLUG is the id minus the `custom:` prefix,
+/// uppercased, with each run of non-alphanumerics collapsed to one `_`.
+/// So `custom:ontraak-prod` → `KLIDE_TOKEN_ONTRAAK_PROD`. Lets a token be
+/// supplied without ever touching the keychain (handy in dev, where every
+/// rebuild re-prompts for keychain access).
+fn custom_env_var_name(id: &str) -> String {
+    let slug = id
+        .strip_prefix(crate::custom_providers::CUSTOM_ID_PREFIX)
+        .unwrap_or(id);
+    let mut out = String::from("KLIDE_TOKEN_");
+    let mut pending_sep = false;
+    for ch in slug.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_sep {
+                out.push('_');
+                pending_sep = false;
+            }
+            out.push(ch.to_ascii_uppercase());
+        } else {
+            pending_sep = !out.ends_with('_');
+        }
+    }
+    out
+}
+
+/// Resolve a custom (self-hosted) provider's token: keychain → env var.
+/// The token is optional (a no-auth local endpoint has none), so this
+/// returns `Option`, not `Result`. `id` is a raw `custom:` id, not in the
+/// static registry.
+pub fn custom_token(id: &str) -> Option<String> {
+    // Env var FIRST: a configured `KLIDE_TOKEN_<SLUG>` must skip the keychain
+    // entirely, otherwise reading the keychain item triggers macOS's prompt
+    // before we ever reach the fallback. Keychain is used only when no env
+    // var is set.
+    env_var(&custom_env_var_name(id)).or_else(|| cached_keyring_lookup(id))
+}
+
+/// Set or clear the keychain entry for a provider. `set` writes (after
+/// rejecting empty values); `clear` deletes. Both invalidate the in-memory
+/// token cache so the change takes effect on the next read.
 pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -406,14 +495,18 @@ pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
     }
     keyring_entry(provider)?
         .set_password(trimmed)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    invalidate_token_cache(provider);
+    Ok(())
 }
 
 pub fn clear_keychain_key(provider: &str) -> Result<(), String> {
-    match keyring_entry(provider)?.delete_credential() {
+    let result = match keyring_entry(provider)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
-    }
+    };
+    invalidate_token_cache(provider);
+    result
 }
 
 #[cfg(test)]
@@ -611,6 +704,17 @@ mod tests {
             other => panic!("lmstudio must be OpenAI-wire, got {other:?}"),
         }
         assert!(matches!(entry.key, KeySource::Local));
+    }
+
+    #[test]
+    fn custom_env_var_name_slugifies_the_id() {
+        // The env-var name is a user-facing contract — they type it to
+        // supply a token without the keychain — so pin the mapping.
+        assert_eq!(custom_env_var_name("custom:ontraak-prod"), "KLIDE_TOKEN_ONTRAAK_PROD");
+        assert_eq!(custom_env_var_name("custom:my.gateway 2"), "KLIDE_TOKEN_MY_GATEWAY_2");
+        // No `custom:` prefix is tolerated; trailing separators don't dangle.
+        assert_eq!(custom_env_var_name("plain"), "KLIDE_TOKEN_PLAIN");
+        assert_eq!(custom_env_var_name("custom:trailing-"), "KLIDE_TOKEN_TRAILING");
     }
 
     #[test]

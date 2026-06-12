@@ -274,6 +274,21 @@ fn registry() -> Vec<ToolEntry> {
             run_read: None,
             run_write_preview: Some(preview_create_skill),
         },
+        // The `userAnswerQuestion` tool does not actually execute — the agent
+        // loop intercepts it and pauses the run via a oneshot channel (see
+        // mod.rs). It lives in the registry only so the model sees a valid
+        // schema and knows the tool exists. `run_read` stays None: the loop
+        // returns "Unknown tool" only if the interception regresses.
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
+            schema: schema("userAnswerQuestion", "Pause the run and ask the user a single free-form question. The user's typed answer is returned as the tool result. Use this to capture tribal knowledge — design decisions, naming rationale, project history — that isn't in the code or README. One question at a time; the harness queues follow-ups on the next turn.",
+                serde_json::json!({
+                    "question": { "type": "string", "description": "The question to ask. One sentence, focused on something only the user can answer." }
+                }),
+                &["question"]),
+            run_read: None,
+            run_write_preview: None,
+        },
     ]
 }
 
@@ -316,6 +331,13 @@ pub fn is_write_tool(name: &str) -> bool {
     registry()
         .iter()
         .any(|e| e.kind == ToolKind::Write && schema_has_name(&e.schema, name))
+}
+
+/// The Q&A tool is `ReadOnly` in the registry (no filesystem side-effect) but
+/// still requires a harness pause. Detect by name so the agent loop can route
+/// to the user-pause path *before* the write/read dispatch above.
+pub fn is_user_question_tool(name: &str) -> bool {
+    name == "userAnswerQuestion"
 }
 
 fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {

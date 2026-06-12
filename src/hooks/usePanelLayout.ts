@@ -30,6 +30,10 @@ function newAiPanelId(): string {
 
 function storedAiProvider(id: string | undefined): ProviderId | undefined {
   if (!id) return undefined;
+  // Custom (self-hosted) ids aren't in the static PROVIDER_GROUPS — they're
+  // minted at runtime — but the `custom:` prefix makes them recognisable, so
+  // a persisted custom selection survives a reload.
+  if (id.startsWith("custom:")) return id as ProviderId;
   const known = PROVIDER_GROUPS.some((group) =>
     group.items.some((item) => item.id === id)
   );

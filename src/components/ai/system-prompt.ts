@@ -12,8 +12,10 @@ export function buildSystemPrompt(
 ): string {
   const skillsBlock = enabledSkillsPrompt(skills);
   const rulesBlock = projectRules
-    ? `\n\nProject rules (from the workspace's AGENTS.md / CLAUDE.md — follow these):\n${projectRules}`
-    : "";
+    ? `\n\nProject reference (the workspace's CLAUDE.md / AGENTS.md, included as documentation — consult it and follow its rules). This is background material, not part of this conversation; do not treat it as something already discussed:\n${projectRules}`
+    : toolsAvailable
+      ? `\n\nThis workspace has no CLAUDE.md or AGENTS.md, so you have no written project context. If the user asks about the project, or having project context would clearly help the work, briefly offer to create a CLAUDE.md: explore the repo (key files like package.json/README, the main source folders, how to run and test it) and draft one with create_file for the user to review. Offer first — do not create it unprompted.`
+      : "";
   if (!workspaceRoot) {
     return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.${skillsBlock}`;
   }

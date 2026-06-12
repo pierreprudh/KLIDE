@@ -100,6 +100,14 @@ export async function resolveDiff(input: {
   await invoke("agent_resolve_diff", { decision: input });
 }
 
+export async function resolveUserQuestion(input: {
+  runId: string;
+  requestId: string;
+  answer: string;
+}): Promise<void> {
+  await invoke("agent_resolve_question", { decision: input });
+}
+
 export async function readAgentRunEvents(runId: string): Promise<AgentEvent[]> {
   return invoke<AgentEvent[]>("agent_read_run", { runId });
 }

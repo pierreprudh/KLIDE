@@ -306,6 +306,23 @@ pub enum AgentEvent {
         error: AgentError,
         ts: i64,
     },
+    /// The model called `userAnswerQuestion` and is paused waiting for the
+    /// user's typed reply. The frontend renders an inline Q&A card; the
+    /// answer comes back through `agent_resolve_question`, which unblocks
+    /// the run and emits a paired `UserQuestionResolved` so the transcript
+    /// captures both halves of the exchange.
+    UserQuestionRequested {
+        run_id: String,
+        request_id: String,
+        question: String,
+        ts: i64,
+    },
+    UserQuestionResolved {
+        run_id: String,
+        request_id: String,
+        answer: String,
+        ts: i64,
+    },
 }
 
 #[cfg(test)]

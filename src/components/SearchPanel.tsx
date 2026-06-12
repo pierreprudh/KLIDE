@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { readWorkspaceTextFile } from "../workspaceFs";
 
 type SearchMatch = {
   file: string;
@@ -61,9 +62,9 @@ export function SearchPanel({ workspaceRoot, visible, onClose, onOpenFile }: Pro
   }
 
   async function openMatch(m: SearchMatch) {
+    if (!workspaceRoot) return;
     try {
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
-      const content = await readTextFile(`${workspaceRoot}/${m.file}`);
+      const content = await readWorkspaceTextFile(workspaceRoot, m.file);
       onOpenFile(m.file, content, { line: m.line, column: m.column });
     } catch (e) {
       setError(`Could not open ${m.file}: ${e}`);

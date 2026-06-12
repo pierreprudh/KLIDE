@@ -114,6 +114,33 @@ impl Workspace {
         Ok(target)
     }
 
+    /// Validate an absolute path that may not exist yet. This is the frontend
+    /// twin of `resolve_new`: used for writes that may create parent folders.
+    pub fn resolve_abs_new(&self, path: &str) -> Result<PathBuf, String> {
+        let target = PathBuf::from(path);
+        if !target.is_absolute() {
+            return Err("Path is outside the open workspace".to_string());
+        }
+        if target.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err("Path is outside the open workspace".to_string());
+        }
+        if !target.starts_with(&self.root) {
+            return Err("Path is outside the open workspace".to_string());
+        }
+        let mut ancestor = target.clone();
+        while !ancestor.exists() {
+            match ancestor.parent() {
+                Some(p) => ancestor = p.to_path_buf(),
+                None => return Err("Path is outside the open workspace".to_string()),
+            }
+        }
+        let ancestor = ancestor.canonicalize().map_err(|e| format!("Invalid path: {e}"))?;
+        if !ancestor.starts_with(&self.root) {
+            return Err("Path is outside the open workspace".to_string());
+        }
+        Ok(target)
+    }
+
     /// Render a resolved path back as workspace-relative for messages shown
     /// to the model and the user. The root itself displays as ".".
     pub fn display(&self, path: &Path) -> String {
@@ -212,6 +239,17 @@ mod tests {
         let new_file = ws.root().join("brand-new.txt");
         assert!(ws.resolve_abs_entry(new_file.to_str().unwrap()).is_ok());
         assert!(ws.resolve_abs_entry("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn resolve_abs_new_allows_nested_missing_paths_inside_workspace() {
+        let (_dir, ws) = temp_workspace("abs-new");
+        let nested = ws.root().join(".klide/skills/example/SKILL.md");
+        assert!(ws.resolve_abs_new(nested.to_str().unwrap()).is_ok());
+        assert!(ws.resolve_abs_new("/etc/klide-nope.txt").is_err());
+        assert!(ws
+            .resolve_abs_new(ws.root().join("../escape.txt").to_str().unwrap())
+            .is_err());
     }
 
     #[test]

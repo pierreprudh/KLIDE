@@ -14,7 +14,7 @@ Local models by default · online providers when you want them · real agent ter
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Ollama](https://img.shields.io/badge/Ollama-local_first-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com)
 
-![Status](https://img.shields.io/badge/status-v0.2--shipped-7A9F4A?style=flat-square)
+![Status](https://img.shields.io/badge/status-v0.3--shipped-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS_·_Linux_·_Windows-555555?style=flat-square)
 ![Binary](https://img.shields.io/badge/binary-~10_MB-4263EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-555555?style=flat-square)
@@ -106,6 +106,11 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] Terminal panel — real shell via PTY, toggleable
 - [x] AI panel — streaming chat against local Ollama (native `tools` API)
 - [x] Agent mode — `write_file` / `create_file` with diff review
+
+**v0.3 — shipped**
+
+- [x] Self-hosted providers — add your own OpenAI-compatible endpoints (label + base URL + keychain token) in Settings; they appear in the provider picker under "Self-hosted", with live model listing and per-endpoint default model
+- [x] Collapsible, glass-headed provider picker that scales to many providers
 
 **v0.2 — shipped** (verified 2026-06-08)
 

@@ -1,4 +1,4 @@
-// Mission Control's data layer. A "run" is one agent session. KIDE aggregates
+// Mission Control's data layer. A "run" is one agent session. Klide aggregates
 // runs from every agentic tool you use — its own AI panel plus external CLIs
 // (Claude Code, Codex) whose session logs the Rust `list_agent_runs` command
 // reads off disk. The board is read-only for now; steering/resume come later.
@@ -114,18 +114,23 @@ export const BOARD_SECTION_LABEL: Record<RunBoardSection, string> = {
 export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
   running: "Active or queued work",
   blocked: "Needs a decision or repair",
-  ready_for_review: "Completed delegate output to inspect",
-  done: "Completed Klide conversations",
+  ready_for_review: "Delegated subtask output to inspect",
+  done: "Finished conversations you ran",
 };
 
-export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "source">): RunBoardSection {
+export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId">): RunBoardSection {
   if (run.status === "running" || run.status === "queued") return "running";
   if (run.status === "waiting" || run.status === "error") return "blocked";
-  if (run.kind === "task" || run.source !== "klide") return "ready_for_review";
+  // "Ready for Review" is for delegated work an agent produced on your behalf:
+  // queued tasks and Klide-spawned subagent runs (which carry a parentId — set
+  // only when Klide actually spawned the delegate). A top-level CLI session you
+  // opened and ended yourself has no parentId, so it belongs in Done alongside
+  // finished Klide conversations — you already drove it, nothing to inspect.
+  if (run.kind === "task" || run.parentId) return "ready_for_review";
   return "done";
 }
 
-export function runNeedsAttention(run: Pick<Run, "status" | "kind" | "source">): boolean {
+export function runNeedsAttention(run: Pick<Run, "status" | "kind" | "parentId">): boolean {
   return boardSectionForRun(run) !== "done";
 }
 
@@ -211,22 +216,29 @@ function fromDto(a: AgentRunDto): Run {
 // Pull a page of real runs from the backend (newest first). Throws if the
 // command is unavailable (e.g. running outside Tauri) — callers fall back to
 // the seed. Pages are offset-based so loading more never re-parses earlier runs.
-export async function fetchAgentRuns(limit = 10, offset = 0): Promise<Run[]> {
+export async function fetchAgentRuns(
+  limit = 10,
+  offset = 0
+): Promise<{ runs: Run[]; hasMore: boolean }> {
   const [external, klide] = await Promise.allSettled([
     invoke<AgentRunDto[]>("list_agent_runs", { limit, offset }),
     invoke<AgentRunDto[]>("agent_list_runs", { limit, offset }),
   ]);
-  const rows = [
-    ...(external.status === "fulfilled" ? external.value : []),
-    ...(klide.status === "fulfilled" ? klide.value : []),
-  ];
-  if (rows.length === 0 && external.status === "rejected" && klide.status === "rejected") {
+  if (external.status === "rejected" && klide.status === "rejected") {
     throw external.reason;
   }
-  return rows
+  const externalRows = external.status === "fulfilled" ? external.value : [];
+  const klideRows = klide.status === "fulfilled" ? klide.value : [];
+  // Both sources are paged independently by the same offset, so each run is
+  // returned at most once across pages. Merge the FULL page from both — do not
+  // slice to `limit`, or the trimmed overflow gets skipped by the next offset
+  // and those runs vanish from the board. Callers dedupe by id on append.
+  const runs = [...externalRows, ...klideRows]
     .map(fromDto)
-    .sort((a, b) => b.updatedMs - a.updatedMs)
-    .slice(0, limit);
+    .sort((a, b) => b.updatedMs - a.updatedMs);
+  // There's another page to pull if either source filled this one.
+  const hasMore = externalRows.length === limit || klideRows.length === limit;
+  return { runs, hasMore };
 }
 
 // ── Stats panel cache ──────────────────────────────────────────────────────
@@ -267,7 +279,7 @@ export function fetchAgentRunsCached(
     promise: Promise.resolve([]),
   };
   entry.promise = fetchAgentRuns(limit, offset)
-    .then((runs) => {
+    .then(({ runs }) => {
       entry.runs = runs;
       entry.at = performance.now();
       return runs;
@@ -401,8 +413,8 @@ export function seedRuns(): Run[] {
       title: "Tour the project and report current state",
       status: "done",
       model: "llama3.1:8b",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
+      project: null,
+      cwd: null,
       branch: "main",
       messageCount: 6,
       updatedMs: now - 4 * min,
@@ -416,8 +428,8 @@ export function seedRuns(): Run[] {
       title: "Explore codebase architecture",
       status: "done",
       model: "opencode-go/minimax-m3",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
+      project: null,
+      cwd: null,
       branch: "main",
       messageCount: 8,
       updatedMs: now - 8 * min,
@@ -432,8 +444,8 @@ export function seedRuns(): Run[] {
       title: "Add a dark-mode toggle to the settings panel",
       status: "running",
       model: "llama3.1:8b",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
+      project: null,
+      cwd: null,
       branch: "main",
       messageCount: 24,
       updatedMs: now - 6_000,
@@ -447,8 +459,8 @@ export function seedRuns(): Run[] {
       title: "Implement the color scheme tokens",
       status: "done",
       model: "claude-opus-4-8",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
+      project: null,
+      cwd: null,
       branch: "main",
       messageCount: 14,
       updatedMs: now - 2 * min,
@@ -463,8 +475,8 @@ export function seedRuns(): Run[] {
       title: "Find CSS variable usage across components",
       status: "done",
       model: "opencode-go/minimax-m3",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
+      project: null,
+      cwd: null,
       branch: "main",
       messageCount: 5,
       updatedMs: now - 5 * min,
@@ -479,8 +491,8 @@ export function seedRuns(): Run[] {
       title: "Refactor the terminal panel resize handle",
       status: "done",
       model: "gpt-5.5",
-      project: "KIDE",
-      cwd: "/Users/you/KIDE",
+      project: null,
+      cwd: null,
       branch: "main",
       messageCount: 11,
       updatedMs: now - 38 * min,

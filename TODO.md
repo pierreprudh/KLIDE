@@ -35,7 +35,7 @@ them.
 ## Architecture deepening (started 2026-06-10)
 
 - [x] Workspace module (`src-tauri/src/workspace.rs`) — one home for the Workspace-rooted invariant. Agent tool executions take `&Workspace` (not a root string); explorer commands resolve through `resolve_abs_entry`; `read_text_file` / `list_dir` now enforce containment too. Replaced `assert_in_workspace` + `resolve_existing_path` / `resolve_new_path`.
-- [ ] Phase 2 — close the plugin-fs bypass: migrate `@tauri-apps/plugin-fs` call sites (App.tsx save, AiPanel, SearchPanel, CommandPalette, summarize.ts, workspaceFiles.ts) to workspace-checked Rust commands, then drop the unscoped `fs:allow-*` permissions from `capabilities/default.json`. Until then, frontend reads/writes can still go around the Workspace seam.
+- [x] Phase 2 — close the plugin-fs bypass: migrated `@tauri-apps/plugin-fs` call sites (App.tsx save, AiPanel, SearchPanel, CommandPalette, summarize.ts, workspaceFiles.ts) to workspace-checked Rust commands, then dropped the unscoped `fs:allow-*` permissions from `capabilities/default.json`.
 
 ## Refactoring (completed 2026-06-04)
 
@@ -53,7 +53,8 @@ them.
 - [x] Checkpoint rollback: preview files changed since a turn and revert selected files.
 - [x] Mission Control v2: resume/open session handoff to the right CLI instead of read-only inspection.
 - [x] Project Memory v3: cross-link entries to touched files (click `filesTouched` to jump to the file). Auto-summarizer watch is parked — current model is the user-triggered "Save as skill" sparkle, which the agent uses to capture reusable patterns explicitly.
-- [ ] Memory auto-summarizer: watch completed/stopped runs and write durable memory notes (the auto-generate path is already shipped for skills, this is the memory equivalent).
+- [x] Memory auto-summarizer: when a Klide agent run settles with status "done", automatically write a durable Project Memory note from the conversation. Toggle in Settings → Harness (`autoMemoryOnRunDone`, default ON). Manual Summarize header action still works. Inline "Auto-saved" notice under the composer fades after 4s. Done runs only (skip cancelled / errored / delegate providers / single-message exchanges).
+- [x] `userAnswerQuestion` pause tool + `/interview` slash command: new tool in the Rust registry that pauses the harness via oneshot, surfaces an inline Q&A card in the AI panel, returns the user's typed answer to the model. Built-in skill "Codebase Interview" shipped in `DEFAULT_SKILLS` (src/skills.ts) — visible in the Skills modal, toggleable like the Code Review built-in, and the system prompt picks it up automatically. Plan mode, read-only, writes `docs/codebase-decisions.md` at the end. The skill explicitly forbids re-asking the same question (the model must track asked questions in its scratchpad). The `/interview` slash command inlines a self-contained prompt so it works even when the skill is disabled.
 
 ## Small Follow-Ups
 

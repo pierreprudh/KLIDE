@@ -172,7 +172,7 @@ export function ActivityBar({ active, onToggle }: Props) {
   // Top zone — in-workbench / full-window tools. The FLIP bar rides
   // between them when one is active.
   const toolItems: { id: View; label: string; Icon: () => React.JSX.Element }[] = [
-    { id: "explorer", label: "Files", Icon: FolderIcon },
+    { id: "explorer", label: "Explorer", Icon: FolderIcon },
     { id: "git", label: "Git", Icon: GitIcon },
     { id: "memory", label: "Memory", Icon: MemoryIcon },
     { id: "skills", label: "Skills", Icon: SkillsIcon },

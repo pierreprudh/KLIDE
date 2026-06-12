@@ -33,8 +33,15 @@ fn normalize_model_ids(value: &serde_json::Value) -> Vec<String> {
 
 #[tauri::command]
 pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, String> {
-    let entry = providers::lookup(&provider)
-        .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+    // A registry miss falls through to the custom (self-hosted) store —
+    // those endpoints expose the OpenAI `/v1/models` listing, queried
+    // with their (optional) keychain token.
+    let Some(entry) = providers::lookup(&provider) else {
+        let cp = crate::custom_providers::get(&provider)
+            .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+        let key = providers::custom_token(&cp.id);
+        return fetch_openai_compatible_models(&cp.id, &cp.models_url(), key).await;
+    };
 
     if let Some(spec) = entry.subscription {
         return subscription_models(&spec);
@@ -57,7 +64,10 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
                     ))
                 }
             };
-            fetch_openai_compatible_models(entry.id, openai.models_url).await
+            // Hosted providers require a key (errors when missing); local
+            // OpenAI-wire ones (LM Studio) return Ok(None) → no auth header.
+            let key = provider_key(entry.id)?;
+            fetch_openai_compatible_models(entry.id, openai.models_url, key).await
         }
         providers::ModelsHandler::StaticPresets(presets) => {
             Ok(presets.iter().map(|m| (*m).to_string()).collect())
@@ -119,12 +129,14 @@ async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
 
 async fn fetch_openai_compatible_models(
     provider: &str,
-    url: &'static str,
+    url: &str,
+    key: Option<String>,
 ) -> Result<Vec<String>, String> {
-    let key = provider_key(provider)?.ok_or_else(|| "Missing API key".to_string())?;
-    let res = reqwest::Client::new()
-        .get(url)
-        .bearer_auth(key)
+    let mut req = reqwest::Client::new().get(url);
+    if let Some(key) = key {
+        req = req.bearer_auth(key);
+    }
+    let res = req
         .send()
         .await
         .map_err(|e| format!("Unable to reach {provider}: {e}"))?;

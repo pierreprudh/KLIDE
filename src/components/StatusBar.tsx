@@ -130,9 +130,6 @@ export function StatusBar({
       {language && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>{language}</span>
       )}
-      {workspaceRoot && (
-        <span>{workspaceRoot.split("/").pop()}</span>
-      )}
       {gitStatus && (
         <span
           title={`${gitStatus.branch} · ${gitStatus.files.length} ${

@@ -112,6 +112,17 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
   };
+  // Self-hosted (custom:*) endpoints — a server-rack glyph with status LEDs,
+  // so "bring your own datacenter" reads at a glance instead of a bare dot.
+  if (id.startsWith("custom:")) {
+    return (
+      <svg {...line} strokeWidth="1.7">
+        <rect x="3" y="4" width="18" height="7" rx="2" />
+        <rect x="3" y="13" width="18" height="7" rx="2" />
+        <path d="M7 7.5h0M7 16.5h0" strokeWidth="2.4" />
+      </svg>
+    );
+  }
   switch (id) {
     case "lmstudio":
       return (

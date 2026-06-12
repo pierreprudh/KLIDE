@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { MLX_MODEL_PRESETS } from "../../agent/providers";
+import { MLX_MODEL_PRESETS, providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { ProviderLogo } from "./icons";
 import { modelBrand } from "../../modelBrand";
@@ -65,6 +65,8 @@ function providerCaption(id: ProviderId): string {
     case "claude-code": return "Claude Code";
     case "codex": return "Codex";
     case "opencode": return "OpenCode";
+    // Self-hosted (custom:*) ids — caption with the endpoint's label.
+    default: return providerName(id);
   }
 }
 

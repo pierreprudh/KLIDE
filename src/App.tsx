@@ -6,7 +6,6 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile, watch } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
@@ -44,6 +43,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout } from "./hooks/usePanelLayout";
+import { readWorkspaceTextFile } from "./workspaceFs";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
@@ -60,6 +60,11 @@ export type HarnessSettings = {
   /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent
    *  request slots). Absent → Ollama's own default. */
   serverConcurrency?: number;
+  /** When a Klide agent run settles with status "done", automatically write
+   *  a project-memory note from the conversation. Default ON (undefined /
+   *  missing field is treated as true). Off silences the auto-save — the
+   *  manual Summarize header action still works. */
+  autoMemoryOnRunDone?: boolean;
 };
 const DEFAULT_AI_MODEL = "llama3.1:8b";
 
@@ -101,6 +106,7 @@ function detectLanguage(path: string): string {
 }
 
 function App() {
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [view, setView] = useState<"workbench" | "runs" | "settings" | "git-review">("workbench");
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
@@ -150,9 +156,8 @@ function App() {
     closeTab,
     saveActive,
     onAgentWrote,
-  } = useEditorTabs({ notify: setFileNotice });
+  } = useEditorTabs({ notify: setFileNotice, workspaceRoot });
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
-  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [recentFolders, setRecentFolders] = useState<string[]>(() => {
     try {
       const parsed = JSON.parse(
@@ -703,25 +708,17 @@ function App() {
       return;
     }
 
-    let unwatch: (() => void) | undefined;
     let cancelled = false;
     const refresh = () => {
       if (!cancelled) refreshGitStatus(workspaceRoot);
     };
 
     refresh();
-    watch(workspaceRoot, refresh, { recursive: true, delayMs: 250 })
-      .then((un) => {
-        if (cancelled) un();
-        else unwatch = un;
-      })
-      .catch(() => {
-        if (!cancelled) refreshGitStatus(workspaceRoot);
-      });
+    const interval = window.setInterval(refresh, 3_000);
 
     return () => {
       cancelled = true;
-      unwatch?.();
+      window.clearInterval(interval);
     };
   }, [workspaceRoot]);
 
@@ -1367,10 +1364,9 @@ function App() {
         onOpenInEditor={(path: string, content: string) => openFile(path, content)}
         onOpenTouchedFile={async (path: string) => {
           if (!workspaceRoot) return;
-          const absolute = path.startsWith("/") ? path : `${workspaceRoot}/${path}`;
           try {
-            const content = await readTextFile(absolute);
-            openFile(absolute, content);
+            const content = await readWorkspaceTextFile(workspaceRoot, path);
+            openFile(path, content);
             setMemoryVisible(false);
           } catch (err) {
             setFileNotice(err instanceof Error ? err.message : String(err));

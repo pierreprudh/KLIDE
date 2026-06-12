@@ -6,11 +6,19 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
-import { ProviderLogo } from "./ai/icons";
+import { ChevronDown, ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { PROVIDER_GROUPS } from "../agent/providers";
+import {
+  customIdFromLabel,
+  refreshCustomProviders,
+  removeCustomProvider,
+  upsertCustomProvider,
+  type CustomProvider,
+} from "../customProviders";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
 import {
@@ -88,8 +96,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -807,6 +815,566 @@ function ApiKeyRow({
   );
 }
 
+// Self-hosted (custom) OpenAI-compatible endpoints. Config (label, base URL,
+// default model) persists to the Rust store; the bearer token rides the same
+// keychain path as the built-in keys. Adding one here makes it appear in the
+// AI panel's provider dropdown under "Self-hosted".
+function PencilIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function TrashIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  );
+}
+
+// A square, ghost-styled icon button. Stops propagation so it can sit
+// inside a clickable (expandable) row without toggling it.
+function IconButton({
+  title,
+  onClick,
+  danger,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  danger?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: 28,
+        height: 28,
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid transparent",
+        background: "transparent",
+        color: "var(--fg-subtle)",
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--bg-hover)";
+        e.currentTarget.style.color = danger ? "var(--danger, #c0392b)" : "var(--fg-strong)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = "var(--fg-subtle)";
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// One self-hosted endpoint: a click-to-expand row. Expanding fetches the
+// live model list (which doubles as a connection + auth test) and the key
+// status. Clicking a model pins it as the endpoint's default.
+function CustomEndpointRow({
+  endpoint,
+  busy,
+  onEdit,
+  onRemove,
+  onSetDefault,
+}: {
+  endpoint: CustomProvider;
+  busy: boolean;
+  onEdit: () => void;
+  onRemove: () => void;
+  onSetDefault: (model: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [models, setModels] = useState<string[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [keyStatus, setKeyStatus] = useState<KeyStatus>({ hasKey: false, source: "none" });
+  const [hoveredModel, setHoveredModel] = useState<string | null>(null);
+
+  const loadDetail = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const ks = await invoke<KeyStatus>("ai_provider_key_status", {
+        provider: endpoint.id,
+      }).catch(() => ({ hasKey: false, source: "none" }) as KeyStatus);
+      setKeyStatus(ks);
+      const m = await invoke<string[]>("ai_provider_models", { provider: endpoint.id });
+      setModels(m);
+    } catch (e) {
+      setError(String(e));
+      setModels([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [endpoint.id]);
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    // Lazy-load the detail the first time it opens.
+    if (next && models === null && !loading) void loadDetail();
+  }
+
+  // Show just the host in the collapsed subtitle; full URL in the detail.
+  let host = endpoint.baseUrl;
+  try {
+    host = new URL(endpoint.baseUrl).host;
+  } catch {
+    /* keep raw */
+  }
+  const count = models?.length ?? 0;
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        className="klide-settings-row"
+        style={{ cursor: "pointer" }}
+      >
+        <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
+          <span
+            style={{
+              display: "grid",
+              placeItems: "center",
+              color: "var(--fg-dim)",
+              transform: open ? "rotate(0deg)" : "rotate(-90deg)",
+              transition: "transform 120ms ease",
+              flexShrink: 0,
+            }}
+          >
+            <ChevronDown />
+          </span>
+          <span style={{ display: "grid", placeItems: "center", color: "var(--fg-subtle)", flexShrink: 0 }}>
+            <ProviderLogo id={endpoint.id as ProviderId} size={15} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div className="klide-row-title">{endpoint.label}</div>
+            <div className="klide-row-description">
+              {host}
+              {endpoint.defaultModel ? ` · ${endpoint.defaultModel}` : ""}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <IconButton title="Edit endpoint" onClick={onEdit}>
+            <PencilIcon />
+          </IconButton>
+          <IconButton title="Remove endpoint" danger onClick={onRemove}>
+            <TrashIcon />
+          </IconButton>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ padding: "0 18px 14px 40px", display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {loading ? (
+              <StatusPill tone="idle">Checking…</StatusPill>
+            ) : error ? (
+              <StatusPill tone="warn">Unreachable</StatusPill>
+            ) : (
+              <StatusPill tone="ok">{`${count} ${count === 1 ? "model" : "models"}`}</StatusPill>
+            )}
+            {keyStatus.source === "keychain" ? (
+              <StatusPill tone="ok">Token saved</StatusPill>
+            ) : keyStatus.source === "env" ? (
+              <StatusPill tone="warn">Token from env</StatusPill>
+            ) : (
+              <StatusPill tone="idle">No token</StatusPill>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--fg-subtle)", wordBreak: "break-all" }}>
+            {endpoint.baseUrl}
+          </div>
+          {error && (
+            <div style={{ fontSize: 12, color: "var(--danger, #c0392b)", wordBreak: "break-word" }}>
+              {error}
+            </div>
+          )}
+          {models && models.length > 0 && (
+            <div style={{ display: "grid", gap: 7 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg-dim)", letterSpacing: "0.02em" }}>
+                  Models{" "}
+                  <span style={{ fontWeight: 400, color: "var(--fg-subtle)" }}>{count}</span>
+                </span>
+                <span style={{ fontSize: 10.5, color: "var(--fg-subtle)" }}>click to set default</span>
+              </div>
+              <div style={{ display: "grid", gap: 2 }}>
+                {models.map((m) => {
+                  const isDefault = m === endpoint.defaultModel;
+                  const hovered = hoveredModel === m;
+                  const colon = m.indexOf(":");
+                  const name = colon >= 0 ? m.slice(0, colon) : m;
+                  const tag = colon >= 0 ? m.slice(colon + 1) : null;
+                  return (
+                    <button
+                      key={m}
+                      disabled={busy}
+                      onClick={() => onSetDefault(m)}
+                      onMouseEnter={() => setHoveredModel(m)}
+                      onMouseLeave={() => setHoveredModel((cur) => (cur === m ? null : cur))}
+                      title={isDefault ? "Default model" : "Set as default"}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "7px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        cursor: busy ? "default" : "pointer",
+                        border: `1px solid ${isDefault ? "color-mix(in srgb, var(--accent) 38%, var(--border))" : "transparent"}`,
+                        background: isDefault ? "var(--accent-soft)" : hovered ? "var(--bg-hover)" : "transparent",
+                        transition: "background 0.12s ease, border-color 0.12s ease",
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 15,
+                          height: 15,
+                          flexShrink: 0,
+                          borderRadius: "50%",
+                          display: "grid",
+                          placeItems: "center",
+                          border: `1px solid ${isDefault ? "var(--accent)" : "var(--border)"}`,
+                          background: isDefault ? "var(--accent)" : "transparent",
+                        }}
+                      >
+                        {isDefault && (
+                          <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
+                            <path d="M2.5 6.2l2.3 2.3 4.7-5" stroke="var(--bg)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </span>
+                      <span style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 7, flex: 1 }}>
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono, monospace)",
+                            fontSize: 12,
+                            color: isDefault ? "var(--accent)" : "var(--fg-strong)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {name}
+                        </span>
+                        {tag && (
+                          <span
+                            style={{
+                              flexShrink: 0,
+                              fontSize: 10,
+                              fontWeight: 600,
+                              letterSpacing: "0.03em",
+                              textTransform: "uppercase",
+                              color: "var(--fg-subtle)",
+                              background: "var(--bg-hover)",
+                              border: "1px solid var(--border)",
+                              padding: "1px 6px",
+                              borderRadius: 999,
+                              fontFamily: "var(--font-mono, monospace)",
+                            }}
+                          >
+                            {tag}
+                          </span>
+                        )}
+                      </span>
+                      {isDefault ? (
+                        <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 600, color: "var(--accent)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                          Default
+                        </span>
+                      ) : hovered ? (
+                        <span style={{ flexShrink: 0, fontSize: 10.5, color: "var(--fg-subtle)" }}>
+                          Set default
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <div>
+            <LinkButton onClick={() => void loadDetail()}>Refresh</LinkButton>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CustomEndpointsBlock({
+  onProviderKeyChange,
+}: {
+  onProviderKeyChange?: (id: string) => void;
+}) {
+  const [endpoints, setEndpoints] = useState<CustomProvider[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setEndpoints(await refreshCustomProviders());
+    } catch {
+      /* store unreadable → treat as empty */
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function resetForm() {
+    setAdding(false);
+    setEditingId(null);
+    setLabel("");
+    setBaseUrl("");
+    setDefaultModel("");
+    setToken("");
+    setError(null);
+  }
+
+  const formOpen = adding || editingId !== null;
+
+  // Escape closes the add/edit modal, matching the app's other dialogs.
+  useEffect(() => {
+    if (!formOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") resetForm();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [formOpen]);
+
+  async function save() {
+    if (busy || !label.trim() || !baseUrl.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Keep an existing id stable on edit; mint one from the label on add.
+      const id = editingId ?? customIdFromLabel(label);
+      await upsertCustomProvider({
+        id,
+        label: label.trim(),
+        baseUrl: baseUrl.trim(),
+        defaultModel: defaultModel.trim(),
+      });
+      // Blank token on edit means "leave the saved one alone".
+      if (token.trim()) {
+        await invoke("ai_set_provider_key", { provider: id, key: token });
+        onProviderKeyChange?.(id);
+      }
+      resetForm();
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await removeCustomProvider(id);
+      if (editingId === id) resetForm();
+      await load();
+      onProviderKeyChange?.(id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Pin a model from the live list as this endpoint's default (used when
+  // the provider is first selected in the AI panel).
+  async function setDefault(ep: CustomProvider, model: string) {
+    if (busy || ep.defaultModel === model) return;
+    setBusy(true);
+    try {
+      await upsertCustomProvider({ ...ep, defaultModel: model });
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEdit(ep: CustomProvider) {
+    resetForm();
+    setEditingId(ep.id);
+    setLabel(ep.label);
+    setBaseUrl(ep.baseUrl);
+    setDefaultModel(ep.defaultModel);
+  }
+
+  return (
+    <>
+      {endpoints.length > 0 && (
+        <Panel>
+          {endpoints.map((ep) => (
+            <CustomEndpointRow
+              key={ep.id}
+              endpoint={ep}
+              busy={busy}
+              onEdit={() => startEdit(ep)}
+              onRemove={() => void remove(ep.id)}
+              onSetDefault={(model) => void setDefault(ep, model)}
+            />
+          ))}
+        </Panel>
+      )}
+
+      {/* Add lives below the container as its own button, not nested in the
+          endpoint list — the list is the container, adding is a separate act. */}
+      <button
+        onClick={() => { resetForm(); setAdding(true); }}
+        className="klide-button"
+        style={{
+          width: "100%",
+          marginTop: endpoints.length > 0 ? 10 : 0,
+          justifyContent: "center",
+          minHeight: 40,
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-md)",
+          background: "var(--bg-hover)",
+          color: "var(--fg-strong)",
+          fontSize: 12.5,
+        }}
+      >
+        + Add self-hosted endpoint
+      </button>
+
+      {/* The add/edit form is a centered modal, not an inline panel row —
+          a focused surface for entering URL + token, dimming the list. */}
+      {formOpen &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={editingId ? "Edit endpoint" : "Add self-hosted endpoint"}
+            onClick={resetForm}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 5200,
+              display: "grid",
+              placeItems: "center",
+              background: "rgba(0,0,0,0.30)",
+              backdropFilter: "blur(3px)",
+            }}
+          >
+            <div
+              className="floating-panel"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: "min(440px, calc(100vw - 80px))",
+                borderRadius: "var(--radius-lg)",
+                display: "grid",
+                gap: 10,
+                padding: "20px 22px",
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg-strong)" }}>
+                {editingId ? "Edit endpoint" : "Add self-hosted endpoint"}
+              </div>
+              <input
+                value={label}
+                placeholder="Name (e.g. My Gateway)"
+                onChange={(e) => setLabel(e.target.value)}
+                aria-label="Endpoint name"
+                className="klide-field"
+                disabled={editingId !== null}
+                autoFocus
+                style={{ height: 34, padding: "0 12px" }}
+              />
+              <input
+                value={baseUrl}
+                placeholder="Base URL (https://llm.example.com/v1)"
+                onChange={(e) => setBaseUrl(e.target.value)}
+                aria-label="Base URL"
+                className="klide-field"
+                autoComplete="off"
+                style={{ height: 34, padding: "0 12px" }}
+              />
+              <input
+                value={defaultModel}
+                placeholder="Default model (optional, e.g. devstral-small-2:24b)"
+                onChange={(e) => setDefaultModel(e.target.value)}
+                aria-label="Default model"
+                className="klide-field"
+                autoComplete="off"
+                style={{ height: 34, padding: "0 12px" }}
+              />
+              <input
+                type="password"
+                value={token}
+                placeholder={editingId ? "Bearer token (leave blank to keep current)" : "Bearer token (stored in keychain)"}
+                onChange={(e) => setToken(e.target.value)}
+                aria-label="Bearer token"
+                className="klide-field"
+                autoComplete="off"
+                style={{ height: 34, padding: "0 12px" }}
+              />
+              <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--fg-subtle)" }}>
+                Requests use the OpenAI wire format. The per-model context window in
+                Inference settings does not apply here — for a self-hosted Ollama
+                endpoint, set the context length server-side (e.g. <code>num_ctx</code>{" "}
+                in a Modelfile), or the model's default is used.
+              </div>
+              {error && (
+                <div style={{ fontSize: 12, color: "var(--danger, #c0392b)" }}>{error}</div>
+              )}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <GhostButton onClick={resetForm}>Cancel</GhostButton>
+                <LinkButton onClick={() => void save()}>
+                  {busy ? "…" : editingId ? "Update" : "Add endpoint"}
+                </LinkButton>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
 function LocalServerRow({
   provider,
   title,
@@ -1208,218 +1776,6 @@ export function SettingsPanel({
                 />
               </Panel>
             </SettingBlock>
-
-            <SettingBlock title="AI Provider">
-              <Panel>
-                {PROVIDER_GROUPS.map((group, groupIdx) => (
-                  <div
-                    key={group.label}
-                    style={{
-                      borderBottom: groupIdx < PROVIDER_GROUPS.length - 1 ? "1px solid var(--border)" : "none",
-                      paddingBottom: 2,
-                    }}
-                  >
-                    <div style={{ padding: "12px 18px 5px", fontSize: 11, fontWeight: 700, letterSpacing: 0, color: "var(--fg-dim)" }}>
-                      {group.label}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 7, padding: "4px 14px 14px" }}>
-                      {group.items.map((p) => {
-                        const isActive = settingsProvider === p.id;
-                        return (
-                          <button
-                            key={p.id}
-                            disabled={!p.available}
-                            onClick={() => {
-                              setSettingsProvider(p.id);
-                              localStorage.setItem("klide.provider", p.id);
-                            }}
-                            className="klide-button"
-                            style={{
-                              justifyContent: "flex-start",
-                              minHeight: 32,
-                              padding: "0 9px",
-                              border: `1px solid ${isActive ? "color-mix(in srgb, var(--accent) 42%, var(--border))" : "transparent"}`,
-                              background: isActive ? "var(--accent-soft)" : "var(--bg-hover)",
-                              color: isActive ? "var(--accent)" : !p.available ? "var(--fg-dim)" : "var(--fg-strong)",
-                              cursor: p.available ? "pointer" : "not-allowed",
-                              opacity: p.available ? 1 : 0.46,
-                              fontSize: 12.5,
-                              textAlign: "left",
-                              boxShadow: isActive ? "inset 0 1px 0 var(--panel-highlight)" : "none",
-                            }}
-                          >
-                            <ProviderLogo id={p.id} size={13} />
-                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {p.name}
-                            </span>
-                            {isActive && (
-                              <span style={{ marginLeft: "auto", width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </Panel>
-            </SettingBlock>
-
-            <SettingBlock title="Model">
-              <Panel>
-                <Row
-                  title="AI model"
-                  description="Model used by the active provider for chat and agent runs."
-                  control={
-                    <Select
-                      value={aiModel}
-                      onChange={onAiModelChange}
-                      options={availableAiModels.length > 0 ? availableAiModels : [aiModel]}
-                      label="AI model"
-                    />
-                  }
-                />
-              </Panel>
-            </SettingBlock>
-
-            <SettingBlock title="Inference">
-              <Panel>
-                <Row
-                  title="Context window"
-                  description={`How much context ${aiModel} runs with. Auto uses the model's full detected window — pick a smaller size only if you're tight on memory. Local (Ollama) models.`}
-                  control={
-                    <Segmented
-                      label="Context window"
-                      value={harnessSettings?.contextWindows?.[aiModel]}
-                      options={[
-                        { label: "Auto", value: undefined },
-                        { label: "16K", value: 16384 },
-                        { label: "32K", value: 32768 },
-                        { label: "64K", value: 65536 },
-                        { label: "128K", value: 131072 },
-                      ]}
-                      onChange={(v) => {
-                        const next = { ...(harnessSettings?.contextWindows ?? {}) };
-                        if (v === undefined) delete next[aiModel];
-                        else next[aiModel] = v;
-                        onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
-                      }}
-                    />
-                  }
-                />
-                <Row
-                  title="Parallel tool calls"
-                  description="When the agent asks for several read-only tools in one step, run them at once instead of one-by-one. File edits always stay sequential for diff review."
-                  control={
-                    <Segmented
-                      label="Parallel tool calls"
-                      value={harnessSettings?.maxParallelTools}
-                      options={[
-                        { label: "Off", value: undefined },
-                        { label: "2", value: 2 },
-                        { label: "4", value: 4 },
-                        { label: "8", value: 8 },
-                      ]}
-                      onChange={(v) =>
-                        onHarnessSettingsChange?.({ ...harnessSettings, maxParallelTools: v })
-                      }
-                    />
-                  }
-                />
-                <Row
-                  title="Concurrent requests"
-                  description="How many requests a Klide-launched Ollama serves at once — raise it to run several AI panels in parallel. Restart the local server to apply."
-                  control={
-                    <Segmented
-                      label="Concurrent requests"
-                      value={harnessSettings?.serverConcurrency}
-                      options={[
-                        { label: "Default", value: undefined },
-                        { label: "2", value: 2 },
-                        { label: "4", value: 4 },
-                      ]}
-                      onChange={(v) =>
-                        onHarnessSettingsChange?.({ ...harnessSettings, serverConcurrency: v })
-                      }
-                    />
-                  }
-                />
-              </Panel>
-            </SettingBlock>
-
-            <SettingBlock title="Harness">
-              <Panel>
-                <p style={{ margin: "10px 18px 6px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
-                  Toggle which tools each run mode can call.
-                </p>
-                {(["plan", "goal"] as const).map((mode) => (
-                  <div key={mode} style={{ margin: "0 18px 12px" }}>
-                    <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 11.5, fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>
-                      {mode.charAt(0).toUpperCase() + mode.slice(1)} mode tools
-                    </label>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                      {(["read_file","list_dir","glob","grep","get_git_status","get_git_diff","clean_context","web_search","web_fetch","write_file","create_file","create_skill"] as const).map((tool) => {
-                        const key = `${mode}.${tool}`;
-                        const overrides = harnessSettings?.toolOverrides ?? {};
-                        const enabled = overrides[key] !== false;
-                        return (
-                          <label
-                            key={tool}
-                            style={{
-                              display: "flex", alignItems: "center", gap: 3,
-                              fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer",
-                              padding: "2px 6px", borderRadius: "var(--radius-xs)",
-                              background: enabled ? "var(--bg-hover)" : "transparent",
-                              transition: "background 0.1s ease",
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={enabled}
-                              onChange={(e) => {
-                                const next = { ...(harnessSettings?.toolOverrides ?? {}), [key]: e.target.checked ? true : false };
-                                onHarnessSettingsChange?.({ ...harnessSettings, toolOverrides: next });
-                              }}
-                              style={{ accentColor: "var(--accent)", margin: 0 }}
-                            />
-                            {tool}
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-                <p style={{ margin: "6px 18px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
-                  Override the system prompt per mode.
-                </p>
-                {(["chat", "plan", "goal"] as const).map((mode) => (
-                  <div key={mode} style={{ margin: "0 18px 12px" }}>
-                    <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 11.5, fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>
-                      {mode.charAt(0).toUpperCase() + mode.slice(1)} mode prompt
-                    </label>
-                    <textarea
-                      value={(harnessSettings as any)?.[`${mode}Prompt`] ?? ""}
-                      onChange={(e) => {
-                        const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
-                        onHarnessSettingsChange?.(next);
-                      }}
-                      placeholder={`Use default ${mode} prompt`}
-                      rows={2}
-                      className="klide-field"
-                      style={{
-                        width: "100%",
-                        resize: "vertical",
-                        fontSize: 11.5,
-                        fontFamily: "var(--font-mono)",
-                        padding: "6px 8px",
-                        outline: "none",
-                        lineHeight: 1.45,
-                        minHeight: 44,
-                      }}
-                    />
-                  </div>
-                ))}
-              </Panel>
-            </SettingBlock>
           </Section>
 
           <Section id="appearance" active={activeSection}>
@@ -1704,31 +2060,134 @@ export function SettingsPanel({
           </Section>
 
           <Section id="ai" active={activeSection}>
-              <SettingBlock title="Assistant">
+              <SettingBlock title="Provider">
+                <Panel>
+                  {PROVIDER_GROUPS.map((group, groupIdx) => (
+                    <div
+                      key={group.label}
+                      style={{
+                        borderBottom: groupIdx < PROVIDER_GROUPS.length - 1 ? "1px solid var(--border)" : "none",
+                        paddingBottom: 2,
+                      }}
+                    >
+                      <div style={{ padding: "12px 18px 5px", fontSize: 11, fontWeight: 700, letterSpacing: 0, color: "var(--fg-dim)" }}>
+                        {group.label}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 7, padding: "4px 14px 14px" }}>
+                        {group.items.map((p) => {
+                          const isActive = settingsProvider === p.id;
+                          return (
+                            <button
+                              key={p.id}
+                              disabled={!p.available}
+                              onClick={() => {
+                                setSettingsProvider(p.id);
+                                localStorage.setItem("klide.provider", p.id);
+                              }}
+                              className="klide-button"
+                              style={{
+                                justifyContent: "flex-start",
+                                minHeight: 32,
+                                padding: "0 9px",
+                                border: `1px solid ${isActive ? "color-mix(in srgb, var(--accent) 42%, var(--border))" : "transparent"}`,
+                                background: isActive ? "var(--accent-soft)" : "var(--bg-hover)",
+                                color: isActive ? "var(--accent)" : !p.available ? "var(--fg-dim)" : "var(--fg-strong)",
+                                cursor: p.available ? "pointer" : "not-allowed",
+                                opacity: p.available ? 1 : 0.46,
+                                fontSize: 12.5,
+                                textAlign: "left",
+                                boxShadow: isActive ? "inset 0 1px 0 var(--panel-highlight)" : "none",
+                              }}
+                            >
+                              <ProviderLogo id={p.id} size={13} />
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {p.name}
+                              </span>
+                              {isActive && (
+                                <span style={{ marginLeft: "auto", width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Model">
                 <Panel>
                   <Row
-                    title="Show assistant panel"
-                    description="Display the AI chat on the right side of the workbench."
+                    title="AI model"
+                    description="Model used by the active provider for chat and agent runs."
                     control={
-                      <Toggle
-                        checked={aiVisible}
-                        onChange={onAiVisibleChange}
-                        label="Show assistant panel"
+                      <Select
+                        value={aiModel}
+                        onChange={onAiModelChange}
+                        options={availableAiModels.length > 0 ? availableAiModels : [aiModel]}
+                        label="AI model"
+                      />
+                    }
+                  />
+                </Panel>
+              </SettingBlock>
+              <SettingBlock title="Inference">
+                <Panel>
+                  <Row
+                    title="Context window"
+                    description={`How much context ${aiModel} runs with. Auto uses the model's full detected window — pick a smaller size only if you're tight on memory. Local (Ollama) models.`}
+                    control={
+                      <Segmented
+                        label="Context window"
+                        value={harnessSettings?.contextWindows?.[aiModel]}
+                        options={[
+                          { label: "Auto", value: undefined },
+                          { label: "16K", value: 16384 },
+                          { label: "32K", value: 32768 },
+                          { label: "64K", value: 65536 },
+                          { label: "128K", value: 131072 },
+                        ]}
+                        onChange={(v) => {
+                          const next = { ...(harnessSettings?.contextWindows ?? {}) };
+                          if (v === undefined) delete next[aiModel];
+                          else next[aiModel] = v;
+                          onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
+                        }}
                       />
                     }
                   />
                   <Row
-                    title="Ollama model"
-                    description="Use this model for the AI panel immediately."
+                    title="Parallel tool calls"
+                    description="When the agent asks for several read-only tools in one step, run them at once instead of one-by-one. File edits always stay sequential for diff review."
                     control={
-                      <Select
-                        label="Ollama model"
-                        value={aiModel}
-                        onChange={onAiModelChange}
-                        options={
-                          availableAiModels.includes(aiModel)
-                            ? availableAiModels
-                            : [aiModel, ...availableAiModels]
+                      <Segmented
+                        label="Parallel tool calls"
+                        value={harnessSettings?.maxParallelTools}
+                        options={[
+                          { label: "Off", value: undefined },
+                          { label: "2", value: 2 },
+                          { label: "4", value: 4 },
+                          { label: "8", value: 8 },
+                        ]}
+                        onChange={(v) =>
+                          onHarnessSettingsChange?.({ ...harnessSettings, maxParallelTools: v })
+                        }
+                      />
+                    }
+                  />
+                  <Row
+                    title="Concurrent requests"
+                    description="How many requests a Klide-launched Ollama serves at once — raise it to run several AI panels in parallel. Restart the local server to apply."
+                    control={
+                      <Segmented
+                        label="Concurrent requests"
+                        value={harnessSettings?.serverConcurrency}
+                        options={[
+                          { label: "Default", value: undefined },
+                          { label: "2", value: 2 },
+                          { label: "4", value: 4 },
+                        ]}
+                        onChange={(v) =>
+                          onHarnessSettingsChange?.({ ...harnessSettings, serverConcurrency: v })
                         }
                       />
                     }
@@ -1805,6 +2264,19 @@ export function SettingsPanel({
                   <p style={{ margin: "10px 0", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
                     Override the system prompt per mode. Leave blank to use the built-in defaults.
                   </p>
+                  <div style={{ margin: "10px 0 14px" }}>
+                    <Row
+                      title="Auto-save memory on run done"
+                      description="When a Klide agent run finishes cleanly, automatically write a Project Memory note from the conversation. The Summarize header action still works either way."
+                      control={
+                        <Toggle
+                          checked={harnessSettings?.autoMemoryOnRunDone !== false}
+                          onChange={(v) => onHarnessSettingsChange?.({ ...harnessSettings, autoMemoryOnRunDone: v ? undefined : false })}
+                          label="Auto-save memory on run done"
+                        />
+                      }
+                    />
+                  </div>
                   {(["chat", "plan", "goal"] as const).map((mode) => (
                     <div key={mode} style={{ marginBottom: 14 }}>
                       <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 5 }}>
@@ -1896,6 +2368,9 @@ export function SettingsPanel({
                   ))}
                 </Panel>
               </SettingBlock>
+              <SettingBlock title="Self-hosted endpoints">
+                <CustomEndpointsBlock onProviderKeyChange={onProviderKeyChange} />
+              </SettingBlock>
               <SettingBlock title="Notes">
                 <Panel>
                   <Row
@@ -1905,7 +2380,7 @@ export function SettingsPanel({
                   />
                   <Row
                     title="Tool support"
-                    description="These providers use the OpenAI-compatible chat and function-calling adapter."
+                    description="These providers support chat and tool calls over the OpenAI-compatible API."
                     control={<CodePill>Build</CodePill>}
                   />
                 </Panel>

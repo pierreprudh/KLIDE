@@ -127,6 +127,99 @@ export const DEFAULT_SKILLS: Skill[] = [
     enabled: true,
     builtin: true,
   },
+  {
+    // Pairs with the `/interview` slash command in AiPanel — the slash
+    // command sends a self-contained prompt, but enabling this skill also
+    // gives the agent a fuller system-prompt instruction set so it can run
+    // the interview without an explicit `/interview` invocation (e.g. when
+    // the user just says "ask me about the project").
+    id: "builtin-codebase-interview",
+    name: "Codebase Interview",
+    description:
+      "Interview the user about a project's structure, design, and history. Captures tribal knowledge as a written record.",
+    instructions: `You're running a structured interview about a codebase. Goal: capture the *why* and *history* — naming, design tensions, tradeoffs, decisions — that aren't in the code or README. The output is a written record that survives the session.
+
+## Setup
+
+1. Read the project root: \`README.md\`, the top-level manifest (\`package.json\`, \`Cargo.toml\`, \`pyproject.toml\`, \`go.mod\`, etc.), and any obvious entry points. If there's no README, note that and proceed with what you have.
+2. Skim the top-level directory structure (\`list_dir\` on the root).
+3. Form a one-paragraph mental model of what the project is and what it isn't.
+
+## Interview loop
+
+Identify **5-10 high-signal things** you don't understand from the code alone. Skip trivia. Look for:
+
+- **Ambiguous naming** — \`utils/\`, \`helpers/\`, \`core/\`, abbreviations that don't match what the code does.
+- **Surprising structure** — folders that don't follow the language's idiom, files that look out of place, splitting patterns that have no obvious reason.
+- **Missing docs** — public APIs without comments, behavior that depends on external knowledge, magic numbers.
+- **Design tensions** — places where two valid approaches could've been chosen and one was. Tests that look adversarial. Comments that justify a choice ("we tried X, but…").
+- **Historical choices** — dependencies that look unusual, files that look dead-but-kept, anything that smells like a former design decision.
+
+For each one, call the \`userAnswerQuestion\` tool with **one short question** — one sentence, focused on what only the user can answer. Examples of good vs bad:
+
+- ❌ "What's the naming convention for the auth folder?" (the user can grep, you can read it yourself)
+- ✅ "Why is \`src/auth/\` structured as a flat list of files instead of a subfolder per provider? Was that deliberate?"
+- ✅ "The \`webhook_signing_secret\` lives in env vars but \`feature_flags\` is in a JSON file — was there a reason to split them?"
+- ✅ "What's the oldest decision in this codebase that you'd push back on if you started over today?"
+
+Wait for the answer. **Use the answer as-is** — don't ask follow-ups unless the answer is clearly incomplete (one word, "I don't know", "not sure"). The model shouldn't grind through 20 questions when 5 sharp ones do the job.
+
+## Hard rule: never repeat a question
+
+The harness records every \`userAnswerQuestion\` call in the transcript. **Before each call, scroll back through the conversation and confirm your new question is not a duplicate** of one you already asked — same topic, same wording, same intent.
+
+Maintain a numbered list of questions you've already asked in your scratchpad. After every answer, append to it. Re-asking the same question wastes the user's time and signals the agent isn't paying attention.
+
+The only acceptable reasons to ask a question that overlaps with a previous one:
+
+- The user said "I don't know" or "not sure" on the first pass.
+- The user's previous answer was a single word and clearly not what they meant.
+- You genuinely discovered a *different* angle of the same topic that the first question didn't cover (e.g. "Why is X structured this way?" followed by "Was that structure added before or after the auth refactor?").
+
+If you catch yourself about to ask the same question twice, **stop and move to a different question instead.**
+
+## After the interview
+
+Write a single markdown file to \`docs/codebase-decisions.md\` with this structure:
+
+\`\`\`markdown
+# Codebase Decisions — captured {YYYY-MM-DD}
+
+Each section is a question the model couldn't answer from the code, plus
+the user's answer in their own words, plus a short note on why it matters
+for future work.
+
+## 1. {Short title}
+**Question:** {the question}
+**Answer:** {verbatim or paraphrased answer}
+**Why it matters:** {1-2 sentences on the implication for future code}
+
+## 2. {Short title}
+...
+\`\`\`
+
+End the run cleanly after the file is written. Don't ask "is this good?" — the user has already seen the doc on the diff review screen and can edit it themselves.
+
+## Notes
+
+- The skill assumes the user is the project author or a long-time contributor. If their answer suggests they aren't, **switch to a discovery mode**: ask about the *intent* of the code rather than its history.
+- This skill is read-only by default. If the user wants the doc under a different path, they can ask in a follow-up turn.`,
+    // Read-only by design. `userAnswerQuestion` is always available (the
+    // tool itself isn't gated by skill allowlists), but listing it here
+    // documents the intent for anyone reading the skill.
+    tools: [
+      "read_file",
+      "list_dir",
+      "glob",
+      "grep",
+      "get_git_status",
+      "get_git_diff",
+      "get_todo_list",
+      "userAnswerQuestion",
+    ],
+    enabled: false,
+    builtin: true,
+  },
 ];
 
 export function loadSkills(): Skill[] {
@@ -135,7 +228,7 @@ export function loadSkills(): Skill[] {
     if (raw === null) return DEFAULT_SKILLS;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return DEFAULT_SKILLS;
-    return parsed
+    const stored = parsed
       .filter(
         (s): s is Skill =>
           s &&
@@ -150,6 +243,18 @@ export function loadSkills(): Skill[] {
           ? s.tools.filter((t) => ALL_TOOL_IDS.includes(t))
           : [...ALL_TOOL_IDS],
       }));
+    // Merge in any DEFAULT_SKILL that's missing from localStorage. New
+    // built-ins ship as DEFAULT_SKILLS entries — without this merge, an
+    // existing user (with skills already persisted) would never see them
+    // because the loader returns the stored list verbatim. The user's
+    // own entries win on id collision; the default is only added when
+    // the id is unknown.
+    const storedIds = new Set(stored.map((s) => s.id));
+    const merged = [...stored];
+    for (const def of DEFAULT_SKILLS) {
+      if (!storedIds.has(def.id)) merged.push(def);
+    }
+    return merged;
   } catch {
     return DEFAULT_SKILLS;
   }

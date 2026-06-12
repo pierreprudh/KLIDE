@@ -1,11 +1,11 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { exists, readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { DiffModal } from "./DiffModal";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -15,16 +15,23 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { startAgentRun, stopAgentRun, resolveDiff } from "../agent/client";
+import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion } from "../agent/client";
+import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
 import {
   DEFAULT_MODELS,
   MODE_OPTIONS,
-  PROVIDER_GROUPS,
   isDelegateProvider,
   normalizeAgentMode,
+  providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
+import {
+  customDefaultModel,
+  isCustomProvider,
+  refreshCustomProviders,
+  type CustomProvider,
+} from "../customProviders";
 import type {
   AgentAttachment as Attachment,
   AgentEvent,
@@ -77,7 +84,7 @@ type Props = {
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number };
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
   onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
@@ -133,15 +140,23 @@ function menuActionStyle(disabled: boolean): CSSProperties {
   };
 }
 
+// The default model for a provider. Built-ins read the static map; custom
+// (self-hosted) providers read their configured default from the cache,
+// since DEFAULT_MODELS has no entry for a runtime id.
+function defaultModelFor(id: ProviderId): string {
+  if (isCustomProvider(id)) return customDefaultModel(id);
+  return DEFAULT_MODELS[id] ?? "";
+}
+
 function storedModelForProvider(id: ProviderId): string {
   const stored = localStorage.getItem(`klide.model.${id}`);
   if (id === "mlx" && stored) {
     // MLX expects Hugging Face-style ids or local paths. Ignore stale
     // Ollama-style tags such as `gemma4:12b-mlx` from earlier shared-model UI.
     const looksLikeMlx = stored.includes("/") || stored.startsWith(".");
-    if (!looksLikeMlx || stored.includes(":")) return DEFAULT_MODELS[id];
+    if (!looksLikeMlx || stored.includes(":")) return defaultModelFor(id);
   }
-  return stored || DEFAULT_MODELS[id];
+  return stored || defaultModelFor(id);
 }
 
 export function AiPanel({
@@ -190,6 +205,10 @@ export function AiPanel({
   const [summarizing, setSummarizing] = useState(false);
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  // Subtle inline "Auto-saved to memory" line under the composer. Surfaces for
+  // ~4s after a run completes, then fades. Cleared on the next send or abort.
+  const [autoMemoryNotice, setAutoMemoryNotice] = useState<string | null>(null);
+  const autoMemoryTimerRef = useRef<number | null>(null);
 
   const lastPublishRef = useRef({ count: -1, streaming: false });
   useEffect(() => {
@@ -284,8 +303,31 @@ export function AiPanel({
   const isLocalProvider = provider === "ollama" || provider === "mlx";
   const [providerOpen, setProviderOpen] = useState(false);
   const providerRef = useRef<HTMLDivElement>(null);
+  // Self-hosted endpoints, loaded from the Rust store. Refreshed on mount
+  // and whenever the picker opens, so endpoints added in Settings show up
+  // without a panel reload.
+  const [customProviders, setCustomProviders] = useState<CustomProvider[]>([]);
+  useEffect(() => { void refreshCustomProviders().then(setCustomProviders).catch(() => {}); }, []);
+  const providerGroups = useMemo(
+    () => providerGroupsWithCustom(customProviders),
+    [customProviders]
+  );
+  // Collapsible provider groups ("stacks"). Each opens via the header chevron.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  function toggleGroup(label: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
   useEffect(() => {
     if (!providerOpen) return;
+    void refreshCustomProviders().then(setCustomProviders).catch(() => {});
+    // Open compact: expand only the stack holding the active provider.
+    const activeGroup = providerGroups.find((g) => g.items.some((it) => it.id === provider));
+    setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
     function onDown(e: MouseEvent) { if (providerRef.current && !providerRef.current.contains(e.target as Node)) setProviderOpen(false); }
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -318,6 +360,19 @@ export function AiPanel({
       requestAnimationFrame(() => taRef.current?.focus());
     }},
     { name: "init", desc: "Analyze the repo and create a CLAUDE.md", run: () => void send({ mode: "goal", text: "Explore this project (read key files like package.json, README, and the main source folders) and create a concise CLAUDE.md at the workspace root documenting what the project is, its stack, how to run it, and the repo layout. Use create_file so I can review the diff." }) },
+    { name: "interview", desc: "Interview me about this codebase — Q&A, one question at a time", run: () => {
+      // /interview starts a structured code interview. Plan mode (read-only)
+      // keeps the agent from accidentally editing while it reads. The prompt
+      // is self-contained so the skill works even if the user hasn't
+      // installed the SKILL.md yet — installing it just gives the model
+      // extra system-prompt context.
+      if (!modelSupportsTools && !providerDelegatesWork) selectMode("plan");
+      void send({
+        mode: "plan",
+        text:
+          "Run the codebase interview. Read README.md (and the top-level package manifest / entry point if there's no README) to ground yourself, then identify 5-10 high-signal things you don't understand about the project — ambiguous naming, surprising structure, missing docs, design tensions, historical choices. For each one, call the `userAnswerQuestion` tool with a single short question (one sentence, focused on what only I can answer). Wait for each answer, use it as-is, and move to the next. After all questions, write a structured doc to docs/codebase-decisions.md with one section per Q&A (Question / Answer / Why it matters). End the run when the doc is written.",
+      });
+    } },
   ];
   const slashMatches = slash !== null ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slash.query.toLowerCase())) : [];
 
@@ -350,9 +405,8 @@ export function AiPanel({
       if (!workspaceRoot) { setProjectRules(""); return; }
       for (const name of ["AGENTS.md", "CLAUDE.md"]) {
         try {
-          const full = `${workspaceRoot}/${name}`;
-          if (!(await exists(full))) continue;
-          let text = await readTextFile(full);
+          if (!(await workspacePathExists(workspaceRoot, name))) continue;
+          let text = await readWorkspaceTextFile(workspaceRoot, name);
           if (text.length > 6000) text = text.slice(0, 6000) + "\n…(truncated)";
           if (!cancelled) setProjectRules(text.trim());
           return;
@@ -400,9 +454,8 @@ export function AiPanel({
     const out: Attachment[] = [];
     for (const p of paths) {
       try {
-        const full = `${workspaceRoot}/${p}`;
-        if (!(await exists(full))) continue;
-        let content = await readTextFile(full);
+        if (!(await workspacePathExists(workspaceRoot, p))) continue;
+        let content = await readWorkspaceTextFile(workspaceRoot, p);
         if (content.length > 12000) content = content.slice(0, 12000) + "\n…(truncated)";
         out.push({ path: p, content });
       } catch {}
@@ -439,6 +492,11 @@ export function AiPanel({
     processingQueueRef.current = false;
     setStreaming(false);
     setActivity(null);
+    // The harness is being aborted; the run loop will emit a paused-state
+    // exit on its own. Clear any visible Q&A card so the UI doesn't show a
+    // question whose answer can never arrive.
+    setPendingQuestion(null);
+    setQuestionAnswer("");
   }
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -465,6 +523,15 @@ export function AiPanel({
     // Intentionally only the *initial* currentId matters — subsequent
     // edits (loadConversation, newConversation) own the active id.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Clear any pending auto-save notice when the panel unmounts (timer would
+  // otherwise fire setState on a dead component).
+  useEffect(() => () => {
+    if (autoMemoryTimerRef.current !== null) {
+      clearTimeout(autoMemoryTimerRef.current);
+      autoMemoryTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -495,6 +562,17 @@ export function AiPanel({
     setStreaming(false);
     setActivity(null);
     setInput("");
+    // The auto-save notice belongs to the previous conversation — clear it
+    // so the fresh chat starts on a clean slate.
+    if (autoMemoryTimerRef.current !== null) {
+      clearTimeout(autoMemoryTimerRef.current);
+      autoMemoryTimerRef.current = null;
+    }
+    setAutoMemoryNotice(null);
+    // Same for any in-flight Q&A card — a fresh chat shouldn't inherit
+    // the previous turn's question.
+    setPendingQuestion(null);
+    setQuestionAnswer("");
     // Fresh id per chat — the prior "reset to panelId" pattern was
     // re-threading the previous transcript into the new run via the
     // agent harness's replay path, so "new conversation" silently
@@ -529,6 +607,47 @@ export function AiPanel({
       // (A toast/notice system would be the right place for this, but
       // it's not in scope for v1.)
       console.error("Summarize failed:", err);
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
+  // Auto-summarize a finished run. Fire-and-forget — the run is already
+  // done, the user has moved on, and the worst case is a model call that
+  // fails silently. The call is keyed to the run's `currentId` and
+  // status "done" so the entry's frontmatter tells a future agent when
+  // and why it was written. The inline notice under the composer is the
+  // only UI feedback — a one-line ✓ Auto-saved to memory, fades after a
+  // few seconds, distinct from the manual Summarize button's text.
+  //
+  // Skips when there are fewer than two messages: a single user message
+  // with no assistant reply isn't a conversation worth summarising.
+  async function runAutoSummarize(turn: QueuedTurn) {
+    if (!workspaceRoot || summarizing) return;
+    const snapshot = msgsRef.current;
+    if (snapshot.length < 2) return;
+    setSummarizing(true);
+    try {
+      const entry = await summarizeAndHandoff({
+        workspaceRoot,
+        provider: turn.provider,
+        model: turn.model,
+        mode: normalizeAgentMode(turn.mode),
+        msgs: snapshot,
+        runId: currentId,
+        status: "done",
+      });
+      onMemoryWritten?.({ relPath: entry.relPath, title: entry.title });
+      setAutoMemoryNotice(`✓ Auto-saved: ${entry.title}`);
+      if (autoMemoryTimerRef.current !== null) {
+        clearTimeout(autoMemoryTimerRef.current);
+      }
+      autoMemoryTimerRef.current = window.setTimeout(() => {
+        setAutoMemoryNotice(null);
+        autoMemoryTimerRef.current = null;
+      }, 4000);
+    } catch (err) {
+      console.error("Auto-summarize failed:", err);
     } finally {
       setSummarizing(false);
     }
@@ -570,6 +689,17 @@ export function AiPanel({
     queueRef.current = [];
     queueGenerationRef.current += 1;
     setQueuedTurns([]);
+    // Drop the previous chat's auto-save notice so the loaded history
+    // doesn't display a stale "Auto-saved" pill.
+    if (autoMemoryTimerRef.current !== null) {
+      clearTimeout(autoMemoryTimerRef.current);
+      autoMemoryTimerRef.current = null;
+    }
+    setAutoMemoryNotice(null);
+    // Loaded history can't have a live Q&A pending — clear the card so
+    // we don't show a question the new run hasn't asked yet.
+    setPendingQuestion(null);
+    setQuestionAnswer("");
   }
 
   function deleteConversation(id: string, e: ReactMouseEvent) {
@@ -669,9 +799,10 @@ export function AiPanel({
         const names = await invoke<string[]>("ai_provider_models", { provider });
         if (cancelled) return;
         if (!isLocalProvider) setConnected(true);
-        const next = names.length > 0 ? names : [DEFAULT_MODELS[provider]];
+        const fallbackModel = defaultModelFor(provider);
+        const next = names.length > 0 ? names : fallbackModel ? [fallbackModel] : [];
         onAvailableModelsChange(next);
-        if (!next.includes(model)) onModelChange(next[0]);
+        if (next.length > 0 && !next.includes(model)) onModelChange(next[0]);
       } catch {
         if (cancelled) return;
         setConnected(false);
@@ -732,6 +863,16 @@ export function AiPanel({
 
   // ── Agent loop (harness-only) ──
   const [pendingDiff, setPendingDiff] = useState<DiffProposal | null>(null);
+  // A free-form Q&A the model is asking via the `userAnswerQuestion` tool.
+  // The harness is paused waiting for the answer; this card collects it
+  // and calls `agent_resolve_question` to unblock. Cleared on submit,
+  // skip, abort, and conversation reset.
+  const [pendingQuestion, setPendingQuestion] = useState<{
+    runId: string;
+    requestId: string;
+    question: string;
+  } | null>(null);
+  const [questionAnswer, setQuestionAnswer] = useState("");
 
   async function runHarnessTurn(turn: QueuedTurn, generation: number) {
     if (queueGenerationRef.current !== generation) return;
@@ -751,6 +892,11 @@ export function AiPanel({
     setActivity("thinking");
 
     let harnessError: Error | null = null;
+    // Track user-initiated stops so the auto-memory hook can distinguish a
+    // clean run_result from a `run_error` with code "aborted". We don't
+    // auto-summarize cancelled runs — the user already knows they stopped
+    // the run, and a half-finished note is more noise than signal.
+    let abortedByUser = false;
     let nextAssistantIdx = assistantIndex;
     // Wall-clock start of the current turn, for the per-message meta footer.
     // Reset after each assistant_message so multi-turn runs time each turn.
@@ -908,11 +1054,26 @@ export function AiPanel({
           setPendingDiff(null);
           break;
         }
+        case "user_question_requested": {
+          setPendingQuestion({ runId: event.runId, requestId: event.requestId, question: event.question });
+          setQuestionAnswer("");
+          break;
+        }
+        case "user_question_resolved": {
+          // Only clear if the resolved id matches what we're showing — the
+          // harness might have resolved an older request we already moved
+          // past, and we don't want to clobber the current question.
+          setPendingQuestion((current) => (current && current.requestId === event.requestId ? null : current));
+          if (!pendingQuestion || pendingQuestion.requestId === event.requestId) {
+            setQuestionAnswer("");
+          }
+          break;
+        }
         case "file_changed": {
           if (workspaceRoot && onFileWritten) {
             void (async () => {
               try {
-                const content = await readTextFile(`${workspaceRoot}/${event.path}`);
+                const content = await readWorkspaceTextFile(workspaceRoot, event.path);
                 onFileWritten(event.path, content);
               } catch { /* file may not exist yet */ }
             })();
@@ -940,6 +1101,8 @@ export function AiPanel({
           // connection-suggestion copy in the catch block would be wrong.
           if (event.error.code !== "aborted") {
             harnessError = new Error(event.error.message);
+          } else {
+            abortedByUser = true;
           }
           break;
         }
@@ -1000,6 +1163,17 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     setActivity(null);
     setPendingDiff(null);
     if (isDelegateProvider(turn.provider)) onWorkspaceChanged?.();
+    // Auto-summarize on a clean `run_result` (no harness error, not user-
+    // cancelled, harness feature flag on, at least one real exchange).
+    // Delegate providers have their own session memory on disk; skip them.
+    if (
+      !harnessError &&
+      !abortedByUser &&
+      harnessSettings?.autoMemoryOnRunDone !== false &&
+      !providerDelegatesWork
+    ) {
+      void runAutoSummarize(turn);
+    }
   }
 
   function enqueueTurn(turn: QueuedTurn) {
@@ -1087,6 +1261,32 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     await resolveDiff({ runId: pendingDiff.runId, proposalId: pendingDiff.id, decision: { behavior: "reject" } });
   }
 
+  // Q&A submit: send the typed answer to the harness and let the
+  // user_question_resolved event clear the card. The Rust side replaces
+  // the literal "(skipped)" with a friendlier marker before returning it
+  // to the model — we send the sentinel ourselves for Skip.
+  async function submitQuestion() {
+    if (!pendingQuestion) return;
+    const snapshot = pendingQuestion;
+    setPendingQuestion(null);
+    setQuestionAnswer("");
+    try {
+      await resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: questionAnswer });
+    } catch (err) {
+      console.error("Failed to submit answer:", err);
+    }
+  }
+
+  function skipQuestion() {
+    if (!pendingQuestion) return;
+    const snapshot = pendingQuestion;
+    setPendingQuestion(null);
+    setQuestionAnswer("");
+    void resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: "(skipped)" }).catch((err) => {
+      console.error("Failed to skip question:", err);
+    });
+  }
+
   // ── RENDER ──
 
   const activeMode = nextSendMode ?? agentMode;
@@ -1109,25 +1309,39 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
           </button>
           {providerOpen && (
-            <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: 200, background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 30 }}>
-              {PROVIDER_GROUPS.map((group) => (
+            <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: 200, maxHeight: "min(60vh, 440px)", overflowY: "auto", overscrollBehavior: "contain", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 30 }}>
+              {providerGroups.map((group) => {
+                const expanded = expandedGroups.has(group.label);
+                const hasActive = group.items.some((it) => it.id === provider);
+                return (
                 <div key={group.label} style={{ marginBottom: 2 }}>
-                  <div style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg-dim)", padding: "6px 8px 3px" }}>{group.label}</div>
-                  {group.items.map((item) => {
+                  <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={expanded}
+                    style={{ position: "sticky", top: 0, zIndex: 1, width: "100%", display: "flex", alignItems: "center", gap: 6, background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg-dim)", padding: "6px 8px 5px", textAlign: "left", transition: "color 120ms ease" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-dim)"; }}>
+                    <span style={{ display: "grid", placeItems: "center", flexShrink: 0, transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 140ms cubic-bezier(0.4, 0, 0.2, 1)" }}>
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                    </span>
+                    <span style={{ flex: 1 }}>{group.label}</span>
+                    {!expanded && hasActive && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--fg-subtle)", flexShrink: 0 }} />}
+                    <span style={{ fontWeight: 500, opacity: 0.5, fontVariantNumeric: "tabular-nums" }}>{group.items.length}</span>
+                  </button>
+                  {expanded && group.items.map((item) => {
                     const active = item.id === provider;
                     return (
                       <button key={item.id} role="menuitem" disabled={!item.available} onClick={() => item.available && selectProvider(item.id)}
-                        style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-sm)", background: active ? "var(--bg-hover)" : "transparent", color: item.available ? "var(--fg-strong)" : "var(--fg-dim)", cursor: item.available ? "pointer" : "default", fontSize: 12, textAlign: "left" }}
+                        style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-sm)", background: active ? "var(--bg-hover)" : "transparent", color: item.available ? "var(--fg-strong)" : "var(--fg-dim)", cursor: item.available ? "pointer" : "default", fontSize: 12, textAlign: "left", transition: "background 120ms ease" }}
                         onMouseEnter={(e) => { if (item.available && !active) e.currentTarget.style.background = "var(--bg-hover)"; }}
                         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
                         <span style={{ display: "grid", placeItems: "center", flexShrink: 0, color: item.available ? "var(--fg-subtle)" : "var(--fg-dim)" }}><ProviderLogo id={item.id} size={15} /></span>
                         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
-                        {active && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
+                        {active && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg-subtle)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
                       </button>
                     );
                   })}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1334,14 +1548,119 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
 
       {!providerDelegatesWork && (
       <div style={{ padding: 10 }}>
-        {queuedTurns.length > 0 && (
-          <div style={{ minHeight: 18, display: "flex", alignItems: "center", gap: 6, color: "var(--fg-subtle)", fontSize: 11, padding: "0 2px 6px", flexWrap: "wrap" }}>
-            <span title={queuedTurns.map((t) => t.text).join("\n\n")} style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)" }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queuedTurns.length} queued</span>
-            </span>
+        {pendingQuestion && (
+          <div
+            className="ai-qa-card"
+            style={{
+              marginBottom: 8,
+              padding: "10px 12px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid color-mix(in srgb, var(--accent) 30%, var(--border))",
+              background: "color-mix(in srgb, var(--accent-soft) 35%, var(--bg-elevated))",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ color: "var(--accent)" }}>
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" />
+                <path d="M12 17h.01" />
+              </svg>
+              Question
+            </div>
+            <div style={{ color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+              {pendingQuestion.question}
+            </div>
+            <textarea
+              autoFocus
+              value={questionAnswer}
+              onChange={(e) => setQuestionAnswer(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  void submitQuestion();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  skipQuestion();
+                }
+              }}
+              placeholder="Type your answer… (⌘↩ to submit, Esc to skip)"
+              rows={3}
+              style={{
+                width: "100%",
+                resize: "vertical",
+                minHeight: 56,
+                maxHeight: 200,
+                font: "inherit",
+                fontSize: 13,
+                lineHeight: 1.5,
+                padding: "8px 10px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border-strong)",
+                background: "var(--bg)",
+                color: "var(--fg-strong)",
+                outline: "none",
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+              <button
+                type="button"
+                onClick={skipQuestion}
+                style={{
+                  height: 26,
+                  padding: "0 10px",
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  color: "var(--fg-subtle)",
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitQuestion()}
+                style={{
+                  height: 26,
+                  padding: "0 12px",
+                  fontSize: 11.5,
+                  fontWeight: 560,
+                  color: "#fff",
+                  background: "var(--accent)",
+                  border: "1px solid var(--accent)",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.filter = "brightness(1.08)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
+              >
+                Submit ⌘↩
+              </button>
+            </div>
           </div>
         )}
-        <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)", overflow: "hidden" }}>
+        {(queuedTurns.length > 0 || autoMemoryNotice) && (
+          <div style={{ minHeight: 18, display: "flex", alignItems: "center", gap: 6, color: "var(--fg-subtle)", fontSize: 11, padding: "0 2px 6px", flexWrap: "wrap" }}>
+            {queuedTurns.length > 0 && (
+              <span title={queuedTurns.map((t) => t.text).join("\n\n")} style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queuedTurns.length} queued</span>
+              </span>
+            )}
+            {autoMemoryNotice && (
+              <span style={{ display: "inline-flex", alignItems: "center", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))", background: "color-mix(in srgb, var(--accent-soft) 60%, transparent)", color: "var(--fg-strong)" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{autoMemoryNotice}</span>
+              </span>
+            )}
+          </div>
+        )}
+        <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
               {slashMatches.map((cmd, idx) => (
@@ -1367,12 +1686,13 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                     onMouseEnter={() => setMentionIdx(idx)}
                     style={{ display: "flex", alignItems: "baseline", gap: 2, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: idx === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
                     <span style={{ color: "var(--fg-strong)" }}>{base}</span>
-                    <span style={{ color: "var(--fg-dim)", fontSize: 11, textOverflow: "ellipsis", overflow: "hidden" }}>{dir && ` ${dir}`}</span>
+                    <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{dir && ` ${dir}`}</span>
                   </div>
                 );
               })}
             </div>
           )}
+          <div style={{ overflow: "hidden", borderRadius: "var(--radius-lg)" }}>
           <textarea ref={taRef} value={input}
             onChange={(e) => handleComposerChange(e.target.value, e.target.selectionStart)}
             onKeyDown={(e) => {
@@ -1476,6 +1796,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                 </button>
               )}
             </div>
+          </div>
           </div>
         </div>
       </div>

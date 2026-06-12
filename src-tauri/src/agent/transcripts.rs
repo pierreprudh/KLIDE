@@ -68,7 +68,9 @@ pub fn append_event(
         | AgentEvent::DiffProposed { ts, .. }
         | AgentEvent::FileChanged { ts, .. }
         | AgentEvent::RunResult { ts, .. }
-        | AgentEvent::RunError { ts, .. } => *ts,
+        | AgentEvent::RunError { ts, .. }
+        | AgentEvent::UserQuestionRequested { ts, .. }
+        | AgentEvent::UserQuestionResolved { ts, .. } => *ts,
     };
     let line = TranscriptLine {
         schema_version: 1,

@@ -50,7 +50,7 @@ import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
 import { modelBrand } from "../modelBrand";
 
-// Mission Control — KIDE's agentic control panel. A board of agent runs pulled
+// Mission Control — Klide's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
 // sessions), grouped by status, with a metadata detail pane. Inspired by the
 // 2026 "dispatch hub" pattern (GitHub Agent HQ, Antigravity Agent Manager,
@@ -2780,9 +2780,9 @@ export function MissionControl({
   async function load() {
     setLoading(true);
     try {
-      const rows = await fetchAgentRuns(PAGE, 0);
+      const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, 0);
       setRuns(rows);
-      setHasMore(rows.length === PAGE);
+      setHasMore(hasMore);
       setNextOffset(PAGE);
       setError(false);
     } catch {
@@ -2800,12 +2800,12 @@ export function MissionControl({
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const rows = await fetchAgentRuns(PAGE, nextOffset);
+      const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, nextOffset);
       setRuns((prev) => {
         const seen = new Set(prev.map((r) => r.id));
         return [...prev, ...rows.filter((r) => !seen.has(r.id))];
       });
-      setHasMore(rows.length === PAGE);
+      setHasMore(hasMore);
       setNextOffset((o) => o + PAGE);
     } catch {
       setHasMore(false);
@@ -2866,6 +2866,15 @@ export function MissionControl({
       done: [],
     };
     for (const r of filtered) by[boardSectionForRun(r)].push(r);
+    // Order each section by recency with a stable id tiebreak. Without this the
+    // row order followed the [tasks, convos, runs] concatenation, so paging in
+    // older runs — or swapping a live convo for its on-disk twin — reshuffled
+    // rows already on screen. Newest on top; ties break deterministically by id.
+    for (const section of Object.keys(by) as RunBoardSection[]) {
+      by[section].sort(
+        (a, b) => b.updatedMs - a.updatedMs || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+      );
+    }
     return by;
   }, [filtered]);
 

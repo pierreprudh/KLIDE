@@ -1,5 +1,6 @@
 mod adapters;
 mod agent;
+mod custom_providers;
 mod delegate;
 mod git;
 mod local_servers;
@@ -198,11 +199,51 @@ fn ai_clear_provider_key(provider: String) -> Result<(), String> {
     providers::clear_keychain_key(&provider)
 }
 
+// ── Custom (self-hosted) providers ──────────────────────────────────────
+// The runtime sibling of the static `providers` registry. Config (label,
+// base URL, default model) persists to `~/.klide/custom_providers.json`;
+// the bearer token rides the existing `ai_set_provider_key` keychain path,
+// keyed by the same `custom:` id.
+
+#[tauri::command]
+fn custom_provider_list() -> Vec<custom_providers::CustomProvider> {
+    custom_providers::list()
+}
+
+#[tauri::command]
+fn custom_provider_upsert(provider: custom_providers::CustomProvider) -> Result<(), String> {
+    custom_providers::upsert(provider)
+}
+
+#[tauri::command]
+fn custom_provider_remove(id: String) -> Result<(), String> {
+    // Drop the keychain token alongside the config so a re-added id with
+    // the same name doesn't silently inherit the old credential.
+    let _ = providers::clear_keychain_key(&id);
+    custom_providers::remove(&id)
+}
+
 pub(crate) fn is_subscription_provider(provider: &str) -> bool {
     providers::is_subscription(provider)
 }
 
 pub(crate) fn response_error(provider: &str, status: reqwest::StatusCode, body: &str) -> String {
+    // Cloudflare edge codes are opaque ("524 <unknown status code>"), and a
+    // self-hosted endpoint behind a tunnel is the common case — translate the
+    // ones we actually hit into an actionable hint instead of the raw code.
+    let hint = match status.as_u16() {
+        524 | 504 => Some(
+            "timed out waiting for the model (~100s proxy limit) — it may be cold or busy. \
+             Try a smaller or pre-warmed model, or a shorter conversation.",
+        ),
+        520 | 521 | 522 | 523 => {
+            Some("the endpoint's edge could not reach its origin server — check the host is up.")
+        }
+        _ => None,
+    };
+    if let Some(hint) = hint {
+        return format!("{provider}: {hint} (HTTP {})", status.as_u16());
+    }
     let trimmed = body.trim();
     if trimmed.is_empty() {
         format!("{provider} returned {status}")
@@ -473,8 +514,30 @@ async fn ai_chat(
     num_ctx: Option<usize>,
     on_chunk: Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    let entry = providers::lookup(&provider)
-        .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+    // Built-in providers resolve through the static registry. A miss
+    // falls through to the custom (self-hosted) store below — those ids
+    // (prefixed `custom:`) can't live in the `const` registry because
+    // their URLs are typed in at runtime.
+    let Some(entry) = providers::lookup(&provider) else {
+        let cp = custom_providers::get(&provider)
+            .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
+        // Custom providers always speak the OpenAI wire. The token is
+        // optional (a no-auth local endpoint has none); tools are sent
+        // and stream usage is left off, matching the safe local-proxy
+        // posture (LM Studio rejects `stream_options`).
+        return adapters::openai_compatible_chat(
+            cp.id.clone(),
+            cp.chat_url(),
+            true,
+            false,
+            providers::custom_token(&cp.id),
+            model,
+            messages,
+            tools,
+            &on_chunk,
+        )
+        .await;
+    };
 
     // Subscription CLIs route first — the per-wire match is for
     // streaming backends only. The `wire` field on subscription rows
@@ -501,7 +564,22 @@ async fn ai_chat(
             adapters::anthropic_chat(model, messages, tools, &on_chunk).await
         }
         providers::WireFormat::OpenAi(cfg) => {
-            adapters::openai_compatible_chat(entry.id, cfg, model, messages, tools, &on_chunk).await
+            // Hosted providers require a key (`provider_key` errors when
+            // missing); local OpenAI-wire ones (MLX, LM Studio) return
+            // Ok(None) and send no auth header.
+            let key = provider_key(entry.id)?;
+            adapters::openai_compatible_chat(
+                entry.id.to_string(),
+                cfg.chat_url.to_string(),
+                cfg.include_tools,
+                cfg.include_usage_in_stream,
+                key,
+                model,
+                messages,
+                tools,
+                &on_chunk,
+            )
+            .await
         }
     }
 }
@@ -730,6 +808,31 @@ fn read_text_file(workspace_root: String, path: String) -> Result<String, String
 }
 
 #[tauri::command]
+fn path_exists(workspace_root: String, path: String) -> Result<bool, String> {
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    if std::path::Path::new(&path).exists() {
+        ws.resolve_abs_read(&path)?;
+        return Ok(true);
+    }
+    let target = ws.resolve_abs_new(&path)?;
+    Ok(target.exists())
+}
+
+#[tauri::command]
+fn write_text_file(workspace_root: String, path: String, content: String) -> Result<(), String> {
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let target = if std::path::Path::new(&path).exists() {
+        ws.resolve_abs_read(&path)?
+    } else {
+        ws.resolve_abs_new(&path)?
+    };
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Unable to create folder: {e}"))?;
+    }
+    std::fs::write(&target, content).map_err(|e| format!("Unable to write file: {e}"))
+}
+
+#[tauri::command]
 fn create_entry(workspace_root: String, path: String, is_directory: bool) -> Result<(), String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
     let target = ws.resolve_abs_entry(&path)?;
@@ -848,7 +951,6 @@ pub fn run() {
         })
         .manage(agent::AgentSupervisorState::default())
         .manage(local_servers::LocalServerState::default())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
@@ -971,6 +1073,8 @@ pub fn run() {
             delegate_pty_stop,
             list_dir,
             read_text_file,
+            path_exists,
+            write_text_file,
             create_entry,
             rename_entry,
             delete_entry,
@@ -993,6 +1097,9 @@ pub fn run() {
             ai_provider_key_status,
             ai_set_provider_key,
             ai_clear_provider_key,
+            custom_provider_list,
+            custom_provider_upsert,
+            custom_provider_remove,
             ai_chat,
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,
@@ -1001,6 +1108,7 @@ pub fn run() {
             agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
             agent::agent_resolve_diff,
+            agent::agent_resolve_question,
             agent::agent_abort_run,
             agent::agent_list_runs,
             agent::agent_read_run,

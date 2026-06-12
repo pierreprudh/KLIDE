@@ -7,7 +7,6 @@
 // `Channel`) so the parsers stay unit-testable without a webview — the
 // fixture tests at the bottom of this file pin each wire contract.
 
-use crate::providers;
 use crate::{
     provider_key, response_error, text_from_message, AiChatResponse, AiUsage, StreamChunk,
 };
@@ -246,11 +245,13 @@ struct OpenAiToolAcc {
 }
 
 struct OpenAiAdapter {
-    /// Provider id, used for error messages (`"openai error: …"`).
-    provider: &'static str,
-    /// Resolved by the registry — the adapter never has to look up the
-    /// endpoint by string match.
-    chat_url: &'static str,
+    /// Provider id, used for error messages (`"openai error: …"`). Owned
+    /// because custom self-hosted providers have a runtime id.
+    provider: String,
+    /// The chat-completions endpoint. Owned because it comes from either
+    /// the static registry (a `&'static str`, copied in) or a custom
+    /// self-hosted provider (a runtime `String`).
+    chat_url: String,
     /// Whether to include `tools` in the request body. MLX's local
     /// server doesn't honour them the same way; everyone else does.
     /// Comes from `OpenAiConfig::include_tools` in the registry.
@@ -270,7 +271,7 @@ impl StreamingProvider for OpenAiAdapter {
     type ToolAccumulator = Vec<OpenAiToolAcc>;
 
     fn name(&self) -> &str {
-        self.provider
+        &self.provider
     }
 
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
@@ -283,7 +284,7 @@ impl StreamingProvider for OpenAiAdapter {
         if self.include_usage_in_stream {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
-        let mut req = client.post(self.chat_url).json(&body);
+        let mut req = client.post(&self.chat_url).json(&body);
         if let Some(key) = &self.key {
             req = req.bearer_auth(key);
         }
@@ -448,26 +449,27 @@ fn split_thinking_tags(raw: &str) -> (String, String) {
     (content.trim_start().to_string(), thinking)
 }
 
+/// Stream a chat completion over the OpenAI wire. The endpoint, the two
+/// policy flags, and the (optional) bearer key are all resolved by the
+/// caller (`ai_chat`) — from the static registry for built-in providers,
+/// or from the custom-provider store for self-hosted ones. The adapter
+/// itself stays oblivious to where the config came from.
 pub(crate) async fn openai_compatible_chat(
-    provider: &'static str,
-    cfg: providers::OpenAiConfig,
+    provider: String,
+    chat_url: String,
+    include_tools: bool,
+    include_usage_in_stream: bool,
+    key: Option<String>,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
-    // Local OpenAI-wire providers (MLX, LM Studio) have no key;
-    // hosted ones (OpenAI / Mistral / xAI / OpenRouter) must have one.
-    let key = match provider_key(provider) {
-        Ok(Some(k)) => Some(k),
-        Ok(None) => None,
-        Err(e) => return Err(e),
-    };
     let adapter = OpenAiAdapter {
         provider,
-        chat_url: cfg.chat_url,
-        include_tools: cfg.include_tools,
-        include_usage_in_stream: cfg.include_usage_in_stream,
+        chat_url,
+        include_tools,
+        include_usage_in_stream,
         model,
         messages,
         tools,
@@ -490,9 +492,24 @@ fn normalize_openai_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json
                         .get_mut("function")
                         .and_then(|function| function.get_mut("arguments"))
                     {
-                        if !arguments.is_string() {
-                            *arguments = serde_json::Value::String(arguments.to_string());
-                        }
+                        // OpenAI wants `arguments` as a JSON-encoded string.
+                        // Some models (esp. local ones over Ollama's OpenAI
+                        // shim) emit a raw object, or stream truncated/invalid
+                        // JSON — Ollama then 400s on the echo with "can't find
+                        // closing '}'". Normalise to a string AND guarantee it
+                        // parses, falling back to "{}" when the model produced
+                        // junk, so one bad tool call can't kill the whole run.
+                        let as_string = if let Some(s) = arguments.as_str() {
+                            s.to_string()
+                        } else {
+                            arguments.to_string()
+                        };
+                        let valid = serde_json::from_str::<serde_json::Value>(&as_string).is_ok();
+                        *arguments = serde_json::Value::String(if valid {
+                            as_string
+                        } else {
+                            "{}".to_string()
+                        });
                     }
                 }
             }
@@ -816,6 +833,37 @@ mod tests {
     //! fixture strings recorded from real provider responses, so we don't
     //! need network access to lock the behaviour in.
     use super::*;
+
+    #[test]
+    fn tool_call_arguments_are_coerced_to_valid_json_strings() {
+        // An object → JSON-encoded string; valid string → kept; invalid /
+        // truncated JSON → "{}" so Ollama can't 400 the echo. This pins the
+        // guard added after a local model streamed `{"analysis": …` (no close).
+        let messages = vec![serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [
+                { "function": { "name": "a", "arguments": { "x": 1 } } },
+                { "function": { "name": "b", "arguments": "{\"y\": 2}" } },
+                { "function": { "name": "c", "arguments": "{\"z\": " } },
+                { "function": { "name": "d", "arguments": "" } },
+            ]
+        })];
+        let out = normalize_openai_messages(messages);
+        let calls = out[0]["tool_calls"].as_array().unwrap();
+        let arg = |i: usize| calls[i]["function"]["arguments"].as_str().unwrap();
+        // Every arguments value is a string, and every string parses as JSON.
+        for i in 0..4 {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(arg(i)).is_ok(),
+                "arg {i} not valid JSON: {}",
+                arg(i)
+            );
+        }
+        assert_eq!(arg(0), "{\"x\":1}");
+        assert_eq!(arg(1), "{\"y\": 2}");
+        assert_eq!(arg(2), "{}"); // truncated → fallback
+        assert_eq!(arg(3), "{}"); // empty → fallback
+    }
     use std::cell::RefCell;
 
     /// A chunk sink the test can introspect. Mirrors what
@@ -921,8 +969,8 @@ mod tests {
         Vec<StreamChunk>,
     ) {
         let mut adapter = OpenAiAdapter {
-            provider: "openai",
-            chat_url: "https://api.openai.com/v1/chat/completions",
+            provider: "openai".to_string(),
+            chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
             include_tools: true,
             include_usage_in_stream: true,
             model: "gpt-4.1".to_string(),
@@ -1061,8 +1109,8 @@ mod tests {
     #[test]
     fn openai_surfaces_mid_stream_error() {
         let mut adapter = OpenAiAdapter {
-            provider: "mistral",
-            chat_url: "https://api.mistral.ai/v1/chat/completions",
+            provider: "mistral".to_string(),
+            chat_url: "https://api.mistral.ai/v1/chat/completions".to_string(),
             include_tools: true,
             include_usage_in_stream: false,
             model: "mistral-large".to_string(),

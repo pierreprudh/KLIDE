@@ -5,8 +5,8 @@
 // survives — not the transcript.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { mkdir, writeTextFile } from "@tauri-apps/plugin-fs";
 import { writeMemory, type MemoryEntry } from "../../memory";
+import { writeWorkspaceTextFile } from "../../workspaceFs";
 import type { Msg } from "./types";
 
 // StreamChunk is the wire shape `ai_chat` emits via Channel. We don't
@@ -319,14 +319,12 @@ export async function detectAndGenerateSkill(
     ? stripped
     : `---\nname: ${cls.title}\ndescription: ${cls.description}\n---\n\n${stripped}`;
 
-  const dir = `${input.workspaceRoot}/.klide/skills/${cls.slug}`;
-  const file = `${dir}/SKILL.md`;
-  await mkdir(dir, { recursive: true });
-  await writeTextFile(file, withFrontmatter + "\n");
+  const relPath = `.klide/skills/${cls.slug}/SKILL.md`;
+  await writeWorkspaceTextFile(input.workspaceRoot, relPath, withFrontmatter + "\n");
   return {
     name: cls.title,
     description: cls.description,
     slug: cls.slug,
-    relPath: `.klide/skills/${cls.slug}/SKILL.md`,
+    relPath,
   };
 }

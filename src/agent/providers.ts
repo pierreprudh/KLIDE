@@ -1,4 +1,5 @@
 import type { AgentMode, ProviderId } from "./types";
+import { customProviderSync } from "../customProviders";
 
 export type ProviderGroup = {
   label: string;
@@ -69,7 +70,35 @@ export const MODE_OPTIONS: { id: AgentMode; label: string; title: string }[] = [
 ];
 
 export function providerName(id: ProviderId): string {
-  return ALL_PROVIDERS.find((p) => p.id === id)?.name ?? "Ollama";
+  const builtin = ALL_PROVIDERS.find((p) => p.id === id)?.name;
+  if (builtin) return builtin;
+  // Self-hosted providers aren't in the static list — resolve their label
+  // from the custom-provider cache, falling back to a humanised id so we
+  // never mislabel a custom endpoint as "Ollama".
+  if (id.startsWith("custom:")) {
+    return customProviderSync(id)?.label ?? (id.slice("custom:".length) || "Custom");
+  }
+  return "Ollama";
+}
+
+/** PROVIDER_GROUPS plus a dynamic "Self-hosted" group built from the
+ *  caller-supplied custom providers. Used by the AI panel's provider
+ *  dropdown so user-added endpoints appear alongside the built-ins. */
+export function providerGroupsWithCustom(
+  custom: { id: string; label: string }[]
+): ProviderGroup[] {
+  if (custom.length === 0) return PROVIDER_GROUPS;
+  return [
+    ...PROVIDER_GROUPS,
+    {
+      label: "Self-hosted",
+      items: custom.map((c) => ({
+        id: c.id as ProviderId,
+        name: c.label,
+        available: true,
+      })),
+    },
+  ];
 }
 
 export function isDelegateProvider(id: ProviderId): boolean {
