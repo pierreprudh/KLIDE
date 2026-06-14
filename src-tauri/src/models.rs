@@ -345,15 +345,29 @@ fn find_context_window(value: &serde_json::Value) -> Option<usize> {
                 "context_length",
                 "num_ctx",
                 "n_ctx",
-                "llama.context_length",
             ] {
                 if let Some(window) = map.get(key).and_then(find_context_window) {
                     return Some(window);
                 }
             }
+            // GGUF reports the window under an architecture-prefixed key, e.g.
+            // "llama.context_length", "gemma.context_length",
+            // "lfm2moe.context_length". Match the suffix so we don't have to
+            // enumerate every model family.
+            for (key, child) in map {
+                if key.ends_with(".context_length") {
+                    if let Some(window) = find_context_window(child) {
+                        return Some(window);
+                    }
+                }
+            }
+            // Last resort: recurse, but only accept a plausible window. Without
+            // the ceiling a stray field like "general.parameter_count"
+            // (8.4 billion) gets mistaken for the window, and Ollama is then
+            // asked to size an absurd KV cache — which silently kills the run.
             for child in map.values() {
                 if let Some(window) = find_context_window(child) {
-                    if window >= 1024 {
+                    if (1024..=10_000_000).contains(&window) {
                         return Some(window);
                     }
                 }
@@ -510,6 +524,21 @@ mod tests {
             find_context_window(&serde_json::json!({ "foo": { "bar": 10 } })),
             None
         );
+    }
+
+    #[test]
+    fn find_context_window_handles_gguf_prefix_and_ignores_param_count() {
+        // Real shape of Ollama /api/show model_info for LFM2.5-8B-A1B: the
+        // window lives under an architecture-prefixed key, and there is a far
+        // larger "parameter_count" that must NOT be mistaken for the window.
+        let value = serde_json::json!({
+            "model_info": {
+                "general.parameter_count": 8_467_856_832_u64,
+                "lfm2moe.context_length": 128_000,
+                "lfm2moe.vocab_size": 128_000,
+            }
+        });
+        assert_eq!(find_context_window(&value), Some(128_000));
     }
 
     #[test]

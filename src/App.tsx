@@ -9,6 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
+import { OrchestratorPreview } from "./components/OrchestratorPreview";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea } from "./components/EditorArea";
@@ -18,7 +19,9 @@ import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
 import type { AgentEvent } from "./agent/types";
-import type { Conversation } from "./components/ai/types";
+import type { Conversation, Msg } from "./components/ai/types";
+import { summarizeAndHandoff } from "./components/ai/summarize";
+import { fetchRunMessages, type RunMessage as MissionRunMessage } from "./runs";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { MemoryModal } from "./components/MemoryModal";
@@ -47,6 +50,7 @@ import { readWorkspaceTextFile } from "./workspaceFs";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
+type ActivityPanel = Panel | "orchestrator";
 export type HarnessSettings = {
   chatPrompt?: string;
   planPrompt?: string;
@@ -107,7 +111,7 @@ function detectLanguage(path: string): string {
 
 function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
-  const [view, setView] = useState<"workbench" | "runs" | "settings" | "git-review">("workbench");
+  const [view, setView] = useState<"workbench" | "runs" | "orchestrator" | "settings" | "git-review">("workbench");
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
@@ -115,6 +119,15 @@ function App() {
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
+  // When MissionControl asks us to "Review Diff" on a Klide run, this
+  // holds the runId so the MissionControl detail pane can scroll its
+  // CheckpointPanel into view (and the CheckpointPanel isn't always in
+  // the DOM if a CLI run is selected).
+  const [pendingCheckpointRunId, setPendingCheckpointRunId] = useState<string | null>(null);
+  // runId currently being summarised by `saveMemoryFromRun` — surfaced as
+  // a subtle spinner on the row so the user knows the model call is in
+  // flight.
+  const [summarizingFromRun, setSummarizingFromRun] = useState<string | null>(null);
   const [profileVisible, setProfileVisible] = useState(false);
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
@@ -295,18 +308,19 @@ function App() {
     activeGridId != null
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
       : null;
-  const activityState: Record<Panel, boolean> = {
+  const activityState: Record<ActivityPanel, boolean> = {
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
     git: view === "git-review",
     memory: view === "workbench" && memoryVisible,
     skills: view === "workbench" && (skillsVisible || sidebarSlot2 === "skills"),
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
+    orchestrator: view === "orchestrator",
     settings: view === "settings",
     profile: profileVisible,
   };
 
-  function togglePanel(panel: Panel, meta?: boolean) {
+  function togglePanel(panel: ActivityPanel, meta?: boolean) {
     if (panel === "settings") {
       setSettingsInitial(null);
       setView("settings");
@@ -318,6 +332,10 @@ function App() {
     }
     if (panel === "runs") {
       setView("runs");
+      return;
+    }
+    if (panel === "orchestrator") {
+      setView("orchestrator");
       return;
     }
     setView("workbench");
@@ -559,6 +577,35 @@ function App() {
     return "Resumed run";
   }
 
+  // Convert MissionControl's `RunMessage` (a read-back of the on-disk
+  // transcript) into the AI panel's `Msg` shape so we can hand it to
+  // `summarizeAndHandoff`, which expects Msg[]. The two shapes diverge
+  // because MissionControl carries `tools: RunToolCall[]` per message
+  // while the AI panel uses `toolCalls: ToolCall[]` (different types).
+  // We do a best-effort conversion: the name + input are preserved, the
+  // result and status are dropped (the summary doesn't need them).
+  function runMessagesToAiMsgs(messages: MissionRunMessage[]): Msg[] {
+    const out: Msg[] = [];
+    for (const m of messages) {
+      if (m.role === "user") {
+        out.push({ role: "user", content: m.text });
+      } else {
+        const toolCalls = (m.tools ?? [])
+          .map((t) => ({
+            name: t.name,
+            args: t.input,
+          }))
+          .filter((t) => Boolean(t.name));
+        out.push({
+          role: "assistant",
+          content: m.text,
+          ...(toolCalls.length > 0 ? { toolCalls: toolCalls as any } : {}),
+        });
+      }
+    }
+    return out;
+  }
+
   async function resumeKlideRun(runId: string) {
     try {
       const events = await invoke<AgentEvent[]>("agent_read_run", { runId });
@@ -590,6 +637,76 @@ function App() {
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
     });
+  }
+
+  // "Review Diff" from Mission Control — for Klide runs the CheckpointPanel
+  // is already mounted in the detail pane (it lists every file the agent
+  // changed with revert affordances), so the row action is just: make sure
+  // the run is selected. For external CLI runs we switch to the GitReview
+  // view; the user can navigate from there. (CLI runs whose cwd differs
+  // from the current workspaceRoot will show the wrong diff — that case
+  // is rare in practice; if it becomes common we'll add a per-run diff
+  // overlay later.)
+  function reviewDiffFromRun(run: { id: string; source: string; cwd: string | null }) {
+    if (run.source === "klide") {
+      // MissionControl is rendered as a single view, so the run is "selected"
+      // by being the current `view === "runs"` selection. We just need to
+      // ask MissionControl to focus the CheckpointPanel — done via a small
+      // bus (see pendingCheckpointRunId below).
+      setPendingCheckpointRunId(run.id);
+    } else {
+      setView("git-review");
+    }
+  }
+
+  // "Save Memory" from Mission Control — fetch the run's transcript, ask
+  // the model for a structured note, and write it to .klide/memory/. Then
+  // open the MemoryModal so the user can see the entry. Klide-only for
+  // now: external CLI runs have no provider+model we can call directly.
+  async function saveMemoryFromRun(run: {
+    id: string;
+    source: string;
+    provider?: string | null;
+    model: string | null;
+    cwd: string | null;
+  }) {
+    if (run.source !== "klide") {
+      setFileNotice("Save Memory is supported for Klide runs only in this slice — open the AI panel pinned to this run to summarise it.");
+      return;
+    }
+    if (!run.cwd) {
+      setFileNotice("Run has no workspace root — can't write a memory note.");
+      return;
+    }
+    if (!run.provider || !run.model) {
+      setFileNotice("Run is missing provider or model — can't summarise.");
+      return;
+    }
+    setSummarizingFromRun(run.id);
+    try {
+      const messages = await fetchRunMessages(run as any);
+      if (messages.length === 0) {
+        setFileNotice("Run has no messages to summarise.");
+        return;
+      }
+      const msgs = runMessagesToAiMsgs(messages);
+      const entry = await summarizeAndHandoff({
+        workspaceRoot: run.cwd,
+        provider: run.provider,
+        model: run.model,
+        mode: "chat",
+        msgs,
+        runId: run.id,
+        status: "done",
+      });
+      setMemoryRefreshKey((k) => k + 1);
+      setMemoryVisible(true);
+      setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
+    } catch (err) {
+      setFileNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSummarizingFromRun(null);
+    }
   }
 
   function updateAiPanelModel(id: string, model: string) {
@@ -699,6 +816,14 @@ function App() {
         /* storage unavailable — skip */
       }
       return next;
+    });
+  }, [workspaceRoot]);
+
+  // Let the backend know which folder is open, so `${VAR}` token references
+  // for self-hosted endpoints resolve from this project's `.env`.
+  useEffect(() => {
+    void invoke("set_active_workspace", { root: workspaceRoot }).catch(() => {
+      /* command unavailable (non-Tauri preview) — ignore */
     });
   }, [workspaceRoot]);
 
@@ -813,7 +938,7 @@ function App() {
       if (e.key === "Escape") {
         if (paletteOpen) { setPaletteOpen(false); return; }
         if (searchVisible) { setSearchVisible(false); return; }
-        if (view === "runs" || view === "git-review" || view === "settings") {
+        if (view === "runs" || view === "orchestrator" || view === "git-review" || view === "settings") {
           e.preventDefault();
           setView("workbench");
           return;
@@ -880,6 +1005,7 @@ function App() {
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
+    { id: "orchestrator", label: "View: Orchestrator Preview", action: () => { setView("orchestrator"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { setView("workbench"); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
@@ -998,8 +1124,15 @@ function App() {
                 theme={theme}
                 onResumeKlideRun={resumeKlideRun}
                 onOpenInAiPanel={openRunInAiPanel}
+                onReviewDiff={reviewDiffFromRun}
+                onSaveMemory={saveMemoryFromRun}
+                pendingCheckpointRunId={pendingCheckpointRunId}
+                onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
+                summarizingFromRunId={summarizingFromRun}
                 onBack={() => setView("workbench")}
               />
+            ) : view === "orchestrator" ? (
+              <OrchestratorPreview />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : panelLayout.anchored ? (

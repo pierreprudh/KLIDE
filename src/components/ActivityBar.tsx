@@ -1,6 +1,6 @@
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 
-type View = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
+type View = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "orchestrator" | "settings" | "profile";
 type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
 
 function FolderIcon() {
@@ -121,6 +121,29 @@ function MissionIcon() {
   );
 }
 
+function OrchestratorIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 6.5h4.5" />
+      <path d="M15.5 6.5H20" />
+      <circle cx="12" cy="6.5" r="2.4" />
+      <path d="M4 17.5h4.5" />
+      <path d="M15.5 17.5H20" />
+      <circle cx="12" cy="17.5" r="2.4" />
+      <path d="M12 8.9v6.2" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg
@@ -178,6 +201,7 @@ export function ActivityBar({ active, onToggle }: Props) {
     { id: "skills", label: "Skills", Icon: SkillsIcon },
     { id: "ai", label: "AI", Icon: SparkIcon },
     { id: "runs", label: "Mission Control", Icon: MissionIcon },
+    { id: "orchestrator", label: "Orchestrator Preview", Icon: OrchestratorIcon },
   ];
 
   // Bottom zone — app-level destinations. The active state here is a

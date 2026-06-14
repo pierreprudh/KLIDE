@@ -218,6 +218,40 @@ impl StreamingProvider for OllamaAdapter {
     }
 }
 
+/// Ollama allocates the KV cache when the model loads, so num_ctx is fixed per
+/// load. Instead of always requesting the model's full window (a big cache —
+/// slow to load, memory-hungry), size it to the conversation: estimate prompt
+/// tokens, add headroom for the reply, and round up to the next tier. Short
+/// chats stay small and fast; the model only reloads when a conversation grows
+/// past its current tier. `ceiling` is the model's real max (passed in as
+/// num_ctx) and is never exceeded.
+fn tiered_num_ctx(
+    messages: &[serde_json::Value],
+    tools: Option<&Vec<serde_json::Value>>,
+    ceiling: usize,
+) -> usize {
+    // ~4 chars per token is the usual rough estimate. Count BOTH the messages
+    // and the tool schemas — the schemas are sent separately from `messages`
+    // but still occupy the prompt. Omitting them under-sizes the window, Ollama
+    // truncates, the tool defs fall off the end, and the model "loses" its
+    // tools and starts hallucinating its own call protocol.
+    let msg_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
+        .map(|s| s.len())
+        .sum();
+    let tool_chars: usize = tools
+        .map(|t| t.iter().map(|s| s.to_string().len()).sum())
+        .unwrap_or(0);
+    let needed = (msg_chars + tool_chars) / 4 + 2048; // + response headroom
+    const TIERS: [usize; 6] = [4096, 8192, 16384, 32768, 65536, 131072];
+    let tier = TIERS.into_iter().find(|&t| t >= needed).unwrap_or(ceiling);
+    // With tools in play, never go below 8k — a truncated tool schema is worse
+    // than a slightly larger cache.
+    let floor = if tools.is_some() { 8192 } else { 4096 };
+    tier.max(floor).min(ceiling).max(1024)
+}
+
 pub(crate) async fn ollama_chat(
     model: String,
     messages: Vec<serde_json::Value>,
@@ -225,11 +259,13 @@ pub(crate) async fn ollama_chat(
     num_ctx: Option<usize>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
+    let ceiling = num_ctx.unwrap_or(32768);
+    let sized = tiered_num_ctx(&messages, tools.as_ref(), ceiling);
     let adapter = OllamaAdapter {
         model,
         messages,
         tools,
-        num_ctx,
+        num_ctx: Some(sized),
         usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
@@ -295,7 +331,7 @@ impl StreamingProvider for OpenAiAdapter {
         &mut self,
         line: &str,
         content: &mut String,
-        _thinking: &mut String,
+        thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
         on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
@@ -347,6 +383,23 @@ impl StreamingProvider for OpenAiAdapter {
                 });
             }
         }
+        // Reasoning models stream their chain-of-thought in a separate field,
+        // not in `content`: `reasoning_content` (DeepSeek, vLLM, Ollama's
+        // reasoning models) or `reasoning` (OpenRouter). Surface it on the
+        // thinking channel so it streams live, just like Anthropic/Ollama.
+        if let Some(r) = delta
+            .get("reasoning_content")
+            .or_else(|| delta.get("reasoning"))
+            .and_then(|v| v.as_str())
+        {
+            if !r.is_empty() {
+                thinking.push_str(r);
+                on_chunk(StreamChunk {
+                    content: String::new(),
+                    thinking: r.to_string(),
+                });
+            }
+        }
         if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
             for call in calls {
                 let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -373,10 +426,20 @@ impl StreamingProvider for OpenAiAdapter {
     fn finalize_response(
         self,
         content: String,
-        _thinking: String,
+        reasoning: String,
         tools: Self::ToolAccumulator,
     ) -> AiChatResponse {
-        let (content, thinking) = split_thinking_tags(&content);
+        // Two thinking sources: reasoning deltas streamed into a separate
+        // field (`reasoning`), and inline `<think>…</think>` tags some models
+        // emit inside `content`. Combine both.
+        let (content, tag_thinking) = split_thinking_tags(&content);
+        let mut thinking = reasoning;
+        if !tag_thinking.trim().is_empty() {
+            if !thinking.is_empty() {
+                thinking.push('\n');
+            }
+            thinking.push_str(&tag_thinking);
+        }
         let tool_calls: Vec<serde_json::Value> = tools
             .into_iter()
             .filter(|t| !t.name.is_empty())
@@ -677,7 +740,7 @@ impl StreamingProvider for AnthropicAdapter {
         &mut self,
         line: &str,
         content: &mut String,
-        _thinking: &mut String,
+        thinking: &mut String,
         tools: &mut Self::ToolAccumulator,
         on_chunk: &dyn Fn(StreamChunk),
     ) -> Result<(), String> {
@@ -761,6 +824,18 @@ impl StreamingProvider for AnthropicAdapter {
                             }
                         }
                     }
+                    // Extended thinking streams as `thinking_delta` blocks.
+                    Some("thinking_delta") => {
+                        if let Some(t) = delta.get("thinking").and_then(|v| v.as_str()) {
+                            if !t.is_empty() {
+                                thinking.push_str(t);
+                                on_chunk(StreamChunk {
+                                    content: String::new(),
+                                    thinking: t.to_string(),
+                                });
+                            }
+                        }
+                    }
                     Some("input_json_delta") => {
                         if let Some(p) = delta.get("partial_json").and_then(|v| v.as_str()) {
                             tools[index].args.push_str(p);
@@ -777,7 +852,7 @@ impl StreamingProvider for AnthropicAdapter {
     fn finalize_response(
         self,
         content: String,
-        _thinking: String,
+        thinking: String,
         tools: Self::ToolAccumulator,
     ) -> AiChatResponse {
         let tool_calls: Vec<serde_json::Value> = tools
@@ -795,7 +870,11 @@ impl StreamingProvider for AnthropicAdapter {
             .collect();
         AiChatResponse {
             content,
-            thinking: None,
+            thinking: if thinking.trim().is_empty() {
+                None
+            } else {
+                Some(thinking)
+            },
             tool_calls,
             usage: if self.usage.is_empty() {
                 None
@@ -833,6 +912,20 @@ mod tests {
     //! fixture strings recorded from real provider responses, so we don't
     //! need network access to lock the behaviour in.
     use super::*;
+
+    #[test]
+    fn tiered_num_ctx_grows_with_conversation_and_caps_at_ceiling() {
+        let msg = |s: &str| serde_json::json!({ "role": "user", "content": s });
+        // Tiny chat, no tools → smallest tier.
+        assert_eq!(tiered_num_ctx(&[msg("hi")], None, 131_072), 4096);
+        // ~40k chars ≈ 10k tokens → 16k tier.
+        assert_eq!(tiered_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072), 16_384);
+        // A low ceiling is never exceeded.
+        assert_eq!(tiered_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384), 16_384);
+        // Tools present → never below the 8k floor, even for a tiny message.
+        let tools = vec![serde_json::json!({ "name": "x" })];
+        assert_eq!(tiered_num_ctx(&[msg("hi")], Some(&tools), 131_072), 8192);
+    }
 
     #[test]
     fn tool_call_arguments_are_coerced_to_valid_json_strings() {
@@ -1073,6 +1166,30 @@ mod tests {
     }
 
     #[test]
+    fn openai_streams_reasoning_content_as_thinking() {
+        // Reasoning models (DeepSeek/vLLM/Ollama) put the chain-of-thought in
+        // a separate `reasoning_content` field that must surface as thinking,
+        // streamed live, while `content` stays the visible answer. The
+        // `reasoning` alias (OpenRouter) is accepted too.
+        let lines = [
+            r#"data: {"choices":[{"delta":{"reasoning_content":"Let me "}}]}"#,
+            r#"data: {"choices":[{"delta":{"reasoning":"think…"}}]}"#,
+            r#"data: {"choices":[{"delta":{"content":"42"}}]}"#,
+            r#"data: [DONE]"#,
+        ];
+        let (content, thinking, tools, chunks) = run_openai(&lines);
+        assert_eq!(content, "42");
+        assert_eq!(thinking.as_deref(), Some("Let me think…"));
+        assert!(tools.is_empty());
+        // Reasoning streams live on the thinking channel, separate from content.
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].thinking, "Let me ");
+        assert_eq!(chunks[0].content, "");
+        assert_eq!(chunks[2].content, "42");
+        assert_eq!(chunks[2].thinking, "");
+    }
+
+    #[test]
     fn openai_stitches_streamed_tool_call_args() {
         // Mimics what the OpenAI Chat Completions API sends when streaming
         // a tool call: `index` ties the deltas together, `arguments` arrives
@@ -1179,6 +1296,25 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].content, "Hello");
         assert_eq!(chunks[1].content, " there");
+    }
+
+    #[test]
+    fn anthropic_streams_thinking_delta_separate_from_text() {
+        // Extended thinking arrives as `thinking_delta` blocks; they must
+        // stream on the thinking channel, not pollute the visible content.
+        let lines = [
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weigh "}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"options"}}"#,
+            r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Done"}}"#,
+            r#"data: {"type":"message_stop"}"#,
+        ];
+        let (content, _tools, chunks) = run_anthropic(&lines);
+        assert_eq!(content, "Done");
+        let thinking: String = chunks.iter().map(|c| c.thinking.as_str()).collect();
+        assert_eq!(thinking, "weigh options");
+        let visible: String = chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(visible, "Done");
     }
 
     #[test]

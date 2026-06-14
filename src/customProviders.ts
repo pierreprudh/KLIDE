@@ -23,6 +23,13 @@ export type CustomProvider = {
   baseUrl: string;
   /** Model pre-selected when this provider is first chosen. */
   defaultModel: string;
+  /**
+   * Optional `${VAR}` reference, resolved from the environment or
+   * `~/.klide/.env` instead of the keychain. Non-secret, so it persists in
+   * plain config; the value lives in the user's `.env`. Absent for endpoints
+   * that use a keychain token (or no auth).
+   */
+  tokenRef?: string;
 };
 
 let cache: CustomProvider[] = [];

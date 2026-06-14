@@ -693,7 +693,7 @@ const API_KEY_PROVIDERS: {
   { id: "xai", title: "xAI Grok", envVar: "XAI_API_KEY", placeholder: "xai-..." },
 ];
 
-type KeyStatus = { hasKey: boolean; source: "keychain" | "env" | "none" };
+type KeyStatus = { hasKey: boolean; source: "keychain" | "env" | "reference" | "none" };
 
 // One provider's key control: shows where the key comes from (keychain / env /
 // none), lets you paste a new one (saved into the keychain via Rust), and clear
@@ -1003,7 +1003,13 @@ function CustomEndpointRow({
             {keyStatus.source === "keychain" ? (
               <StatusPill tone="ok">Token saved</StatusPill>
             ) : keyStatus.source === "env" ? (
-              <StatusPill tone="warn">Token from env</StatusPill>
+              <StatusPill tone="ok">Token from env</StatusPill>
+            ) : keyStatus.source === "reference" ? (
+              keyStatus.hasKey ? (
+                <StatusPill tone="ok">Token from .env</StatusPill>
+              ) : (
+                <StatusPill tone="warn">Reference unresolved</StatusPill>
+              )
             ) : (
               <StatusPill tone="idle">No token</StatusPill>
             )}
@@ -1185,17 +1191,26 @@ function CustomEndpointsBlock({
     try {
       // Keep an existing id stable on edit; mint one from the label on add.
       const id = editingId ?? customIdFromLabel(label);
+      const trimmedToken = token.trim();
+      // Self-hosted endpoints don't use the keychain: the token field holds a
+      // `${VAR}` reference resolved from the project's .env (or env var). A
+      // raw token has nowhere to go, so reject it with a hint. Blank means
+      // "leave whatever's saved alone" — preserve the existing reference.
+      if (trimmedToken && !trimmedToken.startsWith("$")) {
+        setError("Use a ${VAR} reference (e.g. ${DEV_TOKEN}) and put the value in your .env.");
+        setBusy(false);
+        return;
+      }
+      const existing = editingId ? endpoints.find((e) => e.id === editingId) : undefined;
+      const tokenRef = trimmedToken || existing?.tokenRef;
       await upsertCustomProvider({
         id,
         label: label.trim(),
         baseUrl: baseUrl.trim(),
         defaultModel: defaultModel.trim(),
+        tokenRef,
       });
-      // Blank token on edit means "leave the saved one alone".
-      if (token.trim()) {
-        await invoke("ai_set_provider_key", { provider: id, key: token });
-        onProviderKeyChange?.(id);
-      }
+      onProviderKeyChange?.(id);
       resetForm();
       await load();
     } catch (e) {
@@ -1242,6 +1257,9 @@ function CustomEndpointsBlock({
     setLabel(ep.label);
     setBaseUrl(ep.baseUrl);
     setDefaultModel(ep.defaultModel);
+    // A `${VAR}` reference is safe to show; a keychain token is not, so it
+    // stays blank ("leave alone"). This lets the user see/edit the reference.
+    setToken(ep.tokenRef ?? "");
   }
 
   return (
@@ -1343,16 +1361,26 @@ function CustomEndpointsBlock({
                 style={{ height: 34, padding: "0 12px" }}
               />
               <input
-                type="password"
+                // A `${VAR}` reference is non-secret config, so it's shown
+                // plainly — there's no token to mask (self-hosted endpoints
+                // never store a literal token in the app).
+                type="text"
                 value={token}
-                placeholder={editingId ? "Bearer token (leave blank to keep current)" : "Bearer token (stored in keychain)"}
+                placeholder={editingId ? "Token reference ${VAR} (blank = keep current)" : "Token reference, e.g. ${DEV_TOKEN} (optional)"}
                 onChange={(e) => setToken(e.target.value)}
-                aria-label="Bearer token"
+                aria-label="Bearer token reference"
                 className="klide-field"
                 autoComplete="off"
+                spellCheck={false}
                 style={{ height: 34, padding: "0 12px" }}
               />
               <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--fg-subtle)" }}>
+                The bearer token is a reference like <code>{"${DEV_TOKEN}"}</code> —
+                put the value in your project's <code>.env</code>{" "}
+                (<code>DEV_TOKEN=…</code>), or in <code>~/.klide/.env</code> as a global
+                fallback. Klide stores only the reference, never the token, so there's
+                no keychain prompt; keep the <code>.env</code> gitignored.
+                <br />
                 Requests use the OpenAI wire format. The per-model context window in
                 Inference settings does not apply here — for a self-hosted Ollama
                 endpoint, set the context length server-side (e.g. <code>num_ctx</code>{" "}

@@ -1,4 +1,5 @@
-use super::runs::{cap_messages, mtime_ms, project_name, recency_status};
+use super::runs::{cap_messages, mtime_ms, project_name, recency_status, tool_file_path};
+use std::collections::HashSet;
 use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
 use std::collections::HashMap;
 
@@ -123,6 +124,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
     let (mut id, mut cwd, mut branch, mut model) = (None, None, None, None);
     let mut count: u32 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
+    let mut files: HashSet<String> = HashSet::new();
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -165,7 +167,26 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
                     }
                 }
             }
-            Some("response_item") => count += 1,
+            Some("response_item") => {
+                count += 1;
+                // function_call response_items carry the tool name and a
+                // stringified JSON `arguments` blob. Parse it the same way
+                // the message-detail reader does and feed it through the
+                // shared tool_file_path helper so the three adapters agree
+                // on what counts as a "file the agent touched".
+                if let Some(p) = payload {
+                    if p.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                        let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        if let Some(args_str) = p.get("arguments").and_then(|a| a.as_str()) {
+                            if let Ok(args) = serde_json::from_str::<serde_json::Value>(args_str) {
+                                if let Some(path) = tool_file_path(name, &args) {
+                                    files.insert(path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Some("event_msg") => {
                 // `token_count` events carry a *cumulative* total for the
                 // session — keep overwriting so the last one wins. Cached
@@ -189,6 +210,13 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
             .unwrap_or_default()
     });
     let updated_ms = mtime_ms(path);
+    // Cost is computed from the same model + token totals we just summed; the
+    // model is moved into AgentRun below, so capture the cost before then.
+    let cost_usd = crate::pricing::cost_for_run(
+        model.as_deref().unwrap_or(""),
+        input_tokens,
+        output_tokens,
+    );
     Some(AgentRun {
         status: recency_status(updated_ms),
         title: index
@@ -207,6 +235,8 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         message_count: count,
         input_tokens,
         output_tokens,
+        files_touched: files.len() as u32,
+        cost_usd,
         parent_id: None,
     })
 }
@@ -320,6 +350,27 @@ mod tests {
         assert_eq!(run.message_count, 2); // the normal item + the oversized one
         assert_eq!(run.input_tokens, 600); // cumulative minus cached
         assert_eq!(run.output_tokens, 55);
+        assert_eq!(run.files_touched, 0);
+        // gpt-5.4 at 600 input + 55 output = 0.0015 + 0.00055.
+        let c = run.cost_usd.expect("gpt-5.4 has a known price");
+        assert!((c - 0.00205).abs() < 1e-6, "got {c}");
+    }
+
+    #[test]
+    fn parses_files_touched_from_codex_function_calls() {
+        // Codex's tool calls live in response_item/function_call rows with a
+        // stringified JSON `arguments` blob. Two file touches + one re-touch
+        // + a shell_command (not a file tool) = 2 unique paths.
+        let home = temp_home("files");
+        let p = home.join("rollout-1.jsonl");
+        let meta = r#"{"type":"session_meta","payload":{"id":"sess-1","cwd":"/proj","git":{"branch":"main"}}}"#;
+        let fc1 = r#"{"type":"response_item","payload":{"type":"function_call","name":"read_file","arguments":"{\"file_path\":\"/proj/src/main.rs\"}","call_id":"c1"}}"#;
+        let fc2 = r#"{"type":"response_item","payload":{"type":"function_call","name":"read_file","arguments":"{\"file_path\":\"/proj/src/main.rs\"}","call_id":"c2"}}"#;
+        let fc3 = r#"{"type":"response_item","payload":{"type":"function_call","name":"edit","arguments":"{\"file_path\":\"/proj/Cargo.toml\"}","call_id":"c3"}}"#;
+        let fc4 = r#"{"type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"ls\"}","call_id":"c4"}}"#;
+        std::fs::write(&p, format!("{meta}\n{fc1}\n{fc2}\n{fc3}\n{fc4}\n")).unwrap();
+        let run = parse_run(&p, &HashMap::new()).unwrap();
+        assert_eq!(run.files_touched, 2, "re-read should dedupe, shell_command shouldn't count");
     }
 
     #[test]
