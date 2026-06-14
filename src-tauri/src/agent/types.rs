@@ -123,6 +123,23 @@ pub struct AgentRunSummary {
     pub created_ms: i64,
     pub updated_ms: i64,
     pub message_count: u32,
+    /// Sum of `assistant_message.usage.promptTokens` across the run.
+    /// 0 when the provider never reported usage.
+    #[serde(default)]
+    pub input_tokens: i64,
+    /// Sum of `assistant_message.usage.completionTokens` across the run.
+    #[serde(default)]
+    pub output_tokens: i64,
+    /// Count of unique paths in `file_changed` events. 0 when the run
+    /// didn't touch any files (or the events haven't been written yet —
+    /// see `write_summary` for the lazy-enrich behaviour).
+    #[serde(default)]
+    pub files_touched: u32,
+    /// Estimated run cost in USD, computed from `model` + token totals via
+    /// `crate::pricing::cost_for_run`. `None` for local / subscription /
+    /// passthrough / unknown models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
