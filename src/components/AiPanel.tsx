@@ -1531,70 +1531,12 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       </header>
 
       <TodoStrip workspaceRoot={workspaceRoot} />
-      <div
-        ref={scrollRef}
-        onScroll={updateStickFromScroll}
-        style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, position: "relative" }}
-      >
-        {/* Jump-to-latest — a static chevron pinned to the bottom of
-            the scroll area, visible whenever the user is scrolled up.
-            Standard chat-app pattern: no animation, no container, just
-            a small icon in fg-subtle (accent while streaming) that
-            says "more below". Click → smooth-scroll to the latest. */}
-        {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={forceStickToBottom}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                forceStickToBottom();
-              }
-            }}
-            title="Jump to latest message"
-            aria-label="Jump to latest message"
-            style={{
-              position: "absolute",
-              left: "50%",
-              bottom: 8,
-              transform: "translateX(-50%)",
-              zIndex: 5,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: 4,
-              borderRadius: 6,
-              color: streaming ? "var(--accent)" : "var(--fg-subtle)",
-              cursor: "pointer",
-              opacity: 0.7,
-              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.opacity = "1";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.opacity = "0.7";
-            }}
-          >
-            {streaming && (
-              <span
-                aria-hidden
-                style={{
-                  width: 4,
-                  height: 4,
-                  borderRadius: "50%",
-                  background: "currentColor",
-                  animation: "klide-pulse 1.6s ease-in-out infinite",
-                }}
-              />
-            )}
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 5v14" />
-              <path d="m6 13 6 6 6-6" />
-            </svg>
-          </span>
-        )}
+      <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex" }}>
+        <div
+          ref={scrollRef}
+          onScroll={updateStickFromScroll}
+          style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0 }}
+        >
         {providerDelegatesWork ? (
           <DelegateTerminalSurface
             sessionId={`${currentId}:${provider}`}
@@ -1660,6 +1602,75 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           );
         })}
           </>
+        )}
+        </div>
+
+        {/* Jump-to-latest — a static chevron anchored to the visible
+            bottom of the panel (sibling of the scroll div, inside the
+            position:relative wrapper). This is the standard chat-app
+            pattern: a small icon pinned to the viewport bottom that
+            only appears when the user is scrolled up, regardless of
+            where they are in the scroll content.
+
+            Crucially this is OUTSIDE the scroll container — a position
+            absolute chevron inside the scrollable area would scroll
+            along with the content and end up sitting in the middle of
+            a long conversation when the user scrolls up. Anchoring
+            here means it always sits at the bottom of the visible
+            viewport, even mid-scroll. */}
+        {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={forceStickToBottom}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                forceStickToBottom();
+              }
+            }}
+            title="Jump to latest message"
+            aria-label="Jump to latest message"
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: 8,
+              transform: "translateX(-50%)",
+              zIndex: 5,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: 4,
+              borderRadius: 6,
+              color: streaming ? "var(--accent)" : "var(--fg-subtle)",
+              cursor: "pointer",
+              opacity: 0.7,
+              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.opacity = "1";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = "0.7";
+            }}
+          >
+            {streaming && (
+              <span
+                aria-hidden
+                style={{
+                  width: 4,
+                  height: 4,
+                  borderRadius: "50%",
+                  background: "currentColor",
+                  animation: "klide-pulse 1.6s ease-in-out infinite",
+                }}
+              />
+            )}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="m6 13 6 6 6-6" />
+            </svg>
+          </span>
         )}
       </div>
 
