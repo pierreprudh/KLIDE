@@ -1536,76 +1536,73 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         onScroll={updateStickFromScroll}
         style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, position: "relative" }}
       >
-        {/* Jump-to-latest bubble. A small floating circle centered at
-            the bottom of the scroll container, visible whenever the user
-            is scrolled up. Two motion cues keep it from feeling like a
-            dead button:
-              1. klide-float — a slow, 3.2s up-and-down drift while the
-                 bubble is visible. The amplitude is small (3px) and the
-                 easing is symmetric so the bubble never feels jittery.
-              2. During streaming, a pulsing dot sits at the top-right —
-                 same klide-pulse the running-run dot uses, so the
-                 affordance reads as 'something is happening below'.
-            The bubble itself is otherwise minimal: 32px circle, hairline
-            border, translucent glass background, no text. The single
-            down-arrow icon says everything. */}
+        {/* Jump-to-latest — a small free-floating chevron at the bottom
+            of the scroll area. No border, no background, no button
+            chrome: just the icon, drifting on a continuous loop so it
+            reads as 'alive' rather than 'a button that forgot to render
+            its label'. The drift is bigger than the bubble's was (±6px
+            on Y, ±3px on X) so the motion is unmistakable, but the
+            easing is symmetric (0%/100% land on the same point) so
+            the loop has no visible seam.
+
+            Position: bottom: 8, centered horizontally. Sits inside the
+            scroll container so it shares the auto-scroll fate of the
+            messages — when the user is at the bottom, it sits just
+            above the last message; when they're scrolled up, it stays
+            anchored to the visible bottom edge of the viewport. */}
         {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
-          <button
-            type="button"
+          <span
+            role="button"
+            tabIndex={0}
             onClick={forceStickToBottom}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                forceStickToBottom();
+              }
+            }}
             title="Jump to latest message"
             aria-label="Jump to latest message"
             style={{
               position: "absolute",
               left: "50%",
-              bottom: 10,
-              transform: "translateX(-50%)",
+              bottom: 8,
               zIndex: 5,
-              width: 32,
-              height: 32,
-              display: "grid",
-              placeItems: "center",
-              borderRadius: "50%",
-              border: "1px solid var(--border)",
-              background: "color-mix(in srgb, var(--bg-elevated) 80%, transparent)",
-              backdropFilter: "blur(8px)",
-              color: "var(--fg-subtle)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: 4,
+              borderRadius: 6,
+              color: streaming ? "var(--accent)" : "var(--fg-subtle)",
               cursor: "pointer",
-              animation: "klide-float 3.2s ease-in-out infinite",
-              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
+              opacity: 0.7,
+              animation: "klide-drift 3s ease-in-out infinite",
+              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.color = "var(--fg-strong)";
-              e.currentTarget.style.background = "var(--bg-elevated)";
-              e.currentTarget.style.borderColor = "var(--border-strong, var(--border))";
+              e.currentTarget.style.opacity = "1";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--fg-subtle)";
-              e.currentTarget.style.background = "color-mix(in srgb, var(--bg-elevated) 80%, transparent)";
-              e.currentTarget.style.borderColor = "var(--border)";
+              e.currentTarget.style.opacity = "0.7";
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 5v14" />
-              <path d="m6 13 6 6 6-6" />
-            </svg>
             {streaming && (
               <span
                 aria-hidden
                 style={{
-                  position: "absolute",
-                  top: -1,
-                  right: -1,
-                  width: 8,
-                  height: 8,
+                  width: 4,
+                  height: 4,
                   borderRadius: "50%",
-                  background: "var(--accent)",
-                  border: "2px solid var(--bg-elevated)",
+                  background: "currentColor",
                   animation: "klide-pulse 1.6s ease-in-out infinite",
                 }}
               />
             )}
-          </button>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="m6 13 6 6 6-6" />
+            </svg>
+          </span>
         )}
         {providerDelegatesWork ? (
           <DelegateTerminalSurface

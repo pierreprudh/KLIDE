@@ -1196,17 +1196,23 @@ select.klide-field {
   }
 }
 
-/* Gentle vertical drift for floating affordances (e.g. the AI panel's
-   Jump-to-latest bubble). 3px amplitude over 3.2s — small enough to
-   read as 'alive' rather than 'wobbly'. Eased symmetric so the
-   motion has no visible start/stop, which would break the illusion
-   of a floating thing. */
-@keyframes klide-float {
+/* Larger motion for the free-floating jump-to-latest chevron. ±6px on
+   Y, ±3px on X over 3s — unmistakable 'this is alive' drift. The
+   translateX(-50%) is preserved because the chevron is centered with
+   left:50% + transform:translateX(-50%) (no fixed width). Symmetric
+   keyframes so the loop has no visible seam. */
+@keyframes klide-drift {
   0%, 100% {
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(-50%) translate(0, 0);
+  }
+  25% {
+    transform: translateX(-50%) translate(3px, -6px);
   }
   50% {
-    transform: translateX(-50%) translateY(-3px);
+    transform: translateX(-50%) translate(0, -8px);
+  }
+  75% {
+    transform: translateX(-50%) translate(-3px, -6px);
   }
 }
 
