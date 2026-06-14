@@ -1196,25 +1196,9 @@ select.klide-field {
   }
 }
 
-/* Larger motion for the free-floating jump-to-latest chevron. ±6px on
-   Y, ±3px on X over 3s — unmistakable 'this is alive' drift. The
-   translateX(-50%) is preserved because the chevron is centered with
-   left:50% + transform:translateX(-50%) (no fixed width). Symmetric
-   keyframes so the loop has no visible seam. */
-@keyframes klide-drift {
-  0%, 100% {
-    transform: translateX(-50%) translate(0, 0);
-  }
-  25% {
-    transform: translateX(-50%) translate(3px, -6px);
-  }
-  50% {
-    transform: translateX(-50%) translate(0, -8px);
-  }
-  75% {
-    transform: translateX(-50%) translate(-3px, -6px);
-  }
-}
+/* (No motion keyframe for the jump-to-latest chevron — the static
+   placement is the affordance. klide-pulse still drives the
+   streaming dot beside it.) */
 
 /* Per-message meta footer (duration · tokens) — barely-there until the
    reader actually wants it. */

@@ -1536,20 +1536,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         onScroll={updateStickFromScroll}
         style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, position: "relative" }}
       >
-        {/* Jump-to-latest — a small free-floating chevron at the bottom
-            of the scroll area. No border, no background, no button
-            chrome: just the icon, drifting on a continuous loop so it
-            reads as 'alive' rather than 'a button that forgot to render
-            its label'. The drift is bigger than the bubble's was (±6px
-            on Y, ±3px on X) so the motion is unmistakable, but the
-            easing is symmetric (0%/100% land on the same point) so
-            the loop has no visible seam.
-
-            Position: bottom: 8, centered horizontally. Sits inside the
-            scroll container so it shares the auto-scroll fate of the
-            messages — when the user is at the bottom, it sits just
-            above the last message; when they're scrolled up, it stays
-            anchored to the visible bottom edge of the viewport. */}
+        {/* Jump-to-latest — a static chevron pinned to the bottom of
+            the scroll area, visible whenever the user is scrolled up.
+            Standard chat-app pattern: no animation, no container, just
+            a small icon in fg-subtle (accent while streaming) that
+            says "more below". Click → smooth-scroll to the latest. */}
         {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
           <span
             role="button"
@@ -1567,6 +1558,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               position: "absolute",
               left: "50%",
               bottom: 8,
+              transform: "translateX(-50%)",
               zIndex: 5,
               display: "inline-flex",
               alignItems: "center",
@@ -1576,7 +1568,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               color: streaming ? "var(--accent)" : "var(--fg-subtle)",
               cursor: "pointer",
               opacity: 0.7,
-              animation: "klide-drift 3s ease-in-out infinite",
               transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
