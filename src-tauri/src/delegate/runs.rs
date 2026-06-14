@@ -28,6 +28,15 @@ pub struct AgentRun {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub status: String, // "running" (touched <2min ago) | "done"
+    /// Count of unique file paths the agent touched in tool calls (Read,
+    /// Edit, Write, apply_patch, etc.). 0 when the source doesn't record
+    /// tool calls or the session had no file-touching tools.
+    pub files_touched: u32,
+    /// Estimated run cost in USD, computed from input/output tokens and the
+    /// per-model price table in `crate::pricing`. `None` for local,
+    /// subscription, passthrough, or unknown models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>, // set when we can infer parent from spawn mapping
 }
@@ -145,6 +154,58 @@ pub(crate) fn extract_user_text(message: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// Heuristic: does this tool name + argument blob look like a file path the
+/// agent touched? Returns the path if so, `None` otherwise. Conservative —
+/// we only flag tools whose argument shape is unambiguous across the
+/// providers we read from (Claude Code, Codex, OpenCode). Tools with fuzzy
+/// argument shapes (Bash, shell_command, grep_files, apply_patch) are
+/// intentionally skipped: matching them would either over-count or require
+/// a per-tool parser we don't want to maintain here.
+pub(crate) fn tool_file_path(name: &str, args: &serde_json::Value) -> Option<String> {
+    // Recognise the canonical file-touching tool names. Case-insensitive to
+    // survive provider / wire-format variations ("Read" vs "read" vs
+    // "read_file"). Anything else returns None — we don't try to second-guess
+    // tools we don't know.
+    let n = name.to_ascii_lowercase();
+    let is_file_tool = matches!(
+        n.as_str(),
+        "read"
+            | "read_file"
+            | "write"
+            | "write_file"
+            | "create_file"
+            | "edit"
+            | "edit_file"
+            | "str_replace"
+            | "str_replace_based_edit_tool"
+            | "multi_edit"
+            | "multiedit"
+            | "notebookedit"
+            | "notebook_edit"
+    );
+    if !is_file_tool {
+        return None;
+    }
+    // The path key varies by tool: Read/Write/Edit use `file_path`, OpenCode
+    // tools use `filePath`, some pass `path`. Try them in order.
+    let raw = args
+        .get("file_path")
+        .or_else(|| args.get("filePath"))
+        .or_else(|| args.get("filepath"))
+        .or_else(|| args.get("path"))?;
+    let trimmed = raw.as_str()?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // A real file path has a separator. Reject bare words like "foo" or
+    // glob patterns like "**/*.ts" that some grep tools use — those aren't
+    // a single file the agent read.
+    if !(trimmed.contains('/') || trimmed.contains('\\')) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 /// Bound a detail-pane payload: trim long messages, keep the most recent ~80.
 pub(crate) fn cap_messages(msgs: &mut Vec<RunMessage>) {
     for m in msgs.iter_mut() {
@@ -186,6 +247,44 @@ mod tests {
         assert_eq!(extract_user_text(&wrapped), None);
         let plain = serde_json::json!({ "content": [{ "type": "text", "text": " fix it " }] });
         assert_eq!(extract_user_text(&plain).as_deref(), Some("fix it"));
+    }
+
+    #[test]
+    fn tool_file_path_recognises_known_file_tools() {
+        // Canonical snake_case keys.
+        assert_eq!(
+            tool_file_path("read", &serde_json::json!({ "file_path": "/src/a.rs" })),
+            Some("/src/a.rs".to_string())
+        );
+        assert_eq!(
+            tool_file_path("edit", &serde_json::json!({ "file_path": "src/b.ts" })),
+            Some("src/b.ts".to_string())
+        );
+        // camelCase (OpenCode).
+        assert_eq!(
+            tool_file_path("read", &serde_json::json!({ "filePath": "x/y.md" })),
+            Some("x/y.md".to_string())
+        );
+        // Bare `path` key (some Codex tools).
+        assert_eq!(
+            tool_file_path("write", &serde_json::json!({ "path": "./out.txt" })),
+            Some("./out.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn tool_file_path_rejects_unknown_tools_and_bad_values() {
+        // Bash, shell_command, apply_patch — too ambiguous to count.
+        assert_eq!(tool_file_path("bash", &serde_json::json!({ "file_path": "/a" })), None);
+        assert_eq!(tool_file_path("shell_command", &serde_json::json!({ "file_path": "/a" })), None);
+        assert_eq!(tool_file_path("apply_patch", &serde_json::json!({ "file_path": "/a" })), None);
+        // No path key.
+        assert_eq!(tool_file_path("read", &serde_json::json!({ "limit": 10 })), None);
+        // Empty / whitespace path.
+        assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "" })), None);
+        assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "   " })), None);
+        // Bare word without a separator (looks like a glob, not a file).
+        assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "foo" })), None);
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use super::runs::{
     cap_messages, clean_title, extract_routine_heading, extract_user_text, mtime_ms, project_name,
-    recency_status,
+    recency_status, tool_file_path, AgentRun, RunMessage,
 };
-use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
+use std::collections::HashSet;
+use super::{shell_quote, Delegate, RunCandidate, RunParser};
 
 /// Claude Code — Anthropic's CLI. Its TUI accepts the task as the first
 /// positional arg directly, so no subcommand is needed. Sessions land in
@@ -109,6 +110,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let mut count: u32 = 0;
     let mut created_ms: i64 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
+    let mut files: HashSet<String> = HashSet::new();
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -163,6 +165,27 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                     input_tokens += n("input_tokens") + n("cache_creation_input_tokens");
                     output_tokens += n("output_tokens");
                 }
+                // Walk the assistant content for tool_use parts and record
+                // every file the agent touched. We dedupe by path string so a
+                // long session that re-reads a file doesn't double-count it.
+                if let Some(arr) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for part in arr {
+                        if part.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                            let name = part
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("");
+                            let input = part.get("input").unwrap_or(&serde_json::Value::Null);
+                            if let Some(path) = tool_file_path(name, input) {
+                                files.insert(path);
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -171,6 +194,11 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     if created_ms == 0 {
         created_ms = updated_ms;
     }
+    let cost_usd = crate::pricing::cost_for_run(
+        model.as_deref().unwrap_or(""),
+        input_tokens,
+        output_tokens,
+    );
     Some(AgentRun {
         status: recency_status(updated_ms),
         project: cwd.as_deref().and_then(project_name),
@@ -186,6 +214,8 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         message_count: count,
         input_tokens,
         output_tokens,
+        files_touched: files.len() as u32,
+        cost_usd,
         parent_id: None,
     })
 }
@@ -284,6 +314,36 @@ mod tests {
         // Cache reads excluded, cache creation counted.
         assert_eq!(run.input_tokens, 150);
         assert_eq!(run.output_tokens, 20);
+        // The fixture's tool_use has no `input.file_path`, so files_touched
+        // stays at 0. The dedicated file-extraction test below exercises
+        // the path collection with a real path.
+        assert_eq!(run.files_touched, 0);
+        // Claude Sonnet 4.6 at 100+50=150 input + 20 output = 0.00045 + 0.0003.
+        let c = run.cost_usd.expect("sonnet has a known price");
+        assert!((c - 0.00075).abs() < 1e-6, "got {c}");
+    }
+
+    #[test]
+    fn parses_files_touched_from_tool_use_calls() {
+        // Each tool_use with a recognised name + file_path key is counted,
+        // and the same path is only counted once even if re-touched.
+        let home = temp_home("files");
+        let p = home.join("session.jsonl");
+        std::fs::write(
+            &p,
+            concat!(
+                r#"{"type":"user","ts":1000,"cwd":"/proj","message":{"content":"go"}}"#, "\n",
+                r#"{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":1},"content":["#,
+                r#"{"type":"tool_use","name":"Read","input":{"file_path":"/proj/src/main.rs"}},"#,
+                r#"{"type":"tool_use","name":"edit","input":{"file_path":"/proj/src/main.rs"}},"#,
+                r#"{"type":"tool_use","name":"write","input":{"file_path":"/proj/Cargo.toml"}},"#,
+                r#"{"type":"tool_use","name":"Bash","input":{"command":"ls","file_path":"/proj/src/main.rs"}}"#,
+                "]}}\n",
+            ),
+        )
+        .unwrap();
+        let run = parse_run(&p).unwrap();
+        assert_eq!(run.files_touched, 2, "Bash should not be counted, dedupe should drop the re-edit");
     }
 
     #[test]

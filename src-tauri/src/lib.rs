@@ -6,6 +6,7 @@ mod git;
 mod local_servers;
 mod memory;
 mod models;
+mod pricing;
 mod providers;
 mod pty;
 mod skills;

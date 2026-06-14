@@ -62,6 +62,15 @@ export type Run = {
   /** Real token usage summed from the session log; absent when the source doesn't record it. */
   inputTokens?: number;
   outputTokens?: number;
+  /** Unique file paths the agent touched in tool calls. 0 when unknown. */
+  filesTouched?: number;
+  /**
+   * Estimated run cost in USD, computed from model + tokens on the Rust
+   * side via the `pricing` table. `null` for local / subscription /
+   * passthrough / unknown models; `undefined` for Klide runs (the agent
+   * harness doesn't yet surface this).
+   */
+  costUsd?: number | null;
   updatedMs: number;
   createdMs: number;
   /** When this run was spawned by another run (e.g. @explore sub-agent). */
@@ -101,6 +110,8 @@ type AgentRunDto = {
   messageCount: number;
   inputTokens?: number;
   outputTokens?: number;
+  filesTouched?: number;
+  costUsd?: number | null;
   status: string;
   parentId?: string;
 };
@@ -260,6 +271,12 @@ function fromDto(a: AgentRunDto): Run {
     messageCount: a.messageCount ?? 0,
     inputTokens: a.inputTokens ?? 0,
     outputTokens: a.outputTokens ?? 0,
+    // `filesTouched` is 0 when the source doesn't record it; `costUsd` is
+    // null when the model has no known price (local / subscription /
+    // passthrough). Both stay absent (undefined) for Klide runs until the
+    // agent harness surfaces them on `AgentRunSummary`.
+    filesTouched: a.filesTouched,
+    costUsd: a.costUsd,
     updatedMs: a.updatedMs ?? 0,
     createdMs: a.createdMs ?? a.updatedMs ?? 0,
     parentId: a.parentId,
@@ -561,4 +578,22 @@ export function relativeTime(ts: number): string {
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ago`;
   return `${Math.floor(hr / 24)}d ago`;
+}
+
+/** Human-readable cost: "$0.12" for sub-dollar, "$1.23" once we cross a buck.
+ *  Returns null for null/undefined/zero — the row should suppress the cost
+ *  chip rather than show "$0.00" (which is misleading and noisy). */
+export function formatCost(usd: number | null | undefined): string | null {
+  if (usd === null || usd === undefined) return null;
+  if (usd <= 0) return null;
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 1) return `$${usd.toFixed(2)}`;
+  if (usd < 100) return `$${usd.toFixed(2)}`;
+  return `$${Math.round(usd)}`;
+}
+
+/** Short files-touched label: "5 files" or null when zero/unknown. */
+export function formatFilesTouched(n: number | null | undefined): string | null {
+  if (n === null || n === undefined || n <= 0) return null;
+  return `${n} ${n === 1 ? "file" : "files"}`;
 }

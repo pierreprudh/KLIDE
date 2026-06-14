@@ -30,6 +30,8 @@ import {
   boardSectionForRun,
   fetchAgentRuns,
   fetchRunMessages,
+  formatCost,
+  formatFilesTouched,
   runAttentionReason,
   runNeedsAttention,
   runRoutineInfo,
@@ -617,6 +619,8 @@ function RunRow({
               </>
             )}
             {run.branch ? ` · ${run.branch}` : ""}
+            {formatFilesTouched(run.filesTouched) ? ` · ${formatFilesTouched(run.filesTouched)}` : ""}
+            {formatCost(run.costUsd) ? ` · ${formatCost(run.costUsd)}` : ""}
             {tokenSummary ? ` · ${tokenSummary}` : ""}
             {" · "}
             {relativeTime(run.updatedMs)}

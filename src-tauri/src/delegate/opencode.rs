@@ -1,4 +1,5 @@
-use super::runs::{cap_messages, clean_title, project_name};
+use super::runs::{cap_messages, clean_title, project_name, tool_file_path};
+use std::collections::HashSet;
 use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
 
 /// OpenCode — the SST CLI. The quirkiest of the three:
@@ -316,6 +317,40 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         });
     let project = cwd.as_deref().and_then(project_name);
 
+    // Walk every tool part in the session and accumulate the unique file
+    // paths the agent touched. We do this in Rust rather than a single
+    // SELECT DISTINCT json_extract(...) so the same `tool_file_path`
+    // heuristic the JSONL adapters use applies — keeping the three
+    // adapters in lockstep on what counts as "touched".
+    let files_touched: u32 = (|| -> Option<u32> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT data FROM part WHERE session_id = ?1 \
+                 AND json_extract(data, '$.type') = 'tool'",
+            )
+            .ok()?;
+        let mut rows = stmt.query([session_id]).ok()?;
+        let mut files: HashSet<String> = HashSet::new();
+        while let Some(row) = rows.next().ok()? {
+            let raw: String = row.get(0).ok()?;
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+            let name = value.get("tool").and_then(|n| n.as_str()).unwrap_or("");
+            let args = value.get("args").unwrap_or(&serde_json::Value::Null);
+            if let Some(path) = tool_file_path(name, args) {
+                files.insert(path);
+            }
+        }
+        Some(files.len() as u32)
+    })()
+    .unwrap_or(0);
+
+    let cost_usd = crate::pricing::cost_for_run(
+        model_raw.as_deref().unwrap_or(""),
+        input_tokens,
+        output_tokens,
+    );
+
     Some(AgentRun {
         status,
         project,
@@ -340,6 +375,8 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         message_count: message_count as u32,
         input_tokens,
         output_tokens,
+        files_touched,
+        cost_usd,
         parent_id,
     })
 }
@@ -455,6 +492,11 @@ mod tests {
         assert_eq!(run.message_count, 2);
         assert_eq!(run.input_tokens, 10);
         assert_eq!(run.output_tokens, 25);
+        // The seed DB has no file-touching tool parts; the file-touched
+        // test below covers the extraction path.
+        assert_eq!(run.files_touched, 0);
+        // opencode-go is passthrough — no known per-model price.
+        assert_eq!(run.cost_usd, None);
         // Latest message is the assistant's → the agent finished its turn.
         assert_eq!(run.status, "done");
     }
@@ -482,6 +524,47 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].text, "please fix");
         assert_eq!(msgs[1].text, "[tool: grep]\ndone");
+    }
+
+    #[test]
+    fn parses_files_touched_from_tool_parts() {
+        // Three file-touching tool parts across two messages, plus one
+        // re-touch of an already-counted path and one grep tool (not a
+        // file tool). Should resolve to 2 unique paths.
+        let home = temp_home("files");
+        let dir = home.join(".local/share/opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = rusqlite::Connection::open(dir.join("opencode.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT, title TEXT, directory TEXT, model TEXT, \
+                 time_updated INTEGER, time_created INTEGER, parent_id TEXT);
+             CREATE TABLE message (id TEXT, session_id TEXT, data TEXT, time_created INTEGER);
+             CREATE TABLE part (id TEXT, session_id TEXT, message_id TEXT, data TEXT, time_created INTEGER);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session VALUES ('oss-1', 't', '/proj', \
+                 '{\"id\":\"minimax-m3\",\"providerID\":\"opencode-go\"}', 2000, 1000, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message VALUES ('m1', 'oss-1', '{\"role\":\"assistant\"}', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part VALUES \
+                 ('p1', 'oss-1', 'm1', '{\"type\":\"tool\",\"tool\":\"read\",\"args\":{\"filePath\":\"/proj/src/main.rs\"}}', 1), \
+                 ('p2', 'oss-1', 'm1', '{\"type\":\"tool\",\"tool\":\"read\",\"args\":{\"filePath\":\"/proj/src/main.rs\"}}', 2), \
+                 ('p3', 'oss-1', 'm1', '{\"type\":\"tool\",\"tool\":\"edit\",\"args\":{\"filePath\":\"/proj/Cargo.toml\"}}', 3), \
+                 ('p4', 'oss-1', 'm1', '{\"type\":\"tool\",\"tool\":\"grep\",\"args\":{\"pattern\":\"foo\"}}', 4)",
+            [],
+        )
+        .unwrap();
+        let parser = OpenCode.run_parser(home.to_str().unwrap());
+        let run = parser.parse("oss-1").unwrap();
+        assert_eq!(run.files_touched, 2, "dedupe + skip grep");
     }
 
     #[test]
