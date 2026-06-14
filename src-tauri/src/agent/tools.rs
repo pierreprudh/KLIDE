@@ -122,6 +122,17 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
+            schema: schema("get_git_log", "Return recent commit history (hash, subject, relative date, author) so you can understand how the codebase has been evolving. Use this to learn what recent work led to the current state.",
+                serde_json::json!({
+                    "count": { "type": "integer", "description": "How many commits to return (default 20, max 100)." },
+                    "path": { "type": "string", "description": "Optional workspace-relative path to limit history to one file or folder." }
+                }),
+                &[]),
+            run_read: Some(|ws, input| get_git_log(ws.root(), input)),
+            run_write_preview: None,
+        },
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
             schema: schema("clean_context", "Discard tool results that led nowhere (a Glob with 300 paths, a read of the wrong file, a search that came up empty). Each removed result is replaced by '[cleaned: tool_name]' so the agent knows it threw something away. Only the current turn is affected, keeping the prompt cache intact.",
                 serde_json::json!({
                     "ids": { "type": "array", "description": "List of tool_call_ids to clean from the current turn." }
@@ -1038,6 +1049,41 @@ fn get_git_diff(root: &Path, input: &serde_json::Value) -> ToolResult {
             if staged { " (staged)" } else { "" },
             if output.trim().is_empty() {
                 "(empty)"
+            } else {
+                output.trim()
+            }
+        )),
+        Err(e) => err(e),
+    }
+}
+
+fn get_git_log(root: &Path, input: &serde_json::Value) -> ToolResult {
+    let count = input
+        .get("count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20)
+        .clamp(1, 100);
+    let count_arg = format!("-n{count}");
+    // Tab-separated so the model can parse cleanly: hash · subject · date · author.
+    let mut args = vec![
+        "log",
+        "--pretty=format:%h\t%s\t%cr\t%an",
+        count_arg.as_str(),
+    ];
+    let path = trimmed_arg(input, "path");
+    if let Some(p) = path.as_deref() {
+        args.push("--");
+        args.push(p);
+    }
+    match git_output(root, &args) {
+        Ok(output) => ok(format!(
+            "Git log (most recent first){}:\n{}",
+            match path.as_deref() {
+                Some(p) => format!(" for {p}"),
+                None => String::new(),
+            },
+            if output.trim().is_empty() {
+                "(no commits)"
             } else {
                 output.trim()
             }

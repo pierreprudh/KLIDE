@@ -776,6 +776,17 @@ async fn run_agent_loop(
         }
 
         let mut content = Vec::new();
+        // Preserve the reasoning channel on tool-calling turns too. The frontend
+        // keys its "thought process" disclosure off a Thinking block, so without
+        // this the reasoning streamed live is wiped at finalization — a turn that
+        // reasons and then calls a tool (LFM2.5 routes both through the thinking
+        // channel) renders as a vanished thought process with no body. The
+        // no-tool branch above already does this; keep the two consistent.
+        if let Some(t) = thinking_text.as_deref() {
+            if !t.trim().is_empty() {
+                content.push(AgentContentBlock::Thinking { text: t.to_string() });
+            }
+        }
         if !content_text.trim().is_empty() {
             content.push(AgentContentBlock::Text {
                 text: content_text.clone(),
@@ -1056,6 +1067,23 @@ async fn run_agent_loop(
     }
 
     if !completed {
+        // The last turn already emitted its reasoning + tool calls, but the run
+        // never produced a tool-free answer — so without this the conversation
+        // just ends on a tool result with no closing words, then a silent error.
+        // Emit a readable final message so the user always sees *something* and
+        // knows they can continue, before marking the run retryable.
+        emit(AgentEvent::AssistantMessage {
+            run_id: id.clone(),
+            message_id: message_id("assistant"),
+            content: vec![AgentContentBlock::Text {
+                text: "I reached the maximum number of tool turns (8) before finishing this request. \
+                       The work above is where I got to — send another message to have me continue from here."
+                    .to_string(),
+            }],
+            usage: None,
+            ts: now_ms(),
+        })?;
+        message_count += 1;
         let error = AgentError {
             code: "max_turns".to_string(),
             message: "Agent reached the maximum tool turns.".to_string(),
