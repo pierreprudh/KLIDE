@@ -1196,6 +1196,20 @@ select.klide-field {
   }
 }
 
+/* Gentle vertical drift for floating affordances (e.g. the AI panel's
+   Jump-to-latest bubble). 3px amplitude over 3.2s — small enough to
+   read as 'alive' rather than 'wobbly'. Eased symmetric so the
+   motion has no visible start/stop, which would break the illusion
+   of a floating thing. */
+@keyframes klide-float {
+  0%, 100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(-3px);
+  }
+}
+
 /* Per-message meta footer (duration · tokens) — barely-there until the
    reader actually wants it. */
 .klide-msg-meta {

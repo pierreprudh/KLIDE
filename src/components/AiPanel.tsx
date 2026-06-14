@@ -1536,12 +1536,19 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         onScroll={updateStickFromScroll}
         style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, position: "relative" }}
       >
-        {/* Jump-to-latest pill. Centered at the bottom of the scroll
-            container, visible whenever the user is scrolled up and there
-            are messages. Deliberately subtle — a thin border, ghost
-            background, fg-subtle text. The affordance should be discoverable
-            but never compete with the conversation itself. The pulsing
-            dot during streaming is the only "active" cue. */}
+        {/* Jump-to-latest bubble. A small floating circle centered at
+            the bottom of the scroll container, visible whenever the user
+            is scrolled up. Two motion cues keep it from feeling like a
+            dead button:
+              1. klide-float — a slow, 3.2s up-and-down drift while the
+                 bubble is visible. The amplitude is small (3px) and the
+                 easing is symmetric so the bubble never feels jittery.
+              2. During streaming, a pulsing dot sits at the top-right —
+                 same klide-pulse the running-run dot uses, so the
+                 affordance reads as 'something is happening below'.
+            The bubble itself is otherwise minimal: 32px circle, hairline
+            border, translucent glass background, no text. The single
+            down-arrow icon says everything. */}
         {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
           <button
             type="button"
@@ -1554,49 +1561,50 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               bottom: 10,
               transform: "translateX(-50%)",
               zIndex: 5,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              height: 22,
-              padding: "0 9px",
-              borderRadius: 999,
+              width: 32,
+              height: 32,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "50%",
               border: "1px solid var(--border)",
-              background: "color-mix(in srgb, var(--bg-elevated) 78%, transparent)",
-              backdropFilter: "blur(6px)",
+              background: "color-mix(in srgb, var(--bg-elevated) 80%, transparent)",
+              backdropFilter: "blur(8px)",
               color: "var(--fg-subtle)",
-              fontSize: 10,
-              fontWeight: 500,
-              letterSpacing: "0.02em",
-              fontFamily: "var(--font-ui)",
               cursor: "pointer",
-              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+              animation: "klide-float 3.2s ease-in-out infinite",
+              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.color = "var(--fg-strong)";
               e.currentTarget.style.background = "var(--bg-elevated)";
+              e.currentTarget.style.borderColor = "var(--border-strong, var(--border))";
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.color = "var(--fg-subtle)";
-              e.currentTarget.style.background = "color-mix(in srgb, var(--bg-elevated) 78%, transparent)";
+              e.currentTarget.style.background = "color-mix(in srgb, var(--bg-elevated) 80%, transparent)";
+              e.currentTarget.style.borderColor = "var(--border)";
             }}
           >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="m6 13 6 6 6-6" />
+            </svg>
             {streaming && (
               <span
                 aria-hidden
                 style={{
-                  width: 5,
-                  height: 5,
+                  position: "absolute",
+                  top: -1,
+                  right: -1,
+                  width: 8,
+                  height: 8,
                   borderRadius: "50%",
                   background: "var(--accent)",
+                  border: "2px solid var(--bg-elevated)",
                   animation: "klide-pulse 1.6s ease-in-out infinite",
                 }}
               />
             )}
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 5v14" />
-              <path d="m6 13 6 6 6-6" />
-            </svg>
-            Jump to latest
           </button>
         )}
         {providerDelegatesWork ? (
