@@ -504,6 +504,38 @@ export function AiPanel({
   const historyRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
 
+  // Smart auto-scroll: only follow the latest token when the user is
+  // already at (or within a few pixels of) the bottom. If they've scrolled
+  // up to read earlier context, new tokens don't yank them back — the
+  // panel surfaces a "Jump to latest" pill instead. We use a ref for the
+  // sticky flag (no re-render on every scroll event) and a state mirror
+  // (drives the pill's visibility).
+  //
+  // The flag is forced to true at every "the user is at the start of
+  // something new" boundary: new user message, new assistant turn,
+  // conversation switch. See `forceStickToBottom` below.
+  const STICK_THRESHOLD_PX = 48;
+  const stickToBottomRef = useRef(true);
+  const [stickToBottom, setStickToBottom] = useState(true);
+
+  function forceStickToBottom() {
+    stickToBottomRef.current = true;
+    setStickToBottom(true);
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }
+
+  function updateStickFromScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const isStuck = distanceFromBottom <= STICK_THRESHOLD_PX;
+    if (stickToBottomRef.current !== isStuck) {
+      stickToBottomRef.current = isStuck;
+      setStickToBottom(isStuck);
+    }
+  }
+
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
   // Restore the persisted conversation for `currentId` on first mount so a
@@ -700,6 +732,11 @@ export function AiPanel({
     // we don't show a question the new run hasn't asked yet.
     setPendingQuestion(null);
     setQuestionAnswer("");
+    // Switching conversations is a navigation event: jump to the bottom
+    // of the new chat. Without this, an old scroll position from the
+    // previous chat sticks, and the user has to scroll to find the
+    // latest message.
+    forceStickToBottom();
   }
 
   function deleteConversation(id: string, e: ReactMouseEvent) {
@@ -708,7 +745,16 @@ export function AiPanel({
     if (id === currentId) { setMsgs([]); setCurrentId(genId()); }
   }
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [msgs]);
+  // Only auto-scroll on token updates when the user is at the bottom.
+  // The ref read is intentional — we don't want a state dependency here,
+  // which would re-arm the effect on every scroll event and create a
+  // feedback loop. See the `stickToBottomRef` block above.
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight });
+  }, [msgs]);
 
   // Load a resumed conversation from Mission Control. After loading, ping
   // the parent so it can clear `resumeConversation` — otherwise re-clicking
@@ -890,6 +936,10 @@ export function AiPanel({
     setMsgs(nextMsgs);
     setStreaming(true);
     setActivity("thinking");
+    // A fresh assistant turn is the one place we want to yank the user
+    // back to the bottom even if they were scrolled up reading context.
+    // Their action (sending a message) implies "I want to see the reply".
+    forceStickToBottom();
 
     let harnessError: Error | null = null;
     // Track user-initiated stops so the auto-memory hook can distinguish a
@@ -1182,6 +1232,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     const queuedMessage: Msg = { role: "user", content: turn.text, attachments: turn.attachments.length ? turn.attachments : undefined, projectContext: turn.projectContext, queueState: "queued", queueId: turn.clientId };
     msgsRef.current = [...msgsRef.current, queuedMessage];
     setMsgs(msgsRef.current);
+    // The user just hit send. Even if they were scrolled up reading old
+    // context, "send" is a clear navigation signal — pull them to the
+    // bottom so they can watch their message + the reply.
+    forceStickToBottom();
     void drainQueue();
   }
 
@@ -1477,7 +1531,64 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       </header>
 
       <TodoStrip workspaceRoot={workspaceRoot} />
-      <div ref={scrollRef} style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0 }}>
+      <div
+        ref={scrollRef}
+        onScroll={updateStickFromScroll}
+        style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, position: "relative" }}
+      >
+        {/* Jump-to-latest pill. Visible whenever the user is scrolled up
+            while there's something to scroll back to — i.e. messages are
+            present and we're not already at the bottom. The pill always
+            offers a one-click escape, regardless of whether a stream is
+            active. Stays out of the layout (absolute) so it doesn't push
+            the messages around. */}
+        {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
+          <button
+            type="button"
+            onClick={forceStickToBottom}
+            title="Jump to latest message"
+            aria-label="Jump to latest message"
+            style={{
+              position: "absolute",
+              right: 14,
+              bottom: 12,
+              zIndex: 5,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              height: 26,
+              padding: "0 10px",
+              borderRadius: 999,
+              border: "1px solid var(--border)",
+              background: "var(--bg-elevated)",
+              color: "var(--accent)",
+              fontSize: 11,
+              fontWeight: 560,
+              fontFamily: "var(--font-ui)",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="m6 13 6 6 6-6" />
+            </svg>
+            Jump to latest
+            {streaming && (
+              <span
+                aria-hidden
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: "var(--accent)",
+                  boxShadow: "0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent)",
+                  animation: "klide-pulse 1.6s ease-in-out infinite",
+                }}
+              />
+            )}
+          </button>
+        )}
         {providerDelegatesWork ? (
           <DelegateTerminalSurface
             sessionId={`${currentId}:${provider}`}
