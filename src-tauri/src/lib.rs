@@ -211,6 +211,14 @@ fn custom_provider_list() -> Vec<custom_providers::CustomProvider> {
     custom_providers::list()
 }
 
+/// Tell the backend which folder is open, so `${VAR}` token references can
+/// resolve from that project's `.env`. Called by the frontend whenever the
+/// workspace changes; `None` clears it.
+#[tauri::command]
+fn set_active_workspace(root: Option<String>) {
+    providers::set_active_workspace(root);
+}
+
 #[tauri::command]
 fn custom_provider_upsert(provider: custom_providers::CustomProvider) -> Result<(), String> {
     custom_providers::upsert(provider)
@@ -1101,6 +1109,7 @@ pub fn run() {
             custom_provider_list,
             custom_provider_upsert,
             custom_provider_remove,
+            set_active_workspace,
             ai_chat,
             local_servers::ai_local_server_start,
             local_servers::ai_local_server_stop,

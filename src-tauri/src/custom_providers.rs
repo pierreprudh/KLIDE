@@ -40,6 +40,13 @@ pub struct CustomProvider {
     /// Model id pre-selected when this provider is first chosen.
     #[serde(default)]
     pub default_model: String,
+    /// Optional `${VAR}` reference resolved from the process environment or
+    /// `~/.klide/.env` instead of the keychain. When set, the keychain is
+    /// never consulted for this provider — so reading the token triggers no
+    /// macOS prompt. The reference string itself is not a secret, so it is
+    /// safe to persist here in plain JSON; the value stays in the `.env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_ref: Option<String>,
 }
 
 impl CustomProvider {
@@ -95,6 +102,10 @@ pub fn upsert(mut provider: CustomProvider) -> Result<(), String> {
     provider.label = provider.label.trim().to_string();
     provider.base_url = provider.base_url.trim().to_string();
     provider.default_model = provider.default_model.trim().to_string();
+    provider.token_ref = provider
+        .token_ref
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
 
     if !provider.id.starts_with(CUSTOM_ID_PREFIX) {
         return Err(format!("Custom provider id must start with \"{CUSTOM_ID_PREFIX}\""));

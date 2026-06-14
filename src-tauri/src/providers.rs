@@ -357,19 +357,22 @@ pub fn provider_key(id: &str) -> Result<Option<String>, String> {
 /// to report where the key came from without revealing the value.
 pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
     let Some(entry) = lookup(id) else {
-        // Custom (self-hosted) provider — not in the static registry.
-        // env → keychain, matching `custom_token`, so the status never
-        // triggers a keychain prompt when an env var supplies the token.
+        // Custom (self-hosted) provider — not in the static registry. These
+        // never use the keychain: their token comes from a `${VAR}` reference
+        // or the `KLIDE_TOKEN_<SLUG>` env var, so the status never triggers a
+        // keychain prompt.
+        if let Some(reference) = custom_token_reference(id) {
+            // `has_key` reflects whether the reference actually resolves, so
+            // the UI can warn about a `${VAR}` with no matching `.env` entry.
+            return Ok(ProviderKeyStatus {
+                has_key: resolve_reference(&reference).is_some(),
+                source: "reference".to_string(),
+            });
+        }
         if env_var(&custom_env_var_name(id)).is_some() {
             return Ok(ProviderKeyStatus {
                 has_key: true,
                 source: "env".to_string(),
-            });
-        }
-        if cached_keyring_lookup(id).is_some() {
-            return Ok(ProviderKeyStatus {
-                has_key: true,
-                source: "keychain".to_string(),
             });
         }
         return Ok(ProviderKeyStatus {
@@ -415,6 +418,21 @@ const KEYCHAIN_SERVICE: &str = "com.klide.app";
 // never persisted, never crosses into the webview.
 static TOKEN_CACHE: LazyLock<Mutex<HashMap<String, Option<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+// The currently-open workspace root, so `${VAR}` token references can resolve
+// from the project's own `.env`. Set by the frontend (`set_active_workspace`)
+// whenever the open folder changes. `None` before any folder is opened.
+static ACTIVE_WORKSPACE: LazyLock<Mutex<Option<std::path::PathBuf>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Record the open workspace root. `None`/empty clears it (no folder open).
+pub fn set_active_workspace(root: Option<String>) {
+    let next = root
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())
+        .map(std::path::PathBuf::from);
+    *ACTIVE_WORKSPACE.lock().unwrap() = next;
+}
 
 fn keyring_entry(provider: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(|e| e.to_string())
@@ -473,15 +491,90 @@ fn custom_env_var_name(id: &str) -> String {
     out
 }
 
-/// Resolve a custom (self-hosted) provider's token: keychain → env var.
-/// The token is optional (a no-auth local endpoint has none), so this
-/// returns `Option`, not `Result`. `id` is a raw `custom:` id, not in the
-/// static registry.
+/// Extract the variable name from a `${VAR}` / `$VAR` reference. Returns
+/// `None` for anything that isn't a reference (e.g. a literal token), so a
+/// caller can tell "this is a reference" from "this is a raw value".
+fn reference_var_name(reference: &str) -> Option<&str> {
+    let r = reference.trim();
+    let inner = r
+        .strip_prefix("${")
+        .and_then(|s| s.strip_suffix('}'))
+        .or_else(|| r.strip_prefix('$'))?;
+    let name = inner.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Read one key out of a `.env` file. A tiny `KEY=VALUE` parser — enough for
+/// the dotenv convention (blank lines, `#` comments, optional `export` prefix,
+/// surrounding quotes) without pulling in a crate.
+fn dotenv_lookup_in(path: &std::path::Path, name: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != name {
+            continue;
+        }
+        let value = value.trim();
+        // Strip one layer of matching surrounding quotes.
+        let value = value
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(value)
+            .trim();
+        return (!value.is_empty()).then(|| value.to_string());
+    }
+    None
+}
+
+/// Resolve `name` from a `.env`: the open project's `.env` first (so each
+/// project supplies its own tokens), then `~/.klide/.env` as a global
+/// fallback. The files are the user's own, gitignorable secret stores;
+/// Klide only reads them.
+fn dotenv_lookup(name: &str) -> Option<String> {
+    let from_project = ACTIVE_WORKSPACE
+        .lock()
+        .unwrap()
+        .clone()
+        .and_then(|root| dotenv_lookup_in(&root.join(".env"), name));
+    from_project.or_else(|| {
+        let global = crate::home_dir_path()?.join(".klide").join(".env");
+        dotenv_lookup_in(&global, name)
+    })
+}
+
+/// Resolve a `${VAR}` reference: process environment first, then a `.env`
+/// file (project, then global). No path touches the keychain, so no prompt.
+fn resolve_reference(reference: &str) -> Option<String> {
+    let name = reference_var_name(reference)?;
+    env_var(name).or_else(|| dotenv_lookup(name))
+}
+
+/// Resolve a custom (self-hosted) provider's token. Order:
+/// 1. a `${VAR}` reference on the provider → env / project `.env` / `~/.klide/.env`,
+/// 2. the `KLIDE_TOKEN_<SLUG>` convention env var.
+/// Self-hosted endpoints never touch the keychain — their tokens live in the
+/// environment or a `.env`, so reading one never pops a macOS prompt. The
+/// token is optional (a no-auth local endpoint has none), so this returns
+/// `Option`, not `Result`. `id` is a raw `custom:` id, not in the static
+/// registry.
 pub fn custom_token(id: &str) -> Option<String> {
-    // Env var FIRST: a configured `KLIDE_TOKEN_<SLUG>` skips the keychain
-    // entirely (no macOS prompt, nothing on disk). The keychain — the secure
-    // default — is the fallback when no env var is set.
-    env_var(&custom_env_var_name(id)).or_else(|| cached_keyring_lookup(id))
+    if let Some(reference) = custom_token_reference(id) {
+        return resolve_reference(&reference);
+    }
+    env_var(&custom_env_var_name(id))
+}
+
+/// The `${VAR}` reference configured for a custom provider, if any.
+fn custom_token_reference(id: &str) -> Option<String> {
+    crate::custom_providers::get(id).and_then(|p| p.token_ref)
 }
 
 /// Set or clear the keychain entry for a provider. `set` writes (after
@@ -706,6 +799,18 @@ mod tests {
     }
 
     #[test]
+    fn reference_var_name_extracts_the_name() {
+        // Both `${VAR}` and `$VAR` forms, whitespace-tolerant.
+        assert_eq!(reference_var_name("${DEV_TOKEN}"), Some("DEV_TOKEN"));
+        assert_eq!(reference_var_name("$DEV_TOKEN"), Some("DEV_TOKEN"));
+        assert_eq!(reference_var_name("  ${ DEV_TOKEN } "), Some("DEV_TOKEN"));
+        // A literal token (or empty) is not a reference.
+        assert_eq!(reference_var_name("sk-abc123"), None);
+        assert_eq!(reference_var_name("$"), None);
+        assert_eq!(reference_var_name("${}"), None);
+    }
+
+    #[test]
     fn custom_env_var_name_slugifies_the_id() {
         // The env-var name is a user-facing contract — they type it to
         // supply a token without the keychain — so pin the mapping.
@@ -748,10 +853,10 @@ mod tests {
     }
 
     #[test]
-    fn key_status_for_custom_uses_env_var_and_skips_keychain() {
-        // The env-var branch in `key_status` must short-circuit before any
-        // keychain read, so a configured `KLIDE_TOKEN_<SLUG>` never triggers
-        // macOS's keychain prompt. Use a unique id per test to avoid
+    fn key_status_for_custom_uses_env_var_only() {
+        // Self-hosted endpoints never consult the keychain — status comes from
+        // the `KLIDE_TOKEN_<SLUG>` env var (or a `${VAR}` reference), so no
+        // keychain prompt is ever possible. Use a unique id per test to avoid
         // cross-test bleed under cargo's default parallel runner.
         let id = "custom:unit-test-env-only";
         let env_name = custom_env_var_name(id);
@@ -770,11 +875,10 @@ mod tests {
     }
 
     #[test]
-    fn custom_token_prefers_env_over_keychain() {
-        // Pin the ordering: env first, keychain as the fallback. Reversing
-        // this would surprise users who set KLIDE_TOKEN_<SLUG> on purpose
-        // (no keychain access, no on-disk footprint) by popping a macOS
-        // prompt before the env var is consulted.
+    fn custom_token_resolves_from_env_only() {
+        // Self-hosted tokens come from the env (or a `${VAR}` reference),
+        // never the keychain — so an unset env var yields `None` without any
+        // keychain access, and a set one is returned verbatim.
         let id = "custom:unit-test-prefer-env";
         let env_name = custom_env_var_name(id);
         std::env::remove_var(&env_name);
