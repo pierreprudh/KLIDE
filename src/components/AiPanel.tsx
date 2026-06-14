@@ -1536,12 +1536,12 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         onScroll={updateStickFromScroll}
         style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, position: "relative" }}
       >
-        {/* Jump-to-latest pill. Visible whenever the user is scrolled up
-            while there's something to scroll back to — i.e. messages are
-            present and we're not already at the bottom. The pill always
-            offers a one-click escape, regardless of whether a stream is
-            active. Stays out of the layout (absolute) so it doesn't push
-            the messages around. */}
+        {/* Jump-to-latest pill. Centered at the bottom of the scroll
+            container, visible whenever the user is scrolled up and there
+            are messages. Deliberately subtle — a thin border, ghost
+            background, fg-subtle text. The affordance should be discoverable
+            but never compete with the conversation itself. The pulsing
+            dot during streaming is the only "active" cue. */}
         {!providerDelegatesWork && !stickToBottom && msgs.length > 0 && (
           <button
             type="button"
@@ -1550,43 +1550,53 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             aria-label="Jump to latest message"
             style={{
               position: "absolute",
-              right: 14,
-              bottom: 12,
+              left: "50%",
+              bottom: 10,
+              transform: "translateX(-50%)",
               zIndex: 5,
               display: "inline-flex",
               alignItems: "center",
-              gap: 6,
-              height: 26,
-              padding: "0 10px",
+              gap: 5,
+              height: 22,
+              padding: "0 9px",
               borderRadius: 999,
               border: "1px solid var(--border)",
-              background: "var(--bg-elevated)",
-              color: "var(--accent)",
-              fontSize: 11,
-              fontWeight: 560,
+              background: "color-mix(in srgb, var(--bg-elevated) 78%, transparent)",
+              backdropFilter: "blur(6px)",
+              color: "var(--fg-subtle)",
+              fontSize: 10,
+              fontWeight: 500,
+              letterSpacing: "0.02em",
               fontFamily: "var(--font-ui)",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
               cursor: "pointer",
+              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--fg-strong)";
+              e.currentTarget.style.background = "var(--bg-elevated)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--fg-subtle)";
+              e.currentTarget.style.background = "color-mix(in srgb, var(--bg-elevated) 78%, transparent)";
             }}
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 5v14" />
-              <path d="m6 13 6 6 6-6" />
-            </svg>
-            Jump to latest
             {streaming && (
               <span
                 aria-hidden
                 style={{
-                  width: 6,
-                  height: 6,
+                  width: 5,
+                  height: 5,
                   borderRadius: "50%",
                   background: "var(--accent)",
-                  boxShadow: "0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent)",
                   animation: "klide-pulse 1.6s ease-in-out infinite",
                 }}
               />
             )}
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="m6 13 6 6 6-6" />
+            </svg>
+            Jump to latest
           </button>
         )}
         {providerDelegatesWork ? (
