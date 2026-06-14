@@ -1187,6 +1187,15 @@ select.klide-field {
   }
 }
 
+/* Slow clockwise rotation for in-flight row actions (Save Memory while
+   the model is summarising, Review Diff while the file list is fetching).
+   Matches the pacing of the other "still working" affordances. */
+@keyframes klide-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Per-message meta footer (duration · tokens) — barely-there until the
    reader actually wants it. */
 .klide-msg-meta {

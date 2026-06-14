@@ -492,27 +492,46 @@ function RunRow({
   selected,
   onSelect,
   action,
+  extraActions,
   compact,
 }: {
   run: Run;
   selected: boolean;
   onSelect: () => void;
   action?: React.ReactNode;
+  /** Secondary hover-revealed actions (Review Diff, Save Memory). Rendered
+   *  in a small horizontal cluster, only on hover. */
+  extraActions?: React.ReactNode;
   compact?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const tokenSummary = runTokenSummary(run);
-  const rightRail = action ? (
+  const rightRail = action || extraActions ? (
     <span
       style={{
-        width: 24,
-        height: 24,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
         flexShrink: 0,
-        display: "grid",
-        placeItems: "center",
       }}
     >
-      {hovered ? action : <RunAttentionBadge run={run} compact={compact || run.status === "running"} />}
+      {/* Secondary actions: shown on hover. Empty space stays free when not
+          hovered so the row still feels quiet. */}
+      {extraActions && hovered && extraActions}
+      {action ? (
+        <span
+          style={{
+            width: 24,
+            height: 24,
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
+          {hovered ? action : <RunAttentionBadge run={run} compact={compact || run.status === "running"} />}
+        </span>
+      ) : (
+        <RunAttentionBadge run={run} compact={compact} />
+      )}
     </span>
   ) : (
     <RunAttentionBadge run={run} compact={compact} />
@@ -715,6 +734,9 @@ function AttentionQueueItem({
   onResumeKlide,
   onOpenInAiPanel,
   onQuickSend,
+  onReviewDiff,
+  onSaveMemory,
+  summarizingFromRunId,
 }: {
   run: Run;
   reason: RunAttention;
@@ -725,6 +747,9 @@ function AttentionQueueItem({
   onResumeKlide?: (runId: string) => void;
   onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
   onQuickSend?: (taskId: string) => void;
+  onReviewDiff?: (run: { id: string; source: string; cwd: string | null }) => void;
+  onSaveMemory?: (run: { id: string; source: string; provider?: string | null; model: string | null; cwd: string | null }) => void;
+  summarizingFromRunId?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const subtitle = attentionSubtitle(reason, run.source);
@@ -757,6 +782,9 @@ function AttentionQueueItem({
       );
     }
   }
+
+  // Secondary hover-revealed cluster. Same as the sectioned board's rows.
+  const extra = buildRowActions(run, onReviewDiff, onSaveMemory, summarizingFromRunId);
 
   return (
     <button
@@ -825,14 +853,23 @@ function AttentionQueueItem({
       </span>
       <span
         style={{
-          width: 22,
-          height: 22,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
           flexShrink: 0,
-          display: "grid",
-          placeItems: "center",
         }}
       >
-        {action && hovered ? action : <StatusDot status={run.status} size={7} />}
+        {extra && hovered && extra}
+        <span
+          style={{
+            width: 22,
+            height: 22,
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
+          {action && hovered ? action : <StatusDot status={run.status} size={7} />}
+        </span>
       </span>
     </button>
   );
@@ -844,12 +881,18 @@ function AttentionQueue({
   onSelect,
   onResumeKlide,
   onOpenInAiPanel,
+  onReviewDiff,
+  onSaveMemory,
+  summarizingFromRunId,
 }: {
   runs: Run[];
   tasks: TaskSession[];
   onSelect: (run: Run) => void;
   onResumeKlide?: (runId: string) => void;
   onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
+  onReviewDiff?: (run: { id: string; source: string; cwd: string | null }) => void;
+  onSaveMemory?: (run: { id: string; source: string; provider?: string | null; model: string | null; cwd: string | null }) => void;
+  summarizingFromRunId?: string | null;
 }) {
   // Stable open/closed state — collapse the queue after the user dismisses
   // it once, and remember the choice across re-renders. The first render is
@@ -944,6 +987,9 @@ function AttentionQueue({
               onSelect={() => onSelect(run)}
               onResumeKlide={onResumeKlide}
               onOpenInAiPanel={onOpenInAiPanel}
+              onReviewDiff={onReviewDiff}
+              onSaveMemory={onSaveMemory}
+              summarizingFromRunId={summarizingFromRunId}
             />
           ))}
         </div>
@@ -1052,6 +1098,184 @@ function ResumeIcon() {
     >
       <path d="M5 3v18l15-9z" fill="currentColor" />
     </svg>
+  );
+}
+
+// Inline bookmark glyph — matches the MemoryModal's header so the icon
+// visually says "save to memory" before the user reads the tooltip.
+function SaveIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+    </svg>
+  );
+}
+
+// Bracket pair + horizontal line — a "diff" mark that's distinct from
+// Save's bookmark. Visually reads as "look at the change list".
+function DiffIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 4l-4 8 4 8" />
+      <path d="M16 4l4 8-4 8" />
+      <path d="M14 12H10" />
+    </svg>
+  );
+}
+
+// Small row-affordance button: 22x22 square, hairline border, accent on
+// hover. Shared by ReviewDiff, SaveMemory, and any future row affordance
+// so the cluster has one visual rhythm.
+//
+// We intentionally do NOT stopPropagation on the click — the parent row's
+// onSelect (which selects the run in the detail pane) fires too, which is
+// what makes "Review Diff" work: the run needs to be selected so the
+// CheckpointPanel is mounted and scrollable. For Resume/QuickSend (which
+// open a new view) the row selection is harmless and reflects reality.
+function RowActionButton({
+  label,
+  title,
+  disabled,
+  onClick,
+  children,
+  spin,
+}: {
+  label: string;
+  title: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  spin?: boolean;
+}) {
+  return (
+    <span
+      role="button"
+      aria-label={label}
+      aria-busy={spin ? true : undefined}
+      title={title}
+      onClick={() => {
+        if (!disabled) onClick();
+      }}
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: disabled ? "var(--fg-dim)" : "var(--accent)",
+        background: disabled ? "transparent" : "var(--accent-soft)",
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+        animation: spin ? "klide-spin 1s linear infinite" : undefined,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ReviewDiffButton({
+  onClick,
+  disabled,
+  title,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+}) {
+  return (
+    <RowActionButton label="Review diff" title={title} disabled={disabled} onClick={onClick}>
+      <DiffIcon />
+    </RowActionButton>
+  );
+}
+
+function SaveMemoryButton({
+  onClick,
+  disabled,
+  saving,
+  title,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  saving?: boolean;
+  title: string;
+}) {
+  return (
+    <RowActionButton label="Save memory" title={title} disabled={disabled || saving} onClick={onClick} spin={saving}>
+      <SaveIcon />
+    </RowActionButton>
+  );
+}
+
+// Build the secondary hover-revealed action cluster (Review Diff, Save
+// Memory) for a row. Returns `null` when neither applies — keeps the
+// hover rail clean for rows that don't benefit from the affordances.
+//
+// "Review" is always available when the parent supplies the handler:
+//   - Klide → the CheckpointPanel is already in the detail pane
+//   - CLI   → switches to the git-review view (may show the wrong
+//             workspace's diff if the run was elsewhere — see the
+//             reviewDiffFromRun comment in App.tsx for the tradeoff).
+//
+// "Save" is Klide-only in this slice: the model call needs a provider +
+// model that the AI panel can call directly, and CLI runs don't carry
+// that information on the Run.
+function buildRowActions(
+  run: Run,
+  onReviewDiff?: (run: { id: string; source: string; cwd: string | null }) => void,
+  onSaveMemory?: (run: { id: string; source: string; provider?: string | null; model: string | null; cwd: string | null }) => void,
+  summarizingFromRunId?: string | null,
+): React.ReactNode | null {
+  if (!onReviewDiff && !onSaveMemory) return null;
+  const canReview = Boolean(onReviewDiff);
+  const canSave = Boolean(onSaveMemory) && run.source === "klide";
+  if (!canReview && !canSave) return null;
+
+  return (
+    <>
+      {canReview && onReviewDiff && (
+        <ReviewDiffButton
+          onClick={() => onReviewDiff({ id: run.id, source: run.source, cwd: run.cwd })}
+          title={run.source === "klide" ? "Review file changes for this run" : "Open Git Review"}
+        />
+      )}
+      {canSave && onSaveMemory && (
+        <SaveMemoryButton
+          onClick={() => onSaveMemory({
+            id: run.id,
+            source: run.source,
+            provider: run.provider ?? null,
+            model: run.model,
+            cwd: run.cwd,
+          })}
+          saving={summarizingFromRunId === run.id}
+          title="Save a memory note from this conversation"
+        />
+      )}
+    </>
   );
 }
 
@@ -1164,9 +1388,10 @@ function CopyButton({ value, label = "Copy" }: { value: string | null; label?: s
   );
 }
 
-function DetailLabel({ children }: { children: React.ReactNode }) {
+function DetailLabel({ children, id }: { children: React.ReactNode; id?: string }) {
   return (
     <div
+      id={id}
       style={{
         fontSize: 10,
         letterSpacing: "0.06em",
@@ -3003,7 +3228,7 @@ function RunDetail({
 
       {run.source === "klide" && (
         <>
-          <DetailLabel>Checkpoints</DetailLabel>
+          <DetailLabel id={`klide-checkpoints-${run.id}`}>Checkpoints</DetailLabel>
           <div style={{ marginBottom: 22 }}>
             <CheckpointPanel runId={run.id} />
           </div>
@@ -3074,6 +3299,11 @@ export function MissionControl({
   theme,
   onResumeKlideRun,
   onOpenInAiPanel,
+  onReviewDiff,
+  onSaveMemory,
+  pendingCheckpointRunId,
+  onPendingCheckpointConsumed,
+  summarizingFromRunId,
   onBack,
 }: {
   workspaceRoot: string | null;
@@ -3088,6 +3318,23 @@ export function MissionControl({
     resumeSessionId?: string;
     initialTask?: string;
   }) => void;
+  /** "Review Diff" — for Klide runs, scroll the detail pane's
+   *  CheckpointPanel into view. For CLI runs, switch to the git-review
+   *  view. Fires from the row's right rail. */
+  onReviewDiff?: (run: { id: string; source: string; cwd: string | null }) => void;
+  /** "Save Memory" — fetch the run's transcript, ask the model for a
+   *  structured note, and open the memory modal. Klide-only in this
+   *  slice; CLI rows get a "not supported" toast. */
+  onSaveMemory?: (run: { id: string; source: string; provider?: string | null; model: string | null; cwd: string | null }) => void;
+  /** When set, the detail pane focuses the CheckpointPanel for this runId
+   *  (Klide runs) — used to make `onReviewDiff` from a Klide row feel
+   *  instant. The MissionControl consumes it on mount. */
+  pendingCheckpointRunId?: string | null;
+  onPendingCheckpointConsumed?: () => void;
+  /** runId currently being summarised by `onSaveMemory`. Used to show a
+   *  subtle spinner on the row so the user knows the model call is in
+   *  flight. */
+  summarizingFromRunId?: string | null;
   onBack?: () => void;
 }) {
   const tasks = useSyncExternalStore(subscribeTasks, getTaskSessions);
@@ -3255,6 +3502,25 @@ export function MissionControl({
     };
   }, [selected?.id, selected?.source, selected?.kind]);
 
+  // "Review Diff" from the row: scroll the Klide CheckpointPanel into
+  // view. The App's `reviewDiffFromRun` sets `pendingCheckpointRunId` and
+  // also selects the run via the row's onSelect. We wait for the
+  // CheckpointPanel to be in the DOM (the run is now selected) and then
+  // scroll. The `scrollIntoView({ block: "start" })` is a no-op on
+  // non-Klide runs (their detail pane has no checkpoint anchor).
+  useEffect(() => {
+    if (!pendingCheckpointRunId) return;
+    if (!selected || selected.id !== pendingCheckpointRunId) return;
+    // Defer to the next frame so the CheckpointPanel has time to mount
+    // and the layout to settle.
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById(`klide-checkpoints-${pendingCheckpointRunId}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      onPendingCheckpointConsumed?.();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [pendingCheckpointRunId, selected, onPendingCheckpointConsumed]);
+
   function selectRun(run: Run) {
     setSelectedId(run.id);
     if (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") {
@@ -3369,6 +3635,9 @@ export function MissionControl({
           onSelect={selectRun}
           onResumeKlide={onResumeKlideRun}
           onOpenInAiPanel={onOpenInAiPanel}
+          onReviewDiff={onReviewDiff}
+          onSaveMemory={onSaveMemory}
+          summarizingFromRunId={summarizingFromRunId}
         />
 
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
@@ -3491,6 +3760,7 @@ export function MissionControl({
                                 </span>
                               ) : undefined
                             }
+                            extraActions={buildRowActions(run, onReviewDiff, onSaveMemory, summarizingFromRunId)}
                           />
                         </div>
                         {/* Reverse pyramid: each sub-agent card tucks under the
@@ -3547,6 +3817,7 @@ export function MissionControl({
                                     />
                                   ) : undefined
                                 }
+                                extraActions={buildRowActions(child, onReviewDiff, onSaveMemory, summarizingFromRunId)}
                               />
                             </div>
                           );

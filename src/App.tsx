@@ -18,7 +18,9 @@ import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
 import type { AgentEvent } from "./agent/types";
-import type { Conversation } from "./components/ai/types";
+import type { Conversation, Msg } from "./components/ai/types";
+import { summarizeAndHandoff } from "./components/ai/summarize";
+import { fetchRunMessages, type RunMessage as MissionRunMessage } from "./runs";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { MemoryModal } from "./components/MemoryModal";
@@ -115,6 +117,15 @@ function App() {
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
+  // When MissionControl asks us to "Review Diff" on a Klide run, this
+  // holds the runId so the MissionControl detail pane can scroll its
+  // CheckpointPanel into view (and the CheckpointPanel isn't always in
+  // the DOM if a CLI run is selected).
+  const [pendingCheckpointRunId, setPendingCheckpointRunId] = useState<string | null>(null);
+  // runId currently being summarised by `saveMemoryFromRun` — surfaced as
+  // a subtle spinner on the row so the user knows the model call is in
+  // flight.
+  const [summarizingFromRun, setSummarizingFromRun] = useState<string | null>(null);
   const [profileVisible, setProfileVisible] = useState(false);
   const [aiVisible, setAiVisible] = useState(
     () => localStorage.getItem("klide-ai-visible") !== "false"
@@ -559,6 +570,35 @@ function App() {
     return "Resumed run";
   }
 
+  // Convert MissionControl's `RunMessage` (a read-back of the on-disk
+  // transcript) into the AI panel's `Msg` shape so we can hand it to
+  // `summarizeAndHandoff`, which expects Msg[]. The two shapes diverge
+  // because MissionControl carries `tools: RunToolCall[]` per message
+  // while the AI panel uses `toolCalls: ToolCall[]` (different types).
+  // We do a best-effort conversion: the name + input are preserved, the
+  // result and status are dropped (the summary doesn't need them).
+  function runMessagesToAiMsgs(messages: MissionRunMessage[]): Msg[] {
+    const out: Msg[] = [];
+    for (const m of messages) {
+      if (m.role === "user") {
+        out.push({ role: "user", content: m.text });
+      } else {
+        const toolCalls = (m.tools ?? [])
+          .map((t) => ({
+            name: t.name,
+            args: t.input,
+          }))
+          .filter((t) => Boolean(t.name));
+        out.push({
+          role: "assistant",
+          content: m.text,
+          ...(toolCalls.length > 0 ? { toolCalls: toolCalls as any } : {}),
+        });
+      }
+    }
+    return out;
+  }
+
   async function resumeKlideRun(runId: string) {
     try {
       const events = await invoke<AgentEvent[]>("agent_read_run", { runId });
@@ -590,6 +630,76 @@ function App() {
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
     });
+  }
+
+  // "Review Diff" from Mission Control — for Klide runs the CheckpointPanel
+  // is already mounted in the detail pane (it lists every file the agent
+  // changed with revert affordances), so the row action is just: make sure
+  // the run is selected. For external CLI runs we switch to the GitReview
+  // view; the user can navigate from there. (CLI runs whose cwd differs
+  // from the current workspaceRoot will show the wrong diff — that case
+  // is rare in practice; if it becomes common we'll add a per-run diff
+  // overlay later.)
+  function reviewDiffFromRun(run: { id: string; source: string; cwd: string | null }) {
+    if (run.source === "klide") {
+      // MissionControl is rendered as a single view, so the run is "selected"
+      // by being the current `view === "runs"` selection. We just need to
+      // ask MissionControl to focus the CheckpointPanel — done via a small
+      // bus (see pendingCheckpointRunId below).
+      setPendingCheckpointRunId(run.id);
+    } else {
+      setView("git-review");
+    }
+  }
+
+  // "Save Memory" from Mission Control — fetch the run's transcript, ask
+  // the model for a structured note, and write it to .klide/memory/. Then
+  // open the MemoryModal so the user can see the entry. Klide-only for
+  // now: external CLI runs have no provider+model we can call directly.
+  async function saveMemoryFromRun(run: {
+    id: string;
+    source: string;
+    provider?: string | null;
+    model: string | null;
+    cwd: string | null;
+  }) {
+    if (run.source !== "klide") {
+      setFileNotice("Save Memory is supported for Klide runs only in this slice — open the AI panel pinned to this run to summarise it.");
+      return;
+    }
+    if (!run.cwd) {
+      setFileNotice("Run has no workspace root — can't write a memory note.");
+      return;
+    }
+    if (!run.provider || !run.model) {
+      setFileNotice("Run is missing provider or model — can't summarise.");
+      return;
+    }
+    setSummarizingFromRun(run.id);
+    try {
+      const messages = await fetchRunMessages(run as any);
+      if (messages.length === 0) {
+        setFileNotice("Run has no messages to summarise.");
+        return;
+      }
+      const msgs = runMessagesToAiMsgs(messages);
+      const entry = await summarizeAndHandoff({
+        workspaceRoot: run.cwd,
+        provider: run.provider,
+        model: run.model,
+        mode: "chat",
+        msgs,
+        runId: run.id,
+        status: "done",
+      });
+      setMemoryRefreshKey((k) => k + 1);
+      setMemoryVisible(true);
+      setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
+    } catch (err) {
+      setFileNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSummarizingFromRun(null);
+    }
   }
 
   function updateAiPanelModel(id: string, model: string) {
@@ -998,6 +1108,11 @@ function App() {
                 theme={theme}
                 onResumeKlideRun={resumeKlideRun}
                 onOpenInAiPanel={openRunInAiPanel}
+                onReviewDiff={reviewDiffFromRun}
+                onSaveMemory={saveMemoryFromRun}
+                pendingCheckpointRunId={pendingCheckpointRunId}
+                onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
+                summarizingFromRunId={summarizingFromRun}
                 onBack={() => setView("workbench")}
               />
             ) : activeGrid ? (
