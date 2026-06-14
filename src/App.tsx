@@ -9,6 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
+import { OrchestratorPreview } from "./components/OrchestratorPreview";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea } from "./components/EditorArea";
@@ -49,6 +50,7 @@ import { readWorkspaceTextFile } from "./workspaceFs";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
+type ActivityPanel = Panel | "orchestrator";
 export type HarnessSettings = {
   chatPrompt?: string;
   planPrompt?: string;
@@ -109,7 +111,7 @@ function detectLanguage(path: string): string {
 
 function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
-  const [view, setView] = useState<"workbench" | "runs" | "settings" | "git-review">("workbench");
+  const [view, setView] = useState<"workbench" | "runs" | "orchestrator" | "settings" | "git-review">("workbench");
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
@@ -306,18 +308,19 @@ function App() {
     activeGridId != null
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
       : null;
-  const activityState: Record<Panel, boolean> = {
+  const activityState: Record<ActivityPanel, boolean> = {
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
     git: view === "git-review",
     memory: view === "workbench" && memoryVisible,
     skills: view === "workbench" && (skillsVisible || sidebarSlot2 === "skills"),
     ai: view === "workbench" && aiVisible,
     runs: view === "runs",
+    orchestrator: view === "orchestrator",
     settings: view === "settings",
     profile: profileVisible,
   };
 
-  function togglePanel(panel: Panel, meta?: boolean) {
+  function togglePanel(panel: ActivityPanel, meta?: boolean) {
     if (panel === "settings") {
       setSettingsInitial(null);
       setView("settings");
@@ -329,6 +332,10 @@ function App() {
     }
     if (panel === "runs") {
       setView("runs");
+      return;
+    }
+    if (panel === "orchestrator") {
+      setView("orchestrator");
       return;
     }
     setView("workbench");
@@ -812,6 +819,14 @@ function App() {
     });
   }, [workspaceRoot]);
 
+  // Let the backend know which folder is open, so `${VAR}` token references
+  // for self-hosted endpoints resolve from this project's `.env`.
+  useEffect(() => {
+    void invoke("set_active_workspace", { root: workspaceRoot }).catch(() => {
+      /* command unavailable (non-Tauri preview) — ignore */
+    });
+  }, [workspaceRoot]);
+
   useEffect(() => {
     if (!workspaceRoot) {
       setGitStatus(null);
@@ -923,7 +938,7 @@ function App() {
       if (e.key === "Escape") {
         if (paletteOpen) { setPaletteOpen(false); return; }
         if (searchVisible) { setSearchVisible(false); return; }
-        if (view === "runs" || view === "git-review" || view === "settings") {
+        if (view === "runs" || view === "orchestrator" || view === "git-review" || view === "settings") {
           e.preventDefault();
           setView("workbench");
           return;
@@ -990,6 +1005,7 @@ function App() {
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
+    { id: "orchestrator", label: "View: Orchestrator Preview", action: () => { setView("orchestrator"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { setView("workbench"); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
@@ -1115,6 +1131,8 @@ function App() {
                 summarizingFromRunId={summarizingFromRun}
                 onBack={() => setView("workbench")}
               />
+            ) : view === "orchestrator" ? (
+              <OrchestratorPreview />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : panelLayout.anchored ? (
