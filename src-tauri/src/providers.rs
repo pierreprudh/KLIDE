@@ -357,9 +357,9 @@ pub fn provider_key(id: &str) -> Result<Option<String>, String> {
 /// to report where the key came from without revealing the value.
 pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
     let Some(entry) = lookup(id) else {
-        // Custom (self-hosted) provider — not in the static registry. Env
-        // var first, then keychain, matching `custom_token` so the status
-        // never triggers a keychain prompt when an env var is configured.
+        // Custom (self-hosted) provider — not in the static registry.
+        // env → keychain, matching `custom_token`, so the status never
+        // triggers a keychain prompt when an env var supplies the token.
         if env_var(&custom_env_var_name(id)).is_some() {
             return Ok(ProviderKeyStatus {
                 has_key: true,
@@ -478,10 +478,9 @@ fn custom_env_var_name(id: &str) -> String {
 /// returns `Option`, not `Result`. `id` is a raw `custom:` id, not in the
 /// static registry.
 pub fn custom_token(id: &str) -> Option<String> {
-    // Env var FIRST: a configured `KLIDE_TOKEN_<SLUG>` must skip the keychain
-    // entirely, otherwise reading the keychain item triggers macOS's prompt
-    // before we ever reach the fallback. Keychain is used only when no env
-    // var is set.
+    // Env var FIRST: a configured `KLIDE_TOKEN_<SLUG>` skips the keychain
+    // entirely (no macOS prompt, nothing on disk). The keychain — the secure
+    // default — is the fallback when no env var is set.
     env_var(&custom_env_var_name(id)).or_else(|| cached_keyring_lookup(id))
 }
 
@@ -746,5 +745,45 @@ mod tests {
         let status = key_status("ollama").expect("ollama is wired");
         assert!(!status.has_key);
         assert_eq!(status.source, "none");
+    }
+
+    #[test]
+    fn key_status_for_custom_uses_env_var_and_skips_keychain() {
+        // The env-var branch in `key_status` must short-circuit before any
+        // keychain read, so a configured `KLIDE_TOKEN_<SLUG>` never triggers
+        // macOS's keychain prompt. Use a unique id per test to avoid
+        // cross-test bleed under cargo's default parallel runner.
+        let id = "custom:unit-test-env-only";
+        let env_name = custom_env_var_name(id);
+        std::env::remove_var(&env_name);
+
+        let status = key_status(id).expect("custom ids always return a status");
+        assert_eq!(status.source, "none");
+        assert!(!status.has_key);
+
+        std::env::set_var(&env_name, "test-token");
+        let status = key_status(id).expect("custom ids always return a status");
+        assert!(status.has_key);
+        assert_eq!(status.source, "env");
+
+        std::env::remove_var(&env_name);
+    }
+
+    #[test]
+    fn custom_token_prefers_env_over_keychain() {
+        // Pin the ordering: env first, keychain as the fallback. Reversing
+        // this would surprise users who set KLIDE_TOKEN_<SLUG> on purpose
+        // (no keychain access, no on-disk footprint) by popping a macOS
+        // prompt before the env var is consulted.
+        let id = "custom:unit-test-prefer-env";
+        let env_name = custom_env_var_name(id);
+        std::env::remove_var(&env_name);
+
+        assert_eq!(custom_token(id), None);
+
+        std::env::set_var(&env_name, "env-wins");
+        assert_eq!(custom_token(id), Some("env-wins".to_string()));
+
+        std::env::remove_var(&env_name);
     }
 }

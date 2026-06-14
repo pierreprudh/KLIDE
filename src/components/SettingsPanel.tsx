@@ -1003,7 +1003,7 @@ function CustomEndpointRow({
             {keyStatus.source === "keychain" ? (
               <StatusPill tone="ok">Token saved</StatusPill>
             ) : keyStatus.source === "env" ? (
-              <StatusPill tone="warn">Token from env</StatusPill>
+              <StatusPill tone="ok">Token from env</StatusPill>
             ) : (
               <StatusPill tone="idle">No token</StatusPill>
             )}
@@ -1191,7 +1191,9 @@ function CustomEndpointsBlock({
         baseUrl: baseUrl.trim(),
         defaultModel: defaultModel.trim(),
       });
-      // Blank token on edit means "leave the saved one alone".
+      // A token typed here is stored in the keychain (encrypted). Blank on
+      // edit means "leave the saved one alone". To avoid the keychain
+      // entirely, leave it blank and use the KLIDE_TOKEN_… env var.
       if (token.trim()) {
         await invoke("ai_set_provider_key", { provider: id, key: token });
         onProviderKeyChange?.(id);
@@ -1345,7 +1347,7 @@ function CustomEndpointsBlock({
               <input
                 type="password"
                 value={token}
-                placeholder={editingId ? "Bearer token (leave blank to keep current)" : "Bearer token (stored in keychain)"}
+                placeholder={editingId ? "Bearer token (leave blank to keep current)" : "Bearer token (optional, stored in keychain)"}
                 onChange={(e) => setToken(e.target.value)}
                 aria-label="Bearer token"
                 className="klide-field"
@@ -1353,6 +1355,10 @@ function CustomEndpointsBlock({
                 style={{ height: 34, padding: "0 12px" }}
               />
               <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--fg-subtle)" }}>
+                A token typed here is stored in the macOS keychain. To skip the
+                keychain entirely, leave it blank and set <code>KLIDE_TOKEN_…</code>{" "}
+                in your environment instead — the token then never lands on disk.
+                <br />
                 Requests use the OpenAI wire format. The per-model context window in
                 Inference settings does not apply here — for a self-hosted Ollama
                 endpoint, set the context length server-side (e.g. <code>num_ctx</code>{" "}
