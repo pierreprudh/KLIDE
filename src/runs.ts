@@ -7,7 +7,33 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type RunSource = "claude-code" | "codex" | "opencode" | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
-export type RunBoardSection = "running" | "blocked" | "ready_for_review" | "done";
+export type RunBoardSection = "running" | "ready_for_review" | "done";
+
+/** Why a run landed in the Mission Control attention queue. Discriminated by
+ *  `kind` so the row component can pick the right pill tone, copy, and
+ *  inline action. `null` (from `runAttentionReason`) means "nothing to do". */
+export type RunAttention =
+  | { kind: "failed"; agentLabel: string }
+  | { kind: "awaiting_input" }
+  | { kind: "idle"; idleMs: number }
+  | { kind: "awaiting_review"; source: RunSource };
+
+/** Human label for an attention kind, surfaced on the queue pill. */
+export const ATTENTION_LABEL: Record<RunAttention["kind"], string> = {
+  failed: "Failed",
+  awaiting_input: "Needs you",
+  idle: "Idle",
+  awaiting_review: "Awaiting review",
+};
+
+/** Tone (CSS color token) for an attention kind. Failed/awaiting-input pull
+ *  louder tones so the queue reads as a focused action surface. */
+export const ATTENTION_TONE: Record<RunAttention["kind"], "danger" | "warn" | "accent" | "subtle"> = {
+  failed: "danger",
+  awaiting_input: "warn",
+  idle: "subtle",
+  awaiting_review: "accent",
+};
 
 // What this row actually represents on the board. Tasks are Mission Control
 // todos (queued or dispatched to an external agent); convos are Klide's own
@@ -99,28 +125,27 @@ export const STATUS_LABEL: Record<RunStatus, string> = {
 
 export const BOARD_SECTION_ORDER: RunBoardSection[] = [
   "running",
-  "blocked",
   "ready_for_review",
   "done",
 ];
 
 export const BOARD_SECTION_LABEL: Record<RunBoardSection, string> = {
   running: "Running",
-  blocked: "Blocked",
   ready_for_review: "Ready for Review",
   done: "Done",
 };
 
 export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
   running: "Active or queued work",
-  blocked: "Needs a decision or repair",
   ready_for_review: "Delegated subtask output to inspect",
   done: "Finished conversations you ran",
 };
 
 export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId">): RunBoardSection {
-  if (run.status === "running" || run.status === "queued") return "running";
-  if (run.status === "waiting" || run.status === "error") return "blocked";
+  if (run.status === "running" || run.status === "queued" || run.status === "waiting") {
+    return "running";
+  }
+  if (run.status === "error" || run.status === "cancelled") return "done";
   // "Ready for Review" is for delegated work an agent produced on your behalf:
   // queued tasks and Klide-spawned subagent runs (which carry a parentId — set
   // only when Klide actually spawned the delegate). A top-level CLI session you
@@ -130,8 +155,36 @@ export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId"
   return "done";
 }
 
-export function runNeedsAttention(run: Pick<Run, "status" | "kind" | "parentId">): boolean {
-  return boardSectionForRun(run) !== "done";
+export function runNeedsAttention(run: Pick<Run, "status" | "kind" | "parentId" | "source" | "updatedMs">): boolean {
+  return runAttentionReason(run) !== null;
+}
+
+const STALE_RUNNING_MS = 5 * 60_000;
+
+/** What the Mission Control attention queue should surface for a run, if
+ *  anything. The queue is a focused action surface, not a status mirror —
+ *  `null` means "this run is fine where it is in the sectioned board". */
+export function runAttentionReason(
+  run: Pick<Run, "status" | "kind" | "parentId" | "source" | "updatedMs">
+): RunAttention | null {
+  if (run.status === "error") {
+    return { kind: "failed", agentLabel: SOURCE_LABEL[run.source] };
+  }
+  if (run.status === "waiting") {
+    return { kind: "awaiting_input" };
+  }
+  if (run.status === "running") {
+    const idle = Date.now() - run.updatedMs;
+    if (idle >= STALE_RUNNING_MS) return { kind: "idle", idleMs: idle };
+    return null;
+  }
+  // Done / cancelled runs only enter the queue when there's a delegated
+  // artifact you haven't inspected yet — Klide-spawned subagents (parentId)
+  // and Mission Control todos that finished (kind === "task").
+  if (run.kind === "task" || run.parentId) {
+    return { kind: "awaiting_review", source: run.source };
+  }
+  return null;
 }
 
 export function runRoutineInfo(run: Pick<Run, "title">): RunRoutineInfo | null {

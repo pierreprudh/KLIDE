@@ -30,15 +30,19 @@ import {
   boardSectionForRun,
   fetchAgentRuns,
   fetchRunMessages,
+  runAttentionReason,
   runNeedsAttention,
   runRoutineInfo,
   seedRuns,
   relativeTime,
+  ATTENTION_LABEL,
+  ATTENTION_TONE,
   SOURCE_COLOR,
   SOURCE_LABEL,
   STATUS_COLOR,
   STATUS_LABEL,
   type Run,
+  type RunAttention,
   type RunBoardSection,
   type RunKind,
   type RunMessage,
@@ -620,6 +624,327 @@ function RunRow({
       </span>
       {rightRail}
     </button>
+  );
+}
+
+// ── Mission Control v3 — Attention queue ────────────────────────────────────
+// Pinned strip at the top of the board. The board used to have a "Blocked"
+// section that mixed waiting runs with errored ones and never explained *why*
+// each run was blocked; the queue elevates that into a focused action surface
+// with per-row reason text and an inline action.
+//
+// Why this design:
+//   - The queue's items are a strict subset of the sectioned board. A run
+//     shown in the queue is *not* hidden from the section it would otherwise
+//     belong to — duplication is the point. The queue is for acting; the
+//     section is for browsing.
+//   - The reason pill is the new information. It uses four tones (danger /
+//     warn / accent / subtle) so the queue reads at a glance: "red = broken,
+//     amber = blocked on me, blue = ready to read, grey = idle".
+//   - Severity ordering (failed → needs-me → idle → review) puts the runs
+//     that are likely to lose money or context at the top.
+
+const ATTENTION_SEVERITY: Record<RunAttention["kind"], number> = {
+  failed: 0,
+  awaiting_input: 1,
+  idle: 2,
+  awaiting_review: 3,
+};
+
+// Compact one-line summary for an attention reason, in the row's subtitle
+// slot. The label alone ("Failed", "Needs you") is too generic on a board
+// with many runs — append the agent so the user knows which tool to look at.
+function attentionSubtitle(reason: RunAttention, source: RunSource): string {
+  switch (reason.kind) {
+    case "failed":
+      return `${reason.agentLabel} failed`;
+    case "awaiting_input":
+      return `${SOURCE_LABEL[source]} is waiting for input`;
+    case "idle": {
+      const min = Math.floor(reason.idleMs / 60_000);
+      return min < 60 ? `Idle ${min}m` : `Idle ${Math.floor(min / 60)}h`;
+    }
+    case "awaiting_review":
+      return source === "klide"
+        ? "Subagent finished — read its output"
+        : `${SOURCE_LABEL[source]} finished — review the work`;
+  }
+}
+
+// Theme-aware tone styling for the reason pill. Pulled out so the queue can
+// stay compact while still differentiating severity at a glance.
+function attentionPillStyle(kind: RunAttention["kind"]): React.CSSProperties {
+  const tone = ATTENTION_TONE[kind];
+  const fg = tone === "danger"
+    ? "var(--danger, #B42318)"
+    : tone === "warn"
+    ? "#A15C00"
+    : tone === "accent"
+    ? "var(--accent)"
+    : "var(--fg-subtle)";
+  const border = `color-mix(in srgb, ${fg} 35%, var(--border))`;
+  const bg = `color-mix(in srgb, ${fg} 14%, transparent)`;
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    height: 16,
+    padding: "0 6px",
+    borderRadius: 999,
+    border: `1px solid ${border}`,
+    background: bg,
+    color: fg,
+    fontSize: 9,
+    fontWeight: 600,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    fontFamily: "var(--font-mono)",
+    flexShrink: 0,
+  };
+}
+
+function AttentionQueueItem({
+  run,
+  reason,
+  isTask,
+  onSelect,
+  onResumeKlide,
+  onOpenInAiPanel,
+  onQuickSend,
+}: {
+  run: Run;
+  reason: RunAttention;
+  /** True when the run was spawned by Mission Control's task composer — the
+   *  "send an agent" affordance is the right action for queued/error tasks. */
+  isTask: boolean;
+  onSelect: () => void;
+  onResumeKlide?: (runId: string) => void;
+  onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
+  onQuickSend?: (taskId: string) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const subtitle = attentionSubtitle(reason, run.source);
+
+  // Pick the inline action. The hover-revealed slot mirrors RunRow's pattern
+  // so the row stays quiet until the user reaches for it.
+  let action: React.ReactNode | null = null;
+  if (isTask && (run.status === "queued" || run.status === "error")) {
+    action = onQuickSend ? (
+      <QuickSend taskId={run.id} onSent={onSelect} />
+    ) : null;
+  } else if (reason.kind === "failed") {
+    if (run.source === "klide" && onResumeKlide) {
+      action = <ResumeKlide runId={run.id} onResume={onResumeKlide} />;
+    } else if (
+      (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") &&
+      onOpenInAiPanel
+    ) {
+      action = (
+        <ResumeCli
+          source={run.source}
+          onResume={() =>
+            onOpenInAiPanel({
+              provider: run.source as "claude-code" | "codex" | "opencode",
+              workspaceRoot: run.cwd,
+              resumeSessionId: run.id,
+            })
+          }
+        />
+      );
+    }
+  }
+
+  return (
+    <button
+      onClick={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        textAlign: "left",
+        padding: "7px 9px",
+        borderRadius: "var(--radius-sm)",
+        background: hovered ? "var(--bg-hover)" : "transparent",
+        transition: "background var(--motion-fast) var(--ease-out)",
+      }}
+    >
+      <RunAvatar source={run.source} kind={run.kind} model={run.model} />
+      <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              color: "var(--fg-strong)",
+              lineHeight: 1.3,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {run.title}
+          </span>
+        </span>
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
+          <span style={attentionPillStyle(reason.kind)}>{ATTENTION_LABEL[reason.kind]}</span>
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--fg-subtle)",
+              fontFamily: "var(--font-mono)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {subtitle}
+          </span>
+        </span>
+      </span>
+      <span
+        style={{
+          width: 22,
+          height: 22,
+          flexShrink: 0,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        {action && hovered ? action : <StatusDot status={run.status} size={7} />}
+      </span>
+    </button>
+  );
+}
+
+function AttentionQueue({
+  runs,
+  tasks,
+  onSelect,
+  onResumeKlide,
+  onOpenInAiPanel,
+}: {
+  runs: Run[];
+  tasks: TaskSession[];
+  onSelect: (run: Run) => void;
+  onResumeKlide?: (runId: string) => void;
+  onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
+}) {
+  // Stable open/closed state — collapse the queue after the user dismisses
+  // it once, and remember the choice across re-renders. The first render is
+  // open when there's something to look at, so the user doesn't have to dig
+  // for a 1-item queue.
+  const [open, setOpen] = useState(true);
+
+  const items = useMemo(() => {
+    const taskIds = new Set(tasks.map((t) => t.id));
+    return runs
+      .map((run) => {
+        const reason = runAttentionReason(run);
+        return reason ? { run, reason, isTask: taskIds.has(run.id) } : null;
+      })
+      .filter((x): x is { run: Run; reason: RunAttention; isTask: boolean } => x !== null)
+      .sort((a, b) => {
+        const sev = ATTENTION_SEVERITY[a.reason.kind] - ATTENTION_SEVERITY[b.reason.kind];
+        if (sev !== 0) return sev;
+        return b.run.updatedMs - a.run.updatedMs;
+      });
+  }, [runs, tasks]);
+
+  // The strip is hidden entirely when nothing needs attention — its presence
+  // is the signal. Returning null keeps the layout compact and avoids a
+  // permanent "0 items" empty state.
+  if (items.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        margin: "4px 8px 12px",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-elevated)",
+        overflow: "hidden",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={open ? "Collapse attention queue" : "Expand attention queue"}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          padding: "8px 11px",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+          color: "var(--fg-strong)",
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: "50%",
+            background: "var(--danger, #B42318)",
+            boxShadow: "0 0 0 3px color-mix(in srgb, var(--danger, #B42318) 18%, transparent)",
+            flexShrink: 0,
+          }}
+        />
+        Needs you
+        <span style={{ opacity: 0.7 }}>{items.length}</span>
+        <span style={{ marginLeft: "auto", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1 }}>
+          {open ? "▾" : "▸"}
+        </span>
+      </button>
+      {open && (
+        <div
+          style={{
+            borderTop: "1px solid var(--border)",
+            padding: "2px 4px 4px",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {items.map(({ run, reason, isTask }) => (
+            <AttentionQueueItem
+              key={run.id}
+              run={run}
+              reason={reason}
+              isTask={isTask}
+              onSelect={() => onSelect(run)}
+              onResumeKlide={onResumeKlide}
+              onOpenInAiPanel={onOpenInAiPanel}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2861,7 +3186,6 @@ export function MissionControl({
   const grouped = useMemo(() => {
     const by: Record<RunBoardSection, Run[]> = {
       running: [],
-      blocked: [],
       ready_for_review: [],
       done: [],
     };
@@ -3033,6 +3357,14 @@ export function MissionControl({
         <TaskComposer
           workspaceRoot={workspaceRoot}
           onAdded={(id) => setSelectedId(id)}
+        />
+
+        <AttentionQueue
+          runs={filtered}
+          tasks={tasks}
+          onSelect={selectRun}
+          onResumeKlide={onResumeKlideRun}
+          onOpenInAiPanel={onOpenInAiPanel}
         />
 
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
