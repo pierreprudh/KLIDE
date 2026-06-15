@@ -1,6 +1,15 @@
-import { useState, type CSSProperties, type ReactElement } from "react";
+import { useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 
 type MdNode = string | ReactElement;
+
+export type MarkdownOptions = {
+  // Hook for the Mission Control wire-format tool markers
+  // (`[tool: <name> <summary>]` on its own line). The renderer owns
+  // the marker parsing; the caller decides how to render a tool
+  // card. The AI panel never sees these markers and never passes
+  // this hook.
+  renderTool?: (name: string, summary?: string) => ReactNode;
+};
 
 const CODE_KEYWORDS = new Set([
   "const", "let", "var", "function", "return", "if", "else", "for", "while",
@@ -221,7 +230,7 @@ function renderInline(text: string, keyBase: string): MdNode[] {
 // blockquotes, horizontal rules, and paragraph breaks. Operates on a string
 // that's already had fenced code blocks extracted (so we don't run formatting
 // on code contents).
-function renderProse(text: string, keyBase: string): MdNode[] {
+function renderProse(text: string, keyBase: string, options?: MarkdownOptions): MdNode[] {
   const lines = text.split("\n");
   const blocks: MdNode[] = [];
   let para: string[] = [];
@@ -431,7 +440,7 @@ function renderProse(text: string, keyBase: string): MdNode[] {
           fontStyle: "italic",
         }}
       >
-        {renderProse(bqBuf.join("\n"), `${keyBase}-bq-${k}`)}
+        {renderProse(bqBuf.join("\n"), `${keyBase}-bq-${k}`, options)}
       </blockquote>
     );
     bqBuf = [];
@@ -450,6 +459,28 @@ function renderProse(text: string, keyBase: string): MdNode[] {
       continue;
     } else if (tableBuf) {
       flushTable();
+    }
+    // Wire-format tool marker (`[tool: <name> <summary>]` on its own line).
+    // Emitted by the opencode / codex delegate run flat­teners. Only honored
+    // when the caller passes `renderTool`; otherwise the line falls through
+    // to plain text so the AI panel's path is unaffected.
+    if (options?.renderTool) {
+      const toolMatch = /^\[tool:\s*([^\]]+)\]\s*$/.exec(line);
+      if (toolMatch) {
+        flushPara();
+        flushList();
+        flushBlockquote();
+        const marker = toolMatch[1].trim();
+        const m = marker.match(/^([^\s(:]+)(?:\s+(.+))?$/);
+        const toolName = m?.[1] ?? (marker || "tool");
+        const toolSummary = m?.[2]?.trim();
+        blocks.push(
+          <div key={`${keyBase}-tool-${k++}`} style={{ margin: "2px 0" }}>
+            {options.renderTool(toolName, toolSummary)}
+          </div>
+        );
+        continue;
+      }
     }
     // Blockquote lines (`> text`).
     if (/^>\s?/.test(line)) {
@@ -637,7 +668,7 @@ export function stripPlanJson(raw: string): StrippedPlan {
   return { thinking: parts.join("\n\n"), content: "" };
 }
 
-export function renderMarkdown(text: string): MdNode[] {
+export function renderMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
   // Split on ``` so every odd-indexed segment is a code block and every
   // even-indexed segment is prose. Render code blocks first so their
   // contents (which can contain their own ```) are not interpreted again.
@@ -655,7 +686,7 @@ export function renderMarkdown(text: string): MdNode[] {
       code = code.replace(/\n$/, "");
       out.push(<CodeBlock key={`code-${idx}`} code={code} lang={lang} />);
     } else if (seg) {
-      out.push(...renderProse(seg, `seg-${idx}`));
+      out.push(...renderProse(seg, `seg-${idx}`, options));
     }
   });
   return out;
