@@ -56,6 +56,31 @@ them.
 - [x] Memory auto-summarizer: when a Klide agent run settles with status "done", automatically write a durable Project Memory note from the conversation. Toggle in Settings → Harness (`autoMemoryOnRunDone`, default ON). Manual Summarize header action still works. Inline "Auto-saved" notice under the composer fades after 4s. Done runs only (skip cancelled / errored / delegate providers / single-message exchanges).
 - [x] `userAnswerQuestion` pause tool + `/interview` slash command: new tool in the Rust registry that pauses the harness via oneshot, surfaces an inline Q&A card in the AI panel, returns the user's typed answer to the model. Built-in skill "Codebase Interview" shipped in `DEFAULT_SKILLS` (src/skills.ts) — visible in the Skills modal, toggleable like the Code Review built-in, and the system prompt picks it up automatically. Plan mode, read-only, writes `docs/codebase-decisions.md` at the end. The skill explicitly forbids re-asking the same question (the model must track asked questions in its scratchpad). The `/interview` slash command inlines a self-contained prompt so it works even when the skill is disabled.
 
+## v0.3 Done — Agent-Control Foundation
+
+Decision on 2026-06-15: call v0.3 shipped and move the product forward. The
+foundation is now real enough: self-hosted providers, subscription delegate
+PTYs, Mission Control handoff, Project Memory, skills, usage/provider settings,
+checkpoint rollback, workspace-rooted filesystem access, and the interview
+tooling are all in place.
+
+The next milestone should not broaden into "more AI editor features." Klide's
+lane is the local-first control plane for coding agents: watch, resume,
+delegate, compare, review, and remember work across Claude Code, Codex,
+OpenCode, local providers, and future cloud agents.
+
+## v0.4 — Review Queue + Evidence Layer
+
+Goal: make Mission Control answer the three operator questions in under 3
+seconds: what is running, what needs me, and what changed?
+
+- [ ] Review queue: failed, waiting, idle, and completed delegated runs have explicit reasons and a clear next action.
+- [ ] Evidence summaries: each run row shows last meaningful event, branch/worktree, files touched, diff/review entry point, tokens/cost, and memory status.
+- [ ] Delegate observability: fix Claude routine design in Mission Control and restore missing sub-agent visibility for Claude conversations.
+- [ ] Reviewable memory: completed runs draft memory notes that can be accepted, edited, or skipped before becoming durable project memory.
+- [ ] Settings performance: reduce settings open lag; defer usage/provider stat work so the settings surface opens immediately.
+- [ ] Product restraint: keep multi-account setup, natural-language scheduling, and proactive suggestions parked until the review/evidence loop feels excellent.
+
 ## Small Follow-Ups
 
 - [x] Refresh the AI panel connection after saving or clearing a provider key.

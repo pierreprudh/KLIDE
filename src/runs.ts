@@ -9,7 +9,7 @@ import { foldAgentEvents, foldedToRunMessages } from "./agent/foldEvents";
 
 export type RunSource = "claude-code" | "codex" | "opencode" | "omp" | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
-export type RunBoardSection = "running" | "ready_for_review" | "done";
+export type RunBoardSection = "running" | "blocked" | "ready_for_review" | "done";
 
 /** Why a run landed in the Mission Control attention queue. Discriminated by
  *  `kind` so the row component can pick the right pill tone, copy, and
@@ -19,6 +19,14 @@ export type RunAttention =
   | { kind: "awaiting_input" }
   | { kind: "idle"; idleMs: number }
   | { kind: "awaiting_review"; source: RunSource };
+
+export type RunBoardReasonTone = "active" | "danger" | "warn" | "accent" | "success" | "subtle";
+
+export type RunBoardReason = {
+  label: string;
+  detail: string;
+  tone: RunBoardReasonTone;
+};
 
 /** Human label for an attention kind, surfaced on the queue pill. */
 export const ATTENTION_LABEL: Record<RunAttention["kind"], string> = {
@@ -138,27 +146,37 @@ export const STATUS_LABEL: Record<RunStatus, string> = {
 
 export const BOARD_SECTION_ORDER: RunBoardSection[] = [
   "running",
+  "blocked",
   "ready_for_review",
   "done",
 ];
 
 export const BOARD_SECTION_LABEL: Record<RunBoardSection, string> = {
   running: "Running",
+  blocked: "Blocked",
   ready_for_review: "Ready for Review",
   done: "Done",
 };
 
 export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
   running: "Active or queued work",
+  blocked: "Work that failed, needs input, or has gone idle",
   ready_for_review: "Delegated subtask output to inspect",
   done: "Finished conversations you ran",
 };
 
-export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId">): RunBoardSection {
-  if (run.status === "running" || run.status === "queued" || run.status === "waiting") {
+export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId" | "updatedMs">): RunBoardSection {
+  if (run.status === "error" || run.status === "waiting") return "blocked";
+  if (run.status === "running") {
+    const idle = Date.now() - run.updatedMs;
+    return idle >= STALE_RUNNING_MS ? "blocked" : "running";
+  }
+  if (run.status === "queued") {
     return "running";
   }
-  if (run.status === "error" || run.status === "cancelled") return "done";
+  if (run.status === "cancelled") {
+    return run.kind === "task" || run.parentId ? "ready_for_review" : "done";
+  }
   // "Ready for Review" is for delegated work an agent produced on your behalf:
   // queued tasks and Klide-spawned subagent runs (which carry a parentId — set
   // only when Klide actually spawned the delegate). A top-level CLI session you
@@ -198,6 +216,83 @@ export function runAttentionReason(
     return { kind: "awaiting_review", source: run.source };
   }
   return null;
+}
+
+export function runBoardReason(
+  run: Pick<Run, "status" | "kind" | "parentId" | "source" | "updatedMs">
+): RunBoardReason {
+  const attention = runAttentionReason(run);
+  if (attention) {
+    switch (attention.kind) {
+      case "failed":
+        return {
+          label: "Failed",
+          detail: `${attention.agentLabel} failed. Resume the run or inspect the transcript.`,
+          tone: "danger",
+        };
+      case "awaiting_input":
+        return {
+          label: "Needs you",
+          detail: `${SOURCE_LABEL[run.source]} is waiting for input or approval.`,
+          tone: "warn",
+        };
+      case "idle": {
+        const min = Math.floor(attention.idleMs / 60_000);
+        return {
+          label: "Idle",
+          detail: min < 60 ? `No activity for ${min}m.` : `No activity for ${Math.floor(min / 60)}h.`,
+          tone: "subtle",
+        };
+      }
+      case "awaiting_review":
+        return {
+          label: "Review",
+          detail: run.parentId || run.kind === "task"
+            ? `${SOURCE_LABEL[run.source]} finished delegated work. Review the output before calling it done.`
+            : "Finished work is ready to inspect.",
+          tone: "accent",
+        };
+    }
+  }
+
+  switch (run.status) {
+    case "running":
+      return {
+        label: "Active",
+        detail: `${SOURCE_LABEL[run.source]} is actively working.`,
+        tone: "active",
+      };
+    case "queued":
+      return {
+        label: "Queued",
+        detail: "Waiting to be dispatched.",
+        tone: "subtle",
+      };
+    case "cancelled":
+      return {
+        label: "Stopped",
+        detail: "This run was stopped.",
+        tone: "subtle",
+      };
+    case "done":
+      return {
+        label: "Done",
+        detail: "Top-level work you already drove or inspected.",
+        tone: "success",
+      };
+    case "waiting":
+      return {
+        label: "Needs you",
+        detail: `${SOURCE_LABEL[run.source]} is waiting for input or approval.`,
+        tone: "warn",
+      };
+    case "error":
+      return {
+        label: "Failed",
+        detail: `${SOURCE_LABEL[run.source]} failed. Resume the run or inspect the transcript.`,
+        tone: "danger",
+      };
+  }
 }
 
 export function runRoutineInfo(run: Pick<Run, "title">): RunRoutineInfo | null {

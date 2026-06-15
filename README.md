@@ -107,11 +107,6 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] AI panel — streaming chat against local Ollama (native `tools` API)
 - [x] Agent mode — `write_file` / `create_file` with diff review
 
-**v0.3 — shipped**
-
-- [x] Self-hosted providers — add your own OpenAI-compatible endpoints (label + base URL + keychain token) in Settings; they appear in the provider picker under "Self-hosted", with live model listing and per-endpoint default model
-- [x] Collapsible, glass-headed provider picker that scales to many providers
-
 **v0.2 — shipped** (verified 2026-06-08)
 
 - [x] Plan / Build modes, `@`-mentions, slash commands, project-rules loading
@@ -130,13 +125,25 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] Premium polish pass on the always-visible chrome (ActivityBar, TabBar, StatusBar, WelcomeScreen)
 - [x] Parked: Context Lens/project graph heuristics. If revived, feed Memory/summarization instead of silently injecting chat context.
 
-**v0.3 — next moves**
+**v0.3 — shipped**
 
-- [ ] Project Memory v2 — cross-link touched files, decide `.klide/memory/` git semantics, and explore automatic summarization
-- [ ] Settings depth without persistent chrome; reduce lag when opening settings
-- [ ] Auto-suggest codebase improvements (mattpocock/skills-style)
-- [ ] Multi-account setup (professional / private)
-- [ ] Natural-language scheduling ("every morning, summarize X")
+- [x] Self-hosted providers — add your own OpenAI-compatible endpoints (label + base URL + keychain token) in Settings; they appear in the provider picker under "Self-hosted", with live model listing and per-endpoint default model
+- [x] Collapsible, glass-headed provider picker that scales to many providers
+- [x] Project Memory v3 — touched-file links, run metadata, and automatic durable notes for completed Klide runs
+- [x] Skills install/uninstall plus "Save as skill" generation from finished sessions
+- [x] Mission Control handoff polish — resume/open delegate sessions in the right CLI surface, nested sub-agent runs, token/cost/file summaries, and brand marks
+- [x] Workspace-rooted filesystem hardening — file reads/writes flow through checked Rust commands instead of broad webview FS permissions
+- [x] Codebase Interview — `userAnswerQuestion` pause tool plus `/interview` for capturing project decisions
+
+**v0.4 — Review Queue + Evidence Layer**
+
+- [ ] Make Mission Control answer "what is running?", "what needs me?", and "what changed?" in under 3 seconds.
+- [ ] Strengthen the review queue: failed, waiting, idle, and completed delegated runs should have clear reasons and one-click next actions.
+- [ ] Add evidence summaries per run: last meaningful event, branch/worktree, files touched, diff/review entry point, cost/tokens, and saved-memory state.
+- [ ] Fix remaining delegate observability gaps, especially Claude routine design and missing sub-agent visibility.
+- [ ] Make auto-memory reviewable: completed runs should draft memory notes that can be accepted, edited, or skipped.
+- [ ] Reduce settings open lag and keep usage/provider stats progressive instead of blocking the main surface.
+- [ ] Park multi-account setup, natural-language scheduling, and proactive suggestions until the review/evidence loop feels excellent.
 
 ## Build & run
 
