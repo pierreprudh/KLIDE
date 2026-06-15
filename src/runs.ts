@@ -4,6 +4,8 @@
 // reads off disk. The board is read-only for now; steering/resume come later.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { AgentEvent } from "./agent/types";
+import { foldAgentEvents, foldedToRunMessages } from "./agent/foldEvents";
 
 export type RunSource = "claude-code" | "codex" | "opencode" | "omp" | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
@@ -390,83 +392,8 @@ export function invalidateAgentRunsCache() {
 // command is unavailable; callers handle the empty/error state.
 export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
   if (run.source === "klide") {
-    const events = await invoke<any[]>("agent_read_run", { runId: run.id });
-    const rows: RunMessage[] = [];
-    const findTool = (toolCallId: string): RunToolCall | null => {
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const found = rows[i].tools?.find((tool) => tool.id === toolCallId);
-        if (found) return found;
-      }
-      return null;
-    };
-    const lastAssistant = (): RunMessage | null => {
-      for (let i = rows.length - 1; i >= 0; i--) {
-        if (rows[i].role === "assistant") return rows[i];
-      }
-      return null;
-    };
-    const attachTool = (tool: RunToolCall) => {
-      const target = lastAssistant();
-      if (!target) {
-        rows.push({ role: "assistant", text: "", tools: [tool] });
-        return;
-      }
-      target.tools = [...(target.tools ?? []), tool];
-    };
-
-    for (const event of events) {
-      if (event.type === "user_message") {
-        rows.push({ role: "user", text: event.text ?? "" });
-        continue;
-      }
-      if (event.type === "assistant_message") {
-        const content = Array.isArray(event.content) ? event.content : [];
-        const text = content
-          .filter((block: any) => block?.type === "text")
-          .map((block: any) => String(block.text ?? ""))
-          .join("");
-        const tools = content
-          .filter((block: any) => block?.type === "tool_call")
-          .map((block: any): RunToolCall => ({
-            id: String(block.toolCallId ?? ""),
-            name: String(block.name ?? "tool"),
-            input: block.input,
-            status: "unknown",
-          }));
-        if (text.trim() || tools.length > 0) {
-          rows.push({ role: "assistant", text, tools: tools.length ? tools : undefined });
-        }
-        continue;
-      }
-      if (event.type === "tool_call_started") {
-        const existing = findTool(String(event.toolCallId ?? ""));
-        if (existing) {
-          existing.name = String(event.name ?? existing.name);
-          existing.input = event.input;
-          existing.summary = event.summary;
-          existing.status = "started";
-        } else {
-          attachTool({
-            id: String(event.toolCallId ?? ""),
-            name: String(event.name ?? "tool"),
-            input: event.input,
-            summary: event.summary,
-            status: "started",
-          });
-        }
-        continue;
-      }
-      if (event.type === "tool_call_finished") {
-        const existing = findTool(String(event.toolCallId ?? ""));
-        if (existing) {
-          existing.result = String(event.result?.content ?? "");
-          existing.ok = Boolean(event.result?.ok);
-          existing.status = "finished";
-        }
-      }
-    }
-
-    return rows.filter((m) => m.text.trim() || (m.tools?.length ?? 0) > 0);
+    const events = await invoke<AgentEvent[]>("agent_read_run", { runId: run.id });
+    return foldedToRunMessages(foldAgentEvents(events));
   }
   if (run.source === "opencode") {
     // OpenCode stores its history in SQLite (opencode.db), so the read path
