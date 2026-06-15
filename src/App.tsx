@@ -59,6 +59,8 @@ export type HarnessSettings = {
   /** Per-model context window (num_ctx) override for local models. Absent →
    *  use the model's detected trained window. Keyed by model id. */
   contextWindows?: Record<string, number>;
+  /** Per-model reply budget (num_predict) for local models. Absent → provider default. */
+  effortBudgets?: Record<string, number>;
   /** Max read-only tool calls to run concurrently within a turn (1 = off). */
   maxParallelTools?: number;
   /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent

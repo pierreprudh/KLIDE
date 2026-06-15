@@ -639,6 +639,7 @@ async fn run_agent_loop(
                 tools.clone(),
                 request.workspace_root.clone(),
                 request.num_ctx,
+                request.num_predict,
                 stream,
             ) => result,
         };
@@ -740,7 +741,7 @@ async fn run_agent_loop(
             // answer. Models that separate reasoning from answer (non-empty
             // content) keep thinking as its own disclosure, unchanged.
             let thinking = thinking_text.filter(|t| !t.trim().is_empty());
-            let answer_text = if content_text.trim().is_empty() {
+            let mut answer_text = if content_text.trim().is_empty() {
                 thinking.clone().unwrap_or_default()
             } else {
                 if let Some(t) = thinking.clone() {
@@ -748,6 +749,18 @@ async fn run_agent_loop(
                 }
                 content_text.clone()
             };
+            // Ollama reports `done_reason: "length"` when the reply was cut off
+            // because the KV cache (num_ctx) filled mid-generation — the model
+            // didn't "decide" to stop, it ran out of room. Without this the
+            // answer just ends mid-sentence and looks complete. Flag it inline
+            // and point at the fix (raise the context window for this model).
+            if response.stop_reason.as_deref() == Some("length") {
+                answer_text.push_str(
+                    "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
+mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
+conversation, then ask again._",
+                );
+            }
             content.push(AgentContentBlock::Text { text: answer_text });
             emit(AgentEvent::AssistantMessage {
                 run_id: id.clone(),

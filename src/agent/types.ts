@@ -21,6 +21,7 @@ export type ProviderId =
   | "claude-code"
   | "codex"
   | "opencode"
+  | "omp"
   | "anthropic"
   | "openai"
   | "gemini"
@@ -256,9 +257,10 @@ export type StartAgentRunInput = {
   /** Context window (num_ctx) for local models — resolved per model from the
    *  detected window or a user override. Omit to use the adapter default. */
   numCtx?: number;
+  /** Reply budget (num_predict) for local models. Omit to use provider default. */
+  numPredict?: number;
   /** Max read-only tool calls to run concurrently in one turn (1 = sequential). */
   maxParallelTools?: number;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };
-

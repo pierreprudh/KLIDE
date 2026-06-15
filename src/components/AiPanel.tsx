@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { DiffModal } from "./DiffModal";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -84,7 +85,7 @@ type Props = {
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
   onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
@@ -202,6 +203,7 @@ export function AiPanel({
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
+  const [contextTooltipPos, setContextTooltipPos] = useState<{ bottom: number; left: number } | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -246,6 +248,13 @@ export function AiPanel({
   }, [msgs, streaming, model, workspaceRoot, currentId]);
 
   const [contextLimit, setContextLimit] = useState(128_000);
+  // The provider's own prompt-token count from the latest finished turn — the
+  // authoritative "how full is the context" number (it's exactly what the
+  // model counted: system prompt + tools + history). `null` until the first
+  // turn reports usage, or for providers that don't (subscription CLIs); we
+  // fall back to a char-length estimate then.
+  const [measuredPromptTokens, setMeasuredPromptTokens] = useState<number | null>(null);
+  const [measuredUsageTokens, setMeasuredUsageTokens] = useState<{ prompt: number; completion: number } | null>(null);
   const [contextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
@@ -260,7 +269,40 @@ export function AiPanel({
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
   const [modeOpen, setModeOpen] = useState(false);
-  const modeRef = useRef<HTMLDivElement>(null);
+  // Portalled to <body> with viewport coordinates (same pattern as
+  // ModelPicker) so the menu escapes the composer's `overflow: hidden` +
+  // the floating panel's `transform: translateZ(0)`, which would otherwise
+  // clip an `position: absolute` dropdown to the composer box.
+  const [modeMenuPos, setModeMenuPos] = useState<{ bottom: number; left: number } | null>(null);
+  const modeTriggerRef = useRef<HTMLButtonElement>(null);
+  const modeMenuRef = useRef<HTMLDivElement>(null);
+  const contextTriggerRef = useRef<HTMLButtonElement>(null);
+  function openModeMenu() {
+    const trigger = modeTriggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    setModeMenuPos({
+      bottom: Math.round(window.innerHeight - rect.top + 8),
+      left: Math.round(rect.left),
+    });
+    setModeOpen(true);
+  }
+  function closeModeMenu() { setModeOpen(false); setModeMenuPos(null); }
+  function openContextTooltip() {
+    const trigger = contextTriggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const width = 218;
+    setContextTooltipPos({
+      bottom: Math.round(window.innerHeight - rect.top + 8),
+      left: Math.round(Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8)),
+    });
+    setContextHover(true);
+  }
+  function closeContextTooltip() {
+    setContextHover(false);
+    setContextTooltipPos(null);
+  }
   const toggleMode = () => {
     setNextSendMode(null);
     setAgentMode((m) => {
@@ -276,15 +318,44 @@ export function AiPanel({
     agentModeRef.current = mode;
     setAgentMode(mode);
     localStorage.setItem("klide.agentMode", mode);
-    setModeOpen(false);
+    closeModeMenu();
   }
   useEffect(() => { agentModeRef.current = agentMode; }, [agentMode]);
+  // Outside click — the trigger and the portalled menu are in different
+  // subtrees, so test both explicitly.
   useEffect(() => {
     if (!modeOpen) return;
-    function onDown(e: MouseEvent) { if (modeRef.current && !modeRef.current.contains(e.target as Node)) setModeOpen(false); }
+    function onDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (modeTriggerRef.current?.contains(t)) return;
+      if (modeMenuRef.current?.contains(t)) return;
+      closeModeMenu();
+    }
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [modeOpen]);
+  // The portalled menu can't follow the trigger across scroll/resize, so
+  // close it rather than let it drift.
+  useEffect(() => {
+    if (!modeOpen) return;
+    function onMove() { closeModeMenu(); }
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [modeOpen]);
+  useEffect(() => {
+    if (!contextHover) return;
+    function onMove() { closeContextTooltip(); }
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [contextHover]);
 
   const [fileList, setFileList] = useState<string[]>([]);
   const [mention, setMention] = useState<{ query: string } | null>(null);
@@ -464,8 +535,31 @@ export function AiPanel({
   }
 
   const lensProjectContext = providerDelegatesWork ? [] : lensItemsForPrompt(projectContext, input, contextMode);
-  const contextUsed = msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0) + estimateTokens(input) + estimateTokens(projectRules) + estimateProjectContextTokens(lensProjectContext);
-  const contextRatio = Math.min(1, contextUsed / contextLimit);
+  // Effective window: a per-model override (Settings → Harness, Ollama only)
+  // genuinely caps the runtime window, so the gauge must measure against it —
+  // otherwise a dialed-down model reads near-empty when it's actually full.
+  // Everyone else measures against the model's detected trained window.
+  const ctxOverride = harnessSettings?.contextWindows?.[model];
+  const effectiveContextLimit =
+    provider === "ollama" && ctxOverride && ctxOverride > 0 ? ctxOverride : contextLimit;
+  const effortBudget = provider === "ollama" ? harnessSettings?.effortBudgets?.[model] : undefined;
+  // Prefer the model's real prompt-token count when we have it: it already
+  // accounts for the system prompt, tool schemas, and full history, so we only
+  // add the unsent draft on top. Without it, estimate every message by length.
+  const estimatedContextUsed =
+    msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0) +
+    estimateTokens(projectRules) +
+    estimateProjectContextTokens(lensProjectContext);
+  const contextUsed =
+    (measuredPromptTokens !== null && !streaming ? measuredPromptTokens : estimatedContextUsed) +
+    estimateTokens(input);
+  const promptContextUsed =
+    (measuredUsageTokens !== null && !streaming ? measuredUsageTokens.prompt : estimatedContextUsed) +
+    estimateTokens(input);
+  const replyContextUsed =
+    measuredUsageTokens !== null && !streaming ? measuredUsageTokens.completion : 0;
+  const contextRemaining = Math.max(0, effectiveContextLimit - contextUsed);
+  const contextRatio = Math.min(1, contextUsed / effectiveContextLimit);
   const contextTone = contextRatio > 0.85 ? "var(--danger, #B42318)" : contextRatio > 0.65 ? "#A15C00" : "var(--accent)";
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
@@ -587,6 +681,8 @@ export function AiPanel({
     abortActiveHarnessRun();
     setMsgs([]);
     msgsRef.current = [];
+    setMeasuredPromptTokens(null);
+    setMeasuredUsageTokens(null);
     queueRef.current = [];
     queueGenerationRef.current += 1;
     setQueuedTurns([]);
@@ -612,6 +708,8 @@ export function AiPanel({
     // panel still uses `panelId` (see the `useState` initialiser
     // above) so the panel's persistent identity survives reloads;
     // every subsequent chat gets its own transcript.
+    setMeasuredPromptTokens(null);
+    setMeasuredUsageTokens(null);
     setCurrentId(genId());
   }
 
@@ -718,6 +816,9 @@ export function AiPanel({
     setCurrentId(c.id);
     setMsgs(c.msgs);
     msgsRef.current = c.msgs;
+    // No usage stored with history → estimate until this chat's next turn.
+    setMeasuredPromptTokens(null);
+    setMeasuredUsageTokens(null);
     queueRef.current = [];
     queueGenerationRef.current += 1;
     setQueuedTurns([]);
@@ -742,7 +843,7 @@ export function AiPanel({
   function deleteConversation(id: string, e: ReactMouseEvent) {
     e.stopPropagation();
     setConversations((prev) => { const next = prev.filter((c) => c.id !== id); saveConversations(next); return next; });
-    if (id === currentId) { setMsgs([]); setCurrentId(genId()); }
+    if (id === currentId) { setMsgs([]); setCurrentId(genId()); setMeasuredPromptTokens(null); setMeasuredUsageTokens(null); }
   }
 
   // Only auto-scroll on token updates when the user is at the bottom.
@@ -1052,6 +1153,14 @@ export function AiPanel({
           const usage = event.usage;
           const tokens =
             usage?.completionTokens !== undefined ? usage.completionTokens : estimatedTokens;
+          // Capture the real context size for the gauge: the prompt the model
+          // just saw (system + tools + full history) plus the reply it added.
+          // This is the authoritative "how full" number until the next turn.
+          if (usage?.promptTokens !== undefined) {
+            const completion = usage.completionTokens ?? tokens;
+            setMeasuredPromptTokens(usage.promptTokens + completion);
+            setMeasuredUsageTokens({ prompt: usage.promptTokens, completion });
+          }
           // tok/s over decode time (turn minus TTFT) — the rate users feel.
           // Prefer the provider's own eval_duration when available: it's
           // pure decode time, wall-clock can be dragged out by tool calls
@@ -1181,6 +1290,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               ? contextLimit
               : undefined
           : undefined;
+      const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
+      const numPredict =
+        turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
       const maxParallelTools = harnessSettings?.maxParallelTools;
       const session = await startAgentRun({
         runId: currentId,
@@ -1190,6 +1302,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         systemPrompt,
         disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
         numCtx,
+        numPredict,
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
@@ -1853,8 +1966,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   <ProviderLogo id={provider} size={13} /><span>{providerName(provider)}</span>
                 </div>
               ) : (
-                <div ref={modeRef} style={{ position: "relative", flexShrink: 0 }}>
-                  <button type="button" onClick={() => { if (!streaming) setModeOpen((o) => !o); }} disabled={streaming}
+                <div style={{ position: "relative", flexShrink: 0 }}>
+                  <button ref={modeTriggerRef} type="button" onClick={() => { if (!streaming) { if (modeOpen) closeModeMenu(); else openModeMenu(); } }} disabled={streaming}
                     title={`${MODE_OPTIONS.find((o) => o.id === effectiveMode)?.title ?? ""} Click to choose Chat, Plan, or Goal. Press Tab to cycle.`}
                     aria-haspopup="menu" aria-expanded={modeOpen} aria-label={`AI mode: ${MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}`}
                     style={{ display: "flex", alignItems: "center", gap: 5, height: 24, minWidth: 66, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: modeOpen ? "var(--bg-hover)" : "color-mix(in srgb, var(--panel) 88%, transparent)", boxShadow: modeOpen ? "0 6px 18px rgba(38, 38, 32, 0.10)" : "inset 0 1px 0 rgba(255,255,255,0.05)", color: modeOpen ? "var(--fg-strong)" : "var(--fg-subtle)", fontSize: 11, fontWeight: 560, letterSpacing: 0, cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)" }}
@@ -1864,8 +1977,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                     <span>{MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}</span>
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ opacity: 0.65, transform: modeOpen ? "rotate(180deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}><path d="M6 9l6 6 6-6" /></svg>
                   </button>
-                  {modeOpen && (
-                    <div role="menu" aria-label="AI mode" style={{ position: "absolute", left: 0, bottom: "calc(100% + 8px)", width: 132, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)", zIndex: 20 }}>
+                  {modeOpen && modeMenuPos && createPortal(
+                    <div ref={modeMenuRef} role="menu" aria-label="AI mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 132, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)", zIndex: 200 }}>
                       {MODE_OPTIONS.map((option) => {
                         const disabled = option.id === "goal" && !modelSupportsTools && !providerDelegatesWork;
                         const active = option.id === effectiveMode;
@@ -1879,7 +1992,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                           </button>
                         );
                       })}
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
               )}
@@ -1892,20 +2006,35 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               />
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-              <button type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
+              <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
-                onMouseEnter={(e) => { setContextHover(true); e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { setContextHover(false); e.currentTarget.style.background = "transparent"; }}>
+                onMouseEnter={(e) => { openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { closeContextTooltip(); e.currentTarget.style.background = "transparent"; }}
+                onFocus={openContextTooltip}
+                onBlur={closeContextTooltip}>
                 <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="var(--border)" strokeWidth="1.6" />
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength="100" strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`} transform="rotate(-90 11 11)" style={{ transition: "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)" }} />
                 </svg>
-                {contextHover && (
-                  <div role="tooltip" style={{ position: "absolute", right: -2, bottom: "calc(100% + 8px)", width: 218, padding: "10px 11px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 10px 30px rgba(38, 38, 32, 0.16)", color: "var(--fg)", textAlign: "left", pointerEvents: "none" }}>
+                {contextHover && contextTooltipPos && createPortal(
+                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: 218, padding: "10px 11px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 10px 30px rgba(38, 38, 32, 0.16)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: 220 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}><span style={{ color: "var(--fg-strong)", fontSize: 12, fontWeight: 600 }}>Context</span><span style={{ color: contextTone, fontSize: 12, fontWeight: 600 }}>{Math.round(contextRatio * 100)}%</span></div>
                     <div style={{ height: 4, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", marginBottom: 8 }}><div style={{ width: `${Math.max(2, contextRatio * 100)}%`, height: "100%", borderRadius: 999, background: contextTone }} /></div>
-                    <div style={{ color: "var(--fg-subtle)", fontSize: 11, lineHeight: 1.45 }}>{contextUsed.toLocaleString()} / {contextLimit.toLocaleString()} tokens</div>
-                  </div>
+                    <div style={{ display: "grid", gap: 4, color: "var(--fg-subtle)", fontSize: 11, lineHeight: 1.35 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>Window used</span><span style={{ color: "var(--fg-strong)", fontVariantNumeric: "tabular-nums" }}>{contextUsed.toLocaleString()} / {effectiveContextLimit.toLocaleString()}</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>Prompt + history</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{promptContextUsed.toLocaleString()}</span></div>
+                      {replyContextUsed > 0 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>Last reply</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{replyContextUsed.toLocaleString()}</span></div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>Remaining</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{contextRemaining.toLocaleString()}</span></div>
+                    </div>
+                    <div style={{ color: "var(--fg-dim)", fontSize: 10, lineHeight: 1.4, marginTop: 6 }}>
+                      {measuredPromptTokens !== null && !streaming ? "Measured from model usage" : "Estimated before the next turn"}
+                      {provider === "ollama" && ctxOverride && ctxOverride > 0 ? " · window override" : ""}
+                      {effortBudget ? ` · ${effortBudget.toLocaleString()} reply budget` : ""}
+                    </div>
+                  </div>,
+                  document.body
                 )}
               </button>
               {streaming ? (

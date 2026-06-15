@@ -96,8 +96,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -715,6 +715,9 @@ function ApiKeyRow({
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Two ways to supply the key: "paste" → macOS Keychain (classic), or "ref"
+  // → a `${VAR}` reference resolved from .env (same as self-hosted endpoints).
+  const [method, setMethod] = useState<"paste" | "ref">("paste");
 
   const refresh = useCallback(async () => {
     try {
@@ -722,6 +725,9 @@ function ApiKeyRow({
         provider: id,
       });
       setStatus(next);
+      // Reflect the saved method so reopening Settings shows how it's wired.
+      if (next.source === "reference") setMethod("ref");
+      else if (next.source === "keychain") setMethod("paste");
     } catch {
       setStatus({ hasKey: false, source: "none" });
     }
@@ -736,7 +742,11 @@ function ApiKeyRow({
     setBusy(true);
     setError(null);
     try {
-      await invoke("ai_set_provider_key", { provider: id, key: value });
+      if (method === "ref") {
+        await invoke("ai_set_provider_key_reference", { provider: id, reference: value });
+      } else {
+        await invoke("ai_set_provider_key", { provider: id, key: value });
+      }
       setValue("");
       await refresh();
       onChange?.(id);
@@ -752,7 +762,12 @@ function ApiKeyRow({
     setBusy(true);
     setError(null);
     try {
-      await invoke("ai_clear_provider_key", { provider: id });
+      // Clear whichever method is currently providing the key.
+      const cmd =
+        status.source === "reference"
+          ? "ai_clear_provider_key_reference"
+          : "ai_clear_provider_key";
+      await invoke(cmd, { provider: id });
       await refresh();
       onChange?.(id);
     } catch (e) {
@@ -765,6 +780,12 @@ function ApiKeyRow({
   const pill =
     status.source === "keychain" ? (
       <StatusPill tone="ok">Saved</StatusPill>
+    ) : status.source === "reference" ? (
+      status.hasKey ? (
+        <StatusPill tone="ok">Linked</StatusPill>
+      ) : (
+        <StatusPill tone="warn">Unresolved</StatusPill>
+      )
     ) : status.source === "env" ? (
       <StatusPill tone="warn">From env</StatusPill>
     ) : (
@@ -775,8 +796,14 @@ function ApiKeyRow({
     ? error
     : status.source === "keychain"
     ? "Stored securely in your macOS Keychain."
+    : status.source === "reference"
+    ? status.hasKey
+      ? "Resolved from a ${VAR} reference in your .env — no key stored in the app."
+      : "Reference set, but it doesn't resolve. Add the variable to your project .env or ~/.klide/.env."
     : status.source === "env"
     ? `Using ${envVar} from the environment. Save here to move it into the Keychain (survives a packaged build).`
+    : method === "ref"
+    ? `Reference an env var (e.g. \${${envVar}}); the value stays in your .env, never in the app.`
     : `Paste a key to store it in your macOS Keychain, or export ${envVar}.`;
 
   return (
@@ -786,16 +813,18 @@ function ApiKeyRow({
       control={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {pill}
+          <MethodToggle method={method} onChange={setMethod} />
           <input
-            type="password"
+            type={method === "ref" ? "text" : "password"}
             value={value}
-            placeholder={placeholder}
+            placeholder={method === "ref" ? `\${${envVar}}` : placeholder}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void save();
             }}
-            aria-label={`${title} API key`}
+            aria-label={method === "ref" ? `${title} env reference` : `${title} API key`}
             autoComplete="off"
+            spellCheck={false}
             className="klide-field"
             style={{
               width: 190,
@@ -806,12 +835,67 @@ function ApiKeyRow({
           <LinkButton onClick={() => void save()}>
             {busy ? "..." : "Save"}
           </LinkButton>
-          {status.source === "keychain" && (
+          {(status.source === "keychain" || status.source === "reference") && (
             <GhostButton onClick={() => void clear()}>Clear</GhostButton>
           )}
         </div>
       }
     />
+  );
+}
+
+// Compact two-segment switch between the pasted-key (Keychain) and the
+// env-reference (.env) methods. Quiet at rest; the active segment carries the
+// accent tint, matching the picker chips elsewhere.
+function MethodToggle({
+  method,
+  onChange,
+}: {
+  method: "paste" | "ref";
+  onChange: (m: "paste" | "ref") => void;
+}) {
+  const seg = (m: "paste" | "ref", label: string) => {
+    const active = method === m;
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(m)}
+        aria-pressed={active}
+        style={{
+          height: 26,
+          padding: "0 9px",
+          border: "none",
+          borderRadius: 6,
+          background: active ? "var(--bg-elevated)" : "transparent",
+          boxShadow: active ? "0 1px 2px rgba(38,38,32,0.12)" : "none",
+          color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
+          fontSize: 11.5,
+          fontWeight: active ? 560 : 500,
+          cursor: "pointer",
+          transition: "background 120ms ease, color 120ms ease",
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
+  return (
+    <div
+      role="group"
+      aria-label="Key method"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 2,
+        padding: 2,
+        borderRadius: 8,
+        background: "var(--bg-hover)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      {seg("paste", "Paste")}
+      {seg("ref", "Env ref")}
+    </div>
   );
 }
 
@@ -2162,13 +2246,14 @@ export function SettingsPanel({
                 <Panel>
                   <Row
                     title="Context window"
-                    description={`How much context ${aiModel} runs with. Auto uses the model's full detected window — pick a smaller size only if you're tight on memory. Local (Ollama) models.`}
+                    description={`How much room ${aiModel} gets for the active conversation. Auto lets Klide choose a stable working window up to the model's detected limit; choose a smaller cap when memory matters. Ollama only.`}
                     control={
                       <Segmented
                         label="Context window"
                         value={harnessSettings?.contextWindows?.[aiModel]}
                         options={[
                           { label: "Auto", value: undefined },
+                          { label: "8K", value: 8192 },
                           { label: "16K", value: 16384 },
                           { label: "32K", value: 32768 },
                           { label: "64K", value: 65536 },
@@ -2179,6 +2264,28 @@ export function SettingsPanel({
                           if (v === undefined) delete next[aiModel];
                           else next[aiModel] = v;
                           onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
+                        }}
+                      />
+                    }
+                  />
+                  <Row
+                    title="Effort"
+                    description={`How much reply budget ${aiModel} gets per turn. Higher effort gives the model more room to reason and explain, but it can be slower and uses more of the window. Ollama only.`}
+                    control={
+                      <Segmented
+                        label="Effort"
+                        value={harnessSettings?.effortBudgets?.[aiModel]}
+                        options={[
+                          { label: "Auto", value: undefined },
+                          { label: "Quick", value: 1024 },
+                          { label: "Balanced", value: 4096 },
+                          { label: "Deep", value: 8192 },
+                        ]}
+                        onChange={(v) => {
+                          const next = { ...(harnessSettings?.effortBudgets ?? {}) };
+                          if (v === undefined) delete next[aiModel];
+                          else next[aiModel] = v;
+                          onHarnessSettingsChange?.({ ...harnessSettings, effortBudgets: next });
                         }}
                       />
                     }
@@ -2629,6 +2736,7 @@ const STATS_SOURCE_COLOR: Record<RunSource, string> = {
   "claude-code": "#D97757",
   codex: "#7A7A7A",
   opencode: "#3A3A3A",
+  omp: "#7C6BAE",
   klide: "var(--accent)",
 };
 

@@ -340,7 +340,28 @@ pub fn provider_key(id: &str) -> Result<Option<String>, String> {
     match entry.key {
         KeySource::Local => Ok(None),
         KeySource::Hosted { .. } => {
-            let keychain = cached_keyring_lookup(id);
+            // Env-reference method (keychain-free) wins when configured — the
+            // same mechanism self-hosted endpoints use, so a built-in key can
+            // live in `.env` as `${OPENAI_API_KEY}` and never pop a keychain
+            // prompt. Reading it must NOT touch the keychain.
+            if let Some(reference) = builtin_token_reference(id) {
+                return match resolve_reference(&reference) {
+                    Some(key) => Ok(Some(key)),
+                    None => Err(format!(
+                        "Env reference {reference} for {id} did not resolve — check your .env"
+                    )),
+                };
+            }
+            // Only read the Keychain when the user actually pasted a key here
+            // (recorded by a marker on save). No marker → don't even look, so
+            // we never pop the macOS prompt for a provider that's configured
+            // via .env / a process env var / nothing yet. This is what keeps
+            // browsing or model-listing a provider from triggering a prompt.
+            let keychain = if has_keychain_marker(id) {
+                cached_keyring_lookup(id)
+            } else {
+                None
+            };
             let (env, env_legacy) = env_fallback_names(entry);
             let from_env = env
                 .and_then(env_var)
@@ -386,7 +407,17 @@ pub fn key_status(id: &str) -> Result<ProviderKeyStatus, String> {
             source: "none".to_string(),
         });
     }
-    if cached_keyring_lookup(id).is_some() {
+    // Reference method first — checking it before the keychain keeps the
+    // status read keychain-prompt-free when the user opted for `.env`.
+    if let Some(reference) = builtin_token_reference(id) {
+        return Ok(ProviderKeyStatus {
+            has_key: resolve_reference(&reference).is_some(),
+            source: "reference".to_string(),
+        });
+    }
+    // Marker check — NOT a Keychain read, so rendering the status never pops
+    // the macOS access prompt. The secret itself is only touched at send time.
+    if has_keychain_marker(id) {
         return Ok(ProviderKeyStatus {
             has_key: true,
             source: "keychain".to_string(),
@@ -577,6 +608,114 @@ fn custom_token_reference(id: &str) -> Option<String> {
     crate::custom_providers::get(id).and_then(|p| p.token_ref)
 }
 
+// ── Built-in provider env-references (the keychain-free "second method") ──
+// A built-in hosted provider (Anthropic, OpenAI, …) can take its key by one
+// of two methods: the classic pasted key (keychain), or — exactly like a
+// self-hosted endpoint — a `${VAR}` reference resolved from the env / project
+// `.env` / `~/.klide/.env`. The reference itself (never a literal key) is
+// stored in plaintext at `~/.klide/provider_refs.json`, keyed by provider id.
+
+fn provider_refs_path() -> Option<std::path::PathBuf> {
+    crate::home_dir_path().map(|home| home.join(".klide").join("provider_refs.json"))
+}
+
+fn read_provider_refs() -> std::collections::HashMap<String, String> {
+    let Some(path) = provider_refs_path() else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return std::collections::HashMap::new();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+/// The `${VAR}` reference configured for a built-in hosted provider, if any.
+fn builtin_token_reference(id: &str) -> Option<String> {
+    read_provider_refs().remove(id)
+}
+
+// ── Keychain presence markers ────────────────────────────────────────────
+// Reading a Keychain entry (`get_password`) is what pops the macOS "allow
+// access" prompt — and in dev every rebuild re-prompts. We don't want the
+// status pill ("Saved") to cost a prompt, so whenever a key is written/cleared
+// through the app we record *just the provider id* (never the secret) in
+// `~/.klide/keychain_providers.json`. `key_status` reads that marker instead of
+// the Keychain, so opening Settings never prompts. The real secret is still
+// only read at send time, in `provider_key`.
+
+fn keychain_markers_path() -> Option<std::path::PathBuf> {
+    crate::home_dir_path().map(|home| home.join(".klide").join("keychain_providers.json"))
+}
+
+fn read_keychain_markers() -> std::collections::HashSet<String> {
+    let Some(path) = keychain_markers_path() else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return std::collections::HashSet::new();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn has_keychain_marker(id: &str) -> bool {
+    read_keychain_markers().contains(id)
+}
+
+/// Record (or remove) a provider's "has a pasted key" marker. Best-effort:
+/// a write failure must never block saving the actual key.
+fn mark_keychain(id: &str, present: bool) {
+    let mut set = read_keychain_markers();
+    let changed = if present {
+        set.insert(id.to_string())
+    } else {
+        set.remove(id)
+    };
+    if !changed {
+        return;
+    }
+    let Some(path) = keychain_markers_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(&set) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Set (or clear, with `None`/empty) a built-in provider's env reference.
+/// Only genuine `${VAR}` / `$VAR` references are accepted, so a pasted literal
+/// key can never end up sitting in this plaintext file by mistake — that path
+/// belongs to the keychain. Clearing reverts the provider to the keychain
+/// method.
+pub fn set_provider_reference(id: &str, reference: Option<&str>) -> Result<(), String> {
+    let mut refs = read_provider_refs();
+    match reference.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => {
+            if reference_var_name(r).is_none() {
+                return Err(
+                    "Expected an env reference like ${OPENAI_API_KEY}, not a literal key"
+                        .to_string(),
+                );
+            }
+            refs.insert(id.to_string(), r.to_string());
+        }
+        None => {
+            refs.remove(id);
+        }
+    }
+    let path =
+        provider_refs_path().ok_or_else(|| "Could not resolve home directory".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(&refs).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Could not write {path:?}: {e}"))?;
+    invalidate_token_cache(id);
+    Ok(())
+}
+
 /// Set or clear the keychain entry for a provider. `set` writes (after
 /// rejecting empty values); `clear` deletes. Both invalidate the in-memory
 /// token cache so the change takes effect on the next read.
@@ -588,6 +727,7 @@ pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
     keyring_entry(provider)?
         .set_password(trimmed)
         .map_err(|e| e.to_string())?;
+    mark_keychain(provider, true);
     invalidate_token_cache(provider);
     Ok(())
 }
@@ -597,6 +737,7 @@ pub fn clear_keychain_key(provider: &str) -> Result<(), String> {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
     };
+    mark_keychain(provider, false);
     invalidate_token_cache(provider);
     result
 }

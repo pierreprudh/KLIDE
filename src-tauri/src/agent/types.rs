@@ -68,6 +68,10 @@ pub struct StartRunRequest {
     /// `None` lets the provider adapter fall back to its default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_ctx: Option<usize>,
+    /// Reply budget (num_predict) for local models. `None` keeps the provider
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_predict: Option<usize>,
     /// Max read-only tool calls to run concurrently within one turn. `None`
     /// or `Some(1)` keeps execution sequential.
     #[serde(default, skip_serializing_if = "Option::is_none")]

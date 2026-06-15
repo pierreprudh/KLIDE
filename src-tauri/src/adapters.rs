@@ -110,7 +110,13 @@ struct OllamaAdapter {
     /// default; the caller normally resolves the model's real trained window
     /// (or a user override) and passes it here.
     num_ctx: Option<usize>,
+    /// Reply budget for Ollama (`num_predict`). `None` keeps Ollama's default.
+    num_predict: Option<usize>,
     usage: AiUsage,
+    /// Ollama's `done_reason` from the final frame: `"stop"` (finished) or
+    /// `"length"` (cut off at num_ctx). Surfaced so the harness can flag a
+    /// truncated answer.
+    stop_reason: Option<String>,
 }
 
 impl StreamingProvider for OllamaAdapter {
@@ -135,6 +141,9 @@ impl StreamingProvider for OllamaAdapter {
             // an over-large value is safe.
             "options": { "num_ctx": self.num_ctx.unwrap_or(32768) },
         });
+        if let Some(num_predict) = self.num_predict {
+            body["options"]["num_predict"] = serde_json::json!(num_predict);
+        }
         if let Some(tools) = &self.tools {
             body["tools"] = serde_json::Value::Array(tools.clone());
         }
@@ -191,6 +200,10 @@ impl StreamingProvider for OllamaAdapter {
                 eval_duration_ms: count("eval_duration").map(|ns| ns / 1_000_000),
                 prompt_eval_duration_ms: count("prompt_eval_duration").map(|ns| ns / 1_000_000),
             };
+            self.stop_reason = value
+                .get("done_reason")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
         }
         Ok(())
     }
@@ -214,22 +227,35 @@ impl StreamingProvider for OllamaAdapter {
             } else {
                 Some(self.usage)
             },
+            stop_reason: self.stop_reason,
         }
     }
 }
 
-/// Ollama allocates the KV cache when the model loads, so num_ctx is fixed per
-/// load. Instead of always requesting the model's full window (a big cache —
-/// slow to load, memory-hungry), size it to the conversation: estimate prompt
-/// tokens, add headroom for the reply, and round up to the next tier. Short
-/// chats stay small and fast; the model only reloads when a conversation grows
-/// past its current tier. `ceiling` is the model's real max (passed in as
-/// num_ctx) and is never exceeded.
-fn tiered_num_ctx(
+/// A comfortable, flat working window for num_ctx.
+///
+/// Background: Ollama allocates the KV cache at model-load time, sized to
+/// num_ctx — real RAM, reserved up front. We *used* to ramp num_ctx up from a
+/// tiny tier per conversation to keep that cache small. But measurements on an
+/// 8B model showed the cache is cheap (32k ≈ +0.5 GB over weights, 128k ≈
+/// +1.8 GB) — the memory floor is the model weights, not the cache. Ramping
+/// saved ~1 GB while causing two real problems: long answers were *truncated*
+/// when a too-small cache filled mid-generation, and every conversation that
+/// crossed a tier forced a model reload.
+///
+/// So instead: default to a roomy 32k working window (proven safe on a 17 GB
+/// Mac), grow past it only for genuinely large conversations, and cap at the
+/// model's real trained window (`ceiling`, which a user override also sets to
+/// dial memory up or down). The result loads once and never truncates a normal
+/// answer.
+fn working_num_ctx(
     messages: &[serde_json::Value],
     tools: Option<&Vec<serde_json::Value>>,
     ceiling: usize,
 ) -> usize {
+    // A flat default big enough for real coding conversations. Below this we
+    // don't bother shrinking — the saving isn't worth the reloads/truncation.
+    const WORKING_DEFAULT: usize = 32_768;
     // ~4 chars per token is the usual rough estimate. Count BOTH the messages
     // and the tool schemas — the schemas are sent separately from `messages`
     // but still occupy the prompt. Omitting them under-sizes the window, Ollama
@@ -243,13 +269,10 @@ fn tiered_num_ctx(
     let tool_chars: usize = tools
         .map(|t| t.iter().map(|s| s.to_string().len()).sum())
         .unwrap_or(0);
-    let needed = (msg_chars + tool_chars) / 4 + 2048; // + response headroom
-    const TIERS: [usize; 6] = [4096, 8192, 16384, 32768, 65536, 131072];
-    let tier = TIERS.into_iter().find(|&t| t >= needed).unwrap_or(ceiling);
-    // With tools in play, never go below 8k — a truncated tool schema is worse
-    // than a slightly larger cache.
-    let floor = if tools.is_some() { 8192 } else { 4096 };
-    tier.max(floor).min(ceiling).max(1024)
+    let needed = (msg_chars + tool_chars) / 4 + 4096; // + response headroom
+    // At least the comfortable default; grow to fit a large conversation;
+    // never exceed the model's real window.
+    needed.max(WORKING_DEFAULT).min(ceiling).max(1024)
 }
 
 pub(crate) async fn ollama_chat(
@@ -257,16 +280,19 @@ pub(crate) async fn ollama_chat(
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     num_ctx: Option<usize>,
+    num_predict: Option<usize>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let ceiling = num_ctx.unwrap_or(32768);
-    let sized = tiered_num_ctx(&messages, tools.as_ref(), ceiling);
+    let sized = working_num_ctx(&messages, tools.as_ref(), ceiling);
     let adapter = OllamaAdapter {
         model,
         messages,
         tools,
         num_ctx: Some(sized),
+        num_predict,
         usage: AiUsage::default(),
+        stop_reason: None,
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -463,6 +489,9 @@ impl StreamingProvider for OpenAiAdapter {
             } else {
                 Some(self.usage)
             },
+            // Hosted providers report finish_reason too, but the
+            // num_ctx-truncation warning this drives is Ollama-specific.
+            stop_reason: None,
         }
     }
 }
@@ -881,6 +910,9 @@ impl StreamingProvider for AnthropicAdapter {
             } else {
                 Some(self.usage)
             },
+            // Anthropic reports stop_reason too, but this field drives the
+            // Ollama-specific num_ctx-truncation warning. Left None for now.
+            stop_reason: None,
         }
     }
 }
@@ -914,17 +946,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiered_num_ctx_grows_with_conversation_and_caps_at_ceiling() {
+    fn working_num_ctx_uses_flat_default_grows_for_big_chats_and_caps_at_ceiling() {
         let msg = |s: &str| serde_json::json!({ "role": "user", "content": s });
-        // Tiny chat, no tools → smallest tier.
-        assert_eq!(tiered_num_ctx(&[msg("hi")], None, 131_072), 4096);
-        // ~40k chars ≈ 10k tokens → 16k tier.
-        assert_eq!(tiered_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072), 16_384);
-        // A low ceiling is never exceeded.
-        assert_eq!(tiered_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384), 16_384);
-        // Tools present → never below the 8k floor, even for a tiny message.
-        let tools = vec![serde_json::json!({ "name": "x" })];
-        assert_eq!(tiered_num_ctx(&[msg("hi")], Some(&tools), 131_072), 8192);
+        // Tiny chat → the flat comfortable working default, not a shrunk tier.
+        assert_eq!(working_num_ctx(&[msg("hi")], None, 131_072), 32_768);
+        // A conversation below the default still gets the full default.
+        assert_eq!(working_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072), 32_768);
+        // A conversation larger than the default grows past it (≈130k chars ≈
+        // 32.5k tokens + headroom).
+        assert_eq!(working_num_ctx(&[msg(&"x".repeat(130_000))], None, 131_072), 36_596);
+        // The model's real window (or a user override that dials down) is the
+        // hard cap — never exceeded, even for a default-sized request.
+        assert_eq!(working_num_ctx(&[msg("hi")], None, 8192), 8192);
+        // A huge conversation is still capped at the ceiling.
+        assert_eq!(working_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384), 16_384);
+    }
+
+    #[test]
+    fn ollama_request_includes_context_and_reply_budget_options() {
+        let adapter = OllamaAdapter {
+            model: "test".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            num_ctx: Some(8192),
+            num_predict: Some(1024),
+            usage: AiUsage::default(),
+            stop_reason: None,
+        };
+        let request = adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body = request.body().and_then(|b| b.as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["options"]["num_ctx"], 8192);
+        assert_eq!(value["options"]["num_predict"], 1024);
     }
 
     #[test]
@@ -980,7 +1037,9 @@ mod tests {
             messages: vec![],
             tools: None,
             num_ctx: None,
+            num_predict: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -1035,7 +1094,9 @@ mod tests {
             messages: vec![],
             tools: None,
             num_ctx: None,
+            num_predict: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let mut content = String::new();
         let mut thinking = String::new();

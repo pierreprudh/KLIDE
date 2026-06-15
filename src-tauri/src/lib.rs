@@ -137,6 +137,13 @@ pub(crate) struct AiChatResponse {
     pub(crate) tool_calls: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) usage: Option<AiUsage>,
+    /// Why generation stopped, as reported by the provider. Ollama's
+    /// `done_reason`: `"stop"` = the model finished naturally, `"length"` =
+    /// it hit `num_ctx` and was cut off mid-answer. `None` when the provider
+    /// doesn't report it. The harness uses `"length"` to warn the user the
+    /// reply is truncated rather than silently showing a half-answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_reason: Option<String>,
 }
 
 // One streamed delta pushed to the frontend through the per-request Channel.
@@ -198,6 +205,19 @@ fn ai_set_provider_key(provider: String, key: String) -> Result<(), String> {
 #[tauri::command]
 fn ai_clear_provider_key(provider: String) -> Result<(), String> {
     providers::clear_keychain_key(&provider)
+}
+
+// The second key method for built-in providers: a `${VAR}` env reference
+// (resolved from the env / project `.env` / ~/.klide/.env), exactly like a
+// self-hosted endpoint. Keychain-free, so it never pops a macOS prompt.
+#[tauri::command]
+fn ai_set_provider_key_reference(provider: String, reference: String) -> Result<(), String> {
+    providers::set_provider_reference(&provider, Some(&reference))
+}
+
+#[tauri::command]
+fn ai_clear_provider_key_reference(provider: String) -> Result<(), String> {
+    providers::set_provider_reference(&provider, None)
 }
 
 // ── Custom (self-hosted) providers ──────────────────────────────────────
@@ -521,6 +541,7 @@ async fn ai_chat(
     tools: Option<Vec<serde_json::Value>>,
     workspace_root: Option<String>,
     num_ctx: Option<usize>,
+    num_predict: Option<usize>,
     on_chunk: Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     // Built-in providers resolve through the static registry. A miss
@@ -567,7 +588,7 @@ async fn ai_chat(
 
     match entry.wire {
         providers::WireFormat::Ollama => {
-            adapters::ollama_chat(model, messages, tools, num_ctx, &on_chunk).await
+            adapters::ollama_chat(model, messages, tools, num_ctx, num_predict, &on_chunk).await
         }
         providers::WireFormat::Anthropic => {
             adapters::anthropic_chat(model, messages, tools, &on_chunk).await
@@ -785,6 +806,7 @@ async fn subscription_cli_chat(
         thinking: None,
         tool_calls: Vec::new(),
         usage: None,
+        stop_reason: None,
     })
 }
 
@@ -1106,6 +1128,8 @@ pub fn run() {
             ai_provider_key_status,
             ai_set_provider_key,
             ai_clear_provider_key,
+            ai_set_provider_key_reference,
+            ai_clear_provider_key_reference,
             custom_provider_list,
             custom_provider_upsert,
             custom_provider_remove,

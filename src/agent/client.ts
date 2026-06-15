@@ -21,6 +21,7 @@ type StartRunRequest = {
   systemPrompt?: string;
   disabledTools?: string[];
   numCtx?: number;
+  numPredict?: number;
   maxParallelTools?: number;
   parentId?: string;
 };
@@ -64,6 +65,7 @@ export async function startAgentRun(
       systemPrompt: input.systemPrompt,
       disabledTools: input.disabledTools,
       numCtx: input.numCtx,
+      numPredict: input.numPredict,
       maxParallelTools: input.maxParallelTools,
       parentId: input.parentId,
     } satisfies StartRunRequest,
@@ -119,4 +121,3 @@ export async function listCheckpoints(runId: string): Promise<CheckpointEntry[]>
 export async function revertCheckpoint(runId: string, toolCallId: string): Promise<void> {
   await invoke("agent_revert_checkpoint", { runId, toolCallId });
 }
-
