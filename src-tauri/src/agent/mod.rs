@@ -4,9 +4,9 @@ pub mod transcripts;
 pub mod types;
 
 use self::tools::{
-    apply_write, clean_context_ids, execute_read_only_tool, execute_write_tool_preview,
-    is_user_question_tool, is_write_tool, parse_tool_calls, recover_text_tool_calls,
-    schemas_for_mode, NormalizedToolCall,
+    apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,
+    execute_write_tool_preview, is_user_question_tool, is_write_tool, parse_tool_calls,
+    recover_text_tool_calls, schemas_for_mode, NormalizedToolCall,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -323,6 +323,7 @@ async fn run_read_tools_parallel(
     root: &str,
     calls: Vec<NormalizedToolCall>,
     max_parallel: usize,
+    run_id: &str,
 ) -> std::collections::HashMap<String, ToolResult> {
     let mut results = std::collections::HashMap::new();
     for chunk in calls.chunks(max_parallel.max(1)) {
@@ -331,8 +332,9 @@ async fn run_read_tools_parallel(
             .map(|call| {
                 let root = root.to_string();
                 let call = call.clone();
+                let run_id = run_id.to_string();
                 tokio::task::spawn_blocking(move || {
-                    let result = execute_read_only_tool(&root, &call);
+                    let result = execute_read_only_tool(&root, &call, &run_id);
                     (call.id, result)
                 })
             })
@@ -471,6 +473,9 @@ async fn run_agent_loop(
     // turns already on disk so checkpoint files never collide across turns.
     let prior_events = read_events(&runs_dir, &id).unwrap_or_default();
     let resuming = !prior_events.is_empty();
+    // Start this run's file-snapshot slate clean so a reused id never inherits
+    // stale read/write hashes from a previous run (see tools::clear_run_snapshots).
+    clear_run_snapshots(&id);
     let prior_turns = prior_events
         .iter()
         .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))
@@ -644,6 +649,7 @@ async fn run_agent_loop(
                 request.workspace_root.clone(),
                 request.num_ctx,
                 request.num_predict,
+                request.reflection_level.clone(),
                 stream,
             ) => result,
         };
@@ -842,7 +848,8 @@ conversation, then ask again._",
                     .cloned()
                     .collect();
                 if read_calls.len() > 1 {
-                    precomputed = run_read_tools_parallel(root, read_calls, max_parallel).await;
+                    precomputed =
+                        run_read_tools_parallel(root, read_calls, max_parallel, &id).await;
                 }
             }
         }
@@ -1054,7 +1061,7 @@ conversation, then ask again._",
                     // tool that slipped the filter — it can't, but be safe).
                     Some(root) => precomputed
                         .remove(&call.id)
-                        .unwrap_or_else(|| execute_read_only_tool(root, &call)),
+                        .unwrap_or_else(|| execute_read_only_tool(root, &call, &id)),
                     None => no_workspace_result(),
                 };
             }

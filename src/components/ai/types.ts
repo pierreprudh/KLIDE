@@ -37,6 +37,8 @@ export type QueuedTurn = {
   provider: ProviderId;
   model: string;
   modelSupportsTools: boolean;
+  modelSupportsReflection: boolean;
+  reflectionLevel?: string;
   attachments: Attachment[];
   projectContext?: ProjectContextPayload;
 };

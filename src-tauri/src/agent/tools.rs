@@ -1,8 +1,48 @@
 use super::todo;
 use super::types::{AgentMode, DiffProposal, ToolResult};
 use crate::workspace::Workspace;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+
+// ── Per-run file snapshot store (omp's `#tag` staleness guard, lite) ──────
+// Records the content hash of every file the model has read or written, keyed
+// `run_id → workspace-relative path → hash`. write_file consults it to flag an
+// edit aimed at a file that changed since the model last saw it. In-memory
+// only; an entry is reset at the start of its run.
+
+fn snapshot_store() -> &'static Mutex<HashMap<String, HashMap<String, String>>> {
+    static STORE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Forget every snapshot for a run. Called once at the top of a fresh run so a
+/// reused id never inherits a previous run's hashes.
+pub fn clear_run_snapshots(run_id: &str) {
+    if let Ok(mut store) = snapshot_store().lock() {
+        store.remove(run_id);
+    }
+}
+
+/// Remember that `rel_path` hashed to `hash` the last time the model saw it.
+fn record_snapshot(run_id: &str, rel_path: &str, hash: &str) {
+    if run_id.is_empty() {
+        return;
+    }
+    if let Ok(mut store) = snapshot_store().lock() {
+        store
+            .entry(run_id.to_string())
+            .or_default()
+            .insert(rel_path.to_string(), hash.to_string());
+    }
+}
+
+/// The hash this file had when the model last read or wrote it this run.
+fn last_seen_hash(run_id: &str, rel_path: &str) -> Option<String> {
+    let store = snapshot_store().lock().ok()?;
+    store.get(run_id)?.get(rel_path).cloned()
+}
 
 const MAX_FILE_BYTES: u64 = 220_000;
 const MAX_LIST_ENTRIES: usize = 500;
@@ -359,7 +399,7 @@ fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
         == Some(name)
 }
 
-pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResult {
+pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall, run_id: &str) -> ToolResult {
     // Check dynamic tools first
     if let Some(result) = execute_dynamic_tool(&call.name, &call.input, Some(root)) {
         return result;
@@ -372,10 +412,24 @@ pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResu
     let entry = registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));
-    match entry.and_then(|e| e.run_read) {
+    let result = match entry.and_then(|e| e.run_read) {
         Some(f) => f(&ws, &call.input),
         None => err(format!("Unknown tool: {}", call.name)),
+    };
+    // A successful read of a file carries a `{snapshotPath, snapshotHash}` blob
+    // in its metadata — record it so write_file can later tell whether the file
+    // changed since the model read it.
+    if result.ok {
+        if let Some(meta) = &result.metadata {
+            if let (Some(path), Some(hash)) = (
+                meta.get("snapshotPath").and_then(|v| v.as_str()),
+                meta.get("snapshotHash").and_then(|v| v.as_str()),
+            ) {
+                record_snapshot(run_id, path, hash);
+            }
+        }
     }
+    result
 }
 
 pub fn execute_write_tool_preview(
@@ -819,15 +873,22 @@ fn read_file(ws: &Workspace, path: &str) -> ToolResult {
             // copies a numbered line verbatim into `old_str` still edits cleanly.
             let line_count = content.lines().count();
             let numbered = number_lines(&content);
-            ok(format!(
-                "Contents of {} ({} lines, {} chars). Lines are numbered `N: `; \
+            let rel = ws.display(&full);
+            ToolResult {
+                ok: true,
+                content: format!(
+                    "Contents of {} ({} lines, {} chars). Lines are numbered `N: `; \
 when editing with write_file, the number prefix is optional — it's stripped \
 automatically.\n```\n{}\n```",
-                ws.display(&full),
-                line_count,
-                content.len(),
-                numbered
-            ))
+                    rel, line_count, content.len(), numbered
+                ),
+                // The execution wrapper reads this back to record a read
+                // snapshot, so a later write_file can flag a stale edit.
+                metadata: Some(serde_json::json!({
+                    "snapshotPath": rel,
+                    "snapshotHash": hash_content(&content),
+                })),
+            }
         }
         Err(e) => err(format!("Unable to read {} as text: {e}", ws.display(&full))),
     }
@@ -1619,6 +1680,14 @@ fn preview_write_file(
     let rel = ws.display(&full);
     let current =
         std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
+    // Staleness guard (omp's `#tag`, lite): if the live file no longer hashes
+    // to what the model last read, the edit still targets the *current* text
+    // (so it's safe to apply), but flag it so the diff reviewer — and the model
+    // — know the file moved underneath.
+    let stale = matches!(
+        last_seen_hash(run_id, &rel),
+        Some(prev) if prev != hash_content(&current)
+    );
     let new_content = match locate_edit(&current, &old_str) {
         Ok((start, end)) => format!("{}{}{}", &current[..start], new_str, &current[end..]),
         Err(LocateError::NotFound) => {
@@ -1633,6 +1702,13 @@ fn preview_write_file(
                 "old_str matches {n} regions in {rel}. Include more surrounding context so it locates exactly one."
             )));
         }
+    };
+    let stale_reason = if stale {
+        Some(format!(
+            "⚠ {rel} changed since the agent last read it this run — the edit targets the current contents; review carefully."
+        ))
+    } else {
+        None
     };
     if new_content.len() as u64 > MAX_WRITE_BYTES {
         return Err(err("Resulting file would be too large".to_string()));
@@ -1652,7 +1728,7 @@ fn preview_write_file(
         new_hash: hash_content(&new_content),
         unified_diff: unified_diff_lines(&current, &new_content),
         is_create: false,
-        reason: None,
+        reason: stale_reason,
     })
 }
 
@@ -1761,14 +1837,25 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
     }
     std::fs::write(&full, &diff.new_content)
         .map_err(|e| err(format!("Cannot write {}: {e}", diff.path)))?;
+    // The model just wrote this file, so its current hash is the new one — keep
+    // the snapshot fresh so a follow-up edit isn't falsely flagged as stale.
+    record_snapshot(&diff.run_id, &diff.path, &diff.new_hash);
     let rel = ws.display(&full);
+    // A staleness note (set at preview time) rides along into the result so the
+    // model learns the file had moved under it and can re-read if it matters.
+    let note = diff
+        .reason
+        .as_deref()
+        .filter(|r| r.starts_with('⚠'))
+        .map(|r| format!("\n{r}"))
+        .unwrap_or_default();
     if diff.is_create {
         Ok(ok(format!(
-            "Applied: created {rel} ({} chars).",
+            "Applied: created {rel} ({} chars).{note}",
             diff.new_content.len()
         )))
     } else {
-        Ok(ok(format!("Applied: edited {rel}.")))
+        Ok(ok(format!("Applied: edited {rel}.{note}")))
     }
 }
 
@@ -2007,6 +2094,62 @@ mod tests {
         let hint = nearest_hint(current, "    let count = 0;");
         assert!(hint.contains("Closest match near line 2"), "got: {hint}");
         assert!(hint.contains("2:     let count = 0;"), "got: {hint}");
+    }
+
+    // ── Staleness guard (omp's `#tag`, lite) ─────────────────────────────
+
+    fn snapshot_sandbox(label: &str) -> (Workspace, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-snapshot-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
+        (ws, dir)
+    }
+
+    #[test]
+    fn write_flags_a_file_changed_since_last_read() {
+        let (ws, dir) = snapshot_sandbox("stale");
+        let run = "run-stale";
+        clear_run_snapshots(run);
+        std::fs::write(dir.join("a.rs"), "let x = 1;\n").unwrap();
+        let rel = ws.display(&ws.resolve_existing("a.rs").unwrap());
+
+        // The model "read" an older version (a different hash).
+        record_snapshot(run, &rel, &hash_content("let x = 0;\n"));
+
+        let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
+        let proposal = preview_write_file(&ws, &input, run).unwrap();
+        let reason = proposal.reason.expect("stale edit should carry a reason");
+        assert!(reason.contains("changed since"), "got: {reason}");
+    }
+
+    #[test]
+    fn write_is_not_flagged_when_hash_matches_last_read() {
+        let (ws, dir) = snapshot_sandbox("fresh");
+        let run = "run-fresh";
+        clear_run_snapshots(run);
+        let body = "let x = 1;\n";
+        std::fs::write(dir.join("a.rs"), body).unwrap();
+        let rel = ws.display(&ws.resolve_existing("a.rs").unwrap());
+
+        // The model read exactly the current content.
+        record_snapshot(run, &rel, &hash_content(body));
+
+        let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
+        let proposal = preview_write_file(&ws, &input, run).unwrap();
+        assert!(proposal.reason.is_none(), "fresh edit should not be flagged");
+    }
+
+    #[test]
+    fn clear_run_snapshots_forgets_the_run() {
+        let run = "run-clear";
+        record_snapshot(run, "x.rs", "abc");
+        assert_eq!(last_seen_hash(run, "x.rs").as_deref(), Some("abc"));
+        clear_run_snapshots(run);
+        assert_eq!(last_seen_hash(run, "x.rs"), None);
     }
 
     #[test]

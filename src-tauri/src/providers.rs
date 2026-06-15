@@ -61,6 +61,10 @@ pub struct OpenAiConfig {
     /// hosted OpenAI family honours it; local proxies may reject the
     /// field, so leave it off there.
     pub include_usage_in_stream: bool,
+    /// Whether this hosted OpenAI-wire provider accepts `reasoning_effort`.
+    /// Local/custom OpenAI-compatible endpoints stay false unless explicitly
+    /// proven compatible.
+    pub supports_reasoning_effort: bool,
 }
 
 /// How a provider's API key is sourced. Local providers don't have one.
@@ -144,6 +148,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             models_url: "http://127.0.0.1:8080/v1/models",
             include_tools: false,
             include_usage_in_stream: false,
+            supports_reasoning_effort: false,
         }),
         key: KeySource::Local,
         // mlx_lm.server's /v1/models is expensive/noisy and can interfere
@@ -165,6 +170,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             // LM Studio rejects `stream_options` — leave it off so local
             // model users don't get 400s on first request.
             include_usage_in_stream: false,
+            supports_reasoning_effort: false,
         }),
         key: KeySource::Local,
         models: ModelsHandler::OpenAiModels,
@@ -188,6 +194,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             models_url: "https://api.openai.com/v1/models",
             include_tools: true,
             include_usage_in_stream: true,
+            supports_reasoning_effort: true,
         }),
         key: KeySource::Hosted {
             env: Some("OPENAI_API_KEY"),
@@ -210,6 +217,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             // without `stream_options.include_usage`; asking for it is
             // harmless but unnecessary.
             include_usage_in_stream: false,
+            supports_reasoning_effort: false,
         }),
         key: KeySource::Hosted {
             env: Some("MISTRAL_API_KEY"),
@@ -225,6 +233,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             models_url: "https://api.x.ai/v1/models",
             include_tools: true,
             include_usage_in_stream: true,
+            supports_reasoning_effort: false,
         }),
         key: KeySource::Hosted {
             env: Some("XAI_API_KEY"),
@@ -242,6 +251,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             include_tools: true,
             // OpenRouter sends the usage block unprompted.
             include_usage_in_stream: false,
+            supports_reasoning_effort: true,
         }),
         key: KeySource::Hosted {
             env: Some("OPENROUTER_API_KEY"),

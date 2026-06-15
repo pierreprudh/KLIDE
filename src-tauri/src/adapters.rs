@@ -168,6 +168,10 @@ struct OllamaAdapter {
     num_ctx: Option<usize>,
     /// Reply budget for Ollama (`num_predict`). `None` keeps Ollama's default.
     num_predict: Option<usize>,
+    /// Ollama's documented thinking control is boolean. Klide stores richer
+    /// labels for future providers; for Ollama, explicit non-off levels map to
+    /// `think: true`, `off` maps to `false`, and Auto omits the field.
+    think: Option<bool>,
     usage: AiUsage,
     /// Ollama's `done_reason` from the final frame: `"stop"` (finished) or
     /// `"length"` (cut off at num_ctx). Surfaced so the harness can flag a
@@ -199,6 +203,9 @@ impl StreamingProvider for OllamaAdapter {
         });
         if let Some(num_predict) = self.num_predict {
             body["options"]["num_predict"] = serde_json::json!(num_predict);
+        }
+        if let Some(think) = self.think {
+            body["think"] = serde_json::json!(think);
         }
         if let Some(tools) = &self.tools {
             body["tools"] = serde_json::Value::Array(tools.clone());
@@ -331,22 +338,59 @@ fn working_num_ctx(
     needed.max(WORKING_DEFAULT).min(ceiling).max(1024)
 }
 
+fn reflection_level_to_ollama_think(level: Option<&str>) -> Option<bool> {
+    match level.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some("auto") => None,
+        Some("off") => Some(false),
+        Some("low" | "medium" | "high" | "max") => Some(true),
+        // Unknown future labels should be inert rather than surprising users.
+        Some(_) => None,
+    }
+}
+
+pub(crate) fn reflection_level_to_openai_effort(level: Option<&str>) -> Option<String> {
+    match level.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some("auto" | "off") => None,
+        Some("low") => Some("low".to_string()),
+        Some("medium") => Some("medium".to_string()),
+        Some("high" | "max") => Some("high".to_string()),
+        Some(_) => None,
+    }
+}
+
+fn reflection_level_to_anthropic_budget(level: Option<&str>) -> Option<usize> {
+    match level.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some("auto" | "off") => None,
+        Some("low") => Some(1024),
+        Some("medium") => Some(4096),
+        Some("high") => Some(8192),
+        Some("max") => Some(16_384),
+        Some(_) => None,
+    }
+}
+
 pub(crate) async fn ollama_chat(
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     num_ctx: Option<usize>,
     num_predict: Option<usize>,
+    reflection_level: Option<String>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let ceiling = num_ctx.unwrap_or(32768);
     let sized = working_num_ctx(&messages, tools.as_ref(), ceiling);
+    let think = reflection_level_to_ollama_think(reflection_level.as_deref());
     let adapter = OllamaAdapter {
         model,
         messages,
         tools,
         num_ctx: Some(sized),
         num_predict,
+        think,
         usage: AiUsage::default(),
         stop_reason: None,
     };
@@ -382,6 +426,7 @@ struct OpenAiAdapter {
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: Option<String>,
+    reasoning_effort: Option<String>,
     usage: AiUsage,
 }
 
@@ -399,6 +444,9 @@ impl StreamingProvider for OpenAiAdapter {
             self.tools.clone(),
             self.include_tools,
         );
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+        }
         if self.include_usage_in_stream {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
@@ -608,6 +656,7 @@ pub(crate) async fn openai_compatible_chat(
     include_tools: bool,
     include_usage_in_stream: bool,
     key: Option<String>,
+    reasoning_effort: Option<String>,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
@@ -622,6 +671,7 @@ pub(crate) async fn openai_compatible_chat(
         messages,
         tools,
         key,
+        reasoning_effort,
         usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
@@ -786,6 +836,7 @@ struct AnthropicAdapter {
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: String,
+    thinking_budget: Option<usize>,
     usage: AiUsage,
 }
 
@@ -804,6 +855,13 @@ impl StreamingProvider for AnthropicAdapter {
             "stream": true,
             "messages": msgs,
         });
+        if let Some(budget) = self.thinking_budget {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            });
+            body["max_tokens"] = serde_json::json!(budget.saturating_add(4096));
+        }
         if !system.trim().is_empty() {
             body["system"] = serde_json::Value::String(system);
         }
@@ -977,14 +1035,17 @@ pub(crate) async fn anthropic_chat(
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
+    reflection_level: Option<String>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
+    let thinking_budget = reflection_level_to_anthropic_budget(reflection_level.as_deref());
     let adapter = AnthropicAdapter {
         model,
         messages,
         tools,
         key,
+        thinking_budget,
         usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
@@ -1043,6 +1104,7 @@ mod tests {
             tools: None,
             num_ctx: Some(8192),
             num_predict: Some(1024),
+            think: Some(true),
             usage: AiUsage::default(),
             stop_reason: None,
         };
@@ -1055,6 +1117,31 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(body).unwrap();
         assert_eq!(value["options"]["num_ctx"], 8192);
         assert_eq!(value["options"]["num_predict"], 1024);
+        assert_eq!(value["think"], true);
+    }
+
+    #[test]
+    fn reflection_levels_map_to_ollama_think_flag() {
+        assert_eq!(reflection_level_to_ollama_think(None), None);
+        assert_eq!(reflection_level_to_ollama_think(Some("auto")), None);
+        assert_eq!(reflection_level_to_ollama_think(Some("off")), Some(false));
+        assert_eq!(reflection_level_to_ollama_think(Some("low")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("medium")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("high")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("max")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("surprise")), None);
+        assert_eq!(reflection_level_to_openai_effort(None), None);
+        assert_eq!(reflection_level_to_openai_effort(Some("off")), None);
+        assert_eq!(reflection_level_to_openai_effort(Some("low")).as_deref(), Some("low"));
+        assert_eq!(reflection_level_to_openai_effort(Some("medium")).as_deref(), Some("medium"));
+        assert_eq!(reflection_level_to_openai_effort(Some("high")).as_deref(), Some("high"));
+        assert_eq!(reflection_level_to_openai_effort(Some("max")).as_deref(), Some("high"));
+        assert_eq!(reflection_level_to_anthropic_budget(None), None);
+        assert_eq!(reflection_level_to_anthropic_budget(Some("off")), None);
+        assert_eq!(reflection_level_to_anthropic_budget(Some("low")), Some(1024));
+        assert_eq!(reflection_level_to_anthropic_budget(Some("medium")), Some(4096));
+        assert_eq!(reflection_level_to_anthropic_budget(Some("high")), Some(8192));
+        assert_eq!(reflection_level_to_anthropic_budget(Some("max")), Some(16_384));
     }
 
     #[test]
@@ -1111,6 +1198,7 @@ mod tests {
             tools: None,
             num_ctx: None,
             num_predict: None,
+            think: None,
             usage: AiUsage::default(),
             stop_reason: None,
         };
@@ -1168,6 +1256,7 @@ mod tests {
             tools: None,
             num_ctx: None,
             num_predict: None,
+            think: None,
             usage: AiUsage::default(),
             stop_reason: None,
         };
@@ -1204,6 +1293,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: Some("sk-test".to_string()),
+            reasoning_effort: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1269,6 +1359,30 @@ mod tests {
         );
         assert!(body.get("tools").is_some());
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn openai_request_body_includes_reasoning_effort_when_configured() {
+        let adapter = OpenAiAdapter {
+            provider: "openai".to_string(),
+            chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
+            include_tools: true,
+            include_usage_in_stream: true,
+            model: "gpt-5".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: Some("sk-test".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            usage: AiUsage::default(),
+        };
+        let request = adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body = request.body().and_then(|b| b.as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["reasoning_effort"], "high");
     }
 
     #[test]
@@ -1368,6 +1482,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: Some("k".to_string()),
+            reasoning_effort: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1393,6 +1508,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "sk-ant-test".to_string(),
+            thinking_budget: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1430,6 +1546,28 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].content, "Hello");
         assert_eq!(chunks[1].content, " there");
+    }
+
+    #[test]
+    fn anthropic_request_body_includes_thinking_budget_when_configured() {
+        let adapter = AnthropicAdapter {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: "sk-ant-test".to_string(),
+            thinking_budget: Some(4096),
+            usage: AiUsage::default(),
+        };
+        let request = adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body = request.body().and_then(|b| b.as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["thinking"]["type"], "enabled");
+        assert_eq!(value["thinking"]["budget_tokens"], 4096);
+        assert_eq!(value["max_tokens"], 8192);
     }
 
     #[test]
@@ -1479,6 +1617,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
+            thinking_budget: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1506,6 +1645,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
+            thinking_budget: None,
             usage: AiUsage::default(),
         };
         let content = String::new();

@@ -550,6 +550,7 @@ async fn ai_chat(
     workspace_root: Option<String>,
     num_ctx: Option<usize>,
     num_predict: Option<usize>,
+    reflection_level: Option<String>,
     on_chunk: Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     // Built-in providers resolve through the static registry. A miss
@@ -569,6 +570,7 @@ async fn ai_chat(
             true,
             false,
             providers::custom_token(&cp.id),
+            None,
             model,
             messages,
             tools,
@@ -596,10 +598,19 @@ async fn ai_chat(
 
     match entry.wire {
         providers::WireFormat::Ollama => {
-            adapters::ollama_chat(model, messages, tools, num_ctx, num_predict, &on_chunk).await
+            adapters::ollama_chat(
+                model,
+                messages,
+                tools,
+                num_ctx,
+                num_predict,
+                reflection_level,
+                &on_chunk,
+            )
+            .await
         }
         providers::WireFormat::Anthropic => {
-            adapters::anthropic_chat(model, messages, tools, &on_chunk).await
+            adapters::anthropic_chat(model, messages, tools, reflection_level, &on_chunk).await
         }
         providers::WireFormat::OpenAi(cfg) => {
             // Hosted providers require a key (`provider_key` errors when
@@ -612,6 +623,11 @@ async fn ai_chat(
                 cfg.include_tools,
                 cfg.include_usage_in_stream,
                 key,
+                if cfg.supports_reasoning_effort {
+                    adapters::reflection_level_to_openai_effort(reflection_level.as_deref())
+                } else {
+                    None
+                },
                 model,
                 messages,
                 tools,
@@ -1131,6 +1147,7 @@ pub fn run() {
             app_user_info,
             models::ai_context_window,
             models::ai_model_supports_tools,
+            models::ai_model_supports_reflection,
             ai_list_tools,
             search_in_files,
             ai_provider_key_status,

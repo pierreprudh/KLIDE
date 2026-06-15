@@ -218,11 +218,13 @@ function Segmented({
   value,
   onChange,
   label,
+  disabled = false,
 }: {
   options: { label: string; value: number | string | undefined }[];
   value: number | string | undefined;
   onChange: (value: number | string | undefined) => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <div
@@ -245,6 +247,7 @@ function Segmented({
             type="button"
             role="radio"
             aria-checked={active}
+            disabled={disabled}
             onClick={() => onChange(opt.value)}
             style={{
               height: 26,
@@ -252,11 +255,11 @@ function Segmented({
               padding: "0 11px",
               borderRadius: 999,
               border: "none",
-              cursor: "pointer",
+              cursor: disabled ? "not-allowed" : "pointer",
               fontSize: 11.5,
               fontWeight: active ? 600 : 500,
               letterSpacing: "0.01em",
-              color: active ? "var(--accent)" : "var(--fg-subtle)",
+              color: disabled ? "var(--fg-dim)" : active ? "var(--accent)" : "var(--fg-subtle)",
               background: active
                 ? "color-mix(in srgb, var(--accent-soft) 60%, transparent)"
                 : "transparent",
@@ -267,10 +270,10 @@ function Segmented({
                 "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
-              if (!active) e.currentTarget.style.color = "var(--fg-strong)";
+              if (!active && !disabled) e.currentTarget.style.color = "var(--fg-strong)";
             }}
             onMouseLeave={(e) => {
-              if (!active) e.currentTarget.style.color = "var(--fg-subtle)";
+              if (!active && !disabled) e.currentTarget.style.color = "var(--fg-subtle)";
             }}
           >
             {opt.label}
@@ -1666,6 +1669,26 @@ export function SettingsPanel({
     Partial<Record<SubscriptionProviderId, string[]>>
   >({});
   const [connectionLoading, setConnectionLoading] = useState(false);
+  const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkReflectionSupport() {
+      try {
+        const supports = await invoke<boolean>("ai_model_supports_reflection", {
+          provider: settingsProvider,
+          model: aiModel,
+        });
+        if (!cancelled) setModelSupportsReflection(supports);
+      } catch {
+        if (!cancelled) setModelSupportsReflection(false);
+      }
+    }
+    void checkReflectionSupport();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsProvider, aiModel]);
 
   const sectionTitle = useMemo(
     () => sections.find((section) => section.id === activeSection)?.label ?? "Settings",
@@ -2262,7 +2285,7 @@ export function SettingsPanel({
                         onChange={(v) => {
                           const next = { ...(harnessSettings?.contextWindows ?? {}) };
                           if (v === undefined) delete next[aiModel];
-                          else next[aiModel] = v;
+                          else next[aiModel] = Number(v);
                           onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
                         }}
                       />
@@ -2284,8 +2307,38 @@ export function SettingsPanel({
                         onChange={(v) => {
                           const next = { ...(harnessSettings?.effortBudgets ?? {}) };
                           if (v === undefined) delete next[aiModel];
-                          else next[aiModel] = v;
+                          else next[aiModel] = Number(v);
                           onHarnessSettingsChange?.({ ...harnessSettings, effortBudgets: next });
+                        }}
+                      />
+                    }
+                  />
+                  <Row
+                    title="Reflection"
+                    description={
+                      modelSupportsReflection
+                        ? `How much internal thinking ${aiModel} is allowed before answering. Auto keeps the provider default; higher levels ask supported models for deeper reflection.`
+                        : `${aiModel} does not advertise a thinking capability, so Klide leaves reflection off for this model.`
+                    }
+                    control={
+                      <Segmented
+                        label="Reflection"
+                        disabled={!modelSupportsReflection}
+                        value={modelSupportsReflection ? harnessSettings?.reflectionLevels?.[aiModel] : undefined}
+                        options={[
+                          { label: "Auto", value: undefined },
+                          { label: "Off", value: "off" },
+                          { label: "Low", value: "low" },
+                          { label: "Med", value: "medium" },
+                          { label: "High", value: "high" },
+                          { label: "Max", value: "max" },
+                        ]}
+                        onChange={(v) => {
+                          if (!modelSupportsReflection) return;
+                          const next = { ...(harnessSettings?.reflectionLevels ?? {}) };
+                          if (v === undefined) delete next[aiModel];
+                          else next[aiModel] = String(v);
+                          onHarnessSettingsChange?.({ ...harnessSettings, reflectionLevels: next });
                         }}
                       />
                     }
@@ -2304,7 +2357,7 @@ export function SettingsPanel({
                           { label: "8", value: 8 },
                         ]}
                         onChange={(v) =>
-                          onHarnessSettingsChange?.({ ...harnessSettings, maxParallelTools: v })
+                          onHarnessSettingsChange?.({ ...harnessSettings, maxParallelTools: v === undefined ? undefined : Number(v) })
                         }
                       />
                     }
@@ -2322,7 +2375,7 @@ export function SettingsPanel({
                           { label: "4", value: 4 },
                         ]}
                         onChange={(v) =>
-                          onHarnessSettingsChange?.({ ...harnessSettings, serverConcurrency: v })
+                          onHarnessSettingsChange?.({ ...harnessSettings, serverConcurrency: v === undefined ? undefined : Number(v) })
                         }
                       />
                     }

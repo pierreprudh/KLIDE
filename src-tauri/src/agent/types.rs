@@ -72,6 +72,9 @@ pub struct StartRunRequest {
     /// default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_predict: Option<usize>,
+    /// Reflection/thinking preference for models that support it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection_level: Option<String>,
     /// Max read-only tool calls to run concurrently within one turn. `None`
     /// or `Some(1)` keeps execution sequential.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -259,6 +259,8 @@ export type StartAgentRunInput = {
   numCtx?: number;
   /** Reply budget (num_predict) for local models. Omit to use provider default. */
   numPredict?: number;
+  /** Reflection/thinking preference for models that support it. */
+  reflectionLevel?: string;
   /** Max read-only tool calls to run concurrently in one turn (1 = sequential). */
   maxParallelTools?: number;
   /** When this run is a spawned sub-agent, the parent run's id. */

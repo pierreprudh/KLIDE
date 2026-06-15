@@ -85,7 +85,7 @@ type Props = {
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
   onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
@@ -272,6 +272,7 @@ export function AiPanel({
   );
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
+  const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   // Portalled to <body> with viewport coordinates (same pattern as
   // ModelPicker) so the menu escapes the composer's `overflow: hidden` +
@@ -547,6 +548,7 @@ export function AiPanel({
   const effectiveContextLimit =
     provider === "ollama" && ctxOverride && ctxOverride > 0 ? ctxOverride : contextLimit;
   const effortBudget = provider === "ollama" ? harnessSettings?.effortBudgets?.[model] : undefined;
+  const reflectionLevel = modelSupportsReflection ? harnessSettings?.reflectionLevels?.[model] : undefined;
   // Prefer the model's real prompt-token count when we have it: it already
   // accounts for the system prompt, tool schemas, and full history, so we only
   // add the unsent draft on top. Without it, estimate every message by length.
@@ -1008,6 +1010,18 @@ export function AiPanel({
 
   useEffect(() => {
     let cancelled = false;
+    async function checkReflectionSupport() {
+      try {
+        const supports = await invoke<boolean>("ai_model_supports_reflection", { provider, model });
+        if (!cancelled) setModelSupportsReflection(supports);
+      } catch { if (!cancelled) setModelSupportsReflection(false); }
+    }
+    void checkReflectionSupport();
+    return () => { cancelled = true; };
+  }, [provider, model]);
+
+  useEffect(() => {
+    let cancelled = false;
     async function loadContextWindow() {
       try {
         const windowSize = await invoke<number>("ai_context_window", { provider, model });
@@ -1328,6 +1342,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
       const numPredict =
         turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
+      const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
       const maxParallelTools = harnessSettings?.maxParallelTools;
       const session = await startAgentRun({
         runId: currentId,
@@ -1338,6 +1353,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
         numCtx,
         numPredict,
+        reflectionLevel,
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
@@ -1450,7 +1466,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
     const attachments = await collectAttachments(text);
     const activeProjectContext = lensItemsForPrompt(projectContext, text, contextMode);
-    enqueueTurn({ clientId: genId(), text, mode, provider, model, modelSupportsTools, attachments, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
+    enqueueTurn({ clientId: genId(), text, mode, provider, model, modelSupportsTools, modelSupportsReflection, reflectionLevel, attachments, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
   }
 
   async function handleDiffApply() {
@@ -2075,6 +2091,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                       {measuredPromptTokens !== null && !streaming ? "Measured from model usage" : "Estimated before the next turn"}
                       {provider === "ollama" && ctxOverride && ctxOverride > 0 ? " · window override" : ""}
                       {effortBudget ? ` · ${effortBudget.toLocaleString()} reply budget` : ""}
+                      {modelSupportsReflection ? ` · reflection ${reflectionLevel ?? "auto"}` : ""}
                     </div>
                   </div>,
                   document.body
@@ -2109,6 +2126,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           oldContent: pendingDiff.oldContent,
           newContent: pendingDiff.newContent,
           isCreate: pendingDiff.isCreate,
+          reason: pendingDiff.reason,
         }}
         onApply={handleDiffApply}
         onReject={handleDiffReject}

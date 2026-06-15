@@ -22,6 +22,7 @@ type StartRunRequest = {
   disabledTools?: string[];
   numCtx?: number;
   numPredict?: number;
+  reflectionLevel?: string;
   maxParallelTools?: number;
   parentId?: string;
 };
@@ -66,6 +67,7 @@ export async function startAgentRun(
       disabledTools: input.disabledTools,
       numCtx: input.numCtx,
       numPredict: input.numPredict,
+      reflectionLevel: input.reflectionLevel,
       maxParallelTools: input.maxParallelTools,
       parentId: input.parentId,
     } satisfies StartRunRequest,

@@ -460,6 +460,45 @@ pub(crate) async fn ai_model_supports_tools(
     Ok(true)
 }
 
+#[tauri::command]
+pub(crate) async fn ai_model_supports_reflection(
+    provider: String,
+    model: String,
+) -> Result<bool, String> {
+    if provider == "anthropic" {
+        return Ok(true);
+    }
+
+    if let Some(entry) = providers::lookup(&provider) {
+        if let providers::WireFormat::OpenAi(cfg) = entry.wire {
+            return Ok(cfg.supports_reasoning_effort);
+        }
+    }
+
+    if provider != "ollama" {
+        return Ok(false);
+    }
+
+    let res = reqwest::Client::new()
+        .post(format!("{OLLAMA_URL}/api/show"))
+        .json(&serde_json::json!({ "model": model }))
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(response_error("Ollama", status, &body));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
+    Ok(value
+        .get("capabilities")
+        .and_then(|v| v.as_array())
+        .map(|caps| caps.iter().any(|c| c.as_str() == Some("thinking")))
+        .unwrap_or(false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +600,41 @@ mod tests {
         .await
         .unwrap();
         assert!(!supports);
+    }
+
+    #[tokio::test]
+    async fn mlx_does_not_advertise_reflection_support() {
+        let supports = ai_model_supports_reflection(
+            "mlx".to_string(),
+            "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
+        )
+        .await
+        .unwrap();
+        assert!(!supports);
+    }
+
+    #[tokio::test]
+    async fn hosted_reasoning_providers_advertise_reflection_support() {
+        assert!(
+            ai_model_supports_reflection("openai".to_string(), "gpt-5".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            ai_model_supports_reflection("anthropic".to_string(), "claude-sonnet-4-6".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            ai_model_supports_reflection("openrouter".to_string(), "openai/gpt-5".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ai_model_supports_reflection("mistral".to_string(), "mistral-large".to_string())
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
