@@ -520,7 +520,6 @@ function App() {
             stopAfterRejection={stopAfterRejection}
             skills={skills}
             harnessSettings={harnessSettings}
-            onHarnessSettingsChange={setHarnessSettings}
             resumeConversation={resumeConversation}
             onResumeConsumed={() => setResumeConversation(null)}
           />
@@ -1223,7 +1222,6 @@ function App() {
                   setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
                 }}
                 harnessSettings={harnessSettings}
-                onHarnessSettingsChange={setHarnessSettings}
               />
             ) : (
               <div
@@ -1444,7 +1442,6 @@ function App() {
                         stopAfterRejection={stopAfterRejection}
                         skills={skills}
                         harnessSettings={harnessSettings}
-                        onHarnessSettingsChange={setHarnessSettings}
                         onDuplicate={appendAiPanel}
                         onClose={
                           aiPanels.length > 1 ? () => closeAiPanel(panel.id) : undefined

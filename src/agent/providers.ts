@@ -23,7 +23,7 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
       { id: "claude-code", name: "Claude Code", available: true },
       { id: "codex", name: "Codex", available: true },
       { id: "opencode", name: "OpenCode", available: true },
-      { id: "omp", name: "Oh My Pi", available: true },
+      { id: "omp", name: "Omp", available: true },
     ],
   },
   {

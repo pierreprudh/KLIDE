@@ -342,8 +342,10 @@ fn reflection_level_to_ollama_think(level: Option<&str>) -> Option<bool> {
     match level.map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
         Some("auto") => None,
+        Some("minimal" | "low" | "medium" | "high" | "xhigh") => Some(true),
+        // Legacy values from older Klide builds.
         Some("off") => Some(false),
-        Some("low" | "medium" | "high" | "max") => Some(true),
+        Some("max") => Some(true),
         // Unknown future labels should be inert rather than surprising users.
         Some(_) => None,
     }
@@ -353,9 +355,13 @@ pub(crate) fn reflection_level_to_openai_effort(level: Option<&str>) -> Option<S
     match level.map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
         Some("auto" | "off") => None,
+        Some("minimal") => Some("minimal".to_string()),
         Some("low") => Some("low".to_string()),
         Some("medium") => Some("medium".to_string()),
-        Some("high" | "max") => Some("high".to_string()),
+        Some("high") => Some("high".to_string()),
+        Some("xhigh") => Some("xhigh".to_string()),
+        // Legacy value from older Klide builds.
+        Some("max") => Some("xhigh".to_string()),
         Some(_) => None,
     }
 }
@@ -364,9 +370,12 @@ fn reflection_level_to_anthropic_budget(level: Option<&str>) -> Option<usize> {
     match level.map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
         Some("auto" | "off") => None,
-        Some("low") => Some(1024),
+        Some("minimal") => Some(1024),
+        Some("low") => Some(2048),
         Some("medium") => Some(4096),
         Some("high") => Some(8192),
+        Some("xhigh") => Some(16_384),
+        // Legacy value from older Klide builds.
         Some("max") => Some(16_384),
         Some(_) => None,
     }
@@ -1121,28 +1130,30 @@ mod tests {
     }
 
     #[test]
-    fn reflection_levels_map_to_ollama_think_flag() {
-        assert_eq!(reflection_level_to_ollama_think(None), None);
-        assert_eq!(reflection_level_to_ollama_think(Some("auto")), None);
-        assert_eq!(reflection_level_to_ollama_think(Some("off")), Some(false));
-        assert_eq!(reflection_level_to_ollama_think(Some("low")), Some(true));
-        assert_eq!(reflection_level_to_ollama_think(Some("medium")), Some(true));
-        assert_eq!(reflection_level_to_ollama_think(Some("high")), Some(true));
-        assert_eq!(reflection_level_to_ollama_think(Some("max")), Some(true));
-        assert_eq!(reflection_level_to_ollama_think(Some("surprise")), None);
-        assert_eq!(reflection_level_to_openai_effort(None), None);
-        assert_eq!(reflection_level_to_openai_effort(Some("off")), None);
-        assert_eq!(reflection_level_to_openai_effort(Some("low")).as_deref(), Some("low"));
-        assert_eq!(reflection_level_to_openai_effort(Some("medium")).as_deref(), Some("medium"));
-        assert_eq!(reflection_level_to_openai_effort(Some("high")).as_deref(), Some("high"));
-        assert_eq!(reflection_level_to_openai_effort(Some("max")).as_deref(), Some("high"));
-        assert_eq!(reflection_level_to_anthropic_budget(None), None);
-        assert_eq!(reflection_level_to_anthropic_budget(Some("off")), None);
-        assert_eq!(reflection_level_to_anthropic_budget(Some("low")), Some(1024));
-        assert_eq!(reflection_level_to_anthropic_budget(Some("medium")), Some(4096));
-        assert_eq!(reflection_level_to_anthropic_budget(Some("high")), Some(8192));
-        assert_eq!(reflection_level_to_anthropic_budget(Some("max")), Some(16_384));
-    }
+	    fn reflection_levels_map_to_ollama_think_flag() {
+	        assert_eq!(reflection_level_to_ollama_think(None), None);
+	        assert_eq!(reflection_level_to_ollama_think(Some("auto")), None);
+	        assert_eq!(reflection_level_to_ollama_think(Some("minimal")), Some(true));
+	        assert_eq!(reflection_level_to_ollama_think(Some("low")), Some(true));
+	        assert_eq!(reflection_level_to_ollama_think(Some("medium")), Some(true));
+	        assert_eq!(reflection_level_to_ollama_think(Some("high")), Some(true));
+	        assert_eq!(reflection_level_to_ollama_think(Some("xhigh")), Some(true));
+	        assert_eq!(reflection_level_to_ollama_think(Some("surprise")), None);
+	        assert_eq!(reflection_level_to_openai_effort(None), None);
+	        assert_eq!(reflection_level_to_openai_effort(Some("minimal")).as_deref(), Some("minimal"));
+	        assert_eq!(reflection_level_to_openai_effort(Some("low")).as_deref(), Some("low"));
+	        assert_eq!(reflection_level_to_openai_effort(Some("medium")).as_deref(), Some("medium"));
+	        assert_eq!(reflection_level_to_openai_effort(Some("high")).as_deref(), Some("high"));
+	        assert_eq!(reflection_level_to_openai_effort(Some("xhigh")).as_deref(), Some("xhigh"));
+	        assert_eq!(reflection_level_to_anthropic_budget(None), None);
+	        assert_eq!(reflection_level_to_anthropic_budget(Some("minimal")), Some(1024));
+	        assert_eq!(reflection_level_to_anthropic_budget(Some("low")), Some(2048));
+	        assert_eq!(reflection_level_to_anthropic_budget(Some("medium")), Some(4096));
+	        assert_eq!(reflection_level_to_anthropic_budget(Some("high")), Some(8192));
+	        assert_eq!(reflection_level_to_anthropic_budget(Some("xhigh")), Some(16_384));
+	        assert_eq!(reflection_level_to_openai_effort(Some("max")).as_deref(), Some("xhigh"));
+	        assert_eq!(reflection_level_to_anthropic_budget(Some("max")), Some(16_384));
+	    }
 
     #[test]
     fn tool_call_arguments_are_coerced_to_valid_json_strings() {

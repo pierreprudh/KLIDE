@@ -2325,14 +2325,14 @@ export function SettingsPanel({
                         label="Reflection"
                         disabled={!modelSupportsReflection}
                         value={modelSupportsReflection ? harnessSettings?.reflectionLevels?.[aiModel] : undefined}
-                        options={[
-                          { label: "Auto", value: undefined },
-                          { label: "Off", value: "off" },
-                          { label: "Low", value: "low" },
-                          { label: "Med", value: "medium" },
-                          { label: "High", value: "high" },
-                          { label: "Max", value: "max" },
-                        ]}
+	                        options={[
+	                          { label: "Auto", value: undefined },
+	                          { label: "minimal", value: "minimal" },
+	                          { label: "low", value: "low" },
+	                          { label: "medium", value: "medium" },
+	                          { label: "high", value: "high" },
+	                          { label: "xhigh", value: "xhigh" },
+	                        ]}
                         onChange={(v) => {
                           if (!modelSupportsReflection) return;
                           const next = { ...(harnessSettings?.reflectionLevels ?? {}) };
