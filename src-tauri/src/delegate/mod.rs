@@ -14,11 +14,13 @@
 
 mod claude_code;
 mod codex;
+mod omp;
 mod opencode;
 mod runs;
 
 pub use claude_code::ClaudeCode;
 pub use codex::Codex;
+pub use omp::Omp;
 pub use opencode::OpenCode;
 pub use runs::{AgentRun, RunCandidate, RunMessage};
 
@@ -118,7 +120,7 @@ pub trait RunParser {
 }
 
 /// The registry — one adapter per delegate CLI Klide can dispatch.
-pub const ALL: [&dyn Delegate; 3] = [&ClaudeCode, &Codex, &OpenCode];
+pub const ALL: [&dyn Delegate; 4] = [&ClaudeCode, &Codex, &OpenCode, &Omp];
 
 pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
     ALL.into_iter().find(|d| d.id() == provider)

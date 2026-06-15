@@ -5,7 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-export type RunSource = "claude-code" | "codex" | "opencode" | "klide";
+export type RunSource = "claude-code" | "codex" | "opencode" | "omp" | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
 export type RunBoardSection = "running" | "ready_for_review" | "done";
 
@@ -233,6 +233,7 @@ export const SOURCE_LABEL: Record<RunSource, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
+  omp: "Oh My Pi",
   klide: "Klide",
 };
 
@@ -244,11 +245,19 @@ export const SOURCE_COLOR: Record<RunSource, string> = {
   // #211E1E on the outer square). Quieter than Claude/Codex so the paid
   // `opencode-go/*` runs don't shout on the board.
   opencode: "#3A3A3A",
+  // Oh My Pi's mark is a warm violet (the ⌥ glyph); a muted version keeps it
+  // distinct from the others without shouting.
+  omp: "#7C6BAE",
   klide: "var(--accent)",
 };
 
 function toSource(raw: string): RunSource {
-  return raw === "claude-code" || raw === "codex" || raw === "opencode" ? raw : "klide";
+  return raw === "claude-code" ||
+    raw === "codex" ||
+    raw === "opencode" ||
+    raw === "omp"
+    ? raw
+    : "klide";
 }
 
 function toStatus(raw: string): RunStatus {

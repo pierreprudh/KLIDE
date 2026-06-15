@@ -1,8 +1,48 @@
 use super::todo;
 use super::types::{AgentMode, DiffProposal, ToolResult};
 use crate::workspace::Workspace;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+
+// ── Per-run file snapshot store (omp's `#tag` staleness guard, lite) ──────
+// Records the content hash of every file the model has read or written, keyed
+// `run_id → workspace-relative path → hash`. write_file consults it to flag an
+// edit aimed at a file that changed since the model last saw it. In-memory
+// only; an entry is reset at the start of its run.
+
+fn snapshot_store() -> &'static Mutex<HashMap<String, HashMap<String, String>>> {
+    static STORE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Forget every snapshot for a run. Called once at the top of a fresh run so a
+/// reused id never inherits a previous run's hashes.
+pub fn clear_run_snapshots(run_id: &str) {
+    if let Ok(mut store) = snapshot_store().lock() {
+        store.remove(run_id);
+    }
+}
+
+/// Remember that `rel_path` hashed to `hash` the last time the model saw it.
+fn record_snapshot(run_id: &str, rel_path: &str, hash: &str) {
+    if run_id.is_empty() {
+        return;
+    }
+    if let Ok(mut store) = snapshot_store().lock() {
+        store
+            .entry(run_id.to_string())
+            .or_default()
+            .insert(rel_path.to_string(), hash.to_string());
+    }
+}
+
+/// The hash this file had when the model last read or wrote it this run.
+fn last_seen_hash(run_id: &str, rel_path: &str) -> Option<String> {
+    let store = snapshot_store().lock().ok()?;
+    store.get(run_id)?.get(rel_path).cloned()
+}
 
 const MAX_FILE_BYTES: u64 = 220_000;
 const MAX_LIST_ENTRIES: usize = 500;
@@ -251,11 +291,11 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Write,
-            schema: schema("write_file", "Propose a search-and-replace edit to an existing file. The user reviews the diff and approves or rejects it.",
+            schema: schema("write_file", "Propose a search-and-replace edit to an existing file. The user reviews the diff and approves or rejects it. old_str should be a unique snippet copied from the file; matching is tolerant of indentation differences and of leading `N: ` line-number prefixes from read_file output.",
                 serde_json::json!({
                     "path": { "type": "string", "description": "Path of the existing file, relative to the workspace root." },
-                    "old_str": { "type": "string", "description": "The exact text to find in the file. Must match a unique substring." },
-                    "new_str": { "type": "string", "description": "The replacement text. Use an empty string to delete the matched text." }
+                    "old_str": { "type": "string", "description": "Text to find. Copy it from the file (line-number prefixes and exact indentation are optional). Must locate a unique region." },
+                    "new_str": { "type": "string", "description": "The replacement text. Use an empty string to delete the matched region." }
                 }),
                 &["path", "old_str", "new_str"]),
             run_read: None,
@@ -359,7 +399,7 @@ fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
         == Some(name)
 }
 
-pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResult {
+pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall, run_id: &str) -> ToolResult {
     // Check dynamic tools first
     if let Some(result) = execute_dynamic_tool(&call.name, &call.input, Some(root)) {
         return result;
@@ -372,10 +412,24 @@ pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall) -> ToolResu
     let entry = registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));
-    match entry.and_then(|e| e.run_read) {
+    let result = match entry.and_then(|e| e.run_read) {
         Some(f) => f(&ws, &call.input),
         None => err(format!("Unknown tool: {}", call.name)),
+    };
+    // A successful read of a file carries a `{snapshotPath, snapshotHash}` blob
+    // in its metadata — record it so write_file can later tell whether the file
+    // changed since the model read it.
+    if result.ok {
+        if let Some(meta) = &result.metadata {
+            if let (Some(path), Some(hash)) = (
+                meta.get("snapshotPath").and_then(|v| v.as_str()),
+                meta.get("snapshotHash").and_then(|v| v.as_str()),
+            ) {
+                record_snapshot(run_id, path, hash);
+            }
+        }
     }
+    result
 }
 
 pub fn execute_write_tool_preview(
@@ -811,14 +865,43 @@ fn read_file(ws: &Workspace, path: &str) -> ToolResult {
         ));
     }
     match std::fs::read_to_string(&full) {
-        Ok(content) => ok(format!(
-            "Contents of {} ({} chars):\n```\n{}\n```",
-            ws.display(&full),
-            content.len(),
-            content
-        )),
+        Ok(content) => {
+            // Number the lines (1-indexed) the way omp's "hashline" read does:
+            // `N: content`. Numbers help the model reason about *where* code is
+            // and pair with write_file, which strips a leading `N: ` prefix when
+            // it falls back to whitespace-insensitive matching — so a model that
+            // copies a numbered line verbatim into `old_str` still edits cleanly.
+            let line_count = content.lines().count();
+            let numbered = number_lines(&content);
+            let rel = ws.display(&full);
+            ToolResult {
+                ok: true,
+                content: format!(
+                    "Contents of {} ({} lines, {} chars). Lines are numbered `N: `; \
+when editing with write_file, the number prefix is optional — it's stripped \
+automatically.\n```\n{}\n```",
+                    rel, line_count, content.len(), numbered
+                ),
+                // The execution wrapper reads this back to record a read
+                // snapshot, so a later write_file can flag a stale edit.
+                metadata: Some(serde_json::json!({
+                    "snapshotPath": rel,
+                    "snapshotHash": hash_content(&content),
+                })),
+            }
+        }
         Err(e) => err(format!("Unable to read {} as text: {e}", ws.display(&full))),
     }
+}
+
+/// Prefix every line with its 1-indexed number (`N: line`), omp-style.
+fn number_lines(content: &str) -> String {
+    content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| format!("{}: {}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn list_dir(ws: &Workspace, path: &str) -> ToolResult {
@@ -1470,6 +1553,116 @@ fn unified_diff_lines(old: &str, new: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Why a `locate_edit` lookup failed: nothing matched, or several regions did.
+#[derive(Debug)]
+enum LocateError {
+    NotFound,
+    Multiple(usize),
+}
+
+/// Byte `(start, end)` spans of each line in `s`, excluding the trailing `\n`.
+fn line_spans(s: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (i, b) in s.bytes().enumerate() {
+        if b == b'\n' {
+            spans.push((start, i));
+            start = i + 1;
+        }
+    }
+    if start < s.len() {
+        spans.push((start, s.len()));
+    }
+    spans
+}
+
+/// Normalize one line for tolerant matching: drop a leading `N:` / `N: `
+/// line-number prefix (the read_file gutter), then trim surrounding
+/// whitespace so indentation drift doesn't defeat a match. Conservative —
+/// the prefix is stripped only when it's exactly `<digits>:`.
+fn normalize_match_line(line: &str) -> &str {
+    let trimmed = line.trim();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && i < bytes.len() && bytes[i] == b':' {
+        return trimmed[i + 1..].trim_start();
+    }
+    trimmed
+}
+
+/// Locate the unique region of `current` that `old_str` refers to, returning
+/// the byte range to replace. Exact substring first (fast, indentation-
+/// faithful); then a line-based match that ignores indentation and `N: `
+/// gutter prefixes — omp's "hashline" tolerance, minus the engine. Both paths
+/// demand a *unique* hit so an edit never lands in the wrong place.
+fn locate_edit(current: &str, old_str: &str) -> Result<(usize, usize), LocateError> {
+    let exact: Vec<usize> = current.match_indices(old_str).map(|(i, _)| i).collect();
+    match exact.len() {
+        1 => return Ok((exact[0], exact[0] + old_str.len())),
+        n if n > 1 => return Err(LocateError::Multiple(n)),
+        _ => {}
+    }
+
+    // Normalized old_str lines, trimming blank lines off both ends so a stray
+    // leading/trailing newline doesn't widen the window.
+    let old_norm: Vec<&str> = old_str.lines().map(normalize_match_line).collect();
+    let (Some(first), Some(last)) = (
+        old_norm.iter().position(|l| !l.is_empty()),
+        old_norm.iter().rposition(|l| !l.is_empty()),
+    ) else {
+        return Err(LocateError::NotFound); // old_str carried no real content
+    };
+    let old_core = &old_norm[first..=last];
+    let n = old_core.len();
+
+    let spans = line_spans(current);
+    let cur_norm: Vec<&str> = spans
+        .iter()
+        .map(|&(a, b)| normalize_match_line(&current[a..b]))
+        .collect();
+
+    let mut windows: Vec<usize> = Vec::new();
+    if n <= cur_norm.len() {
+        for i in 0..=cur_norm.len() - n {
+            if (0..n).all(|k| cur_norm[i + k] == old_core[k]) {
+                windows.push(i);
+            }
+        }
+    }
+    match windows.len() {
+        1 => Ok((spans[windows[0]].0, spans[windows[0] + n - 1].1)),
+        0 => Err(LocateError::NotFound),
+        m => Err(LocateError::Multiple(m)),
+    }
+}
+
+/// A short, numbered context hint pointing at where `old_str` *almost* matched
+/// — the first file line whose normalized form equals old_str's first real
+/// line. Empty when there's no near-miss to show.
+fn nearest_hint(current: &str, old_str: &str) -> String {
+    let Some(target) = old_str
+        .lines()
+        .map(normalize_match_line)
+        .find(|l| !l.is_empty())
+    else {
+        return String::new();
+    };
+    let lines: Vec<&str> = current.lines().collect();
+    let Some(hit) = lines.iter().position(|l| normalize_match_line(l) == target) else {
+        return String::new();
+    };
+    let start = hit.saturating_sub(2);
+    let end = (hit + 3).min(lines.len());
+    let ctx = (start..end)
+        .map(|i| format!("{}: {}", i + 1, lines[i]))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\nClosest match near line {}:\n{}", hit + 1, ctx)
+}
+
 fn preview_write_file(
     ws: &Workspace,
     input: &serde_json::Value,
@@ -1487,18 +1680,36 @@ fn preview_write_file(
     let rel = ws.display(&full);
     let current =
         std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
-    let occurrences = current.matches(&old_str).count();
-    if occurrences == 0 {
-        return Err(err(format!(
-            "old_str not found in {rel}. Read the file again and use an exact substring."
-        )));
-    }
-    if occurrences > 1 {
-        return Err(err(format!(
-            "old_str matches {occurrences} locations in {rel}. Include more surrounding context."
-        )));
-    }
-    let new_content = current.replacen(&old_str, &new_str, 1);
+    // Staleness guard (omp's `#tag`, lite): if the live file no longer hashes
+    // to what the model last read, the edit still targets the *current* text
+    // (so it's safe to apply), but flag it so the diff reviewer — and the model
+    // — know the file moved underneath.
+    let stale = matches!(
+        last_seen_hash(run_id, &rel),
+        Some(prev) if prev != hash_content(&current)
+    );
+    let new_content = match locate_edit(&current, &old_str) {
+        Ok((start, end)) => format!("{}{}{}", &current[..start], new_str, &current[end..]),
+        Err(LocateError::NotFound) => {
+            return Err(err(format!(
+                "old_str not found in {rel} (tried exact and whitespace-insensitive matching).{}\n\
+                 Re-read the file and copy a snippet that exists verbatim.",
+                nearest_hint(&current, &old_str)
+            )));
+        }
+        Err(LocateError::Multiple(n)) => {
+            return Err(err(format!(
+                "old_str matches {n} regions in {rel}. Include more surrounding context so it locates exactly one."
+            )));
+        }
+    };
+    let stale_reason = if stale {
+        Some(format!(
+            "⚠ {rel} changed since the agent last read it this run — the edit targets the current contents; review carefully."
+        ))
+    } else {
+        None
+    };
     if new_content.len() as u64 > MAX_WRITE_BYTES {
         return Err(err("Resulting file would be too large".to_string()));
     }
@@ -1517,7 +1728,7 @@ fn preview_write_file(
         new_hash: hash_content(&new_content),
         unified_diff: unified_diff_lines(&current, &new_content),
         is_create: false,
-        reason: None,
+        reason: stale_reason,
     })
 }
 
@@ -1616,6 +1827,50 @@ fn preview_create_skill(
     })
 }
 
+/// Is this `.json` path actually JSONC (comments / trailing commas allowed)?
+/// Strict JSON validation would false-alarm on these, so we skip them.
+fn is_jsonc_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let base = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+    base == "tsconfig.json"
+        || base.starts_with("tsconfig.")
+        || base == "jsconfig.json"
+        || base == "settings.json"
+        || base == "launch.json"
+        || base == "devcontainer.json"
+        || lower.contains("/.vscode/")
+}
+
+/// Cheap, in-process syntax check of freshly-written content, keyed off the
+/// file extension. Returns `Some(summary)` only when the content is
+/// *definitely* malformed; `None` when it parses or the language has no
+/// trustworthy in-process parser (omp's post-edit diagnostics, lite). Advisory
+/// only — it never blocks a write, it rides the tool result so the model can
+/// fix its own mistake on the next turn. Languages without a reliable Rust
+/// parser (e.g. TypeScript) are deliberately skipped rather than risk a false
+/// alarm from a brace-counting heuristic.
+fn verify_syntax(path: &str, content: &str) -> Option<String> {
+    if content.trim().is_empty() {
+        return None;
+    }
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    let problem = match ext.as_str() {
+        "json" if !is_jsonc_path(path) => serde_json::from_str::<serde_json::Value>(content)
+            .err()
+            .map(|e| format!("invalid JSON — {e}")),
+        "rs" => syn::parse_file(content)
+            .err()
+            .map(|e| format!("Rust parse error — {e}")),
+        _ => None,
+    }?;
+    Some(format!(
+        "⚠ Syntax check failed: {problem}. The edit was applied; re-read and fix the syntax."
+    ))
+}
+
 pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolResult> {
     let ws = Workspace::new(root).map_err(err)?;
     // Re-validate at apply time: never trust a proposal path blindly.
@@ -1626,14 +1881,31 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
     }
     std::fs::write(&full, &diff.new_content)
         .map_err(|e| err(format!("Cannot write {}: {e}", diff.path)))?;
+    // The model just wrote this file, so its current hash is the new one — keep
+    // the snapshot fresh so a follow-up edit isn't falsely flagged as stale.
+    record_snapshot(&diff.run_id, &diff.path, &diff.new_hash);
     let rel = ws.display(&full);
+    // A staleness note (set at preview time) rides along into the result so the
+    // model learns the file had moved under it and can re-read if it matters.
+    let note = diff
+        .reason
+        .as_deref()
+        .filter(|r| r.starts_with('⚠'))
+        .map(|r| format!("\n{r}"))
+        .unwrap_or_default();
+    // Post-edit syntax verification: a definite parse error is appended so the
+    // model can fix it next turn (the write still happened — the agent owns the
+    // correction, same as omp's diagnostics).
+    let syntax = verify_syntax(&diff.path, &diff.new_content)
+        .map(|s| format!("\n{s}"))
+        .unwrap_or_default();
     if diff.is_create {
         Ok(ok(format!(
-            "Applied: created {rel} ({} chars).",
+            "Applied: created {rel} ({} chars).{note}{syntax}",
             diff.new_content.len()
         )))
     } else {
-        Ok(ok(format!("Applied: edited {rel}.")))
+        Ok(ok(format!("Applied: edited {rel}.{note}{syntax}")))
     }
 }
 
@@ -1795,5 +2067,183 @@ mod tests {
         let (calls, cleaned) = recover_text_tool_calls(content);
         assert!(calls.is_empty());
         assert_eq!(cleaned, content);
+    }
+
+    // ── Tolerant edit matching (omp-inspired) ────────────────────────────
+
+    #[test]
+    fn number_lines_is_one_indexed() {
+        assert_eq!(number_lines("a\nb\nc"), "1: a\n2: b\n3: c");
+    }
+
+    #[test]
+    fn normalize_strips_gutter_and_indentation() {
+        assert_eq!(normalize_match_line("    let x = 1;"), "let x = 1;");
+        assert_eq!(normalize_match_line("42:    let x = 1;"), "let x = 1;");
+        assert_eq!(normalize_match_line("42: let x = 1;"), "let x = 1;");
+        // A real `key:` line with no leading digits is left alone after trim.
+        assert_eq!(normalize_match_line("  name: value"), "name: value");
+        // Blank / whitespace-only lines normalize to empty.
+        assert_eq!(normalize_match_line("   "), "");
+    }
+
+    #[test]
+    fn locate_exact_unique() {
+        let current = "fn a() {}\nfn b() {}\n";
+        let (s, e) = locate_edit(current, "fn b() {}").expect("unique");
+        assert_eq!(&current[s..e], "fn b() {}");
+    }
+
+    #[test]
+    fn locate_exact_multiple_is_error() {
+        let current = "x = 1\nx = 1\n";
+        assert!(matches!(
+            locate_edit(current, "x = 1"),
+            Err(LocateError::Multiple(2))
+        ));
+    }
+
+    #[test]
+    fn locate_tolerates_indentation_drift() {
+        // Model copied the body with the wrong indentation (2 spaces vs 4).
+        let current = "fn f() {\n    let y = 2;\n    return y;\n}\n";
+        let old = "  let y = 2;\n  return y;";
+        let (s, e) = locate_edit(current, old).expect("fuzzy unique");
+        // The matched region is the real (4-space) file text, byte-exact.
+        assert_eq!(&current[s..e], "    let y = 2;\n    return y;");
+    }
+
+    #[test]
+    fn locate_tolerates_line_number_prefixes() {
+        // Model pasted numbered lines straight from read_file output.
+        let current = "fn f() {\n    let y = 2;\n    return y;\n}\n";
+        let old = "2:     let y = 2;\n3:     return y;";
+        let (s, e) = locate_edit(current, old).expect("numbered fuzzy unique");
+        assert_eq!(&current[s..e], "    let y = 2;\n    return y;");
+    }
+
+    #[test]
+    fn locate_fuzzy_requires_uniqueness() {
+        // Two indentation-equal regions ⇒ ambiguous ⇒ error, never a guess.
+        let current = "if a {\n    do_it();\n}\nif b {\n    do_it();\n}\n";
+        assert!(matches!(
+            locate_edit(current, "do_it();"),
+            // "do_it();" appears exactly twice as a substring → exact-multiple.
+            Err(LocateError::Multiple(2))
+        ));
+    }
+
+    #[test]
+    fn locate_not_found_gives_a_hint() {
+        let current = "fn alpha() {\n    let count = 0;\n}\n";
+        // Right line, wrong content on the surrounding lines.
+        assert!(matches!(
+            locate_edit(current, "let count = 999;"),
+            Err(LocateError::NotFound)
+        ));
+        let hint = nearest_hint(current, "    let count = 0;");
+        assert!(hint.contains("Closest match near line 2"), "got: {hint}");
+        assert!(hint.contains("2:     let count = 0;"), "got: {hint}");
+    }
+
+    // ── Staleness guard (omp's `#tag`, lite) ─────────────────────────────
+
+    fn snapshot_sandbox(label: &str) -> (Workspace, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-snapshot-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
+        (ws, dir)
+    }
+
+    #[test]
+    fn write_flags_a_file_changed_since_last_read() {
+        let (ws, dir) = snapshot_sandbox("stale");
+        let run = "run-stale";
+        clear_run_snapshots(run);
+        std::fs::write(dir.join("a.rs"), "let x = 1;\n").unwrap();
+        let rel = ws.display(&ws.resolve_existing("a.rs").unwrap());
+
+        // The model "read" an older version (a different hash).
+        record_snapshot(run, &rel, &hash_content("let x = 0;\n"));
+
+        let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
+        let proposal = preview_write_file(&ws, &input, run).unwrap();
+        let reason = proposal.reason.expect("stale edit should carry a reason");
+        assert!(reason.contains("changed since"), "got: {reason}");
+    }
+
+    #[test]
+    fn write_is_not_flagged_when_hash_matches_last_read() {
+        let (ws, dir) = snapshot_sandbox("fresh");
+        let run = "run-fresh";
+        clear_run_snapshots(run);
+        let body = "let x = 1;\n";
+        std::fs::write(dir.join("a.rs"), body).unwrap();
+        let rel = ws.display(&ws.resolve_existing("a.rs").unwrap());
+
+        // The model read exactly the current content.
+        record_snapshot(run, &rel, &hash_content(body));
+
+        let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
+        let proposal = preview_write_file(&ws, &input, run).unwrap();
+        assert!(proposal.reason.is_none(), "fresh edit should not be flagged");
+    }
+
+    // ── Post-edit syntax verification (omp's diagnostics, lite) ──────────
+
+    #[test]
+    fn verify_passes_valid_rust_and_json() {
+        assert!(verify_syntax("src/main.rs", "fn main() {\n    let x = 1;\n}\n").is_none());
+        assert!(verify_syntax("package.json", "{\n  \"name\": \"k\"\n}\n").is_none());
+    }
+
+    #[test]
+    fn verify_flags_broken_rust() {
+        // Missing closing brace.
+        let v = verify_syntax("src/lib.rs", "fn main() {\n    let x = 1;\n").expect("rust err");
+        assert!(v.contains("Syntax check failed"), "got: {v}");
+        assert!(v.contains("Rust parse error"), "got: {v}");
+    }
+
+    #[test]
+    fn verify_flags_broken_json() {
+        let v = verify_syntax("data.json", "{ \"a\": 1, }").expect("json err");
+        assert!(v.contains("invalid JSON"), "got: {v}");
+    }
+
+    #[test]
+    fn verify_skips_jsonc_and_unknown_languages() {
+        // tsconfig.json is JSONC — comments/trailing commas are legal, so we
+        // must not flag it.
+        assert!(verify_syntax("tsconfig.json", "{ // ok\n  \"compilerOptions\": {}, }").is_none());
+        assert!(verify_syntax(".vscode/settings.json", "{ /* c */ }").is_none());
+        // TypeScript has no trustworthy in-process parser here — skipped.
+        assert!(verify_syntax("src/App.tsx", "const x = (").is_none());
+        // Empty / whitespace content is never flagged.
+        assert!(verify_syntax("a.rs", "   \n").is_none());
+    }
+
+    #[test]
+    fn clear_run_snapshots_forgets_the_run() {
+        let run = "run-clear";
+        record_snapshot(run, "x.rs", "abc");
+        assert_eq!(last_seen_hash(run, "x.rs").as_deref(), Some("abc"));
+        clear_run_snapshots(run);
+        assert_eq!(last_seen_hash(run, "x.rs"), None);
+    }
+
+    #[test]
+    fn line_spans_round_trip() {
+        let s = "alpha\nbeta\ngamma";
+        let spans = line_spans(s);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(&s[spans[0].0..spans[0].1], "alpha");
+        assert_eq!(&s[spans[2].0..spans[2].1], "gamma");
+        // Trailing newline does not create a phantom empty line.
+        assert_eq!(line_spans("a\n").len(), 1);
     }
 }

@@ -24,7 +24,8 @@
 //
 // All numbers are list prices as of June 2026. Update by editing the table.
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelPricing {
     /// USD per 1,000,000 input tokens (excludes cache reads).
     pub input_per_million: f64,

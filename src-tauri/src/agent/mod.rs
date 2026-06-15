@@ -4,9 +4,9 @@ pub mod transcripts;
 pub mod types;
 
 use self::tools::{
-    apply_write, clean_context_ids, execute_read_only_tool, execute_write_tool_preview,
-    is_user_question_tool, is_write_tool, parse_tool_calls, recover_text_tool_calls,
-    schemas_for_mode, NormalizedToolCall,
+    apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,
+    execute_write_tool_preview, is_user_question_tool, is_write_tool, parse_tool_calls,
+    recover_text_tool_calls, schemas_for_mode, NormalizedToolCall,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -271,6 +271,20 @@ fn reconstruct_prior_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Va
             AgentEvent::ToolCallFinished { result, .. } => {
                 pending_tool_results.push(result.content.clone());
             }
+            AgentEvent::ContextCompacted { summary, .. } => {
+                // Collapse everything before the marker into one system
+                // message. Turns recorded after it replay verbatim, so the
+                // model keeps the gist of old context plus the recent
+                // exchanges in full — at a fraction of the tokens.
+                out.clear();
+                pending_tool_results.clear();
+                out.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!(
+                        "[Earlier conversation compacted to save context]\n{summary}"
+                    )
+                }));
+            }
             _ => {}
         }
     }
@@ -323,6 +337,7 @@ async fn run_read_tools_parallel(
     root: &str,
     calls: Vec<NormalizedToolCall>,
     max_parallel: usize,
+    run_id: &str,
 ) -> std::collections::HashMap<String, ToolResult> {
     let mut results = std::collections::HashMap::new();
     for chunk in calls.chunks(max_parallel.max(1)) {
@@ -331,8 +346,9 @@ async fn run_read_tools_parallel(
             .map(|call| {
                 let root = root.to_string();
                 let call = call.clone();
+                let run_id = run_id.to_string();
                 tokio::task::spawn_blocking(move || {
-                    let result = execute_read_only_tool(&root, &call);
+                    let result = execute_read_only_tool(&root, &call, &run_id);
                     (call.id, result)
                 })
             })
@@ -471,6 +487,9 @@ async fn run_agent_loop(
     // turns already on disk so checkpoint files never collide across turns.
     let prior_events = read_events(&runs_dir, &id).unwrap_or_default();
     let resuming = !prior_events.is_empty();
+    // Start this run's file-snapshot slate clean so a reused id never inherits
+    // stale read/write hashes from a previous run (see tools::clear_run_snapshots).
+    clear_run_snapshots(&id);
     let prior_turns = prior_events
         .iter()
         .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))
@@ -555,7 +574,11 @@ async fn run_agent_loop(
     // the Mission Control "Messages" tally reflects the whole conversation.
     let mut message_count = prior_turns as u32 + 1;
     let mut completed = false;
-    const MAX_TURNS: usize = 8;
+    // omp budgets a run by output tokens, not a tiny turn cap; 8 turns was
+    // genuinely limiting for real multi-file work. 16 gives the agent room to
+    // read → plan → edit → verify across several files before it has to hand
+    // back to the user (who can always continue the conversation).
+    const MAX_TURNS: usize = 16;
     const COMPACT_AFTER: usize = 14;
 
     for turn in 0..MAX_TURNS {
@@ -639,6 +662,8 @@ async fn run_agent_loop(
                 tools.clone(),
                 request.workspace_root.clone(),
                 request.num_ctx,
+                request.num_predict,
+                request.reflection_level.clone(),
                 stream,
             ) => result,
         };
@@ -740,7 +765,7 @@ async fn run_agent_loop(
             // answer. Models that separate reasoning from answer (non-empty
             // content) keep thinking as its own disclosure, unchanged.
             let thinking = thinking_text.filter(|t| !t.trim().is_empty());
-            let answer_text = if content_text.trim().is_empty() {
+            let mut answer_text = if content_text.trim().is_empty() {
                 thinking.clone().unwrap_or_default()
             } else {
                 if let Some(t) = thinking.clone() {
@@ -748,6 +773,18 @@ async fn run_agent_loop(
                 }
                 content_text.clone()
             };
+            // Ollama reports `done_reason: "length"` when the reply was cut off
+            // because the KV cache (num_ctx) filled mid-generation — the model
+            // didn't "decide" to stop, it ran out of room. Without this the
+            // answer just ends mid-sentence and looks complete. Flag it inline
+            // and point at the fix (raise the context window for this model).
+            if response.stop_reason.as_deref() == Some("length") {
+                answer_text.push_str(
+                    "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
+mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
+conversation, then ask again._",
+                );
+            }
             content.push(AgentContentBlock::Text { text: answer_text });
             emit(AgentEvent::AssistantMessage {
                 run_id: id.clone(),
@@ -825,7 +862,8 @@ async fn run_agent_loop(
                     .cloned()
                     .collect();
                 if read_calls.len() > 1 {
-                    precomputed = run_read_tools_parallel(root, read_calls, max_parallel).await;
+                    precomputed =
+                        run_read_tools_parallel(root, read_calls, max_parallel, &id).await;
                 }
             }
         }
@@ -1037,7 +1075,7 @@ async fn run_agent_loop(
                     // tool that slipped the filter — it can't, but be safe).
                     Some(root) => precomputed
                         .remove(&call.id)
-                        .unwrap_or_else(|| execute_read_only_tool(root, &call)),
+                        .unwrap_or_else(|| execute_read_only_tool(root, &call, &id)),
                     None => no_workspace_result(),
                 };
             }
@@ -1076,9 +1114,10 @@ async fn run_agent_loop(
             run_id: id.clone(),
             message_id: message_id("assistant"),
             content: vec![AgentContentBlock::Text {
-                text: "I reached the maximum number of tool turns (8) before finishing this request. \
-                       The work above is where I got to — send another message to have me continue from here."
-                    .to_string(),
+                text: format!(
+                    "I reached the maximum number of tool turns ({MAX_TURNS}) before finishing this request. \
+                     The work above is where I got to — send another message to have me continue from here."
+                ),
             }],
             usage: None,
             ts: now_ms(),
@@ -1211,6 +1250,40 @@ pub async fn agent_abort_run(
         }
         None => Err(format!("No known run with id {run_id}")),
     }
+}
+
+/// Write a compaction marker into a run's transcript. The frontend generates
+/// `summary` (one model call over the older turns) and calls this; on the next
+/// turn, `reconstruct_prior_messages` collapses everything before the marker
+/// into that summary while replaying recent turns verbatim — freeing context
+/// without losing the thread.
+#[tauri::command]
+pub async fn agent_compact_context(
+    app: tauri::AppHandle,
+    run_id: String,
+    summary: String,
+) -> Result<(), String> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err("Refusing to compact with an empty summary".to_string());
+    }
+    let runs_dir = app_runs_dir(&app)?;
+    let prior = read_events(&runs_dir, &run_id).unwrap_or_default();
+    if prior.is_empty() {
+        return Err("No conversation to compact yet".to_string());
+    }
+    let seq = prior.len() as u64;
+    append_event(
+        &runs_dir,
+        &run_id,
+        seq,
+        &AgentEvent::ContextCompacted {
+            run_id: run_id.clone(),
+            summary: summary.to_string(),
+            ts: now_ms(),
+        },
+    )?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1448,6 +1521,34 @@ mod replay_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "hello");
+    }
+
+    #[test]
+    fn context_compacted_collapses_prior_and_keeps_recent_verbatim() {
+        let compacted = AgentEvent::ContextCompacted {
+            run_id: "r".into(),
+            summary: "we set up auth and fixed the parser".into(),
+            ts: 9,
+        };
+        let out = reconstruct_prior_messages(&[
+            user_msg("old turn 1"),
+            assistant_text("old reply 1"),
+            compacted,
+            user_msg("recent question"),
+            assistant_text("recent answer"),
+        ]);
+        // Everything before the marker collapses into one system summary;
+        // the two recent turns replay verbatim after it.
+        assert_eq!(out.len(), 3, "got: {out:?}");
+        assert_eq!(out[0]["role"], "system");
+        assert!(out[0]["content"]
+            .as_str()
+            .expect("summary is string")
+            .contains("we set up auth"));
+        assert_eq!(out[1]["role"], "user");
+        assert_eq!(out[1]["content"], "recent question");
+        assert_eq!(out[2]["role"], "assistant");
+        assert_eq!(out[2]["content"], "recent answer");
     }
 
     #[test]

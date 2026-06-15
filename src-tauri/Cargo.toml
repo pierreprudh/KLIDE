@@ -39,3 +39,6 @@ keyring = { version = "3", features = ["apple-native"] }
 # separate system install.
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Post-edit syntax verification for Rust files: `syn::parse_file` gives a fast,
+# in-process parse with no toolchain spawn. JSON is checked via serde_json.
+syn = { version = "2", features = ["full"] }

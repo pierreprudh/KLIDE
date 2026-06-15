@@ -23,6 +23,7 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
       { id: "claude-code", name: "Claude Code", available: true },
       { id: "codex", name: "Codex", available: true },
       { id: "opencode", name: "OpenCode", available: true },
+      { id: "omp", name: "Oh My Pi", available: true },
     ],
   },
   {
@@ -55,6 +56,7 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
   "claude-code": "claude-sonnet-4-6",
   codex: "gpt-5",
   opencode: "opencode",
+  omp: "claude-sonnet-4-6",
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-4.1",
   gemini: "gemini-2.5-pro",
@@ -102,7 +104,9 @@ export function providerGroupsWithCustom(
 }
 
 export function isDelegateProvider(id: ProviderId): boolean {
-  return id === "claude-code" || id === "codex" || id === "opencode";
+  return (
+    id === "claude-code" || id === "codex" || id === "opencode" || id === "omp"
+  );
 }
 
 export function normalizeAgentMode(value: string | null): AgentMode {

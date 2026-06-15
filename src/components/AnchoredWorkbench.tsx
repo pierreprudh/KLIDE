@@ -115,6 +115,7 @@ type Props = {
   onSkillGenerated: (skill: { name: string; relPath: string }) => void;
 
   harnessSettings: HarnessSettings;
+  onHarnessSettingsChange: (settings: HarnessSettings) => void;
 };
 
 // Anchored workbench — the calm, fullscreen surface. A single 1px-bordered
@@ -179,6 +180,7 @@ export function AnchoredWorkbench(props: Props) {
     onMemoryWritten,
     onSkillGenerated,
     harnessSettings,
+    onHarnessSettingsChange,
   } = props;
 
   const sideVisible = explorerVisible;
@@ -339,6 +341,7 @@ export function AnchoredWorkbench(props: Props) {
         stopAfterRejection={stopAfterRejection}
         skills={skills}
         harnessSettings={harnessSettings}
+        onHarnessSettingsChange={onHarnessSettingsChange}
         onDuplicate={onDuplicateAiPanel}
         onClose={aiPanels.length > 1 ? () => onCloseAiPanel(safeId) : undefined}
         resumeConversation={resumeConversation}

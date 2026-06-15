@@ -32,6 +32,7 @@ const PROVIDER_LOGO_COLOR: Partial<Record<ProviderId, string>> = {
   opencode: "var(--fg-strong)",
   xai: "var(--fg-strong)",
   openrouter: "#4A6CF7",
+  omp: "#7C6BAE",
 };
 
 const PROVIDER_LOGO_IMAGE: Partial<Record<ProviderId, string>> = {
@@ -141,6 +142,19 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
       return (
         <svg {...line} strokeWidth="2">
           <path d="M5 5l14 14M19 5L5 19" />
+        </svg>
+      );
+    case "omp":
+      // Oh My Pi's "Pi" mark (a blocky P + i dot). The source art is solid
+      // white, so render it with currentColor (tinted by PROVIDER_LOGO_COLOR)
+      // instead of a fixed fill — that way it survives Klide's light themes.
+      return (
+        <svg {...base} viewBox="0 0 800 800" fill="currentColor">
+          <path
+            fillRule="evenodd"
+            d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"
+          />
+          <path d="M517.36 400 H634.72 V634.72 H517.36 Z" />
         </svg>
       );
     default:

@@ -68,6 +68,13 @@ pub struct StartRunRequest {
     /// `None` lets the provider adapter fall back to its default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_ctx: Option<usize>,
+    /// Reply budget (num_predict) for local models. `None` keeps the provider
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_predict: Option<usize>,
+    /// Reflection/thinking preference for models that support it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection_level: Option<String>,
     /// Max read-only tool calls to run concurrently within one turn. `None`
     /// or `Some(1)` keeps execution sequential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,6 +328,16 @@ pub enum AgentEvent {
     RunError {
         run_id: String,
         error: AgentError,
+        ts: i64,
+    },
+    /// A compaction marker written into the transcript when the user compacts
+    /// the conversation to free context. On replay, everything BEFORE this
+    /// marker collapses into a single system message holding `summary`; events
+    /// after it replay verbatim. So the model keeps the gist of old turns plus
+    /// the recent exchanges in full, at a fraction of the tokens.
+    ContextCompacted {
+        run_id: String,
+        summary: String,
         ts: i64,
     },
     /// The model called `userAnswerQuestion` and is paused waiting for the

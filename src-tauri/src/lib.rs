@@ -137,6 +137,13 @@ pub(crate) struct AiChatResponse {
     pub(crate) tool_calls: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) usage: Option<AiUsage>,
+    /// Why generation stopped, as reported by the provider. Ollama's
+    /// `done_reason`: `"stop"` = the model finished naturally, `"length"` =
+    /// it hit `num_ctx` and was cut off mid-answer. `None` when the provider
+    /// doesn't report it. The harness uses `"length"` to warn the user the
+    /// reply is truncated rather than silently showing a half-answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_reason: Option<String>,
 }
 
 // One streamed delta pushed to the frontend through the per-request Channel.
@@ -198,6 +205,27 @@ fn ai_set_provider_key(provider: String, key: String) -> Result<(), String> {
 #[tauri::command]
 fn ai_clear_provider_key(provider: String) -> Result<(), String> {
     providers::clear_keychain_key(&provider)
+}
+
+// Per-model list price (USD per million in/out tokens), or null for local /
+// subscription / unknown models. The AI panel fetches this once per model and
+// computes per-message + per-conversation cost from each turn's token usage.
+#[tauri::command]
+fn ai_model_pricing(model: String) -> Option<pricing::ModelPricing> {
+    pricing::pricing_for_model(&model)
+}
+
+// The second key method for built-in providers: a `${VAR}` env reference
+// (resolved from the env / project `.env` / ~/.klide/.env), exactly like a
+// self-hosted endpoint. Keychain-free, so it never pops a macOS prompt.
+#[tauri::command]
+fn ai_set_provider_key_reference(provider: String, reference: String) -> Result<(), String> {
+    providers::set_provider_reference(&provider, Some(&reference))
+}
+
+#[tauri::command]
+fn ai_clear_provider_key_reference(provider: String) -> Result<(), String> {
+    providers::set_provider_reference(&provider, None)
 }
 
 // ── Custom (self-hosted) providers ──────────────────────────────────────
@@ -521,6 +549,8 @@ async fn ai_chat(
     tools: Option<Vec<serde_json::Value>>,
     workspace_root: Option<String>,
     num_ctx: Option<usize>,
+    num_predict: Option<usize>,
+    reflection_level: Option<String>,
     on_chunk: Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     // Built-in providers resolve through the static registry. A miss
@@ -540,6 +570,7 @@ async fn ai_chat(
             true,
             false,
             providers::custom_token(&cp.id),
+            None,
             model,
             messages,
             tools,
@@ -567,10 +598,19 @@ async fn ai_chat(
 
     match entry.wire {
         providers::WireFormat::Ollama => {
-            adapters::ollama_chat(model, messages, tools, num_ctx, &on_chunk).await
+            adapters::ollama_chat(
+                model,
+                messages,
+                tools,
+                num_ctx,
+                num_predict,
+                reflection_level,
+                &on_chunk,
+            )
+            .await
         }
         providers::WireFormat::Anthropic => {
-            adapters::anthropic_chat(model, messages, tools, &on_chunk).await
+            adapters::anthropic_chat(model, messages, tools, reflection_level, &on_chunk).await
         }
         providers::WireFormat::OpenAi(cfg) => {
             // Hosted providers require a key (`provider_key` errors when
@@ -583,6 +623,11 @@ async fn ai_chat(
                 cfg.include_tools,
                 cfg.include_usage_in_stream,
                 key,
+                if cfg.supports_reasoning_effort {
+                    adapters::reflection_level_to_openai_effort(reflection_level.as_deref())
+                } else {
+                    None
+                },
                 model,
                 messages,
                 tools,
@@ -785,6 +830,7 @@ async fn subscription_cli_chat(
         thinking: None,
         tool_calls: Vec::new(),
         usage: None,
+        stop_reason: None,
     })
 }
 
@@ -1101,11 +1147,15 @@ pub fn run() {
             app_user_info,
             models::ai_context_window,
             models::ai_model_supports_tools,
+            models::ai_model_supports_reflection,
             ai_list_tools,
             search_in_files,
             ai_provider_key_status,
             ai_set_provider_key,
             ai_clear_provider_key,
+            ai_set_provider_key_reference,
+            ai_clear_provider_key_reference,
+            ai_model_pricing,
             custom_provider_list,
             custom_provider_upsert,
             custom_provider_remove,
@@ -1119,6 +1169,7 @@ pub fn run() {
             agent::agent_resolve_permission,
             agent::agent_resolve_diff,
             agent::agent_resolve_question,
+            agent::agent_compact_context,
             agent::agent_abort_run,
             agent::agent_list_runs,
             agent::agent_read_run,

@@ -55,17 +55,40 @@ async fn stream_provider<S: StreamingProvider>(
         .timeout(Duration::from_secs(180))
         .build()
         .map_err(|e| format!("Unable to build HTTP client: {e}"))?;
-    let res = provider
-        .build_request(&client)?
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach {}: {e}", provider.name()))?;
-
-    let status = res.status();
-    if !status.is_success() {
-        let text = res.text().await.unwrap_or_default();
-        return Err(response_error(provider.name(), status, &text));
-    }
+    // Send with retry on transient throttling. A 429 (rate limit) or 503
+    // (overloaded) arrives BEFORE any streamed bytes, so retrying the whole
+    // request is safe — no chunks have been emitted yet. We honor the server's
+    // own backoff hint (Retry-After header, or OpenAI's "try again in Xs"
+    // body) and fall back to exponential backoff. The run only fails if the
+    // throttling outlasts our retries.
+    const MAX_RETRIES: u32 = 3;
+    let mut attempt: u32 = 0;
+    let res = loop {
+        let res = provider
+            .build_request(&client)?
+            .send()
+            .await
+            .map_err(|e| format!("Unable to reach {}: {e}", provider.name()))?;
+        let status = res.status();
+        if status.is_success() {
+            break res;
+        }
+        let transient = matches!(status.as_u16(), 429 | 503);
+        let header_wait = retry_after_header(res.headers());
+        // Reading the body consumes `res`; we need it for both the backoff
+        // hint and the final error, so read it once here.
+        let body = res.text().await.unwrap_or_default();
+        if transient && attempt < MAX_RETRIES {
+            let wait = header_wait
+                .or_else(|| retry_after_from_body(&body))
+                .unwrap_or_else(|| Duration::from_millis(500 * 2u64.pow(attempt)))
+                .min(Duration::from_secs(30)); // never sleep absurdly long
+            attempt += 1;
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+        return Err(response_error(provider.name(), status, &body));
+    };
 
     let mut content = String::new();
     let mut thinking = String::new();
@@ -100,6 +123,39 @@ async fn stream_provider<S: StreamingProvider>(
     Ok(provider.finalize_response(content, thinking, tools))
 }
 
+/// Parse a `Retry-After` response header. Per HTTP it's either a number of
+/// seconds or an HTTP-date; we only handle the seconds form (what OpenAI /
+/// Anthropic send), returning `None` for anything else so the caller falls
+/// back to its own backoff.
+fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let secs: f64 = raw.trim().parse().ok()?;
+    (secs.is_finite() && secs >= 0.0).then(|| Duration::from_millis((secs * 1000.0) as u64))
+}
+
+/// Pull a backoff hint out of OpenAI's error body, which phrases it as
+/// "Please try again in 3.353s" (or "…in 412ms"). Best-effort: returns `None`
+/// if the phrase isn't found, so the caller uses exponential backoff instead.
+fn retry_after_from_body(body: &str) -> Option<Duration> {
+    let rest = body.split("try again in ").nth(1)?;
+    // The number (digits + decimal point) then the unit letters right after it,
+    // parsed separately so a trailing sentence period can't contaminate either.
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let unit: String = rest[num.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    let value: f64 = num.parse().ok()?;
+    match unit.as_str() {
+        "ms" => Some(Duration::from_millis(value as u64)),
+        "s" => Some(Duration::from_millis((value * 1000.0) as u64)),
+        _ => None,
+    }
+}
+
 // ── Ollama adapter ──
 
 struct OllamaAdapter {
@@ -110,7 +166,17 @@ struct OllamaAdapter {
     /// default; the caller normally resolves the model's real trained window
     /// (or a user override) and passes it here.
     num_ctx: Option<usize>,
+    /// Reply budget for Ollama (`num_predict`). `None` keeps Ollama's default.
+    num_predict: Option<usize>,
+    /// Ollama's documented thinking control is boolean. Klide stores richer
+    /// labels for future providers; for Ollama, explicit non-off levels map to
+    /// `think: true`, `off` maps to `false`, and Auto omits the field.
+    think: Option<bool>,
     usage: AiUsage,
+    /// Ollama's `done_reason` from the final frame: `"stop"` (finished) or
+    /// `"length"` (cut off at num_ctx). Surfaced so the harness can flag a
+    /// truncated answer.
+    stop_reason: Option<String>,
 }
 
 impl StreamingProvider for OllamaAdapter {
@@ -135,6 +201,12 @@ impl StreamingProvider for OllamaAdapter {
             // an over-large value is safe.
             "options": { "num_ctx": self.num_ctx.unwrap_or(32768) },
         });
+        if let Some(num_predict) = self.num_predict {
+            body["options"]["num_predict"] = serde_json::json!(num_predict);
+        }
+        if let Some(think) = self.think {
+            body["think"] = serde_json::json!(think);
+        }
         if let Some(tools) = &self.tools {
             body["tools"] = serde_json::Value::Array(tools.clone());
         }
@@ -191,6 +263,10 @@ impl StreamingProvider for OllamaAdapter {
                 eval_duration_ms: count("eval_duration").map(|ns| ns / 1_000_000),
                 prompt_eval_duration_ms: count("prompt_eval_duration").map(|ns| ns / 1_000_000),
             };
+            self.stop_reason = value
+                .get("done_reason")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
         }
         Ok(())
     }
@@ -214,22 +290,35 @@ impl StreamingProvider for OllamaAdapter {
             } else {
                 Some(self.usage)
             },
+            stop_reason: self.stop_reason,
         }
     }
 }
 
-/// Ollama allocates the KV cache when the model loads, so num_ctx is fixed per
-/// load. Instead of always requesting the model's full window (a big cache —
-/// slow to load, memory-hungry), size it to the conversation: estimate prompt
-/// tokens, add headroom for the reply, and round up to the next tier. Short
-/// chats stay small and fast; the model only reloads when a conversation grows
-/// past its current tier. `ceiling` is the model's real max (passed in as
-/// num_ctx) and is never exceeded.
-fn tiered_num_ctx(
+/// A comfortable, flat working window for num_ctx.
+///
+/// Background: Ollama allocates the KV cache at model-load time, sized to
+/// num_ctx — real RAM, reserved up front. We *used* to ramp num_ctx up from a
+/// tiny tier per conversation to keep that cache small. But measurements on an
+/// 8B model showed the cache is cheap (32k ≈ +0.5 GB over weights, 128k ≈
+/// +1.8 GB) — the memory floor is the model weights, not the cache. Ramping
+/// saved ~1 GB while causing two real problems: long answers were *truncated*
+/// when a too-small cache filled mid-generation, and every conversation that
+/// crossed a tier forced a model reload.
+///
+/// So instead: default to a roomy 32k working window (proven safe on a 17 GB
+/// Mac), grow past it only for genuinely large conversations, and cap at the
+/// model's real trained window (`ceiling`, which a user override also sets to
+/// dial memory up or down). The result loads once and never truncates a normal
+/// answer.
+fn working_num_ctx(
     messages: &[serde_json::Value],
     tools: Option<&Vec<serde_json::Value>>,
     ceiling: usize,
 ) -> usize {
+    // A flat default big enough for real coding conversations. Below this we
+    // don't bother shrinking — the saving isn't worth the reloads/truncation.
+    const WORKING_DEFAULT: usize = 32_768;
     // ~4 chars per token is the usual rough estimate. Count BOTH the messages
     // and the tool schemas — the schemas are sent separately from `messages`
     // but still occupy the prompt. Omitting them under-sizes the window, Ollama
@@ -243,13 +332,44 @@ fn tiered_num_ctx(
     let tool_chars: usize = tools
         .map(|t| t.iter().map(|s| s.to_string().len()).sum())
         .unwrap_or(0);
-    let needed = (msg_chars + tool_chars) / 4 + 2048; // + response headroom
-    const TIERS: [usize; 6] = [4096, 8192, 16384, 32768, 65536, 131072];
-    let tier = TIERS.into_iter().find(|&t| t >= needed).unwrap_or(ceiling);
-    // With tools in play, never go below 8k — a truncated tool schema is worse
-    // than a slightly larger cache.
-    let floor = if tools.is_some() { 8192 } else { 4096 };
-    tier.max(floor).min(ceiling).max(1024)
+    let needed = (msg_chars + tool_chars) / 4 + 4096; // + response headroom
+    // At least the comfortable default; grow to fit a large conversation;
+    // never exceed the model's real window.
+    needed.max(WORKING_DEFAULT).min(ceiling).max(1024)
+}
+
+fn reflection_level_to_ollama_think(level: Option<&str>) -> Option<bool> {
+    match level.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some("auto") => None,
+        Some("off") => Some(false),
+        Some("low" | "medium" | "high" | "max") => Some(true),
+        // Unknown future labels should be inert rather than surprising users.
+        Some(_) => None,
+    }
+}
+
+pub(crate) fn reflection_level_to_openai_effort(level: Option<&str>) -> Option<String> {
+    match level.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some("auto" | "off") => None,
+        Some("low") => Some("low".to_string()),
+        Some("medium") => Some("medium".to_string()),
+        Some("high" | "max") => Some("high".to_string()),
+        Some(_) => None,
+    }
+}
+
+fn reflection_level_to_anthropic_budget(level: Option<&str>) -> Option<usize> {
+    match level.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some("auto" | "off") => None,
+        Some("low") => Some(1024),
+        Some("medium") => Some(4096),
+        Some("high") => Some(8192),
+        Some("max") => Some(16_384),
+        Some(_) => None,
+    }
 }
 
 pub(crate) async fn ollama_chat(
@@ -257,16 +377,22 @@ pub(crate) async fn ollama_chat(
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     num_ctx: Option<usize>,
+    num_predict: Option<usize>,
+    reflection_level: Option<String>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let ceiling = num_ctx.unwrap_or(32768);
-    let sized = tiered_num_ctx(&messages, tools.as_ref(), ceiling);
+    let sized = working_num_ctx(&messages, tools.as_ref(), ceiling);
+    let think = reflection_level_to_ollama_think(reflection_level.as_deref());
     let adapter = OllamaAdapter {
         model,
         messages,
         tools,
         num_ctx: Some(sized),
+        num_predict,
+        think,
         usage: AiUsage::default(),
+        stop_reason: None,
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -300,6 +426,7 @@ struct OpenAiAdapter {
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: Option<String>,
+    reasoning_effort: Option<String>,
     usage: AiUsage,
 }
 
@@ -317,6 +444,9 @@ impl StreamingProvider for OpenAiAdapter {
             self.tools.clone(),
             self.include_tools,
         );
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+        }
         if self.include_usage_in_stream {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
@@ -463,6 +593,9 @@ impl StreamingProvider for OpenAiAdapter {
             } else {
                 Some(self.usage)
             },
+            // Hosted providers report finish_reason too, but the
+            // num_ctx-truncation warning this drives is Ollama-specific.
+            stop_reason: None,
         }
     }
 }
@@ -523,6 +656,7 @@ pub(crate) async fn openai_compatible_chat(
     include_tools: bool,
     include_usage_in_stream: bool,
     key: Option<String>,
+    reasoning_effort: Option<String>,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
@@ -537,6 +671,7 @@ pub(crate) async fn openai_compatible_chat(
         messages,
         tools,
         key,
+        reasoning_effort,
         usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
@@ -701,6 +836,7 @@ struct AnthropicAdapter {
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
     key: String,
+    thinking_budget: Option<usize>,
     usage: AiUsage,
 }
 
@@ -719,6 +855,13 @@ impl StreamingProvider for AnthropicAdapter {
             "stream": true,
             "messages": msgs,
         });
+        if let Some(budget) = self.thinking_budget {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            });
+            body["max_tokens"] = serde_json::json!(budget.saturating_add(4096));
+        }
         if !system.trim().is_empty() {
             body["system"] = serde_json::Value::String(system);
         }
@@ -881,6 +1024,9 @@ impl StreamingProvider for AnthropicAdapter {
             } else {
                 Some(self.usage)
             },
+            // Anthropic reports stop_reason too, but this field drives the
+            // Ollama-specific num_ctx-truncation warning. Left None for now.
+            stop_reason: None,
         }
     }
 }
@@ -889,14 +1035,17 @@ pub(crate) async fn anthropic_chat(
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
+    reflection_level: Option<String>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
+    let thinking_budget = reflection_level_to_anthropic_budget(reflection_level.as_deref());
     let adapter = AnthropicAdapter {
         model,
         messages,
         tools,
         key,
+        thinking_budget,
         usage: AiUsage::default(),
     };
     stream_provider(adapter, on_chunk).await
@@ -914,17 +1063,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiered_num_ctx_grows_with_conversation_and_caps_at_ceiling() {
+    fn retry_after_from_body_parses_openai_hint() {
+        // The exact phrasing OpenAI's 429 uses.
+        let s = Duration::from_millis(3353);
+        assert_eq!(
+            retry_after_from_body("Rate limit reached. Please try again in 3.353s. Visit…"),
+            Some(s)
+        );
+        // Sub-second hints come back as milliseconds.
+        assert_eq!(
+            retry_after_from_body("try again in 412ms."),
+            Some(Duration::from_millis(412))
+        );
+        // No hint → None, so the caller uses exponential backoff.
+        assert_eq!(retry_after_from_body("some other error"), None);
+    }
+
+    #[test]
+    fn working_num_ctx_uses_flat_default_grows_for_big_chats_and_caps_at_ceiling() {
         let msg = |s: &str| serde_json::json!({ "role": "user", "content": s });
-        // Tiny chat, no tools → smallest tier.
-        assert_eq!(tiered_num_ctx(&[msg("hi")], None, 131_072), 4096);
-        // ~40k chars ≈ 10k tokens → 16k tier.
-        assert_eq!(tiered_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072), 16_384);
-        // A low ceiling is never exceeded.
-        assert_eq!(tiered_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384), 16_384);
-        // Tools present → never below the 8k floor, even for a tiny message.
-        let tools = vec![serde_json::json!({ "name": "x" })];
-        assert_eq!(tiered_num_ctx(&[msg("hi")], Some(&tools), 131_072), 8192);
+        // Tiny chat → the flat comfortable working default, not a shrunk tier.
+        assert_eq!(working_num_ctx(&[msg("hi")], None, 131_072), 32_768);
+        // A conversation below the default still gets the full default.
+        assert_eq!(working_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072), 32_768);
+        // A conversation larger than the default grows past it (≈130k chars ≈
+        // 32.5k tokens + headroom).
+        assert_eq!(working_num_ctx(&[msg(&"x".repeat(130_000))], None, 131_072), 36_596);
+        // The model's real window (or a user override that dials down) is the
+        // hard cap — never exceeded, even for a default-sized request.
+        assert_eq!(working_num_ctx(&[msg("hi")], None, 8192), 8192);
+        // A huge conversation is still capped at the ceiling.
+        assert_eq!(working_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384), 16_384);
+    }
+
+    #[test]
+    fn ollama_request_includes_context_and_reply_budget_options() {
+        let adapter = OllamaAdapter {
+            model: "test".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            num_ctx: Some(8192),
+            num_predict: Some(1024),
+            think: Some(true),
+            usage: AiUsage::default(),
+            stop_reason: None,
+        };
+        let request = adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body = request.body().and_then(|b| b.as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["options"]["num_ctx"], 8192);
+        assert_eq!(value["options"]["num_predict"], 1024);
+        assert_eq!(value["think"], true);
+    }
+
+    #[test]
+    fn reflection_levels_map_to_ollama_think_flag() {
+        assert_eq!(reflection_level_to_ollama_think(None), None);
+        assert_eq!(reflection_level_to_ollama_think(Some("auto")), None);
+        assert_eq!(reflection_level_to_ollama_think(Some("off")), Some(false));
+        assert_eq!(reflection_level_to_ollama_think(Some("low")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("medium")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("high")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("max")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("surprise")), None);
+        assert_eq!(reflection_level_to_openai_effort(None), None);
+        assert_eq!(reflection_level_to_openai_effort(Some("off")), None);
+        assert_eq!(reflection_level_to_openai_effort(Some("low")).as_deref(), Some("low"));
+        assert_eq!(reflection_level_to_openai_effort(Some("medium")).as_deref(), Some("medium"));
+        assert_eq!(reflection_level_to_openai_effort(Some("high")).as_deref(), Some("high"));
+        assert_eq!(reflection_level_to_openai_effort(Some("max")).as_deref(), Some("high"));
+        assert_eq!(reflection_level_to_anthropic_budget(None), None);
+        assert_eq!(reflection_level_to_anthropic_budget(Some("off")), None);
+        assert_eq!(reflection_level_to_anthropic_budget(Some("low")), Some(1024));
+        assert_eq!(reflection_level_to_anthropic_budget(Some("medium")), Some(4096));
+        assert_eq!(reflection_level_to_anthropic_budget(Some("high")), Some(8192));
+        assert_eq!(reflection_level_to_anthropic_budget(Some("max")), Some(16_384));
     }
 
     #[test]
@@ -980,7 +1197,10 @@ mod tests {
             messages: vec![],
             tools: None,
             num_ctx: None,
+            num_predict: None,
+            think: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -1035,7 +1255,10 @@ mod tests {
             messages: vec![],
             tools: None,
             num_ctx: None,
+            num_predict: None,
+            think: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -1070,6 +1293,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: Some("sk-test".to_string()),
+            reasoning_effort: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1135,6 +1359,30 @@ mod tests {
         );
         assert!(body.get("tools").is_some());
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn openai_request_body_includes_reasoning_effort_when_configured() {
+        let adapter = OpenAiAdapter {
+            provider: "openai".to_string(),
+            chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
+            include_tools: true,
+            include_usage_in_stream: true,
+            model: "gpt-5".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: Some("sk-test".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            usage: AiUsage::default(),
+        };
+        let request = adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body = request.body().and_then(|b| b.as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["reasoning_effort"], "high");
     }
 
     #[test]
@@ -1234,6 +1482,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: Some("k".to_string()),
+            reasoning_effort: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1259,6 +1508,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "sk-ant-test".to_string(),
+            thinking_budget: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1296,6 +1546,28 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].content, "Hello");
         assert_eq!(chunks[1].content, " there");
+    }
+
+    #[test]
+    fn anthropic_request_body_includes_thinking_budget_when_configured() {
+        let adapter = AnthropicAdapter {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: "sk-ant-test".to_string(),
+            thinking_budget: Some(4096),
+            usage: AiUsage::default(),
+        };
+        let request = adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        let body = request.body().and_then(|b| b.as_bytes()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["thinking"]["type"], "enabled");
+        assert_eq!(value["thinking"]["budget_tokens"], 4096);
+        assert_eq!(value["max_tokens"], 8192);
     }
 
     #[test]
@@ -1345,6 +1617,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
+            thinking_budget: None,
             usage: AiUsage::default(),
         };
         let mut content = String::new();
@@ -1372,6 +1645,7 @@ mod tests {
             messages: vec![],
             tools: None,
             key: "k".to_string(),
+            thinking_budget: None,
             usage: AiUsage::default(),
         };
         let content = String::new();

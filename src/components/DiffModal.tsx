@@ -6,6 +6,9 @@ export type PendingEdit = {
   oldContent: string;
   newContent: string;
   isCreate: boolean;
+  /** Optional advisory note from the harness (e.g. a staleness warning when
+   *  the file changed since the agent last read it). Shown as a banner. */
+  reason?: string;
 };
 
 type Props = {
@@ -103,6 +106,21 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
             <span style={{ color: "#b8323a" }}>−{stats.removed}</span>
           </div>
         </header>
+
+        {edit.reason && (
+          <div
+            style={{
+              padding: "9px 18px",
+              borderBottom: "1px solid var(--border)",
+              background: "rgba(184, 130, 40, 0.10)",
+              color: "var(--fg-strong)",
+              fontSize: 12,
+              lineHeight: 1.45,
+            }}
+          >
+            {edit.reason}
+          </div>
+        )}
 
         <div
           style={{

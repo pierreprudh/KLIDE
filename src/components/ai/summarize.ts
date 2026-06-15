@@ -179,6 +179,25 @@ async function callModel(
   return buffer;
 }
 
+// Summarize the older slice of a conversation so it can REPLACE those turns
+// as context while recent turns continue verbatim. Different intent from the
+// memory note above: this output is fed straight back to the model as a system
+// message (via the ContextCompacted transcript marker), so it must preserve
+// the working state, not read like a report. Returns the trimmed summary text.
+export async function summarizeForCompaction(
+  provider: string,
+  model: string,
+  older: Msg[]
+): Promise<string> {
+  const convo = serializeConversation(older);
+  const prompt = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
+
+Earlier conversation:
+${convo}`;
+  const text = await callModel(provider, model, [{ role: "user", content: prompt }]);
+  return text.trim();
+}
+
 // Top-level entry point. Returns the saved MemoryEntry; throws if the
 // workspace isn't open, the model is unavailable, or the response is
 // empty. The caller (AiPanel) handles the success notice + the

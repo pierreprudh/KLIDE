@@ -70,7 +70,8 @@ pub fn append_event(
         | AgentEvent::RunResult { ts, .. }
         | AgentEvent::RunError { ts, .. }
         | AgentEvent::UserQuestionRequested { ts, .. }
-        | AgentEvent::UserQuestionResolved { ts, .. } => *ts,
+        | AgentEvent::UserQuestionResolved { ts, .. }
+        | AgentEvent::ContextCompacted { ts, .. } => *ts,
     };
     let line = TranscriptLine {
         schema_version: 1,
