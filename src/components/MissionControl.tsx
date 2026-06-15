@@ -325,12 +325,22 @@ type AppUserInfo = { username: string; hostname: string; homeDir: string };
 
 // Regex-based model → logo mapping. Keys are tested as RegExp against the model name.
 // The first match wins, so order matters (more specific patterns first).
+// OpenAI brand mark (the inline SVG from icons.tsx) for API models, kept
+// distinct from the Codex *CLI product* logo. A Klide conversation on the
+// OpenAI API (gpt-*, o1/o3/o4 reasoning models) is not Codex.
+function OpenAiLogo({ size = 13 }: { size?: number }) {
+  return <ProviderLogo id="openai" size={size} />;
+}
 const MODEL_LOGO_RULES: { pattern: RegExp; Comp: LogoComp }[] = [
   { pattern: /deepseek/i, Comp: DeepSeekLogo },
   { pattern: /minimax/i, Comp: MiniMaxLogo },
   { pattern: /kimi/i, Comp: KimiLogo },
   { pattern: /claude/i, Comp: ClaudeCodeLogo },
-  { pattern: /gpt-|codex/i, Comp: CodexLogo },
+  // Codex CLI only — keep this before the OpenAI rule so a literal "codex"
+  // model still wears the Codex mark.
+  { pattern: /codex/i, Comp: CodexLogo },
+  // OpenAI API models (gpt-4o, gpt-5, o1/o3/o4) → the OpenAI mark, not Codex.
+  { pattern: /^gpt-|^o[134]\b|^o[134]-/i, Comp: OpenAiLogo },
   { pattern: /glm|z-?ai/i, Comp: ZaiLogo },
 ];
 
