@@ -83,6 +83,13 @@ type ContextBreakdownRow = {
   muted?: boolean;
 };
 
+type ReflectionOption = {
+  value: string | undefined;
+  label: string;
+  level: number;
+  desc: string;
+};
+
 type Props = {
   workspaceRoot: string | null;
   onFileWritten?: (path: string, newContent: string) => void;
@@ -108,7 +115,6 @@ type Props = {
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
   harnessSettings?: AiHarnessSettings;
-  onHarnessSettingsChange?: (settings: AiHarnessSettings) => void;
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
   onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
@@ -170,6 +176,67 @@ function formatContextTokens(tokens: number): string {
   return tokens.toLocaleString();
 }
 
+const REFLECTION_BAR_HEIGHTS = [4, 7, 10, 13];
+const XHIGH_BAR_INDEX = REFLECTION_BAR_HEIGHTS.length - 1;
+
+function ReflectionBars({ level, size = "compact" }: { level: number; size?: "compact" | "menu" }) {
+  const isAuto = level === 0;
+  const isXhigh = level > REFLECTION_BAR_HEIGHTS.length;
+  const activeCount = isAuto ? 0 : Math.min(level, REFLECTION_BAR_HEIGHTS.length);
+  const barWidth = 2;
+  const gap = 2;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        height: size === "menu" ? 15 : 14,
+        display: "inline-flex",
+        alignItems: "end",
+        gap,
+        flexShrink: 0,
+      }}
+    >
+      {REFLECTION_BAR_HEIGHTS.map((height, idx) => {
+        const active = isAuto || idx < activeCount;
+        const isTip = isXhigh && idx === XHIGH_BAR_INDEX;
+        return (
+          <span
+            key={idx}
+            style={{
+              width: barWidth,
+              height,
+              borderRadius: 1,
+              background: isTip
+                ? "linear-gradient(to top, color-mix(in oklab, var(--accent) 70%, transparent), var(--accent))"
+                : active
+                  ? "linear-gradient(to top, color-mix(in oklab, var(--fg) 65%, transparent), var(--fg))"
+                  : "var(--border-strong)",
+              opacity: isAuto ? 0.35 : active ? 0.88 : 0.32,
+            }}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+function normalizeReflectionLevel(level: string | undefined | null): string | undefined {
+  switch (level) {
+    case "off":
+    case "minimal":
+      return "minimal";
+    case "low":
+    case "medium":
+    case "high":
+      return level;
+    case "max":
+    case "xhigh":
+      return "xhigh";
+    default:
+      return undefined;
+  }
+}
+
 // The default model for a provider. Built-ins read the static map; custom
 // (self-hosted) providers read their configured default from the cache,
 // since DEFAULT_MODELS has no entry for a runtime id.
@@ -207,7 +274,6 @@ export function AiPanel({
   skills,
   projectContext,
   harnessSettings,
-  onHarnessSettingsChange,
   onDuplicate,
   onProviderChange,
   onClose,
@@ -233,7 +299,7 @@ export function AiPanel({
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [contextHover, setContextHover] = useState(false);
-  const [contextTooltipPos, setContextTooltipPos] = useState<{ bottom: number; left: number } | null>(null);
+  const [contextTooltipPos, setContextTooltipPos] = useState<{ bottom: number; left: number; width: number; compact: boolean } | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -348,10 +414,14 @@ export function AiPanel({
     const trigger = contextTriggerRef.current;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    const width = 218;
+    const viewportPad = 8;
+    const width = Math.min(360, Math.max(272, window.innerWidth - viewportPad * 2));
+    const idealLeft = rect.right - width;
     setContextTooltipPos({
       bottom: Math.round(window.innerHeight - rect.top + 8),
-      left: Math.round(Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8)),
+      left: Math.round(Math.min(Math.max(viewportPad, idealLeft), window.innerWidth - width - viewportPad)),
+      width: Math.round(width),
+      compact: width < 330,
     });
     setContextHover(true);
   }
@@ -621,23 +691,43 @@ export function AiPanel({
   const ctxOverride = harnessSettings?.contextWindows?.[model];
   const effectiveContextLimit =
     provider === "ollama" && ctxOverride && ctxOverride > 0 ? ctxOverride : contextLimit;
+  const contextLimitNote = provider === "ollama"
+    ? ctxOverride && ctxOverride > 0
+      ? "Ollama override active: Klide sends this window as num_ctx."
+      : "Ollama auto: Klide chooses a stable working window up to the detected model limit."
+    : isCustomProvider(provider)
+      ? "Self-hosted endpoint: Klide cannot set context here. Configure the server/model window upstream."
+      : isLocalProvider
+        ? "Local OpenAI-compatible server: context is controlled by the server, not by Klide."
+        : "API provider: context is provider-controlled; Klide tracks usage against the advertised limit.";
   const effortBudget = provider === "ollama" ? harnessSettings?.effortBudgets?.[model] : undefined;
-  const reflectionLevel = modelSupportsReflection ? harnessSettings?.reflectionLevels?.[model] : undefined;
-  const reflectionOptions: { value: string | undefined; label: string; short: string; desc: string }[] = [
-    { value: undefined, label: "Auto", short: "Auto", desc: "Provider default" },
-    { value: "off", label: "Off", short: "Off", desc: "No extra thinking" },
-    { value: "low", label: "Fast", short: "Fast", desc: "Lower latency" },
-    { value: "medium", label: "Balanced", short: "Bal", desc: "Default reasoning depth" },
-    { value: "high", label: "Deep", short: "Deep", desc: "More careful reasoning" },
-    { value: "max", label: "Max", short: "Max", desc: "Highest supported depth" },
+  const reflectionStorageKey = `klide.reflectionLevel.${panelId ?? "ai-main"}.${provider}.${model}`;
+  const [panelReflectionLevel, setPanelReflectionLevel] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    try {
+      const stored = normalizeReflectionLevel(localStorage.getItem(reflectionStorageKey));
+      setPanelReflectionLevel(stored ?? normalizeReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
+    } catch {
+      setPanelReflectionLevel(normalizeReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
+    }
+  }, [reflectionStorageKey, harnessSettings?.reflectionLevels?.[model], model]);
+  const reflectionLevel = modelSupportsReflection ? panelReflectionLevel : undefined;
+  const reflectionOptions: ReflectionOption[] = [
+    { value: undefined, label: "Auto", level: 0, desc: "Provider default" },
+    { value: "minimal", label: "minimal", level: 1, desc: "Smallest reasoning effort" },
+    { value: "low", label: "low", level: 2, desc: "Lower reasoning effort" },
+    { value: "medium", label: "medium", level: 3, desc: "Default reasoning effort" },
+    { value: "high", label: "high", level: 4, desc: "Higher reasoning effort" },
+    { value: "xhigh", label: "xhigh", level: 5, desc: "Highest reasoning effort" },
   ];
   const activeReflection = reflectionOptions.find((o) => o.value === reflectionLevel) ?? reflectionOptions[0];
   function selectReflectionLevel(level: string | undefined) {
-    if (!modelSupportsReflection || !onHarnessSettingsChange) return;
-    const nextLevels = { ...(harnessSettings?.reflectionLevels ?? {}) };
-    if (level === undefined) delete nextLevels[model];
-    else nextLevels[model] = level;
-    onHarnessSettingsChange({ ...(harnessSettings ?? {}), reflectionLevels: nextLevels });
+    if (!modelSupportsReflection) return;
+    setPanelReflectionLevel(level);
+    try {
+      if (level === undefined) localStorage.removeItem(reflectionStorageKey);
+      else localStorage.setItem(reflectionStorageKey, level);
+    } catch {}
     closeReflectionMenu();
   }
   const [toolSchemaTokens, setToolSchemaTokens] = useState(0);
@@ -2254,8 +2344,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             rows={1}
             style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block" }}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", flexWrap: "nowrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: width < 360 ? 4 : 6, minWidth: 0, flex: "1 1 auto", flexWrap: "nowrap", overflow: "hidden" }}>
               {providerDelegatesWork ? (
                 <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "color-mix(in srgb, var(--panel) 88%, transparent)", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 560, flexShrink: 0 }}>
                   <ProviderLogo id={provider} size={13} /><span>{providerName(provider)}</span>
@@ -2265,12 +2355,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   <button ref={modeTriggerRef} type="button" onClick={() => { if (!streaming) { if (modeOpen) closeModeMenu(); else openModeMenu(); } }} disabled={streaming}
                     title={`${MODE_OPTIONS.find((o) => o.id === effectiveMode)?.title ?? ""} Click to choose Chat, Plan, or Goal. Press Tab to cycle.`}
                     aria-haspopup="menu" aria-expanded={modeOpen} aria-label={`AI mode: ${MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}`}
-                    style={{ display: "flex", alignItems: "center", gap: 5, height: 24, minWidth: 66, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: modeOpen ? "var(--bg-hover)" : "color-mix(in srgb, var(--panel) 88%, transparent)", boxShadow: modeOpen ? "0 6px 18px rgba(38, 38, 32, 0.10)" : "inset 0 1px 0 rgba(255,255,255,0.05)", color: modeOpen ? "var(--fg-strong)" : "var(--fg-subtle)", fontSize: 11, fontWeight: 560, letterSpacing: 0, cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)" }}
+                    style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 0, height: 24, width: width < 360 ? 58 : 64, padding: width < 360 ? "0 17px 0 7px" : "0 19px 0 9px", borderRadius: 999, border: "1px solid var(--border-strong)", background: modeOpen ? "var(--bg-hover)" : "color-mix(in srgb, var(--panel) 88%, transparent)", boxShadow: modeOpen ? "0 6px 18px rgba(38, 38, 32, 0.10)" : "inset 0 1px 0 rgba(255,255,255,0.05)", color: modeOpen ? "var(--fg-strong)" : "var(--fg-subtle)", fontSize: 11, fontWeight: 560, letterSpacing: 0, cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)" }}
                     onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
                     onMouseLeave={(e) => { if (!modeOpen) e.currentTarget.style.color = "var(--fg-subtle)"; }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: effectiveMode === "goal" ? "var(--accent)" : effectiveMode === "plan" ? "#A15C00" : "var(--fg-dim)", flexShrink: 0 }} />
-                    <span>{MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}</span>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ opacity: 0.65, transform: modeOpen ? "rotate(180deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}><path d="M6 9l6 6 6-6" /></svg>
+                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>{MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}</span>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", right: width < 360 ? 5 : 7, opacity: 0.65, transform: modeOpen ? "rotate(180deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}><path d="M6 9l6 6 6-6" /></svg>
                   </button>
                   {modeOpen && modeMenuPos && createPortal(
                     <div ref={modeMenuRef} role="menu" aria-label="AI mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 132, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)", zIndex: 200 }}>
@@ -2304,9 +2393,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   <button
                     ref={reflectionTriggerRef}
                     type="button"
-                    disabled={streaming || !onHarnessSettingsChange}
+                    disabled={streaming}
                     onClick={() => {
-                      if (streaming || !onHarnessSettingsChange) return;
+                      if (streaming) return;
                       if (reflectionOpen) closeReflectionMenu();
                       else openReflectionMenu();
                     }}
@@ -2315,32 +2404,30 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                     aria-label={`Reflection: ${activeReflection.label}`}
                     title="Choose reflection level for this model"
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                      height: 24,
-                      minWidth: 68,
-                      padding: "0 8px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border-strong)",
-                      background: reflectionOpen ? "var(--bg-hover)" : "color-mix(in srgb, var(--panel) 88%, transparent)",
-                      boxShadow: reflectionOpen ? "0 6px 18px rgba(38, 38, 32, 0.10)" : "inset 0 1px 0 rgba(255,255,255,0.05)",
+	                      display: "flex",
+	                      alignItems: "center",
+	                      justifyContent: "center",
+	                      height: 24,
+	                      width: width < 360 ? 28 : 32,
+	                      padding: 0,
+	                      borderRadius: 999,
+	                      border: "1px solid transparent",
+	                      background: reflectionOpen ? "var(--bg-hover)" : "transparent",
+	                      boxShadow: "none",
                       color: reflectionOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
                       fontSize: 11,
                       fontWeight: 560,
                       letterSpacing: 0,
-                      cursor: streaming || !onHarnessSettingsChange ? "default" : "pointer",
-                      transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)",
+                      cursor: streaming ? "default" : "pointer",
+	                      transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
                     }}
-                    onMouseEnter={(e) => { if (!streaming && onHarnessSettingsChange) e.currentTarget.style.color = "var(--fg-strong)"; }}
+                    onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
                     onMouseLeave={(e) => { if (!reflectionOpen) e.currentTarget.style.color = "var(--fg-subtle)"; }}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: activeReflection.value === "off" ? "var(--fg-dim)" : activeReflection.value === "low" ? "#7A9F4A" : activeReflection.value === "high" || activeReflection.value === "max" ? "var(--accent)" : "#A15C00", flexShrink: 0 }} />
-                    <span>{activeReflection.short}</span>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ opacity: 0.65, transform: reflectionOpen ? "rotate(180deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}><path d="M6 9l6 6 6-6" /></svg>
-                  </button>
+	                    <ReflectionBars level={activeReflection.level} />
+	                  </button>
                   {reflectionOpen && reflectionMenuPos && createPortal(
-                    <div ref={reflectionMenuRef} role="menu" aria-label="Reflection level" className="popover-enter" style={{ position: "fixed", left: reflectionMenuPos.left, bottom: reflectionMenuPos.bottom, width: 176, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)", zIndex: 205 }}>
+	                    <div ref={reflectionMenuRef} role="menu" aria-label="Reflection level" className="popover-enter" style={{ position: "fixed", left: reflectionMenuPos.left, bottom: reflectionMenuPos.bottom, width: 166, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 10px 26px rgba(38, 38, 32, 0.14)", zIndex: 205 }}>
                       {reflectionOptions.map((option) => {
                         const active = option.value === reflectionLevel;
                         return (
@@ -2349,13 +2436,18 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                             type="button"
                             role="menuitemradio"
                             aria-checked={active}
-                            onClick={() => selectReflectionLevel(option.value)}
-                            style={{ width: "100%", minHeight: 34, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "5px 8px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--bg-hover)" : "transparent", color: active ? "var(--fg-strong)" : "var(--fg-subtle)", font: "inherit", textAlign: "left", cursor: "pointer" }}
-                          >
-                            <span style={{ display: "grid", gap: 1, minWidth: 0 }}>
-                              <span style={{ fontSize: 12, fontWeight: 560 }}>{option.label}</span>
-                              <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{option.desc}</span>
-                            </span>
+	                            onClick={() => selectReflectionLevel(option.value)}
+		                            style={{ width: "100%", minHeight: 30, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 7px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--bg-hover)" : "transparent", color: active ? "var(--fg-strong)" : "var(--fg-subtle)", font: "inherit", textAlign: "left", cursor: "pointer" }}
+		                          >
+		                            <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+	                              <ReflectionBars level={option.level} size="menu" />
+	                              <span style={{ display: "grid", gap: 1, minWidth: 0 }}>
+	                              <span style={{ fontSize: 12, fontWeight: 560 }}>{option.label}</span>
+	                              {option.value === undefined && (
+	                                <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{option.desc}</span>
+	                              )}
+	                              </span>
+	                            </span>
                             {active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><path d="M20 6 9 17l-5-5" /></svg>}
                           </button>
                         );
@@ -2366,8 +2458,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                 </div>
               )}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-              {conversationCostUsd > 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "initial", gap: width < 360 ? 3 : 4, flex: "0 0 auto", minWidth: 0 }}>
+              {conversationCostUsd > 0 && width >= 380 && (
                 <span
                   title={`This conversation has cost about $${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 4 : 2)} (${modelLabel(model)} list price)`}
                   style={{ height: 20, display: "inline-flex", alignItems: "center", padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
@@ -2386,10 +2478,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength="100" strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`} transform="rotate(-90 11 11)" style={{ transition: "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)" }} />
                 </svg>
                 {contextHover && contextTooltipPos && createPortal(
-                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: 360, padding: "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: 220 }}>
-                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
+                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: 220 }}>
+                    <div style={{ display: "flex", alignItems: contextTooltipPos.compact ? "start" : "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
                       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 620 }}>Context window</span>
-                      <span style={{ color: "var(--fg-subtle)", fontSize: 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{formatContextTokens(contextUsed)} / {formatContextTokens(effectiveContextLimit)} ({Math.round(contextRatio * 100)}%)</span>
+                      <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}>{formatContextTokens(contextUsed)} / {formatContextTokens(effectiveContextLimit)} ({Math.round(contextRatio * 100)}%)</span>
                     </div>
                     <div style={{ height: 7, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", marginBottom: 11, display: "flex", gap: 1 }}>
                       {contextBreakdownRows.filter((row) => row.id !== "free" && row.tokens > 0).map((row) => (
@@ -2410,10 +2502,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                       {contextBreakdownRows.map((row) => {
                         const pct = effectiveContextLimit > 0 ? (row.tokens / effectiveContextLimit) * 100 : 0;
                         return (
-                          <div key={row.id} style={{ display: "grid", gridTemplateColumns: "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: 8, opacity: row.muted ? 0.72 : 1 }}>
+                          <div key={row.id} style={{ display: "grid", gridTemplateColumns: contextTooltipPos.compact ? "12px minmax(0, 1fr) 58px 42px" : "14px minmax(0, 1fr) 70px 54px", alignItems: "center", gap: contextTooltipPos.compact ? 6 : 8, opacity: row.muted ? 0.72 : 1 }}>
                             <span style={{ width: 8, height: 8, borderRadius: 2, background: row.color, boxShadow: row.id === "free" ? "inset 0 0 0 1px var(--border)" : undefined }} />
                             <span style={{ color: row.id === "free" ? "var(--fg-dim)" : "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
-                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)" }}>{formatContextTokens(row.tokens)}</span>
+                            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11 : 12 }}>{formatContextTokens(row.tokens)}</span>
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: row.id === "free" ? "var(--fg-dim)" : "var(--fg-subtle)" }}>{pct.toFixed(pct >= 10 || pct === 0 ? 0 : 1)}%</span>
                           </div>
                         );
@@ -2428,9 +2520,14 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                       <div>
                         {measuredPromptTokens !== null && !streaming ? "Headline measured from provider usage; category split is estimated." : "Estimated before the next turn."}
                       </div>
-                      {provider === "ollama" && ctxOverride && ctxOverride > 0 ? " · window override" : ""}
-                      {effortBudget ? ` · ${effortBudget.toLocaleString()} reply budget` : ""}
-                      {modelSupportsReflection ? ` · reflection ${reflectionLevel ?? "auto"}` : ""}
+                      <div>{contextLimitNote}</div>
+                      {(effortBudget || modelSupportsReflection) && (
+                        <div>
+                          {effortBudget ? `${effortBudget.toLocaleString()} reply budget` : ""}
+                          {effortBudget && modelSupportsReflection ? " · " : ""}
+                          {modelSupportsReflection ? `reflection ${reflectionLevel ?? "auto"}` : ""}
+                        </div>
+                      )}
                     </div>
                   </div>,
                   document.body

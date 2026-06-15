@@ -1006,6 +1006,7 @@ pub fn run() {
         })
         .manage(agent::AgentSupervisorState::default())
         .manage(local_servers::LocalServerState::default())
+        .manage(models::ReflectionProbeCache::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};

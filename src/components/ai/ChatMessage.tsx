@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import type { Msg } from "./types";
 import { DelegateConsole } from "./DelegateTerminal";
 import { DotGridLoader, ToolIcon } from "./icons";
-import { renderMarkdown, splitThinking, stripPlanJson } from "./markdown";
+import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 
 // Premium thinking block. Renders as a soft card with a pulsing dot while the
 // agent is still streaming, a rotating chevron, and a markdown body so code

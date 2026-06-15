@@ -10,12 +10,28 @@ use crate::{
     response_error,
 };
 use crate::{ANTHROPIC_VERSION, OLLAMA_URL};
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use std::time::Instant;
 
 static OLLAMA_MODELS_CACHE: LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
     LazyLock::new(|| Mutex::new(None));
+
+/// Cached results of the active Ollama reflection probe. Keyed by
+/// `"ollama:<model>"`. Lives for the Tauri process so we don't burn a
+/// chat inference on every model switch.
+pub struct ReflectionProbeCache {
+    pub cache: Mutex<HashMap<String, bool>>,
+}
+
+impl Default for ReflectionProbeCache {
+    fn default() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+}
 
 fn normalize_model_ids(value: &serde_json::Value) -> Vec<String> {
     value
@@ -462,16 +478,25 @@ pub(crate) async fn ai_model_supports_tools(
 
 #[tauri::command]
 pub(crate) async fn ai_model_supports_reflection(
+    state: tauri::State<'_, ReflectionProbeCache>,
     provider: String,
     model: String,
+) -> Result<bool, String> {
+    resolve_reflection_support(&state, &provider, &model).await
+}
+
+async fn resolve_reflection_support(
+    state: &ReflectionProbeCache,
+    provider: &str,
+    model: &str,
 ) -> Result<bool, String> {
     if provider == "anthropic" {
         return Ok(true);
     }
 
-    if let Some(entry) = providers::lookup(&provider) {
+    if let Some(entry) = providers::lookup(provider) {
         if let providers::WireFormat::OpenAi(cfg) = entry.wire {
-            return Ok(cfg.supports_reasoning_effort);
+            return Ok(cfg.supports_reasoning_effort && openai_wire_model_supports_reasoning(model));
         }
     }
 
@@ -479,6 +504,45 @@ pub(crate) async fn ai_model_supports_reflection(
         return Ok(false);
     }
 
+    // Fast path: trust Ollama's modelfile capability list.
+    if ollama_advertises_thinking(model).await.unwrap_or(false) {
+        return Ok(true);
+    }
+
+    // Slow path: some local models (e.g. LFM 2.5 8B) accept the `think` param
+    // even when the modelfile forgets to advertise the capability. Probe once
+    // with a tiny non-streaming chat and cache the verdict for the session.
+    let cache_key = format!("ollama:{model}");
+    if let Some(cached) = state
+        .cache
+        .lock()
+        .expect("reflection probe cache poisoned")
+        .get(&cache_key)
+        .copied()
+    {
+        return Ok(cached);
+    }
+    let probed = probe_ollama_thinking_support(model).await;
+    state
+        .cache
+        .lock()
+        .expect("reflection probe cache poisoned")
+        .insert(cache_key, probed);
+    Ok(probed)
+}
+
+fn openai_wire_model_supports_reasoning(model: &str) -> bool {
+    let lower = model.trim().to_ascii_lowercase();
+    let model = lower.rsplit('/').next().unwrap_or(lower.as_str());
+
+    model.starts_with("gpt-5")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.starts_with("o5")
+}
+
+async fn ollama_advertises_thinking(model: &str) -> Result<bool, String> {
     let res = reqwest::Client::new()
         .post(format!("{OLLAMA_URL}/api/show"))
         .json(&serde_json::json!({ "model": model }))
@@ -497,6 +561,37 @@ pub(crate) async fn ai_model_supports_reflection(
         .and_then(|v| v.as_array())
         .map(|caps| caps.iter().any(|c| c.as_str() == Some("thinking")))
         .unwrap_or(false))
+}
+
+/// Sends a one-shot non-streaming chat with `think: true` and decides
+/// whether the model actually exposed a thinking channel in the response.
+/// Conservative on ambiguity: a missing or empty field means "not supported".
+async fn probe_ollama_thinking_support(model: &str) -> bool {
+    let req = reqwest::Client::new()
+        .post(format!("{OLLAMA_URL}/api/chat"))
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": true,
+            "stream": false,
+        }))
+        .timeout(Duration::from_secs(15));
+    let Ok(res) = req.send().await else { return false; };
+    if !res.status().is_success() {
+        return false;
+    }
+    let Ok(body) = res.text().await else { return false; };
+    ollama_probe_response_has_thinking(&body)
+}
+
+fn ollama_probe_response_has_thinking(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").cloned())
+        .and_then(|m| m.get("thinking").cloned())
+        .and_then(|t| t.as_str().map(str::to_string))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -604,9 +699,10 @@ mod tests {
 
     #[tokio::test]
     async fn mlx_does_not_advertise_reflection_support() {
-        let supports = ai_model_supports_reflection(
-            "mlx".to_string(),
-            "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
+        let supports = resolve_reflection_support(
+            &ReflectionProbeCache::default(),
+            "mlx",
+            "mlx-community/Llama-3.1-8B-Instruct-4bit",
         )
         .await
         .unwrap();
@@ -615,26 +711,42 @@ mod tests {
 
     #[tokio::test]
     async fn hosted_reasoning_providers_advertise_reflection_support() {
-        assert!(
-            ai_model_supports_reflection("openai".to_string(), "gpt-5".to_string())
-                .await
-                .unwrap()
-        );
-        assert!(
-            ai_model_supports_reflection("anthropic".to_string(), "claude-sonnet-4-6".to_string())
-                .await
-                .unwrap()
-        );
-        assert!(
-            ai_model_supports_reflection("openrouter".to_string(), "openai/gpt-5".to_string())
-                .await
-                .unwrap()
-        );
-        assert!(
-            !ai_model_supports_reflection("mistral".to_string(), "mistral-large".to_string())
-                .await
-                .unwrap()
-        );
+        let cache = ReflectionProbeCache::default();
+        assert!(resolve_reflection_support(&cache, "openai", "gpt-5").await.unwrap());
+        assert!(resolve_reflection_support(&cache, "openai", "o4-mini").await.unwrap());
+        assert!(resolve_reflection_support(&cache, "anthropic", "claude-sonnet-4-6")
+            .await
+            .unwrap());
+        assert!(resolve_reflection_support(&cache, "openrouter", "openai/gpt-5")
+            .await
+            .unwrap());
+        assert!(!resolve_reflection_support(&cache, "openai", "gpt-4.1-mini")
+            .await
+            .unwrap());
+        assert!(!resolve_reflection_support(&cache, "openrouter", "openai/gpt-4.1-mini")
+            .await
+            .unwrap());
+        assert!(!resolve_reflection_support(&cache, "mistral", "mistral-large")
+            .await
+            .unwrap());
+    }
+
+    #[test]
+    fn ollama_probe_response_recognises_thinking_field() {
+        // Thinking field present and non-empty → supported.
+        assert!(ollama_probe_response_has_thinking(
+            r#"{"message":{"thinking":"Let me think...","content":"hi"}}"#
+        ));
+        // Thinking field present but empty → not supported (be conservative).
+        assert!(!ollama_probe_response_has_thinking(
+            r#"{"message":{"thinking":"","content":"hi"}}"#
+        ));
+        // No thinking field → not supported.
+        assert!(!ollama_probe_response_has_thinking(
+            r#"{"message":{"content":"hi"}}"#
+        ));
+        // Garbage body → not supported.
+        assert!(!ollama_probe_response_has_thinking("not json"));
     }
 
     #[tokio::test]
