@@ -313,12 +313,16 @@ function formatDuration(ms: number): string {
 // Quiet per-message stats — centered under the answer, barely-there by
 // default, full strength on hover (see .klide-msg-meta in tokens.css).
 // Order: tok/s · tokens · time · TTFT.
-function MessageMeta({ meta }: { meta: { ms?: number; tokens?: number; ttftMs?: number; tps?: number; exact?: boolean } }) {
+function MessageMeta({ meta }: { meta: { ms?: number; tokens?: number; promptTokens?: number; ttftMs?: number; tps?: number; exact?: boolean; costUsd?: number } }) {
   const parts: string[] = [];
   if (meta.tps) parts.push(`${meta.tps} tok/s`);
   if (meta.tokens) parts.push(`${meta.exact ? "" : "~"}${meta.tokens.toLocaleString()} tokens`);
   if (meta.ms !== undefined) parts.push(formatDuration(meta.ms));
   if (meta.ttftMs !== undefined) parts.push(`TTFT ${formatDuration(meta.ttftMs)}`);
+  // Cost last, so the eye lands on it. Sub-cent turns show "<$0.01".
+  if (meta.costUsd !== undefined && meta.costUsd > 0) {
+    parts.push(meta.costUsd < 0.01 ? "<$0.01" : `$${meta.costUsd.toFixed(meta.costUsd < 1 ? 3 : 2)}`);
+  }
   if (parts.length === 0) return null;
   return (
     <div

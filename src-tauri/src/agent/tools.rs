@@ -251,11 +251,11 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Write,
-            schema: schema("write_file", "Propose a search-and-replace edit to an existing file. The user reviews the diff and approves or rejects it.",
+            schema: schema("write_file", "Propose a search-and-replace edit to an existing file. The user reviews the diff and approves or rejects it. old_str should be a unique snippet copied from the file; matching is tolerant of indentation differences and of leading `N: ` line-number prefixes from read_file output.",
                 serde_json::json!({
                     "path": { "type": "string", "description": "Path of the existing file, relative to the workspace root." },
-                    "old_str": { "type": "string", "description": "The exact text to find in the file. Must match a unique substring." },
-                    "new_str": { "type": "string", "description": "The replacement text. Use an empty string to delete the matched text." }
+                    "old_str": { "type": "string", "description": "Text to find. Copy it from the file (line-number prefixes and exact indentation are optional). Must locate a unique region." },
+                    "new_str": { "type": "string", "description": "The replacement text. Use an empty string to delete the matched region." }
                 }),
                 &["path", "old_str", "new_str"]),
             run_read: None,
@@ -811,14 +811,36 @@ fn read_file(ws: &Workspace, path: &str) -> ToolResult {
         ));
     }
     match std::fs::read_to_string(&full) {
-        Ok(content) => ok(format!(
-            "Contents of {} ({} chars):\n```\n{}\n```",
-            ws.display(&full),
-            content.len(),
-            content
-        )),
+        Ok(content) => {
+            // Number the lines (1-indexed) the way omp's "hashline" read does:
+            // `N: content`. Numbers help the model reason about *where* code is
+            // and pair with write_file, which strips a leading `N: ` prefix when
+            // it falls back to whitespace-insensitive matching — so a model that
+            // copies a numbered line verbatim into `old_str` still edits cleanly.
+            let line_count = content.lines().count();
+            let numbered = number_lines(&content);
+            ok(format!(
+                "Contents of {} ({} lines, {} chars). Lines are numbered `N: `; \
+when editing with write_file, the number prefix is optional — it's stripped \
+automatically.\n```\n{}\n```",
+                ws.display(&full),
+                line_count,
+                content.len(),
+                numbered
+            ))
+        }
         Err(e) => err(format!("Unable to read {} as text: {e}", ws.display(&full))),
     }
+}
+
+/// Prefix every line with its 1-indexed number (`N: line`), omp-style.
+fn number_lines(content: &str) -> String {
+    content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| format!("{}: {}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn list_dir(ws: &Workspace, path: &str) -> ToolResult {
@@ -1470,6 +1492,116 @@ fn unified_diff_lines(old: &str, new: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Why a `locate_edit` lookup failed: nothing matched, or several regions did.
+#[derive(Debug)]
+enum LocateError {
+    NotFound,
+    Multiple(usize),
+}
+
+/// Byte `(start, end)` spans of each line in `s`, excluding the trailing `\n`.
+fn line_spans(s: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (i, b) in s.bytes().enumerate() {
+        if b == b'\n' {
+            spans.push((start, i));
+            start = i + 1;
+        }
+    }
+    if start < s.len() {
+        spans.push((start, s.len()));
+    }
+    spans
+}
+
+/// Normalize one line for tolerant matching: drop a leading `N:` / `N: `
+/// line-number prefix (the read_file gutter), then trim surrounding
+/// whitespace so indentation drift doesn't defeat a match. Conservative —
+/// the prefix is stripped only when it's exactly `<digits>:`.
+fn normalize_match_line(line: &str) -> &str {
+    let trimmed = line.trim();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && i < bytes.len() && bytes[i] == b':' {
+        return trimmed[i + 1..].trim_start();
+    }
+    trimmed
+}
+
+/// Locate the unique region of `current` that `old_str` refers to, returning
+/// the byte range to replace. Exact substring first (fast, indentation-
+/// faithful); then a line-based match that ignores indentation and `N: `
+/// gutter prefixes — omp's "hashline" tolerance, minus the engine. Both paths
+/// demand a *unique* hit so an edit never lands in the wrong place.
+fn locate_edit(current: &str, old_str: &str) -> Result<(usize, usize), LocateError> {
+    let exact: Vec<usize> = current.match_indices(old_str).map(|(i, _)| i).collect();
+    match exact.len() {
+        1 => return Ok((exact[0], exact[0] + old_str.len())),
+        n if n > 1 => return Err(LocateError::Multiple(n)),
+        _ => {}
+    }
+
+    // Normalized old_str lines, trimming blank lines off both ends so a stray
+    // leading/trailing newline doesn't widen the window.
+    let old_norm: Vec<&str> = old_str.lines().map(normalize_match_line).collect();
+    let (Some(first), Some(last)) = (
+        old_norm.iter().position(|l| !l.is_empty()),
+        old_norm.iter().rposition(|l| !l.is_empty()),
+    ) else {
+        return Err(LocateError::NotFound); // old_str carried no real content
+    };
+    let old_core = &old_norm[first..=last];
+    let n = old_core.len();
+
+    let spans = line_spans(current);
+    let cur_norm: Vec<&str> = spans
+        .iter()
+        .map(|&(a, b)| normalize_match_line(&current[a..b]))
+        .collect();
+
+    let mut windows: Vec<usize> = Vec::new();
+    if n <= cur_norm.len() {
+        for i in 0..=cur_norm.len() - n {
+            if (0..n).all(|k| cur_norm[i + k] == old_core[k]) {
+                windows.push(i);
+            }
+        }
+    }
+    match windows.len() {
+        1 => Ok((spans[windows[0]].0, spans[windows[0] + n - 1].1)),
+        0 => Err(LocateError::NotFound),
+        m => Err(LocateError::Multiple(m)),
+    }
+}
+
+/// A short, numbered context hint pointing at where `old_str` *almost* matched
+/// — the first file line whose normalized form equals old_str's first real
+/// line. Empty when there's no near-miss to show.
+fn nearest_hint(current: &str, old_str: &str) -> String {
+    let Some(target) = old_str
+        .lines()
+        .map(normalize_match_line)
+        .find(|l| !l.is_empty())
+    else {
+        return String::new();
+    };
+    let lines: Vec<&str> = current.lines().collect();
+    let Some(hit) = lines.iter().position(|l| normalize_match_line(l) == target) else {
+        return String::new();
+    };
+    let start = hit.saturating_sub(2);
+    let end = (hit + 3).min(lines.len());
+    let ctx = (start..end)
+        .map(|i| format!("{}: {}", i + 1, lines[i]))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\nClosest match near line {}:\n{}", hit + 1, ctx)
+}
+
 fn preview_write_file(
     ws: &Workspace,
     input: &serde_json::Value,
@@ -1487,18 +1619,21 @@ fn preview_write_file(
     let rel = ws.display(&full);
     let current =
         std::fs::read_to_string(&full).map_err(|e| err(format!("Cannot read {rel}: {e}")))?;
-    let occurrences = current.matches(&old_str).count();
-    if occurrences == 0 {
-        return Err(err(format!(
-            "old_str not found in {rel}. Read the file again and use an exact substring."
-        )));
-    }
-    if occurrences > 1 {
-        return Err(err(format!(
-            "old_str matches {occurrences} locations in {rel}. Include more surrounding context."
-        )));
-    }
-    let new_content = current.replacen(&old_str, &new_str, 1);
+    let new_content = match locate_edit(&current, &old_str) {
+        Ok((start, end)) => format!("{}{}{}", &current[..start], new_str, &current[end..]),
+        Err(LocateError::NotFound) => {
+            return Err(err(format!(
+                "old_str not found in {rel} (tried exact and whitespace-insensitive matching).{}\n\
+                 Re-read the file and copy a snippet that exists verbatim.",
+                nearest_hint(&current, &old_str)
+            )));
+        }
+        Err(LocateError::Multiple(n)) => {
+            return Err(err(format!(
+                "old_str matches {n} regions in {rel}. Include more surrounding context so it locates exactly one."
+            )));
+        }
+    };
     if new_content.len() as u64 > MAX_WRITE_BYTES {
         return Err(err("Resulting file would be too large".to_string()));
     }
@@ -1795,5 +1930,93 @@ mod tests {
         let (calls, cleaned) = recover_text_tool_calls(content);
         assert!(calls.is_empty());
         assert_eq!(cleaned, content);
+    }
+
+    // ── Tolerant edit matching (omp-inspired) ────────────────────────────
+
+    #[test]
+    fn number_lines_is_one_indexed() {
+        assert_eq!(number_lines("a\nb\nc"), "1: a\n2: b\n3: c");
+    }
+
+    #[test]
+    fn normalize_strips_gutter_and_indentation() {
+        assert_eq!(normalize_match_line("    let x = 1;"), "let x = 1;");
+        assert_eq!(normalize_match_line("42:    let x = 1;"), "let x = 1;");
+        assert_eq!(normalize_match_line("42: let x = 1;"), "let x = 1;");
+        // A real `key:` line with no leading digits is left alone after trim.
+        assert_eq!(normalize_match_line("  name: value"), "name: value");
+        // Blank / whitespace-only lines normalize to empty.
+        assert_eq!(normalize_match_line("   "), "");
+    }
+
+    #[test]
+    fn locate_exact_unique() {
+        let current = "fn a() {}\nfn b() {}\n";
+        let (s, e) = locate_edit(current, "fn b() {}").expect("unique");
+        assert_eq!(&current[s..e], "fn b() {}");
+    }
+
+    #[test]
+    fn locate_exact_multiple_is_error() {
+        let current = "x = 1\nx = 1\n";
+        assert!(matches!(
+            locate_edit(current, "x = 1"),
+            Err(LocateError::Multiple(2))
+        ));
+    }
+
+    #[test]
+    fn locate_tolerates_indentation_drift() {
+        // Model copied the body with the wrong indentation (2 spaces vs 4).
+        let current = "fn f() {\n    let y = 2;\n    return y;\n}\n";
+        let old = "  let y = 2;\n  return y;";
+        let (s, e) = locate_edit(current, old).expect("fuzzy unique");
+        // The matched region is the real (4-space) file text, byte-exact.
+        assert_eq!(&current[s..e], "    let y = 2;\n    return y;");
+    }
+
+    #[test]
+    fn locate_tolerates_line_number_prefixes() {
+        // Model pasted numbered lines straight from read_file output.
+        let current = "fn f() {\n    let y = 2;\n    return y;\n}\n";
+        let old = "2:     let y = 2;\n3:     return y;";
+        let (s, e) = locate_edit(current, old).expect("numbered fuzzy unique");
+        assert_eq!(&current[s..e], "    let y = 2;\n    return y;");
+    }
+
+    #[test]
+    fn locate_fuzzy_requires_uniqueness() {
+        // Two indentation-equal regions ⇒ ambiguous ⇒ error, never a guess.
+        let current = "if a {\n    do_it();\n}\nif b {\n    do_it();\n}\n";
+        assert!(matches!(
+            locate_edit(current, "do_it();"),
+            // "do_it();" appears exactly twice as a substring → exact-multiple.
+            Err(LocateError::Multiple(2))
+        ));
+    }
+
+    #[test]
+    fn locate_not_found_gives_a_hint() {
+        let current = "fn alpha() {\n    let count = 0;\n}\n";
+        // Right line, wrong content on the surrounding lines.
+        assert!(matches!(
+            locate_edit(current, "let count = 999;"),
+            Err(LocateError::NotFound)
+        ));
+        let hint = nearest_hint(current, "    let count = 0;");
+        assert!(hint.contains("Closest match near line 2"), "got: {hint}");
+        assert!(hint.contains("2:     let count = 0;"), "got: {hint}");
+    }
+
+    #[test]
+    fn line_spans_round_trip() {
+        let s = "alpha\nbeta\ngamma";
+        let spans = line_spans(s);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(&s[spans[0].0..spans[0].1], "alpha");
+        assert_eq!(&s[spans[2].0..spans[2].1], "gamma");
+        // Trailing newline does not create a phantom empty line.
+        assert_eq!(line_spans("a\n").len(), 1);
     }
 }

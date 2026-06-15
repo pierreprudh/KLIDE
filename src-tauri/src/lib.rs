@@ -207,6 +207,14 @@ fn ai_clear_provider_key(provider: String) -> Result<(), String> {
     providers::clear_keychain_key(&provider)
 }
 
+// Per-model list price (USD per million in/out tokens), or null for local /
+// subscription / unknown models. The AI panel fetches this once per model and
+// computes per-message + per-conversation cost from each turn's token usage.
+#[tauri::command]
+fn ai_model_pricing(model: String) -> Option<pricing::ModelPricing> {
+    pricing::pricing_for_model(&model)
+}
+
 // The second key method for built-in providers: a `${VAR}` env reference
 // (resolved from the env / project `.env` / ~/.klide/.env), exactly like a
 // self-hosted endpoint. Keychain-free, so it never pops a macOS prompt.
@@ -1130,6 +1138,7 @@ pub fn run() {
             ai_clear_provider_key,
             ai_set_provider_key_reference,
             ai_clear_provider_key_reference,
+            ai_model_pricing,
             custom_provider_list,
             custom_provider_upsert,
             custom_provider_remove,

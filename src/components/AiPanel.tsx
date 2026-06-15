@@ -46,7 +46,7 @@ import { ProviderLogo, AssistantPlaceholderLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { renderMessageBody } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
-import { ModelPicker } from "./ai/ModelPicker";
+import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { summarizeAndHandoff, detectAndGenerateSkill } from "./ai/summarize";
 import {
@@ -255,6 +255,10 @@ export function AiPanel({
   // fall back to a char-length estimate then.
   const [measuredPromptTokens, setMeasuredPromptTokens] = useState<number | null>(null);
   const [measuredUsageTokens, setMeasuredUsageTokens] = useState<{ prompt: number; completion: number } | null>(null);
+  // Per-model list price (USD / million in+out tokens), or null for local /
+  // subscription / unknown models. Fetched per model; drives per-message and
+  // per-conversation cost from each turn's token usage.
+  const [pricing, setPricing] = useState<{ inputPerMillion: number; outputPerMillion: number } | null>(null);
   const [contextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
@@ -561,6 +565,12 @@ export function AiPanel({
   const contextRemaining = Math.max(0, effectiveContextLimit - contextUsed);
   const contextRatio = Math.min(1, contextUsed / effectiveContextLimit);
   const contextTone = contextRatio > 0.85 ? "var(--danger, #B42318)" : contextRatio > 0.65 ? "#A15C00" : "var(--accent)";
+  // Running cost for this conversation = sum of every turn's per-message cost.
+  // Stays 0 (chip hidden) for local / subscription / unknown-price models.
+  const conversationCostUsd = msgs.reduce(
+    (sum, m) => sum + (m.role === "assistant" ? m.meta?.costUsd ?? 0 : 0),
+    0
+  );
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1008,6 +1018,21 @@ export function AiPanel({
     return () => { cancelled = true; };
   }, [provider, model]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPricing() {
+      try {
+        const p = await invoke<{ inputPerMillion: number; outputPerMillion: number } | null>(
+          "ai_model_pricing",
+          { model }
+        );
+        if (!cancelled) setPricing(p ?? null);
+      } catch { if (!cancelled) setPricing(null); }
+    }
+    void loadPricing();
+    return () => { cancelled = true; };
+  }, [provider, model]);
+
   // ── Agent loop (harness-only) ──
   const [pendingDiff, setPendingDiff] = useState<DiffProposal | null>(null);
   // A free-form Q&A the model is asking via the `userAnswerQuestion` tool.
@@ -1179,7 +1204,17 @@ export function AiPanel({
             tps = Math.round(tokens / (decodeMs / 1000));
           }
           const exact = usage?.completionTokens !== undefined;
-          next[i] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider, meta: { ms: turnMs, tokens, ttftMs, tps, exact } };
+          // Per-message cost from this turn's real token usage × the model's
+          // list price. Only when the provider reported both counts AND the
+          // model has a known price (hosted, non-subscription) — local and
+          // subscription turns leave costUsd undefined (no per-token bill).
+          const costUsd =
+            pricing && usage?.promptTokens !== undefined && usage?.completionTokens !== undefined
+              ? (usage.promptTokens * pricing.inputPerMillion +
+                  usage.completionTokens * pricing.outputPerMillion) /
+                1_000_000
+              : undefined;
+          next[i] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider, meta: { ms: turnMs, tokens, promptTokens: usage?.promptTokens, ttftMs, tps, exact, costUsd } };
           commit(next);
           break;
         }
@@ -2006,6 +2041,14 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               />
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+              {conversationCostUsd > 0 && (
+                <span
+                  title={`This conversation has cost about $${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 4 : 2)} (${modelLabel(model)} list price)`}
+                  style={{ height: 20, display: "inline-flex", alignItems: "center", padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
+                >
+                  {conversationCostUsd < 0.01 ? "<$0.01" : `$${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 3 : 2)}`}
+                </span>
+              )}
               <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
                 onMouseEnter={(e) => { openContextTooltip(); e.currentTarget.style.background = "var(--bg-hover)"; }}

@@ -555,7 +555,11 @@ async fn run_agent_loop(
     // the Mission Control "Messages" tally reflects the whole conversation.
     let mut message_count = prior_turns as u32 + 1;
     let mut completed = false;
-    const MAX_TURNS: usize = 8;
+    // omp budgets a run by output tokens, not a tiny turn cap; 8 turns was
+    // genuinely limiting for real multi-file work. 16 gives the agent room to
+    // read → plan → edit → verify across several files before it has to hand
+    // back to the user (who can always continue the conversation).
+    const MAX_TURNS: usize = 16;
     const COMPACT_AFTER: usize = 14;
 
     for turn in 0..MAX_TURNS {
@@ -1089,9 +1093,10 @@ conversation, then ask again._",
             run_id: id.clone(),
             message_id: message_id("assistant"),
             content: vec![AgentContentBlock::Text {
-                text: "I reached the maximum number of tool turns (8) before finishing this request. \
-                       The work above is where I got to — send another message to have me continue from here."
-                    .to_string(),
+                text: format!(
+                    "I reached the maximum number of tool turns ({MAX_TURNS}) before finishing this request. \
+                     The work above is where I got to — send another message to have me continue from here."
+                ),
             }],
             usage: None,
             ts: now_ms(),

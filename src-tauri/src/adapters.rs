@@ -55,17 +55,40 @@ async fn stream_provider<S: StreamingProvider>(
         .timeout(Duration::from_secs(180))
         .build()
         .map_err(|e| format!("Unable to build HTTP client: {e}"))?;
-    let res = provider
-        .build_request(&client)?
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach {}: {e}", provider.name()))?;
-
-    let status = res.status();
-    if !status.is_success() {
-        let text = res.text().await.unwrap_or_default();
-        return Err(response_error(provider.name(), status, &text));
-    }
+    // Send with retry on transient throttling. A 429 (rate limit) or 503
+    // (overloaded) arrives BEFORE any streamed bytes, so retrying the whole
+    // request is safe — no chunks have been emitted yet. We honor the server's
+    // own backoff hint (Retry-After header, or OpenAI's "try again in Xs"
+    // body) and fall back to exponential backoff. The run only fails if the
+    // throttling outlasts our retries.
+    const MAX_RETRIES: u32 = 3;
+    let mut attempt: u32 = 0;
+    let res = loop {
+        let res = provider
+            .build_request(&client)?
+            .send()
+            .await
+            .map_err(|e| format!("Unable to reach {}: {e}", provider.name()))?;
+        let status = res.status();
+        if status.is_success() {
+            break res;
+        }
+        let transient = matches!(status.as_u16(), 429 | 503);
+        let header_wait = retry_after_header(res.headers());
+        // Reading the body consumes `res`; we need it for both the backoff
+        // hint and the final error, so read it once here.
+        let body = res.text().await.unwrap_or_default();
+        if transient && attempt < MAX_RETRIES {
+            let wait = header_wait
+                .or_else(|| retry_after_from_body(&body))
+                .unwrap_or_else(|| Duration::from_millis(500 * 2u64.pow(attempt)))
+                .min(Duration::from_secs(30)); // never sleep absurdly long
+            attempt += 1;
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+        return Err(response_error(provider.name(), status, &body));
+    };
 
     let mut content = String::new();
     let mut thinking = String::new();
@@ -98,6 +121,39 @@ async fn stream_provider<S: StreamingProvider>(
     }
 
     Ok(provider.finalize_response(content, thinking, tools))
+}
+
+/// Parse a `Retry-After` response header. Per HTTP it's either a number of
+/// seconds or an HTTP-date; we only handle the seconds form (what OpenAI /
+/// Anthropic send), returning `None` for anything else so the caller falls
+/// back to its own backoff.
+fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let secs: f64 = raw.trim().parse().ok()?;
+    (secs.is_finite() && secs >= 0.0).then(|| Duration::from_millis((secs * 1000.0) as u64))
+}
+
+/// Pull a backoff hint out of OpenAI's error body, which phrases it as
+/// "Please try again in 3.353s" (or "…in 412ms"). Best-effort: returns `None`
+/// if the phrase isn't found, so the caller uses exponential backoff instead.
+fn retry_after_from_body(body: &str) -> Option<Duration> {
+    let rest = body.split("try again in ").nth(1)?;
+    // The number (digits + decimal point) then the unit letters right after it,
+    // parsed separately so a trailing sentence period can't contaminate either.
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let unit: String = rest[num.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    let value: f64 = num.parse().ok()?;
+    match unit.as_str() {
+        "ms" => Some(Duration::from_millis(value as u64)),
+        "s" => Some(Duration::from_millis((value * 1000.0) as u64)),
+        _ => None,
+    }
 }
 
 // ── Ollama adapter ──
@@ -944,6 +1000,23 @@ mod tests {
     //! fixture strings recorded from real provider responses, so we don't
     //! need network access to lock the behaviour in.
     use super::*;
+
+    #[test]
+    fn retry_after_from_body_parses_openai_hint() {
+        // The exact phrasing OpenAI's 429 uses.
+        let s = Duration::from_millis(3353);
+        assert_eq!(
+            retry_after_from_body("Rate limit reached. Please try again in 3.353s. Visit…"),
+            Some(s)
+        );
+        // Sub-second hints come back as milliseconds.
+        assert_eq!(
+            retry_after_from_body("try again in 412ms."),
+            Some(Duration::from_millis(412))
+        );
+        // No hint → None, so the caller uses exponential backoff.
+        assert_eq!(retry_after_from_body("some other error"), None);
+    }
 
     #[test]
     fn working_num_ctx_uses_flat_default_grows_for_big_chats_and_caps_at_ceiling() {

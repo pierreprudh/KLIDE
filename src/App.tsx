@@ -61,6 +61,8 @@ export type HarnessSettings = {
   contextWindows?: Record<string, number>;
   /** Per-model reply budget (num_predict) for local models. Absent → provider default. */
   effortBudgets?: Record<string, number>;
+  /** Per-model thinking/reflection level for models that advertise thinking. */
+  reflectionLevels?: Record<string, string>;
   /** Max read-only tool calls to run concurrently within a turn (1 = off). */
   maxParallelTools?: number;
   /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent

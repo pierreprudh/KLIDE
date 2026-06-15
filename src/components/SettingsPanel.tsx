@@ -96,8 +96,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -219,9 +219,9 @@ function Segmented({
   onChange,
   label,
 }: {
-  options: { label: string; value: number | undefined }[];
-  value: number | undefined;
-  onChange: (value: number | undefined) => void;
+  options: { label: string; value: number | string | undefined }[];
+  value: number | string | undefined;
+  onChange: (value: number | string | undefined) => void;
   label: string;
 }) {
   return (
