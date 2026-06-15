@@ -5,8 +5,8 @@ pub mod types;
 
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,
-    execute_write_tool_preview, is_user_question_tool, is_write_tool, parse_tool_calls,
-    recover_text_tool_calls, schemas_for_mode, NormalizedToolCall,
+    execute_write_tool_preview, find_tool_kind, parse_tool_calls, recover_text_tool_calls,
+    schemas_for_mode, tool_summary, NormalizedToolCall, ToolKind,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -360,30 +360,6 @@ async fn run_read_tools_parallel(
         }
     }
     results
-}
-
-fn tool_summary(call: &NormalizedToolCall) -> String {
-    match call.name.as_str() {
-        "read_file" | "list_dir" | "write_file" => call
-            .input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|path| format!("{} {}", call.name, path))
-            .unwrap_or_else(|| call.name.clone()),
-        "create_file" => call
-            .input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|path| format!("create_file {}", path))
-            .unwrap_or_else(|| "create_file".to_string()),
-        "glob" | "grep" => call
-            .input
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .map(|pattern| format!("{} {}", call.name, pattern))
-            .unwrap_or_else(|| call.name.clone()),
-        _ => call.name.clone(),
-    }
 }
 
 /// Settle a cancelled run: aborted event, summary on disk, handle status.
@@ -858,7 +834,7 @@ conversation, then ask again._",
             if let Some(root) = request.workspace_root.as_deref() {
                 let read_calls: Vec<NormalizedToolCall> = tool_calls
                     .iter()
-                    .filter(|c| !is_write_tool(&c.name))
+                    .filter(|c| matches!(find_tool_kind(&c.name), Some(ToolKind::ReadOnly)))
                     .cloned()
                     .collect();
                 if read_calls.len() > 1 {
@@ -884,7 +860,7 @@ conversation, then ask again._",
 
             let tool_result: ToolResult;
 
-            if is_user_question_tool(&call.name) {
+            if matches!(find_tool_kind(&call.name), Some(ToolKind::Pause)) {
                 // Pause for a typed Q&A. The question is read from the tool
                 // input; the answer comes back through `agent_resolve_question`,
                 // which sends via the oneshot we stash in `pending_question`.
@@ -947,7 +923,7 @@ conversation, then ask again._",
                     },
                     metadata: None,
                 };
-            } else if is_write_tool(&call.name) {
+            } else if matches!(find_tool_kind(&call.name), Some(ToolKind::Write)) {
                 let root = match request.workspace_root.as_deref() {
                     Some(root) => root,
                     None => {

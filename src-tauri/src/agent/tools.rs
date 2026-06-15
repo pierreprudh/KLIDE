@@ -66,6 +66,11 @@ pub struct NormalizedToolCall {
 pub enum ToolKind {
     ReadOnly,
     Write,
+    // Pauses the run for user input (Q&A today; future: confirmation prompts).
+    // The registry is the source of truth — the harness dispatches on kind, not
+    // by name. A Pause entry has no run_read / run_write_preview; the harness's
+    // pause arm handles the interaction.
+    Pause,
 }
 
 // Tool executions receive a `Workspace`, never a raw root string — resolving
@@ -74,11 +79,36 @@ type ReadToolFn = fn(ws: &Workspace, input: &serde_json::Value) -> ToolResult;
 type WritePreviewFn =
     fn(ws: &Workspace, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult>;
 
+// Per-tool one-liner rendered on the `ToolCallStarted` event. Each entry owns
+// its own display logic; the harness stops carrying per-tool arg keys.
+type SummaryFn = fn(call: &NormalizedToolCall) -> String;
+
+fn default_summary(call: &NormalizedToolCall) -> String {
+    call.name.clone()
+}
+
+fn path_summary(call: &NormalizedToolCall) -> String {
+    call.input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(|path| format!("{} {}", call.name, path))
+        .unwrap_or_else(|| call.name.clone())
+}
+
+fn pattern_summary(call: &NormalizedToolCall) -> String {
+    call.input
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .map(|pattern| format!("{} {}", call.name, pattern))
+        .unwrap_or_else(|| call.name.clone())
+}
+
 struct ToolEntry {
     kind: ToolKind,
     schema: serde_json::Value,
     run_read: Option<ReadToolFn>,
     run_write_preview: Option<WritePreviewFn>,
+    summary: SummaryFn,
 }
 
 fn schema(
@@ -110,6 +140,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["path"]),
             run_read: Some(|ws, input| read_file(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
+            summary: path_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -118,6 +149,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["path"]),
             run_read: Some(|ws, input| list_dir(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
+            summary: path_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -129,6 +161,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["pattern"]),
             run_read: Some(glob),
             run_write_preview: None,
+            summary: pattern_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -141,6 +174,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["pattern"]),
             run_read: Some(grep),
             run_write_preview: None,
+            summary: pattern_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -148,6 +182,7 @@ fn registry() -> Vec<ToolEntry> {
                 serde_json::json!({}), &[]),
             run_read: Some(|ws, _input| get_git_status(ws.root())),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -159,6 +194,7 @@ fn registry() -> Vec<ToolEntry> {
                 &[]),
             run_read: Some(|ws, input| get_git_diff(ws.root(), input)),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -170,6 +206,7 @@ fn registry() -> Vec<ToolEntry> {
                 &[]),
             run_read: Some(|ws, input| get_git_log(ws.root(), input)),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -186,6 +223,7 @@ fn registry() -> Vec<ToolEntry> {
                 ok(format!("Context cleaned: {} tool result(s) marked for removal", ids.len()))
             }),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -196,6 +234,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["query"]),
             run_read: Some(|_ws, input| web_search(input)),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -206,6 +245,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["url"]),
             run_read: Some(|_ws, input| web_fetch(input)),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -219,6 +259,7 @@ fn registry() -> Vec<ToolEntry> {
                 }
             }),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
@@ -288,6 +329,7 @@ fn registry() -> Vec<ToolEntry> {
                 }
             }),
             run_write_preview: None,
+            summary: default_summary,
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -300,6 +342,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["path", "old_str", "new_str"]),
             run_read: None,
             run_write_preview: Some(preview_write_file),
+            summary: path_summary,
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -311,6 +354,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["path", "contents"]),
             run_read: None,
             run_write_preview: Some(preview_create_file),
+            summary: path_summary,
         },
         ToolEntry {
             kind: ToolKind::Write,
@@ -324,14 +368,16 @@ fn registry() -> Vec<ToolEntry> {
                 &["name", "title", "instructions"]),
             run_read: None,
             run_write_preview: Some(preview_create_skill),
+            summary: default_summary,
         },
         // The `userAnswerQuestion` tool does not actually execute — the agent
-        // loop intercepts it and pauses the run via a oneshot channel (see
-        // mod.rs). It lives in the registry only so the model sees a valid
-        // schema and knows the tool exists. `run_read` stays None: the loop
-        // returns "Unknown tool" only if the interception regresses.
+        // loop dispatches on `kind == ToolKind::Pause` and pauses the run via
+        // a oneshot channel (see mod.rs). It lives in the registry only so the
+        // model sees a valid schema and knows the tool exists. `run_read` and
+        // `run_write_preview` stay None: the loop returns "Unknown tool" only
+        // if the kind-based dispatch regresses.
         ToolEntry {
-            kind: ToolKind::ReadOnly,
+            kind: ToolKind::Pause,
             schema: schema("userAnswerQuestion", "Pause the run and ask the user a single free-form question. The user's typed answer is returned as the tool result. Use this to capture tribal knowledge — design decisions, naming rationale, project history — that isn't in the code or README. One question at a time; the harness queues follow-ups on the next turn.",
                 serde_json::json!({
                     "question": { "type": "string", "description": "The question to ask. One sentence, focused on something only the user can answer." }
@@ -339,6 +385,7 @@ fn registry() -> Vec<ToolEntry> {
                 &["question"]),
             run_read: None,
             run_write_preview: None,
+            summary: default_summary,
         },
     ]
 }
@@ -378,17 +425,25 @@ pub fn schemas_for_mode(mode: &AgentMode, disabled: &[String]) -> Option<Vec<ser
     }
 }
 
-pub fn is_write_tool(name: &str) -> bool {
+/// Look up a tool by name and return its kind. The registry is the only
+/// module that names a tool; callers (the run loop, the parallel pre-execute
+/// filter) dispatch on this kind, not on a string match.
+pub fn find_tool_kind(name: &str) -> Option<ToolKind> {
     registry()
-        .iter()
-        .any(|e| e.kind == ToolKind::Write && schema_has_name(&e.schema, name))
+        .into_iter()
+        .find(|e| schema_has_name(&e.schema, name))
+        .map(|e| e.kind)
 }
 
-/// The Q&A tool is `ReadOnly` in the registry (no filesystem side-effect) but
-/// still requires a harness pause. Detect by name so the agent loop can route
-/// to the user-pause path *before* the write/read dispatch above.
-pub fn is_user_question_tool(name: &str) -> bool {
-    name == "userAnswerQuestion"
+/// Render the per-tool one-liner used on the `ToolCallStarted` event. The
+/// summary fn lives on the registry entry, so the harness stops carrying
+/// per-tool arg keys.
+pub fn tool_summary(call: &NormalizedToolCall) -> String {
+    registry()
+        .into_iter()
+        .find(|e| schema_has_name(&e.schema, &call.name))
+        .map(|e| (e.summary)(call))
+        .unwrap_or_else(|| call.name.clone())
 }
 
 fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
