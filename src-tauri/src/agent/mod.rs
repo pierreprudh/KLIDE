@@ -271,6 +271,20 @@ fn reconstruct_prior_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Va
             AgentEvent::ToolCallFinished { result, .. } => {
                 pending_tool_results.push(result.content.clone());
             }
+            AgentEvent::ContextCompacted { summary, .. } => {
+                // Collapse everything before the marker into one system
+                // message. Turns recorded after it replay verbatim, so the
+                // model keeps the gist of old context plus the recent
+                // exchanges in full — at a fraction of the tokens.
+                out.clear();
+                pending_tool_results.clear();
+                out.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!(
+                        "[Earlier conversation compacted to save context]\n{summary}"
+                    )
+                }));
+            }
             _ => {}
         }
     }
@@ -1238,6 +1252,40 @@ pub async fn agent_abort_run(
     }
 }
 
+/// Write a compaction marker into a run's transcript. The frontend generates
+/// `summary` (one model call over the older turns) and calls this; on the next
+/// turn, `reconstruct_prior_messages` collapses everything before the marker
+/// into that summary while replaying recent turns verbatim — freeing context
+/// without losing the thread.
+#[tauri::command]
+pub async fn agent_compact_context(
+    app: tauri::AppHandle,
+    run_id: String,
+    summary: String,
+) -> Result<(), String> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err("Refusing to compact with an empty summary".to_string());
+    }
+    let runs_dir = app_runs_dir(&app)?;
+    let prior = read_events(&runs_dir, &run_id).unwrap_or_default();
+    if prior.is_empty() {
+        return Err("No conversation to compact yet".to_string());
+    }
+    let seq = prior.len() as u64;
+    append_event(
+        &runs_dir,
+        &run_id,
+        seq,
+        &AgentEvent::ContextCompacted {
+            run_id: run_id.clone(),
+            summary: summary.to_string(),
+            ts: now_ms(),
+        },
+    )?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn agent_list_runs(
     app: tauri::AppHandle,
@@ -1473,6 +1521,34 @@ mod replay_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "hello");
+    }
+
+    #[test]
+    fn context_compacted_collapses_prior_and_keeps_recent_verbatim() {
+        let compacted = AgentEvent::ContextCompacted {
+            run_id: "r".into(),
+            summary: "we set up auth and fixed the parser".into(),
+            ts: 9,
+        };
+        let out = reconstruct_prior_messages(&[
+            user_msg("old turn 1"),
+            assistant_text("old reply 1"),
+            compacted,
+            user_msg("recent question"),
+            assistant_text("recent answer"),
+        ]);
+        // Everything before the marker collapses into one system summary;
+        // the two recent turns replay verbatim after it.
+        assert_eq!(out.len(), 3, "got: {out:?}");
+        assert_eq!(out[0]["role"], "system");
+        assert!(out[0]["content"]
+            .as_str()
+            .expect("summary is string")
+            .contains("we set up auth"));
+        assert_eq!(out[1]["role"], "user");
+        assert_eq!(out[1]["content"], "recent question");
+        assert_eq!(out[2]["role"], "assistant");
+        assert_eq!(out[2]["content"], "recent answer");
     }
 
     #[test]

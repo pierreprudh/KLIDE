@@ -1827,6 +1827,50 @@ fn preview_create_skill(
     })
 }
 
+/// Is this `.json` path actually JSONC (comments / trailing commas allowed)?
+/// Strict JSON validation would false-alarm on these, so we skip them.
+fn is_jsonc_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let base = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+    base == "tsconfig.json"
+        || base.starts_with("tsconfig.")
+        || base == "jsconfig.json"
+        || base == "settings.json"
+        || base == "launch.json"
+        || base == "devcontainer.json"
+        || lower.contains("/.vscode/")
+}
+
+/// Cheap, in-process syntax check of freshly-written content, keyed off the
+/// file extension. Returns `Some(summary)` only when the content is
+/// *definitely* malformed; `None` when it parses or the language has no
+/// trustworthy in-process parser (omp's post-edit diagnostics, lite). Advisory
+/// only — it never blocks a write, it rides the tool result so the model can
+/// fix its own mistake on the next turn. Languages without a reliable Rust
+/// parser (e.g. TypeScript) are deliberately skipped rather than risk a false
+/// alarm from a brace-counting heuristic.
+fn verify_syntax(path: &str, content: &str) -> Option<String> {
+    if content.trim().is_empty() {
+        return None;
+    }
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    let problem = match ext.as_str() {
+        "json" if !is_jsonc_path(path) => serde_json::from_str::<serde_json::Value>(content)
+            .err()
+            .map(|e| format!("invalid JSON — {e}")),
+        "rs" => syn::parse_file(content)
+            .err()
+            .map(|e| format!("Rust parse error — {e}")),
+        _ => None,
+    }?;
+    Some(format!(
+        "⚠ Syntax check failed: {problem}. The edit was applied; re-read and fix the syntax."
+    ))
+}
+
 pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolResult> {
     let ws = Workspace::new(root).map_err(err)?;
     // Re-validate at apply time: never trust a proposal path blindly.
@@ -1849,13 +1893,19 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
         .filter(|r| r.starts_with('⚠'))
         .map(|r| format!("\n{r}"))
         .unwrap_or_default();
+    // Post-edit syntax verification: a definite parse error is appended so the
+    // model can fix it next turn (the write still happened — the agent owns the
+    // correction, same as omp's diagnostics).
+    let syntax = verify_syntax(&diff.path, &diff.new_content)
+        .map(|s| format!("\n{s}"))
+        .unwrap_or_default();
     if diff.is_create {
         Ok(ok(format!(
-            "Applied: created {rel} ({} chars).{note}",
+            "Applied: created {rel} ({} chars).{note}{syntax}",
             diff.new_content.len()
         )))
     } else {
-        Ok(ok(format!("Applied: edited {rel}.{note}")))
+        Ok(ok(format!("Applied: edited {rel}.{note}{syntax}")))
     }
 }
 
@@ -2141,6 +2191,40 @@ mod tests {
         let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
         let proposal = preview_write_file(&ws, &input, run).unwrap();
         assert!(proposal.reason.is_none(), "fresh edit should not be flagged");
+    }
+
+    // ── Post-edit syntax verification (omp's diagnostics, lite) ──────────
+
+    #[test]
+    fn verify_passes_valid_rust_and_json() {
+        assert!(verify_syntax("src/main.rs", "fn main() {\n    let x = 1;\n}\n").is_none());
+        assert!(verify_syntax("package.json", "{\n  \"name\": \"k\"\n}\n").is_none());
+    }
+
+    #[test]
+    fn verify_flags_broken_rust() {
+        // Missing closing brace.
+        let v = verify_syntax("src/lib.rs", "fn main() {\n    let x = 1;\n").expect("rust err");
+        assert!(v.contains("Syntax check failed"), "got: {v}");
+        assert!(v.contains("Rust parse error"), "got: {v}");
+    }
+
+    #[test]
+    fn verify_flags_broken_json() {
+        let v = verify_syntax("data.json", "{ \"a\": 1, }").expect("json err");
+        assert!(v.contains("invalid JSON"), "got: {v}");
+    }
+
+    #[test]
+    fn verify_skips_jsonc_and_unknown_languages() {
+        // tsconfig.json is JSONC — comments/trailing commas are legal, so we
+        // must not flag it.
+        assert!(verify_syntax("tsconfig.json", "{ // ok\n  \"compilerOptions\": {}, }").is_none());
+        assert!(verify_syntax(".vscode/settings.json", "{ /* c */ }").is_none());
+        // TypeScript has no trustworthy in-process parser here — skipped.
+        assert!(verify_syntax("src/App.tsx", "const x = (").is_none());
+        // Empty / whitespace content is never flagged.
+        assert!(verify_syntax("a.rs", "   \n").is_none());
     }
 
     #[test]

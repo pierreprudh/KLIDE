@@ -330,6 +330,16 @@ pub enum AgentEvent {
         error: AgentError,
         ts: i64,
     },
+    /// A compaction marker written into the transcript when the user compacts
+    /// the conversation to free context. On replay, everything BEFORE this
+    /// marker collapses into a single system message holding `summary`; events
+    /// after it replay verbatim. So the model keeps the gist of old turns plus
+    /// the recent exchanges in full, at a fraction of the tokens.
+    ContextCompacted {
+        run_id: String,
+        summary: String,
+        ts: i64,
+    },
     /// The model called `userAnswerQuestion` and is paused waiting for the
     /// user's typed reply. The frontend renders an inline Q&A card; the
     /// answer comes back through `agent_resolve_question`, which unblocks
