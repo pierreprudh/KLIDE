@@ -182,23 +182,24 @@ fn tool_provider_message(call: &NormalizedToolCall, result: &ToolResult) -> serd
 /// the new run starts with the same context the user already saw on
 /// screen.
 ///
-/// Earlier versions of this function emitted the same wire shape the
-/// loop uses at runtime — `assistant` with a `tool_calls` array plus
-/// `role: "tool"` messages with `name` / `tool_call_id`. That worked
-/// for OpenAI and Anthropic (which normalise / translate the shape)
-/// but broke Ollama, whose chat API wants `tool_calls[*].function
-/// .arguments` as a JSON object (not the OpenAI-encoded string) and
-/// has no `tool_call_id` field on tool results. Once the replay started
-/// feeding prior turns' tool flow back into Ollama, the local server
-/// rejected the request with `Value looks like object, but can't find
-/// closing '}' symbol`.
+/// There are two wire shapes, picked by `structured`:
 ///
-/// The simplest fix that's also the most portable: keep user and
-/// assistant text, fold the tool flow into the next assistant
-/// message's content. The model still sees the conversation, the wire
-/// shape is just `{role, content}` for every provider, and the tool
-/// results are marked inline so the assistant's answer stays
-/// grounded in what the tool returned.
+/// 1. **Structured** (`structured == true`) — the OpenAI-compatible shape
+///    the live loop already uses: `assistant` with a `tool_calls` array
+///    plus `role: "tool"` messages keyed by `tool_call_id`. Every
+///    OpenAI-wire provider speaks this (OpenAI, Anthropic, Mistral, xAI,
+///    LM Studio, custom self-hosted endpoints, *and* Ollama reached over
+///    its `/v1` compat path). This is the faithful replay: the model sees
+///    its own prior tool calls exactly as it made them.
+///
+/// 2. **Text-fold** (`structured == false`) — for Ollama's *native*
+///    `/api/chat` endpoint only. That API wants `tool_calls[*].function
+///    .arguments` as a JSON object (not the OpenAI-encoded string) and has
+///    no `tool_call_id` field on tool results, so replaying the structured
+///    shape into it made the local server reject the request with `Value
+///    looks like object, but can't find closing '}' symbol`. The portable
+///    workaround folds the tool flow into the next assistant message's
+///    text:
 ///
 ///   user  →  { role: "user", content: text [+ attached files] }
 ///   assistant_message
@@ -206,9 +207,21 @@ fn tool_provider_message(call: &NormalizedToolCall, result: &ToolResult) -> serd
 ///   tool_call_finished
 ///         →  buffered; folded into the next assistant_message
 ///
-/// Thinking blocks are dropped — the model already consumed them.
-/// Compaction that already ran in the parent is preserved as-is.
-fn reconstruct_prior_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Value> {
+///    NOTE: do NOT use the text-fold for OpenAI-wire providers. Folding
+///    tool results into assistant text as `[tool_result]…:end` teaches
+///    smaller models (e.g. devstral) to *imitate* that format — after a
+///    couple of turns they stop emitting structured `tool_calls` and start
+///    narrating fabricated tool transcripts as plain text instead.
+///
+/// Thinking blocks are dropped in both shapes — the model already consumed
+/// them. Compaction that already ran in the parent is preserved as-is.
+fn reconstruct_prior_messages(
+    prior_events: &[AgentEvent],
+    structured: bool,
+) -> Vec<serde_json::Value> {
+    if structured {
+        return reconstruct_structured_messages(prior_events);
+    }
     let mut out: Vec<serde_json::Value> = Vec::new();
     // Tool results waiting to be folded into the next assistant turn.
     // They don't carry across a user message — a tool result from a
@@ -295,6 +308,119 @@ fn reconstruct_prior_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Va
     // Ollama parse error, and the next assistant turn never saw them
     // anyway in the live run.
     let _ = pending_tool_results;
+
+    out
+}
+
+/// Faithful OpenAI-wire replay (see `reconstruct_prior_messages` docs).
+/// Rebuilds the exact `assistant.tool_calls` + `role: "tool"` shape the
+/// live loop produces, so a continuation turn sees its own prior tool
+/// calls structurally — never as imitated text.
+///
+/// A tool_call is only replayed if it has a matching `ToolCallFinished`
+/// later in the stream. OpenAI-compatible APIs reject an assistant
+/// `tool_calls` entry with no following `role: "tool"` reply, so a turn
+/// that was cancelled mid-call (started, never finished) would otherwise
+/// poison the whole request. We pre-scan for finished ids and drop the
+/// orphans — matching the text-fold path, which also drops them.
+fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_json::Value> {
+    use std::collections::{HashMap, HashSet};
+
+    // Tool calls that actually returned a result. Calls without one are
+    // dropped so we never emit an unanswered `assistant.tool_calls`.
+    let finished: HashSet<&str> = prior_events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolCallFinished { tool_call_id, .. } => Some(tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    // tool_call_id -> tool name, so a later `ToolCallFinished` can label
+    // its `role: "tool"` message the way `tool_provider_message` does.
+    let mut call_names: HashMap<String, String> = HashMap::new();
+
+    for event in prior_events {
+        match event {
+            AgentEvent::UserMessage {
+                text, attachments, ..
+            } => {
+                let mut content = text.clone();
+                if !attachments.is_empty() {
+                    let attached = attachments
+                        .iter()
+                        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    if !attached.is_empty() {
+                        content.push_str("\n\n[Files attached for context]\n");
+                        content.push_str(&attached);
+                    }
+                }
+                out.push(serde_json::json!({ "role": "user", "content": content }));
+            }
+            AgentEvent::AssistantMessage { content, .. } => {
+                let mut text = String::new();
+                let mut raw_tool_calls: Vec<serde_json::Value> = Vec::new();
+                for block in content {
+                    match block {
+                        AgentContentBlock::Text { text: t } => text.push_str(t),
+                        AgentContentBlock::ToolCall {
+                            tool_call_id,
+                            name,
+                            input,
+                        } => {
+                            // Skip calls that never returned — see fn docs.
+                            if !finished.contains(tool_call_id.as_str()) {
+                                continue;
+                            }
+                            call_names.insert(tool_call_id.clone(), name.clone());
+                            // OpenAI wire wants `arguments` as a JSON-encoded
+                            // string, matching the live loop's raw tool_calls.
+                            raw_tool_calls.push(serde_json::json!({
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": input.to_string(),
+                                },
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                out.push(assistant_provider_message(&text, &raw_tool_calls));
+            }
+            AgentEvent::ToolCallFinished {
+                tool_call_id,
+                result,
+                ..
+            } => {
+                // Pair with the assistant turn's tool_call. If we never saw
+                // the originating call (shouldn't happen — finished implies
+                // started), fall back to an empty name.
+                let name = call_names.get(tool_call_id).cloned().unwrap_or_default();
+                out.push(serde_json::json!({
+                    "role": "tool",
+                    "content": result.content,
+                    "name": name,
+                    "tool_call_id": tool_call_id,
+                }));
+            }
+            AgentEvent::ContextCompacted { summary, .. } => {
+                out.clear();
+                call_names.clear();
+                out.push(serde_json::json!({
+                    "role": "system",
+                    "content": format!(
+                        "[Earlier conversation compacted to save context]\n{summary}"
+                    )
+                }));
+            }
+            _ => {}
+        }
+    }
 
     out
 }
@@ -537,7 +663,12 @@ async fn run_agent_loop(
     // turn would arrive as a fresh chat — the "agent has no memory"
     // bug the user kept hitting.
     if resuming {
-        let prior = reconstruct_prior_messages(&prior_events);
+        // Only Ollama's native `/api/chat` needs the text-fold workaround.
+        // Every OpenAI-wire provider (incl. Ollama over `/v1` and custom
+        // self-hosted endpoints) gets the faithful structured replay — the
+        // text-fold poisons those models into imitating fake tool text.
+        let structured_replay = request.provider != "ollama";
+        let prior = reconstruct_prior_messages(&prior_events, structured_replay);
         // `provider_messages` always returns `[..., user]` with the new
         // turn at the tail. Pop it, splice the history in, push it back.
         if let Some(new_user) = messages.pop() {
@@ -1488,12 +1619,12 @@ mod replay_tests {
 
     #[test]
     fn empty_events_produces_empty_messages() {
-        assert!(reconstruct_prior_messages(&[]).is_empty());
+        assert!(reconstruct_prior_messages(&[], false).is_empty());
     }
 
     #[test]
     fn user_message_becomes_user_role() {
-        let out = reconstruct_prior_messages(&[user_msg("hello")]);
+        let out = reconstruct_prior_messages(&[user_msg("hello")], false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "hello");
@@ -1512,7 +1643,7 @@ mod replay_tests {
             compacted,
             user_msg("recent question"),
             assistant_text("recent answer"),
-        ]);
+        ], false);
         // Everything before the marker collapses into one system summary;
         // the two recent turns replay verbatim after it.
         assert_eq!(out.len(), 3, "got: {out:?}");
@@ -1529,7 +1660,7 @@ mod replay_tests {
 
     #[test]
     fn assistant_text_becomes_assistant_role_with_content() {
-        let out = reconstruct_prior_messages(&[assistant_text("hi back")]);
+        let out = reconstruct_prior_messages(&[assistant_text("hi back")], false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "assistant");
         assert_eq!(out[0]["content"], "hi back");
@@ -1542,7 +1673,7 @@ mod replay_tests {
     fn assistant_with_tool_call_drops_call_keeps_text() {
         // Tool calls are folded into the next assistant turn as
         // inline tool results, not surfaced as a structured array.
-        let out = reconstruct_prior_messages(&[assistant_with_tool_call()]);
+        let out = reconstruct_prior_messages(&[assistant_with_tool_call()], false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "assistant");
         assert!(out[0]["content"]
@@ -1561,7 +1692,7 @@ mod replay_tests {
             assistant_text("let me check"),
             tool_result("tc1", "file contents"),
             assistant_text("done"),
-        ]);
+        ], false);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["role"], "assistant");
         assert_eq!(out[0]["content"], "let me check");
@@ -1584,7 +1715,7 @@ mod replay_tests {
             tool_result("tc1", "hello world"),
             assistant_text("the readme says hi"),
         ];
-        let out = reconstruct_prior_messages(&events);
+        let out = reconstruct_prior_messages(&events, false);
         // 1 user + 1 pre-tool assistant + 1 closing assistant with the
         // tool result folded in = 3 messages. The tool_call_finished
         // was folded into the closing turn, the ToolCall block on
@@ -1609,7 +1740,7 @@ mod replay_tests {
         // message) has its orphan tool result dropped. Re-emitting it
         // as `role: "tool"` is exactly the Ollama parse-error case
         // we just fixed.
-        let out = reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")]);
+        let out = reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")], false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
     }
@@ -1624,7 +1755,7 @@ mod replay_tests {
             tool_result("tc1", "stale result"),
             user_msg("second turn"),
             assistant_text("second answer"),
-        ]);
+        ], false);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "first turn");
@@ -1649,9 +1780,106 @@ mod replay_tests {
             },
             user_msg("hi"),
         ];
-        let out = reconstruct_prior_messages(&events);
+        let out = reconstruct_prior_messages(&events, false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
+    }
+
+    // --- Structured replay (OpenAI-wire / custom self-hosted providers) ---
+    //
+    // The opposite contract from the text-fold tests above: prior tool
+    // calls replay as a structured `assistant.tool_calls` array followed
+    // by `role: "tool"` results — never folded into text. This is the path
+    // that stops devstral & co. from imitating fake `[tool_result]` blocks.
+
+    #[test]
+    fn structured_replay_emits_tool_calls_and_tool_role() {
+        let out = reconstruct_prior_messages(
+            &[
+                user_msg("read the readme"),
+                assistant_with_tool_call(),
+                tool_result("tc1", "hello world"),
+                assistant_text("the readme says hi"),
+            ],
+            true,
+        );
+        // user + assistant(tool_calls) + tool + assistant(final) = 4.
+        assert_eq!(out.len(), 4, "got: {out:?}");
+        assert_eq!(out[0]["role"], "user");
+
+        // The calling assistant turn carries a structured tool_calls array,
+        // NOT a folded [tool_result] text block.
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["content"], "let me read that");
+        let calls = out[1]["tool_calls"].as_array().expect("tool_calls array");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], "tc1");
+        assert_eq!(calls[0]["function"]["name"], "read_file");
+        // arguments is a JSON-encoded string, matching the live loop's wire.
+        assert_eq!(
+            calls[0]["function"]["arguments"]
+                .as_str()
+                .expect("arguments is a string"),
+            "{\"path\":\"README.md\"}"
+        );
+
+        // The result comes back as a paired role:"tool" message.
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["tool_call_id"], "tc1");
+        assert_eq!(out[2]["name"], "read_file");
+        assert_eq!(out[2]["content"], "hello world");
+
+        assert_eq!(out[3]["role"], "assistant");
+        assert_eq!(out[3]["content"], "the readme says hi");
+
+        // No [tool_result] text leaks into any message.
+        for m in &out {
+            if let Some(c) = m["content"].as_str() {
+                assert!(!c.contains("[tool_result]"), "text-fold leaked: {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn structured_replay_drops_orphan_tool_calls() {
+        // A turn that called a tool but never got a result (e.g. cancelled
+        // mid-call) must not replay an unanswered assistant.tool_calls —
+        // OpenAI-compatible APIs reject that. The call is dropped.
+        let out = reconstruct_prior_messages(&[user_msg("go"), assistant_with_tool_call()], true);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["content"], "let me read that");
+        assert!(
+            out[1].get("tool_calls").is_none(),
+            "orphan tool_call was not dropped: {:?}",
+            out[1]
+        );
+    }
+
+    #[test]
+    fn structured_replay_preserves_compaction() {
+        let out = reconstruct_prior_messages(
+            &[
+                user_msg("old"),
+                assistant_text("old reply"),
+                AgentEvent::ContextCompacted {
+                    run_id: "r".into(),
+                    summary: "did the thing".into(),
+                    ts: 9,
+                },
+                user_msg("new"),
+                assistant_text("new reply"),
+            ],
+            true,
+        );
+        assert_eq!(out.len(), 3, "got: {out:?}");
+        assert_eq!(out[0]["role"], "system");
+        assert!(out[0]["content"]
+            .as_str()
+            .expect("summary string")
+            .contains("did the thing"));
+        assert_eq!(out[1]["content"], "new");
+        assert_eq!(out[2]["content"], "new reply");
     }
 }
 
