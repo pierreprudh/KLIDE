@@ -10,19 +10,40 @@
     {
       "id": "T2",
       "text": "Step 2: Write unit tests for core logic, edge cases, and error handling paths",
-      "done": false,
+      "done": true,
       "created_at": 1781718175601,
-      "updated_at": 1781718183253
+      "updated_at": 1781728558300
     },
     {
       "id": "T3",
       "text": "Step 3: Perform integration and manual smoke tests, then document results",
-      "done": false,
+      "done": true,
       "created_at": 1781718179009,
-      "updated_at": 1781718179009
+      "updated_at": 1781728560184
+    },
+    {
+      "id": "T4",
+      "text": "Step 1: Set up test environment and fixtures for the feature",
+      "done": true,
+      "created_at": 1781728796485,
+      "updated_at": 1781728802707
+    },
+    {
+      "id": "T5",
+      "text": "Step 2: Write unit tests for core logic, edge cases, and error handling paths",
+      "done": true,
+      "created_at": 1781728798627,
+      "updated_at": 1781729109472
+    },
+    {
+      "id": "T6",
+      "text": "Step 3: Perform integration and manual smoke tests, then document results",
+      "done": true,
+      "created_at": 1781728800547,
+      "updated_at": 1781729111487
     }
   ],
-  "next_id": 4,
+  "next_id": 7,
   "events": [
     {
       "seq": 1,
@@ -68,7 +89,88 @@
       "previous_text": "Step 2: Write and run unit tests covering core logic and edge cases",
       "done": false,
       "at": 1781718183253
+    },
+    {
+      "seq": 6,
+      "action": "complete",
+      "todo_id": "T2",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781728558300
+    },
+    {
+      "seq": 7,
+      "action": "complete",
+      "todo_id": "T3",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781728560184
+    },
+    {
+      "seq": 8,
+      "action": "add",
+      "todo_id": "T4",
+      "text": "Step 1: Set up test environment and fixtures for the feature",
+      "previous_text": null,
+      "done": false,
+      "at": 1781728796485
+    },
+    {
+      "seq": 9,
+      "action": "add",
+      "todo_id": "T5",
+      "text": "Step 2: Write and run unit tests covering core logic and edge cases",
+      "previous_text": null,
+      "done": false,
+      "at": 1781728798627
+    },
+    {
+      "seq": 10,
+      "action": "add",
+      "todo_id": "T6",
+      "text": "Step 3: Perform integration and manual smoke tests, then document results",
+      "previous_text": null,
+      "done": false,
+      "at": 1781728800547
+    },
+    {
+      "seq": 11,
+      "action": "complete",
+      "todo_id": "T4",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781728802707
+    },
+    {
+      "seq": 12,
+      "action": "edit",
+      "todo_id": "T5",
+      "text": "Step 2: Write unit tests for core logic, edge cases, and error handling paths",
+      "previous_text": "Step 2: Write and run unit tests covering core logic and edge cases",
+      "done": false,
+      "at": 1781728804879
+    },
+    {
+      "seq": 13,
+      "action": "complete",
+      "todo_id": "T5",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781729109472
+    },
+    {
+      "seq": 14,
+      "action": "complete",
+      "todo_id": "T6",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781729111487
     }
   ],
-  "next_event_id": 6
+  "next_event_id": 15
 }

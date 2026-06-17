@@ -17,7 +17,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion } from "../agent/client";
+import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission } from "../agent/client";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
@@ -1445,9 +1445,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     question: string;
   } | null>(null);
   const [questionAnswer, setQuestionAnswer] = useState("");
-  // Permission UI is not rendered yet, but the stream stores/resolves the
-  // pending request so the harness state stays consistent.
-  const [, setPendingPermission] = useState<{
+  // run_command approval: the harness pauses and emits a permission request;
+  // the user approves or rejects (approveCommand / rejectCommand) before the
+  // command runs. The card renders from `pendingPermission`.
+  const [pendingPermission, setPendingPermission] = useState<{
     runId: string;
     requestId: string;
     command: string;
@@ -1924,6 +1925,28 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     void resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: "(skipped)" }).catch((err) => {
       console.error("Failed to skip question:", err);
     });
+  }
+
+  function approveCommand() {
+    if (!pendingPermission) return;
+    const snapshot = pendingPermission;
+    setPendingPermission(null);
+    void resolvePermission({
+      runId: snapshot.runId,
+      requestId: snapshot.requestId,
+      decision: { behavior: "allow", scope: "once" },
+    }).catch((err) => console.error("Failed to approve command:", err));
+  }
+
+  function rejectCommand() {
+    if (!pendingPermission) return;
+    const snapshot = pendingPermission;
+    setPendingPermission(null);
+    void resolvePermission({
+      runId: snapshot.runId,
+      requestId: snapshot.requestId,
+      decision: { behavior: "deny" },
+    }).catch((err) => console.error("Failed to reject command:", err));
   }
 
   // ── RENDER ──

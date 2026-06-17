@@ -1,0 +1,67 @@
+{
+  "todos": [
+    {
+      "id": "T1",
+      "text": "Define acceptance criteria for testing this feature",
+      "done": true,
+      "created_at": 1781729202630,
+      "updated_at": 1781730953984
+    },
+    {
+      "id": "T2",
+      "text": "Write unit tests for the AI panel streaming functionality",
+      "done": true,
+      "created_at": 1781729202632,
+      "updated_at": 1781730953985
+    }
+  ],
+  "next_id": 3,
+  "events": [
+    {
+      "seq": 1,
+      "action": "add",
+      "todo_id": "T1",
+      "text": "Define acceptance criteria for testing this feature",
+      "previous_text": null,
+      "done": false,
+      "at": 1781729202630
+    },
+    {
+      "seq": 2,
+      "action": "add",
+      "todo_id": "T2",
+      "text": "Create test data sets and environment setup",
+      "previous_text": null,
+      "done": false,
+      "at": 1781729202632
+    },
+    {
+      "seq": 3,
+      "action": "edit",
+      "todo_id": "T2",
+      "text": "Write unit tests for the AI panel streaming functionality",
+      "previous_text": "Create test data sets and environment setup",
+      "done": false,
+      "at": 1781729202632
+    },
+    {
+      "seq": 4,
+      "action": "complete",
+      "todo_id": "T1",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781730953984
+    },
+    {
+      "seq": 5,
+      "action": "complete",
+      "todo_id": "T2",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781730953985
+    }
+  ],
+  "next_event_id": 6
+}

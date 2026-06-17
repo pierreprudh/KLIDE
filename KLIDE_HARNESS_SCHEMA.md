@@ -48,7 +48,7 @@ Tools are filtered by **kind** per mode (`tools.rs:list_tools`):
 |---|---|
 | **Chat** | none — converse from visible context only |
 | **Plan** | `ReadOnly` tools only (12) + dynamic tools — inspect, never edit |
-| **Goal** | all kinds (16) + dynamic tools — inspect + diff-reviewed edits + pause |
+| **Goal** | all kinds (17) + dynamic tools — inspect + diff-reviewed edits + approval-gated commands + pause |
 
 *Dynamic tools* (`load_dynamic_tools`) are additionally available in Plan/Goal
 for custom/MCP-style tools loaded at runtime.
@@ -79,6 +79,12 @@ for custom/MCP-style tools loaded at runtime.
 | `write_file` | Search-and-replace on an existing file. `old_str` is matched tolerantly — leading `N: ` line-number prefixes and indentation differences are forgiven. | **Pi** + CC (`str_replace`) + CX (`apply_patch`) |
 | `create_file` | Create a new file (fails if it exists). | CC/CX |
 | `create_skill` | Save a reusable skill to `.agents/skills/<name>/SKILL.md`. | CC (skills) |
+
+### Command (Goal only, approval-gated) — 1
+
+| Tool | Purpose | Lineage |
+|---|---|---|
+| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. | CC/CX/OC (bash tool) + K (approval gate) |
 
 ### Pause (Goal only) — 1
 
