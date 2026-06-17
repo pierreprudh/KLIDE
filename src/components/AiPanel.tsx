@@ -301,14 +301,16 @@ export function AiPanel({
   // Was further down; the view-switch bug surfaced when we replaced a
   // random UUID with this stable id and TypeScript started complaining.
   const [currentId, setCurrentId] = useState<string>(() => {
-    // Re-attach to a conversation only when one was in-flight (or explicitly
-    // resumed) at the last unmount — e.g. the panel remounted mid-run after a
-    // view switch. If the previous conversation already finished, or there
-    // was none, start a fresh id so quick chats stay their own runs instead
-    // of piling into one ever-growing transcript. Panel identity (provider/
-    // model prefs) still lives under `panelId` separately.
+    // Re-attach to the panel's last conversation on remount (e.g. after a view
+    // switch), whether it's still in-flight or already finished — so the chat
+    // you were looking at, and its answer, is still on screen when you come
+    // back. The hydration effect below reloads that conversation's messages.
+    // Each chat already gets its own id (the "+" / new-chat action rotates it
+    // and persists the new one via savePanelSession), so re-attaching shows
+    // the *current* thread rather than piling every chat into one. Panel
+    // identity (provider/model prefs) still lives under `panelId` separately.
     const prior = panelId ? loadPanelSession(panelId) : null;
-    return prior?.active ? prior.convoId : genId();
+    return prior ? prior.convoId : genId();
   });
   const [input, setInput] = useState("");
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
@@ -1721,9 +1723,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       next[i] = { role: "assistant", content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.` };
       commit(next);
     }
-    // Turn settled (done or errored): the conversation is no longer in-flight,
-    // so reopening the panel after this point starts a fresh chat. A queued
-    // follow-up turn flips it back to active when it starts.
+    // Turn settled (done or errored): record it no longer in-flight. The panel
+    // still re-attaches to this conversation on remount (so the answer stays on
+    // screen); starting a brand-new chat is the explicit "+" action.
     if (panelId) savePanelSession(panelId, currentId, false);
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     // Flush any pending delta that hasn't been rendered yet
