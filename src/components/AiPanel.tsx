@@ -991,57 +991,30 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       setMsgs(saved.msgs);
       msgsRef.current = saved.msgs;
     }
-    // Delegates stream through the PTY, not a Klide transcript — nothing to
-    // reconnect here.
-    if (providerDelegatesWork) return;
-
-    // Reconnect to a run that kept going while the panel was unmounted (a
-    // mid-run view switch). The harness runs on in Rust and writes the
-    // transcript, but the live event Channel is per-mount and dies on unmount.
-    // We rebuild from the transcript and, while the run is still unsettled,
-    // poll it — showing the thinking animation — so a switch-away-and-back
-    // mid-stream still surfaces progress and lands on the final answer.
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    // Length reconnect last wrote. If `msgs` diverges from it, the user took
-    // over (typed / sent / new chat) and owns the panel — we back off.
-    let ownedLen = msgsRef.current.length;
-    const deadline = Date.now() + 300_000; // stop spinning if a run never settles
-    const stop = () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-    const tick = async () => {
-      if (cancelled) return;
-      let events: AgentEvent[];
-      try {
-        events = await invoke<AgentEvent[]>("agent_read_run", { runId: currentId });
-      } catch {
-        return; // no transcript for this id (brand-new chat) — nothing to do
-      }
-      if (cancelled || msgsRef.current.length !== ownedLen) return; // user took over
-      const replayed = eventsToMsgs(events);
-      if (replayed.length >= ownedLen && replayed.length > 0) {
-        setMsgs(replayed);
-        msgsRef.current = replayed;
-        ownedLen = replayed.length;
-      }
-      const settled = events.some(
-        (e) => e.type === "run_result" || e.type === "run_error"
-      );
-      if (settled || Date.now() > deadline) {
-        setStreaming(false);
-        setActivity(null);
-        stop();
-        return;
-      }
-      // Still running — show the thinking indicator and poll again.
-      setStreaming(true);
-      setActivity("thinking");
-      timer = setTimeout(() => void tick(), 1200);
-    };
-    void tick();
-    return stop;
+    // Reconnect to a run that progressed while the panel was unmounted: the
+    // harness keeps running in Rust and writes the transcript, but the live
+    // event stream is per-mount and doesn't survive a view switch. So if a
+    // mid-run switch left us with just the user message, rebuild from the
+    // on-disk transcript — which has the (possibly finished) assistant reply.
+    // Klide runs only (currentId == transcript id); delegates use the PTY.
+    if (!providerDelegatesWork) {
+      const baseLen = msgsRef.current.length;
+      void (async () => {
+        try {
+          const events = await invoke<AgentEvent[]>("agent_read_run", { runId: currentId });
+          const replayed = eventsToMsgs(events);
+          // Adopt only if the user did nothing since mount (msgs length is
+          // still the restored snapshot) and the transcript is richer —
+          // guards against clobbering a chat the user already started typing.
+          if (msgsRef.current.length === baseLen && replayed.length > baseLen) {
+            setMsgs(replayed);
+            msgsRef.current = replayed;
+          }
+        } catch {
+          /* no transcript for this id (brand-new chat) — nothing to reconnect */
+        }
+      })();
+    }
     // Intentionally only the *initial* currentId matters — subsequent
     // edits (loadConversation, newConversation) own the active id.
     // eslint-disable-next-line react-hooks/exhaustive-deps
