@@ -2,6 +2,8 @@ pub mod todo;
 pub mod tools;
 pub mod transcripts;
 pub mod types;
+#[cfg(test)]
+mod eval;
 
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,

@@ -121,6 +121,21 @@ Four adapters, each running the actual binary and reading its on-disk sessions
 Mission Control aggregates runs from Klide's own loop **and** all four delegates
 into one board.
 
+## Evals
+
+`src-tauri/src/agent/eval.rs` — golden scenarios that run scripted tool-call
+sequences (what a model *would* emit) through the **real** execution path
+(`execute_read_only_tool` / `execute_write_tool_preview` + `apply_write` /
+`run_command_capture`) against a fixture workspace, then assert the resulting
+files + tool results. They run as `cargo test` (`agent::eval`). Add a scenario
+by appending to `scenarios()`.
+
+Scope: this evals the harness's **deterministic** behavior (read → edit →
+verify, command success/failure surfacing). The model-in-loop layer — *does the
+agent choose the right tools to finish a task?* — needs the run loop decoupled
+from `tauri::AppHandle` + a mockable provider, and is the documented next step;
+this scenario format is the foundation it will reuse.
+
 ## Identity
 
 The harness presents as **Klide's coding agent** running on whichever model the
