@@ -263,6 +263,9 @@ export type StartAgentRunInput = {
   reflectionLevel?: string;
   /** Max read-only tool calls to run concurrently in one turn (1 = sequential). */
   maxParallelTools?: number;
+  /** Max tool turns before handing back to the user. Omit for the harness
+   *  default; a runaway-loop guard, not a task-size limit. */
+  maxTurns?: number;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };

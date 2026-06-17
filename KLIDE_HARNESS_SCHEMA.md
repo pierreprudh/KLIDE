@@ -33,7 +33,10 @@ AiPanel (view) ──startAgentRun()──▶  run_agent_loop()  [Rust, src-taur
 - **Model-agnostic.** The same loop drives every provider (Ollama, Anthropic,
   OpenAI, Mistral, xAI, custom endpoints). The model is interchangeable; the
   harness identity is Klide's. *(K)*
-- **Bounded.** `MAX_TURNS = 16` tool turns per run (`mod.rs:689`). *(Pi)*
+- **Bounded, configurable.** Tool-turn cap defaults to **50** and is set in
+  Settings → Harness ("Max tool turns", up to 500; hard ceiling 1000). It's a
+  runaway-loop guard, not a task-size limit — the conversation can always be
+  continued past it. *(Pi — the cap concept; K — configurability)*
 - **Continuation-aware.** Resuming replays prior turns as faithful structured
   tool messages so the model keeps its memory across turns. *(K)*
 

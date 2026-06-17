@@ -1,0 +1,74 @@
+{
+  "todos": [
+    {
+      "id": "T1",
+      "text": "Write unit tests for the core feature logic",
+      "done": true,
+      "created_at": 1781717031303,
+      "updated_at": 1781717037936
+    },
+    {
+      "id": "T2",
+      "text": "Run integration tests against the Tauri backend AND verify PTY/terminal output",
+      "done": false,
+      "created_at": 1781717033207,
+      "updated_at": 1781717040355
+    },
+    {
+      "id": "T3",
+      "text": "Do a manual smoke test in the editor UI",
+      "done": false,
+      "created_at": 1781717035962,
+      "updated_at": 1781717035962
+    }
+  ],
+  "next_id": 4,
+  "events": [
+    {
+      "seq": 1,
+      "action": "add",
+      "todo_id": "T1",
+      "text": "Write unit tests for the core feature logic",
+      "previous_text": null,
+      "done": false,
+      "at": 1781717031303
+    },
+    {
+      "seq": 2,
+      "action": "add",
+      "todo_id": "T2",
+      "text": "Run integration tests against the Tauri backend",
+      "previous_text": null,
+      "done": false,
+      "at": 1781717033207
+    },
+    {
+      "seq": 3,
+      "action": "add",
+      "todo_id": "T3",
+      "text": "Do a manual smoke test in the editor UI",
+      "previous_text": null,
+      "done": false,
+      "at": 1781717035962
+    },
+    {
+      "seq": 4,
+      "action": "complete",
+      "todo_id": "T1",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1781717037936
+    },
+    {
+      "seq": 5,
+      "action": "edit",
+      "todo_id": "T2",
+      "text": "Run integration tests against the Tauri backend AND verify PTY/terminal output",
+      "previous_text": "Run integration tests against the Tauri backend",
+      "done": false,
+      "at": 1781717040355
+    }
+  ],
+  "next_event_id": 6
+}

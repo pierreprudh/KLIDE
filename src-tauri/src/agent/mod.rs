@@ -123,7 +123,7 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
         })
 }
 
-fn provider_messages(request: &StartRunRequest, system: String) -> Vec<serde_json::Value> {
+fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) -> Vec<serde_json::Value> {
     let mut user_text = request.initial_text.clone();
     if !request.attachments.is_empty() {
         let attachments = request
@@ -143,7 +143,7 @@ fn provider_messages(request: &StartRunRequest, system: String) -> Vec<serde_jso
         && matches!(request.mode, AgentMode::Chat));
     if should_include_todos {
         if let Some(cwd) = &request.workspace_root {
-            if let Some(todo_text) = todo::list_todos_text(cwd) {
+            if let Some(todo_text) = todo::list_todos_text(cwd, run_id) {
                 messages.push(serde_json::json!({
                     "role": "system",
                     "content": format!("[TODO list]\n{}", todo_text)
@@ -656,7 +656,7 @@ async fn run_agent_loop(
     })?;
 
     let system = base_system_prompt(&request);
-    let mut messages = provider_messages(&request, system);
+    let mut messages = provider_messages(&request, system, &id);
     // When this run id was used before, the on-disk transcript holds the
     // whole prior conversation. Replay it into `messages` between the
     // system prompt and the new user turn, so the model sees the same
@@ -686,10 +686,15 @@ async fn run_agent_loop(
     // genuinely limiting for real multi-file work. 16 gives the agent room to
     // read → plan → edit → verify across several files before it has to hand
     // back to the user (who can always continue the conversation).
-    const MAX_TURNS: usize = 16;
+    // Turn cap is a runaway-loop guard, not a task-size limit. Default is
+    // generous; the user can raise it (Settings → Harness) for big multi-file
+    // or multi-agent work. Clamped to a hard ceiling so a stuck loop can't burn
+    // tokens forever. The conversation can always be continued past the cap.
+    const DEFAULT_MAX_TURNS: usize = 50;
+    let max_turns = request.max_turns.unwrap_or(DEFAULT_MAX_TURNS).clamp(1, 1000);
     const COMPACT_AFTER: usize = 14;
 
-    for turn in 0..MAX_TURNS {
+    for turn in 0..max_turns {
         // Auto-compaction: trim verbose tool results from older turns
         if messages.len() > COMPACT_AFTER {
             let mut compacted = 0;
@@ -738,7 +743,7 @@ async fn run_agent_loop(
         // Refresh the TODO list context before every turn so the model always
         // sees the latest task state (tools may have modified it).
         if let Some(cwd) = &request.workspace_root {
-            let todo_text = todo::list_todos_text(cwd);
+            let todo_text = todo::list_todos_text(cwd, &id);
             for msg in messages.iter_mut() {
                 if msg.get("role").and_then(|v| v.as_str()) == Some("system")
                     && msg
@@ -1223,8 +1228,9 @@ conversation, then ask again._",
             message_id: message_id("assistant"),
             content: vec![AgentContentBlock::Text {
                 text: format!(
-                    "I reached the maximum number of tool turns ({MAX_TURNS}) before finishing this request. \
-                     The work above is where I got to — send another message to have me continue from here."
+                    "I reached the tool-turn limit ({max_turns}) before finishing this request. \
+                     The work above is where I got to — send another message to have me continue from here, \
+                     or raise \"Max tool turns\" in Settings → Harness for big tasks."
                 ),
             }],
             usage: None,

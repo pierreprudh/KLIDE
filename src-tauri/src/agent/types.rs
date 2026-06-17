@@ -79,6 +79,10 @@ pub struct StartRunRequest {
     /// or `Some(1)` keeps execution sequential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parallel_tools: Option<usize>,
+    /// Max tool turns before the run hands back to the user. `None` uses the
+    /// harness default; a runaway-loop guard, not a task-size limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }

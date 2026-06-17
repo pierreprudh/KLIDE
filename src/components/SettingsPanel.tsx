@@ -96,8 +96,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -2387,6 +2387,26 @@ export function SettingsPanel({
                         ]}
                         onChange={(v) =>
                           onHarnessSettingsChange?.({ ...harnessSettings, maxParallelTools: v === undefined ? undefined : Number(v) })
+                        }
+                      />
+                    }
+                  />
+                  <Row
+                    title="Max tool turns"
+                    description="How many tool rounds the agent runs before handing back to you — a runaway-loop guard, not a task limit. Raise it for big multi-file or multi-agent work. You can always continue past it by sending another message. Default 50."
+                    control={
+                      <Segmented
+                        label="Max tool turns"
+                        value={harnessSettings?.maxTurns}
+                        options={[
+                          { label: "Default", value: undefined },
+                          { label: "50", value: 50 },
+                          { label: "100", value: 100 },
+                          { label: "250", value: 250 },
+                          { label: "500", value: 500 },
+                        ]}
+                        onChange={(v) =>
+                          onHarnessSettingsChange?.({ ...harnessSettings, maxTurns: v === undefined ? undefined : Number(v) })
                         }
                       />
                     }

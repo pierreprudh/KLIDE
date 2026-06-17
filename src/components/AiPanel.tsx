@@ -76,6 +76,7 @@ type AiHarnessSettings = {
   effortBudgets?: Record<string, number>;
   reflectionLevels?: Record<string, string>;
   maxParallelTools?: number;
+  maxTurns?: number;
   serverConcurrency?: number;
   autoMemoryOnRunDone?: boolean;
 };
@@ -1724,6 +1725,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
       const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
       const maxParallelTools = harnessSettings?.maxParallelTools;
+      const maxTurns = harnessSettings?.maxTurns;
       // Mark this conversation in-flight so a mid-run view switch re-attaches
       // to it rather than starting fresh on remount.
       if (panelId) savePanelSession(panelId, currentId, true);
@@ -1738,6 +1740,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         numPredict,
         reflectionLevel,
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
+        maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
@@ -2079,7 +2082,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         </div>
       </header>
 
-      <TodoStrip workspaceRoot={workspaceRoot} />
       <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex" }}>
         <div
           ref={scrollRef}
@@ -2357,6 +2359,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             )}
           </div>
         )}
+        <TodoStrip workspaceRoot={workspaceRoot} conversationId={currentId} />
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>

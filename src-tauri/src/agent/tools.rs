@@ -75,7 +75,7 @@ pub enum ToolKind {
 
 // Tool executions receive a `Workspace`, never a raw root string — resolving
 // a path without going through the Workspace-rooted checks is unrepresentable.
-type ReadToolFn = fn(ws: &Workspace, input: &serde_json::Value) -> ToolResult;
+type ReadToolFn = fn(ws: &Workspace, input: &serde_json::Value, run_id: &str) -> ToolResult;
 type WritePreviewFn =
     fn(ws: &Workspace, input: &serde_json::Value, run_id: &str) -> Result<DiffProposal, ToolResult>;
 
@@ -138,7 +138,7 @@ fn registry() -> Vec<ToolEntry> {
             schema: schema("read_file", "Read the full text contents of a file in the workspace.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative file path." } }),
                 &["path"]),
-            run_read: Some(|ws, input| read_file(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
+            run_read: Some(|ws, input, _run_id| read_file(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
             summary: path_summary,
         },
@@ -147,7 +147,7 @@ fn registry() -> Vec<ToolEntry> {
             schema: schema("list_dir", "List entries in a workspace directory.",
                 serde_json::json!({ "path": { "type": "string", "description": "Workspace-relative directory path. Use . for the root." } }),
                 &["path"]),
-            run_read: Some(|ws, input| list_dir(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
+            run_read: Some(|ws, input, _run_id| list_dir(ws, &trimmed_arg(input, "path").unwrap_or_else(|| ".".to_string()))),
             run_write_preview: None,
             summary: path_summary,
         },
@@ -159,7 +159,7 @@ fn registry() -> Vec<ToolEntry> {
                     "path": { "type": "string", "description": "Optional workspace-relative directory to search from." }
                 }),
                 &["pattern"]),
-            run_read: Some(glob),
+            run_read: Some(|ws, input, _run_id| glob(ws, input)),
             run_write_preview: None,
             summary: pattern_summary,
         },
@@ -172,7 +172,7 @@ fn registry() -> Vec<ToolEntry> {
                     "maxResults": { "type": "number", "description": "Optional cap on returned matches." }
                 }),
                 &["pattern"]),
-            run_read: Some(grep),
+            run_read: Some(|ws, input, _run_id| grep(ws, input)),
             run_write_preview: None,
             summary: pattern_summary,
         },
@@ -180,7 +180,7 @@ fn registry() -> Vec<ToolEntry> {
             kind: ToolKind::ReadOnly,
             schema: schema("get_git_status", "Return git branch and changed files for the workspace.",
                 serde_json::json!({}), &[]),
-            run_read: Some(|ws, _input| get_git_status(ws.root())),
+            run_read: Some(|ws, _input, _run_id| get_git_status(ws.root())),
             run_write_preview: None,
             summary: default_summary,
         },
@@ -192,7 +192,7 @@ fn registry() -> Vec<ToolEntry> {
                     "staged": { "type": "boolean", "description": "Whether to read staged diff." }
                 }),
                 &[]),
-            run_read: Some(|ws, input| get_git_diff(ws.root(), input)),
+            run_read: Some(|ws, input, _run_id| get_git_diff(ws.root(), input)),
             run_write_preview: None,
             summary: default_summary,
         },
@@ -204,7 +204,7 @@ fn registry() -> Vec<ToolEntry> {
                     "path": { "type": "string", "description": "Optional workspace-relative path to limit history to one file or folder." }
                 }),
                 &[]),
-            run_read: Some(|ws, input| get_git_log(ws.root(), input)),
+            run_read: Some(|ws, input, _run_id| get_git_log(ws.root(), input)),
             run_write_preview: None,
             summary: default_summary,
         },
@@ -215,7 +215,7 @@ fn registry() -> Vec<ToolEntry> {
                     "ids": { "type": "array", "description": "List of tool_call_ids to clean from the current turn." }
                 }),
                 &["ids"]),
-            run_read: Some(|_ws, input| {
+            run_read: Some(|_ws, input, _run_id| {
                 let ids: Vec<String> = input.get("ids")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -232,7 +232,7 @@ fn registry() -> Vec<ToolEntry> {
                     "query": { "type": "string", "description": "The search query." }
                 }),
                 &["query"]),
-            run_read: Some(|_ws, input| web_search(input)),
+            run_read: Some(|_ws, input, _run_id| web_search(input)),
             run_write_preview: None,
             summary: default_summary,
         },
@@ -243,7 +243,7 @@ fn registry() -> Vec<ToolEntry> {
                     "url": { "type": "string", "description": "The URL to fetch." }
                 }),
                 &["url"]),
-            run_read: Some(|_ws, input| web_fetch(input)),
+            run_read: Some(|_ws, input, _run_id| web_fetch(input)),
             run_write_preview: None,
             summary: default_summary,
         },
@@ -251,9 +251,9 @@ fn registry() -> Vec<ToolEntry> {
             kind: ToolKind::ReadOnly,
             schema: schema("get_todo_list", "Read the current TODO list. Each item has an id (e.g. T1, T2) and a done/pending status. Returns empty if no todos exist.",
                 serde_json::json!({}), &[]),
-            run_read: Some(|ws, _input| {
+            run_read: Some(|ws, _input, run_id| {
                 let root = ws.root().to_string_lossy();
-                match todo::list_todos_text(&root) {
+                match todo::list_todos_text(&root, run_id) {
                     Some(text) => ok(format!("TODO list:\n{text}")),
                     None => ok("No todos yet. Use update_todo_list to add one.".to_string()),
                 }
@@ -274,7 +274,7 @@ fn registry() -> Vec<ToolEntry> {
                     "text": { "type": "string", "description": "Task text. Required for add and edit." }
                 }),
                 &["action"]),
-            run_read: Some(|ws, input| {
+            run_read: Some(|ws, input, run_id| {
                 let root = &ws.root().to_string_lossy();
                 let action = match input.get("action").and_then(|v| v.as_str()) {
                     Some(a) => a,
@@ -286,16 +286,14 @@ fn registry() -> Vec<ToolEntry> {
                             Some(t) => t.to_string(),
                             None => return err("add action requires text.".to_string()),
                         };
-                        todo::add_todo(root, text)
+                        todo::add_todo(root, run_id, text)
                     }
                     "complete" | "uncomplete" => {
                         let id = match input.get("id").and_then(|v| v.as_str()) {
                             Some(i) => i,
                             None => return err("{action} action requires an id.".to_string()),
                         };
-                        // Toggle the status; if already in the requested state,
-                        // the result still reports the current state.
-                        todo::toggle_todo(root, id)
+                        todo::set_todo_done(root, run_id, id, action == "complete")
                     }
                     "edit" => {
                         let id = match input.get("id").and_then(|v| v.as_str()) {
@@ -306,21 +304,21 @@ fn registry() -> Vec<ToolEntry> {
                             Some(t) => t.to_string(),
                             None => return err("edit action requires text.".to_string()),
                         };
-                        todo::update_text(root, id, text)
+                        todo::update_text(root, run_id, id, text)
                     }
                     "remove" => {
                         let id = match input.get("id").and_then(|v| v.as_str()) {
                             Some(i) => i,
                             None => return err("remove action requires an id.".to_string()),
                         };
-                        todo::remove_todo(root, id)
+                        todo::remove_todo(root, run_id, id)
                     }
-                    "clear_done" => todo::clear_done(root),
+                    "clear_done" => todo::clear_done(root, run_id),
                     _ => return err(format!("Unknown action: {action}")),
                 };
                 match result {
                     Ok(msg) => {
-                        let list = todo::list_todos_text(root)
+                        let list = todo::list_todos_text(root, run_id)
                             .map(|t| format!("\n\nCurrent todos:\n{t}"))
                             .unwrap_or_default();
                         ok(format!("{msg}{list}"))
@@ -468,7 +466,7 @@ pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall, run_id: &st
         .into_iter()
         .find(|e| schema_has_name(&e.schema, &call.name));
     let result = match entry.and_then(|e| e.run_read) {
-        Some(f) => f(&ws, &call.input),
+        Some(f) => f(&ws, &call.input, run_id),
         None => err(format!("Unknown tool: {}", call.name)),
     };
     // A successful read of a file carries a `{snapshotPath, snapshotHash}` blob

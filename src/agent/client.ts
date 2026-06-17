@@ -24,6 +24,7 @@ type StartRunRequest = {
   numPredict?: number;
   reflectionLevel?: string;
   maxParallelTools?: number;
+  maxTurns?: number;
   parentId?: string;
 };
 
@@ -69,6 +70,7 @@ export async function startAgentRun(
       numPredict: input.numPredict,
       reflectionLevel: input.reflectionLevel,
       maxParallelTools: input.maxParallelTools,
+      maxTurns: input.maxTurns,
       parentId: input.parentId,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
