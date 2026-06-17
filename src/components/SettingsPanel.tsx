@@ -157,8 +157,27 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "stats", label: "Stats", icon: <BarChartIcon /> },
 ];
 
-function Section({ id, active, children }: { id: SectionId; active: SectionId; children: ReactNode }) {
-  return <div style={{ display: id === active ? "block" : "none" }}>{children}</div>;
+// A section's subtree only mounts once its tab has been visited (`mounted`),
+// then stays mounted (hidden via display) so re-selecting it is instant and
+// in-progress edits survive a tab switch. Deferring the mount is what keeps
+// Settings opening fast: the API / Local-AI sections fire per-provider status
+// `invoke`s on mount, so we don't pay for them until the user goes there.
+function Section({
+  id,
+  active,
+  mounted = true,
+  children,
+}: {
+  id: SectionId;
+  active: SectionId;
+  mounted?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ display: id === active ? "block" : "none" }}>
+      {mounted ? children : null}
+    </div>
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1660,6 +1679,16 @@ export function SettingsPanel({
   const [activeSection, setActiveSection] = useState<SectionId>(
     isSectionId(initialSection) ? initialSection : "general"
   );
+  // Sections that have been opened at least once. Only these mount their
+  // subtree (see `Section`); the rest stay unmounted so their per-provider
+  // status `invoke`s don't fire on open. The starting section is pre-seeded.
+  const [visitedSections, setVisitedSections] = useState<Set<SectionId>>(
+    () => new Set([isSectionId(initialSection) ? initialSection : "general"])
+  );
+  function goToSection(id: SectionId) {
+    setVisitedSections((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setActiveSection(id);
+  }
   const [draft, setDraft] = useState(() => emptyDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [subscriptionStatuses, setSubscriptionStatuses] = useState<
@@ -1830,7 +1859,7 @@ export function SettingsPanel({
               <button
                 key={section.id}
                 type="button"
-                onClick={() => setActiveSection(section.id)}
+                onClick={() => goToSection(section.id)}
                 onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--bg-hover)"; }}
                 onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
                 style={{
@@ -1884,7 +1913,7 @@ export function SettingsPanel({
             {sectionTitle}
           </h1>
 
-          <Section id="general" active={activeSection}>
+          <Section id="general" active={activeSection} mounted={visitedSections.has("general")}>
             <SettingBlock title="Panels">
               <Panel>
                 <Row
@@ -1913,7 +1942,7 @@ export function SettingsPanel({
             </SettingBlock>
           </Section>
 
-          <Section id="appearance" active={activeSection}>
+          <Section id="appearance" active={activeSection} mounted={visitedSections.has("appearance")}>
               <SettingBlock title="Theme">
                 <Panel>
                   <Row
@@ -2016,7 +2045,7 @@ export function SettingsPanel({
               </SettingBlock>
           </Section>
 
-          <Section id="layout" active={activeSection}>
+          <Section id="layout" active={activeSection} mounted={visitedSections.has("layout")}>
               <SettingBlock title="Presets">
                 <Panel>
                   {[...BUILTIN_PRESETS, ...customLayouts].map((preset) => {
@@ -2194,7 +2223,7 @@ export function SettingsPanel({
               </SettingBlock>
           </Section>
 
-          <Section id="ai" active={activeSection}>
+          <Section id="ai" active={activeSection} mounted={visitedSections.has("ai")}>
               <SettingBlock title="Provider">
                 <Panel>
                   {PROVIDER_GROUPS.map((group, groupIdx) => (
@@ -2500,7 +2529,7 @@ export function SettingsPanel({
                     title="API providers"
                     description="OpenAI, Mistral, and xAI keys are read by the Tauri backend."
                     control={
-                      <LinkButton onClick={() => setActiveSection("api")}>
+                      <LinkButton onClick={() => goToSection("api")}>
                         Open API
                       </LinkButton>
                     }
@@ -2509,7 +2538,7 @@ export function SettingsPanel({
                     title="Subscription providers"
                     description="Claude Code and Codex use your local CLI login."
                     control={
-                      <LinkButton onClick={() => setActiveSection("subscription")}>
+                      <LinkButton onClick={() => goToSection("subscription")}>
                         Open Subscription
                       </LinkButton>
                     }
@@ -2518,7 +2547,7 @@ export function SettingsPanel({
               </SettingBlock>
           </Section>
 
-          <Section id="local-ai" active={activeSection}>
+          <Section id="local-ai" active={activeSection} mounted={visitedSections.has("local-ai")}>
               <SettingBlock title="Local Servers">
                 <Panel>
                   <LocalServerRow provider="ollama" title="Ollama" defaultModel="llama3.1:8b" />
@@ -2541,7 +2570,7 @@ export function SettingsPanel({
               </SettingBlock>
           </Section>
 
-          <Section id="api" active={activeSection}>
+          <Section id="api" active={activeSection} mounted={visitedSections.has("api")}>
               <SettingBlock title="API Keys">
                 <Panel>
                   {API_KEY_PROVIDERS.map((provider) => (
@@ -2575,7 +2604,7 @@ export function SettingsPanel({
               </SettingBlock>
           </Section>
 
-          <Section id="subscription" active={activeSection}>
+          <Section id="subscription" active={activeSection} mounted={visitedSections.has("subscription")}>
             {connectionLoading && Object.keys(subscriptionStatuses).length === 0 ? (
               <CenteredLoader label="Checking subscriptions…" />
             ) : (
@@ -2679,7 +2708,7 @@ export function SettingsPanel({
             )}
           </Section>
 
-          <Section id="editor" active={activeSection}>
+          <Section id="editor" active={activeSection} mounted={visitedSections.has("editor")}>
             <SettingBlock title="Editor">
               <Panel>
                 <Row
@@ -2733,7 +2762,7 @@ export function SettingsPanel({
             </SettingBlock>
           </Section>
 
-          <Section id="terminal" active={activeSection}>
+          <Section id="terminal" active={activeSection} mounted={visitedSections.has("terminal")}>
             <SettingBlock title="Terminal">
               <Panel>
                 <Row
