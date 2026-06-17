@@ -10,11 +10,11 @@ Local models by default · online providers when you want them · real agent ter
 
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)](https://v2.tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![React 18](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Ollama](https://img.shields.io/badge/Ollama-local_first-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com)
 
-![Status](https://img.shields.io/badge/status-v0.3--shipped-7A9F4A?style=flat-square)
+![Status](https://img.shields.io/badge/status-v0.4--shipped-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS_·_Linux_·_Windows-555555?style=flat-square)
 ![Binary](https://img.shields.io/badge/binary-~10_MB-4263EB?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-555555?style=flat-square)
@@ -23,7 +23,7 @@ Local models by default · online providers when you want them · real agent ter
 
 ---
 
-**Klide is a small, fast, AI-native coding control surface.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — but the center of gravity is the agent loop: modes, context, diffs, skills, and workspace state are available when needed instead of always shouting for attention. Local models run out of the box, and the agent doesn't just chat: it reads your code, drafts a plan, and edits files behind a diff you approve. No Electron bloat, no busy chrome, no black-box autonomy.
+**Klide is a small, fast, AI-native coding control surface.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — but the center of gravity is the agent loop: modes, context, diffs, skills, and workspace state are available when needed instead of always shouting for attention. Local models run out of the box, and the agent doesn't just chat: it reads your code, drafts a plan, edits files behind a diff you approve, and runs commands — tests, builds, linters — behind an approval you grant. No Electron bloat, no busy chrome, no black-box autonomy.
 
 > **VS Code's structure · Linear's aesthetic · agent harness transparency** — Tauri-light and local-model-first.
 
@@ -83,16 +83,23 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - **Streaming chat** — all providers stream token-by-token through a single Rust `ai_chat` command, so keys never enter the webview
 - **Multi-provider** — local Ollama/MLX, direct/API providers, OpenAI-compatible providers, and delegate subscription CLIs (Claude Code · Codex · OpenCode), all behind one switcher
 - **Real delegate terminals** — Claude Code, Codex, and OpenCode run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
-- **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits (`Tab` to switch)
+- **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits and run approval-gated commands (`Tab` to switch)
 - **Quiet agent controls** — mode switching, provider selection, context pressure, history, skills, project rules, and diff review stay close to the work without becoming a dashboard
 - **`@`-mentions** — fuzzy-pick workspace files to attach as context
 - **Slash commands** — `/chat`, `/plan`, `/goal`, `/clear`, `/explain`, `/init`
 - **Keychain-stored keys** — API keys live in the OS keychain (env vars as fallback); managed from Settings → API
 - Auto-loads project rules from `AGENTS.md` / `CLAUDE.md`, plus skills from workspace and user skill folders
 
+**Agent harness**
+- **One agent loop, in Rust** — every mode runs through the same loop; the panel starts runs and renders the event stream. Tools are defined once in Rust (16 read/edit/inspect tools + approval-gated `run_command`); the frontend fetches schemas over IPC. See [`KLIDE_HARNESS_SCHEMA.md`](./KLIDE_HARNESS_SCHEMA.md) for the full tool list and lineage.
+- **`run_command`** — the agent runs tests, builds, typechecks, and linters to verify its own work. Every command is shown for approval before it runs, killed after a configurable timeout, and "approve for this run" stops re-prompting repeated commands.
+- **Edit contract** — numbered file reads + indentation-tolerant search/replace + a post-edit syntax check, so edits land cleanly even on small local models.
+- **Tunable** — turn cap, command timeout, parallel tool calls, and per-model context windows are all configurable in Settings → Harness.
+- **Eval net** — golden scenarios drive the real tool layer (`cargo test`) so harness changes can't silently regress reads, edits, or command handling.
+
 **Agent operations**
-- **Mission Control** — run board for Klide and delegate runs, with transcript preview, metadata, resume, and "open in another CLI" handoff
-- **Project Memory** — durable handoff notes in `.klide/memory/`, surfaced through a centered Memory modal and written from the AI panel's summarize action
+- **Mission Control** — run board for Klide and delegate runs answering "what's running / what needs me / what changed" at a glance: per-run reasons + next action, evidence (last event, branch, files touched, tokens/cost, sub-agent count, memory status), transcript preview, resume, and "open in another CLI" handoff
+- **Project Memory** — durable handoff notes in `.klide/memory/`; completed runs draft a note you accept, edit, or skip before it becomes durable, plus a manual summarize action — all browsable in a centered Memory modal
 
 ## Roadmap
 
@@ -135,15 +142,21 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] Workspace-rooted filesystem hardening — file reads/writes flow through checked Rust commands instead of broad webview FS permissions
 - [x] Codebase Interview — `userAnswerQuestion` pause tool plus `/interview` for capturing project decisions
 
-**v0.4 — Review Queue + Evidence Layer**
+**v0.4 — Review Queue + Evidence Layer** &nbsp;✅ _shipped_
 
-- [ ] Make Mission Control answer "what is running?", "what needs me?", and "what changed?" in under 3 seconds.
-- [ ] Strengthen the review queue: failed, waiting, idle, and completed delegated runs should have clear reasons and one-click next actions.
-- [ ] Add evidence summaries per run: last meaningful event, branch/worktree, files touched, diff/review entry point, cost/tokens, and saved-memory state.
-- [ ] Fix remaining delegate observability gaps, especially Claude routine design and missing sub-agent visibility.
-- [ ] Make auto-memory reviewable: completed runs should draft memory notes that can be accepted, edited, or skipped.
-- [ ] Reduce settings open lag and keep usage/provider stats progressive instead of blocking the main surface.
-- [ ] Park multi-account setup, natural-language scheduling, and proactive suggestions until the review/evidence loop feels excellent.
+- [x] Mission Control answers "what is running?", "what needs me?", and "what changed?" at a glance — quiet rows, attention queue, per-run reasons + one next action.
+- [x] Evidence summaries per run — last meaningful event, branch, files touched, diff/review entry point, tokens/cost, sub-agent count, and saved-memory status (`· memory` chip), consistent across Klide and delegate runs.
+- [x] Delegate observability — Claude sub-agent visibility (counts `Agent`/`Task` calls, excludes sidechain turns) and symmetric routine badging.
+- [x] Reviewable memory — completed runs draft a note you accept, edit, or skip in the Memory modal before it becomes durable.
+- [x] Settings open instantly — sections mount on first visit, so per-provider status calls don't block the surface.
+- [x] Parked (intentionally): multi-account setup, natural-language scheduling, proactive suggestions — until the loop feels excellent.
+
+**Agent harness capability** &nbsp;✅ _shipped_
+
+- [x] `run_command` — approval-gated shell execution so the agent can run tests/build/lint and verify its own work
+- [x] Configurable turn cap (default 50) + command timeout (default 180s) + per-run command allowlist
+- [x] Eval foundation — golden tool-layer scenarios run as `cargo test`; documented tool schema + lineage in `KLIDE_HARNESS_SCHEMA.md`
+- [ ] Next: model-in-loop eval (decouple the run loop from `tauri::AppHandle` + mockable provider), project-persistent command allowlist, test-after-edit
 
 ## Build & run
 
