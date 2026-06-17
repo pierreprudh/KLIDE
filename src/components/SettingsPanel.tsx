@@ -2454,13 +2454,13 @@ export function SettingsPanel({
                   </p>
                   <div style={{ margin: "10px 0 14px" }}>
                     <Row
-                      title="Auto-save memory on run done"
-                      description="When a Klide agent run finishes cleanly, automatically write a Project Memory note from the conversation. The Summarize header action still works either way."
+                      title="Auto-draft memory on run done"
+                      description="When a Klide agent run finishes cleanly, generate a Project Memory note from the conversation and park it as a draft to review (accept / edit / skip) in the Memory modal before it becomes durable. The Summarize header action still writes directly."
                       control={
                         <Toggle
                           checked={harnessSettings?.autoMemoryOnRunDone !== false}
                           onChange={(v) => onHarnessSettingsChange?.({ ...harnessSettings, autoMemoryOnRunDone: v ? undefined : false })}
-                          label="Auto-save memory on run done"
+                          label="Auto-draft memory on run done"
                         />
                       }
                     />

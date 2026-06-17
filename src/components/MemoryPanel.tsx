@@ -1,10 +1,23 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import {
   listMemory,
   readMemory,
   relativeMemoryTime,
+  writeMemory,
   type MemoryEntry,
 } from "../memory";
+import {
+  subscribeMemoryDrafts,
+  getMemoryDrafts,
+  removeMemoryDraft,
+  type MemoryDraft,
+} from "../memoryDrafts";
 
 type Props = {
   workspaceRoot: string | null;
@@ -232,6 +245,33 @@ export function MemoryPanel({
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [rawView, setRawView] = useState(false);
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+
+  // Pending memory drafts (from finished runs) awaiting accept / edit / skip.
+  // The store snapshot is shared across panels; filter to this workspace.
+  const allDrafts = useSyncExternalStore(subscribeMemoryDrafts, getMemoryDrafts);
+  const drafts = useMemo(
+    () => allDrafts.filter((d) => d.workspaceRoot === workspaceRoot),
+    [allDrafts, workspaceRoot]
+  );
+  const selectedDraft =
+    drafts.find((d) => d.draftId === selectedDraftId) ?? null;
+
+  // Accept a draft: write it to durable memory, drop the draft, refresh, and
+  // select the new entry. Skip just drops the draft.
+  async function acceptDraft(draft: MemoryDraft) {
+    if (!workspaceRoot) return;
+    try {
+      const { draftId, createdAtMs, workspaceRoot: _ws, ...input } = draft;
+      const entry = await writeMemory(workspaceRoot, input);
+      removeMemoryDraft(draftId);
+      setSelectedDraftId(null);
+      await refresh();
+      setSelectedId(entry.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   async function refresh() {
     if (!workspaceRoot) return;
@@ -416,6 +456,104 @@ export function MemoryPanel({
               minHeight: 0,
             }}
           >
+            {drafts.length > 0 && (
+              <>
+                <div
+                  style={{
+                    padding: "4px 4px 6px",
+                    fontSize: 10,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "var(--accent)",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  Pending review
+                  <span style={{ opacity: 0.7 }}>{drafts.length}</span>
+                </div>
+                {drafts.map((d) => {
+                  const active = d.draftId === selectedDraftId;
+                  return (
+                    <div
+                      key={d.draftId}
+                      onClick={() => {
+                        setSelectedDraftId(d.draftId);
+                        setSelectedId(null);
+                      }}
+                      style={{
+                        padding: "10px 11px",
+                        marginBottom: 5,
+                        cursor: "pointer",
+                        borderRadius: "var(--radius-md)",
+                        border: `1px solid ${active ? "var(--accent)" : "var(--accent-soft, var(--border))"}`,
+                        background: active ? "var(--accent-soft)" : "var(--bg)",
+                        borderLeft: "2px solid var(--accent)",
+                        transition:
+                          "border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                      }}
+                      onMouseEnter={(ev) => {
+                        if (!active) ev.currentTarget.style.background = "var(--bg-hover)";
+                      }}
+                      onMouseLeave={(ev) => {
+                        if (!active) ev.currentTarget.style.background = "var(--bg)";
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 500,
+                          color: "var(--fg-strong)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {d.title}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 10.5,
+                          color: "var(--fg-dim)",
+                          fontFamily: "var(--font-mono)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <span style={pillStyle()}>draft</span>
+                        {d.model && (
+                          <span
+                            style={{
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              maxWidth: 120,
+                            }}
+                          >
+                            {d.model}
+                          </span>
+                        )}
+                        <span style={{ marginLeft: "auto" }}>
+                          {relativeMemoryTime(d.createdAtMs)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {(filtered.length > 0 || workspaceRoot) && (
+                  <div
+                    style={{
+                      margin: "2px 4px 8px",
+                      borderTop: "1px solid var(--border)",
+                    }}
+                  />
+                )}
+              </>
+            )}
             {!workspaceRoot && (
               <div
                 style={{
@@ -458,7 +596,10 @@ export function MemoryPanel({
               return (
                 <div
                   key={e.id}
-                  onClick={() => setSelectedId(e.id)}
+                  onClick={() => {
+                    setSelectedId(e.id);
+                    setSelectedDraftId(null);
+                  }}
                   style={{
                     padding: "10px 11px",
                     marginBottom: 5,
@@ -562,7 +703,17 @@ export function MemoryPanel({
 
         {/* -------- detail -------- */}
         <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-          {!selected ? (
+          {selectedDraft ? (
+            <DraftReview
+              key={selectedDraft.draftId}
+              draft={selectedDraft}
+              onAccept={(edited) => void acceptDraft(edited)}
+              onSkip={() => {
+                removeMemoryDraft(selectedDraft.draftId);
+                setSelectedDraftId(null);
+              }}
+            />
+          ) : !selected ? (
             <EmptyDetail />
           ) : (
             <MemoryDetail
@@ -940,6 +1091,147 @@ function FileChip({
       {path}
     </Element>
   );
+}
+
+/* ====================================================== draft review === */
+
+// Editable review of a pending memory draft. Local state seeded from the
+// draft (the component is keyed by draftId, so picking another draft remounts
+// it fresh). Accept builds the edited note and hands it back to be written;
+// Skip discards. Files-touched stays read-only — it's extracted, not authored.
+function DraftReview({
+  draft,
+  onAccept,
+  onSkip,
+}: {
+  draft: MemoryDraft;
+  onAccept: (edited: MemoryDraft) => void;
+  onSkip: () => void;
+}) {
+  const [title, setTitle] = useState(draft.title);
+  const [goal, setGoal] = useState(draft.goal);
+  const [notes, setNotes] = useState(draft.notes);
+  const [decisionsText, setDecisionsText] = useState(draft.decisions.join("\n"));
+
+  const fieldStyle: React.CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    fontSize: 12.5,
+    fontFamily: "inherit",
+    lineHeight: 1.5,
+    padding: "7px 9px",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-sm)",
+    background: "var(--bg)",
+    color: "var(--fg-strong)",
+    outline: "none",
+    resize: "vertical",
+  };
+
+  function accept() {
+    onAccept({
+      ...draft,
+      title: title.trim() || "Untitled session",
+      goal: goal.trim(),
+      notes: notes.trim(),
+      decisions: decisionsText
+        .split("\n")
+        .map((l) => l.replace(/^[-*]\s+/, "").trim())
+        .filter(Boolean),
+    });
+  }
+
+  return (
+    <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            color: "var(--accent)",
+            fontWeight: 600,
+          }}
+        >
+          Review draft
+        </span>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button onClick={onSkip} style={ghostBtnStyle()}>
+            Skip
+          </button>
+          <button onClick={accept} style={primaryBtnStyle()}>
+            Accept &amp; save
+          </button>
+        </span>
+      </div>
+
+      <Section title="Title">
+        <input value={title} onChange={(e) => setTitle(e.target.value)} style={fieldStyle} />
+      </Section>
+
+      <Section title="Goal">
+        <textarea
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          rows={2}
+          style={fieldStyle}
+        />
+      </Section>
+
+      <Section title="Notes">
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={4}
+          style={fieldStyle}
+        />
+      </Section>
+
+      <Section title="Decisions (one per line)">
+        <textarea
+          value={decisionsText}
+          onChange={(e) => setDecisionsText(e.target.value)}
+          rows={4}
+          style={fieldStyle}
+        />
+      </Section>
+
+      {draft.filesTouched.length > 0 && (
+        <Section title="Files touched">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {draft.filesTouched.map((p) => (
+              <FileChip key={p} path={p} />
+            ))}
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function ghostBtnStyle(): React.CSSProperties {
+  return {
+    fontSize: 12,
+    padding: "5px 12px",
+    borderRadius: "var(--radius-sm)",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg-subtle)",
+    cursor: "pointer",
+  };
+}
+
+function primaryBtnStyle(): React.CSSProperties {
+  return {
+    fontSize: 12,
+    padding: "5px 12px",
+    borderRadius: "var(--radius-sm)",
+    border: "1px solid var(--accent)",
+    background: "var(--accent)",
+    color: "var(--accent-fg, #fff)",
+    cursor: "pointer",
+    fontWeight: 500,
+  };
 }
 
 function EmptyDetail() {

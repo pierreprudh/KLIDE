@@ -5,7 +5,7 @@
 // survives — not the transcript.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { writeMemory, type MemoryEntry } from "../../memory";
+import { writeMemory, type MemoryEntry, type MemoryInput } from "../../memory";
 import { writeWorkspaceTextFile } from "../../workspaceFs";
 import type { Msg } from "./types";
 
@@ -198,13 +198,16 @@ ${convo}`;
   return text.trim();
 }
 
-// Top-level entry point. Returns the saved MemoryEntry; throws if the
-// workspace isn't open, the model is unavailable, or the response is
-// empty. The caller (AiPanel) handles the success notice + the
-// memoryRefreshKey bump.
-export async function summarizeAndHandoff(
+// Generate the structured note WITHOUT persisting it. Returns a
+// `MemoryInput` ready to hand to `writeMemory`. The reviewable-memory flow
+// drafts this on run-done and only writes once the user accepts (see
+// `src/memoryDrafts.ts`); `summarizeAndHandoff` = generate + write, used by
+// the manual "Summarize" action where the write is the explicit intent.
+// Throws if there's nothing to summarize, the model is unavailable, or the
+// response is empty.
+export async function generateMemoryNote(
   input: SummarizeInput
-): Promise<MemoryEntry> {
+): Promise<MemoryInput> {
   if (input.msgs.length === 0) {
     throw new Error("Nothing to summarize — start a conversation first.");
   }
@@ -222,15 +225,13 @@ export async function summarizeAndHandoff(
     throw new Error("Model returned an empty summary.");
   }
   const parsed = parseSummaryResponse(text);
-  const filesTouched = extractFilePaths(input.msgs);
-  const title = deriveTitle(input.msgs);
 
-  return writeMemory(input.workspaceRoot, {
-    title,
+  return {
+    title: deriveTitle(input.msgs),
     goal: parsed.goal,
     plan: [],
     decisions: parsed.decisions,
-    filesTouched,
+    filesTouched: extractFilePaths(input.msgs),
     nextSteps: [],
     notes: parsed.notes,
     runId: input.runId ?? null,
@@ -238,7 +239,17 @@ export async function summarizeAndHandoff(
     model: input.model,
     mode: input.mode,
     status: input.status ?? null,
-  });
+  };
+}
+
+// Top-level entry point for the manual action. Generates the note and writes
+// it straight to `.klide/memory/`. Returns the saved MemoryEntry; the caller
+// (AiPanel) handles the success notice + the memoryRefreshKey bump.
+export async function summarizeAndHandoff(
+  input: SummarizeInput
+): Promise<MemoryEntry> {
+  const note = await generateMemoryNote(input);
+  return writeMemory(input.workspaceRoot, note);
 }
 
 /* ============================================================ auto-skill ===*/

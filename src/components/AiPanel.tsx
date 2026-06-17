@@ -49,7 +49,8 @@ import { renderMessageBody } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
-import { summarizeAndHandoff, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
+import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
+import { addMemoryDraft } from "../memoryDrafts";
 import {
   genId,
   deriveTitle,
@@ -1104,7 +1105,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     if (snapshot.length < 2) return;
     setSummarizing(true);
     try {
-      const entry = await summarizeAndHandoff({
+      // Reviewable memory: generate the note but DON'T write it. Park it as a
+      // draft the user accepts / edits / skips from the Memory modal before it
+      // becomes durable. The manual "Summarize" action still writes directly.
+      const note = await generateMemoryNote({
         workspaceRoot,
         provider: turn.provider,
         model: turn.model,
@@ -1113,8 +1117,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         runId: currentId,
         status: "done",
       });
-      onMemoryWritten?.({ relPath: entry.relPath, title: entry.title });
-      setAutoMemoryNotice(`✓ Auto-saved: ${entry.title}`);
+      addMemoryDraft(note, workspaceRoot);
+      setAutoMemoryNotice(`✎ Memory draft ready to review: ${note.title}`);
       if (autoMemoryTimerRef.current !== null) {
         clearTimeout(autoMemoryTimerRef.current);
       }
