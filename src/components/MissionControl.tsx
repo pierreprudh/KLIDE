@@ -22,7 +22,7 @@ import {
   subscribeKlideConvos,
   type KlideConvo,
 } from "../klideConvos";
-import { listMemory } from "../memory";
+import { listMemory, subscribeMemoryChanged } from "../memory";
 import type { ThemeId } from "../theme";
 import {
   BOARD_SECTION_HINT,
@@ -2937,6 +2937,14 @@ export function MissionControl({
   // the board shows which completed runs are remembered vs still un-captured.
   // Re-runs when a Save-memory action settles (`summarizingFromRunId` clears).
   const [memoryRunIds, setMemoryRunIds] = useState<Set<string>>(new Set());
+  // Bumped whenever a memory note is written anywhere (accept a draft, manual
+  // Summarize, MC "Save memory"), so the "memory saved" chips reload promptly
+  // instead of only on reopen.
+  const [memoryVersion, setMemoryVersion] = useState(0);
+  useEffect(
+    () => subscribeMemoryChanged(() => setMemoryVersion((v) => v + 1)),
+    []
+  );
   useEffect(() => {
     if (!workspaceRoot) {
       setMemoryRunIds(new Set());
@@ -2956,7 +2964,7 @@ export function MissionControl({
     return () => {
       cancelled = true;
     };
-  }, [workspaceRoot, summarizingFromRunId]);
+  }, [workspaceRoot, summarizingFromRunId, memoryVersion]);
 
   // Initial load (and refresh) — just the most-recent page.
   async function load() {

@@ -46,13 +46,27 @@ export async function listMemory(
   return invoke<MemoryEntry[]>("memory_list", { workspaceRoot, limit });
 }
 
+// Durable memory changed (a note was written). Surfaces let across-surface
+// listeners — e.g. Mission Control's "memory saved" chip — refresh without
+// each one polling. `writeMemory` is the single write chokepoint, so firing
+// here covers every path (manual Summarize, draft accept, MC "Save memory").
+const memoryChangeListeners = new Set<() => void>();
+export function subscribeMemoryChanged(fn: () => void): () => void {
+  memoryChangeListeners.add(fn);
+  return () => {
+    memoryChangeListeners.delete(fn);
+  };
+}
+
 // Persist a structured memory note. Returns the saved entry (the Rust side
 // fills in id, path, dates). Throws if the workspace isn't open.
 export async function writeMemory(
   workspaceRoot: string,
   input: MemoryInput
 ): Promise<MemoryEntry> {
-  return invoke<MemoryEntry>("memory_write", { workspaceRoot, input });
+  const entry = await invoke<MemoryEntry>("memory_write", { workspaceRoot, input });
+  for (const fn of memoryChangeListeners) fn();
+  return entry;
 }
 
 // Read the raw markdown for a given relative path. Used by the editor
