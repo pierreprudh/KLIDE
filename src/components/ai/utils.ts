@@ -9,6 +9,20 @@ export function genId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+// The snapshot to persist for a conversation. Right after a send the list is
+// `[…, user, assistant("")]` — an empty placeholder waiting for tokens. We
+// must not let that placeholder block persistence (a view switch in that
+// window would otherwise drop the just-sent user message), so strip a
+// trailing empty assistant turn but keep everything before it.
+export function messagesForPersist(msgs: Msg[]): Msg[] {
+  if (msgs.length === 0) return msgs;
+  const last = msgs[msgs.length - 1];
+  if (last.role === "assistant" && !last.content && !last.thinking && !last.toolCalls) {
+    return msgs.slice(0, -1);
+  }
+  return msgs;
+}
+
 export function deriveTitle(msgs: Msg[]): string {
   const firstUser = msgs.find((m) => m.role === "user");
   const text = firstUser?.content.trim() ?? "";

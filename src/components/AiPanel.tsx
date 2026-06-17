@@ -54,6 +54,7 @@ import { addMemoryDraft } from "../memoryDrafts";
 import {
   genId,
   deriveTitle,
+  messagesForPersist,
   estimateTokens,
   messageTokenEstimate,
   fuzzyFiles,
@@ -1256,11 +1257,13 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   }, [input]);
 
   useEffect(() => {
-    if (msgs.length === 0) return;
-    const lastMsg = msgs[msgs.length - 1];
-    if (lastMsg.role === "assistant" && lastMsg.content === "" && !lastMsg.thinking && !lastMsg.toolCalls) return;
+    // Persist the conversation as it changes, dropping only a trailing empty
+    // assistant placeholder — the user message before it must survive a view
+    // switch even in the brief pre-token window. See `messagesForPersist`.
+    const toSave = messagesForPersist(msgs);
+    if (toSave.length === 0) return;
     setConversations((prev) => {
-      const conv: Conversation = { id: currentId, title: deriveTitle(msgs), msgs, updatedAt: Date.now() };
+      const conv: Conversation = { id: currentId, title: deriveTitle(toSave), msgs: toSave, updatedAt: Date.now() };
       const next = [conv, ...prev.filter((c) => c.id !== currentId)];
       saveConversations(next);
       return next;
@@ -1272,10 +1275,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   // already kept in sync above, and the persist effect above will
   // have run for the most recent state when React re-rendered.
   useEffect(() => () => {
-    const snapshot = msgsRef.current;
+    const snapshot = messagesForPersist(msgsRef.current);
     if (snapshot.length === 0) return;
-    const lastMsg = snapshot[snapshot.length - 1];
-    if (lastMsg.role === "assistant" && lastMsg.content === "" && !lastMsg.thinking && !lastMsg.toolCalls) return;
     const raw = (() => {
       try { return localStorage.getItem("klide.conversations"); } catch { return null; }
     })();
