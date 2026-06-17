@@ -1930,14 +1930,14 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     });
   }
 
-  function approveCommand() {
+  function approveCommand(scope: "once" | "run" = "once") {
     if (!pendingPermission) return;
     const snapshot = pendingPermission;
     setPendingPermission(null);
     void resolvePermission({
       runId: snapshot.runId,
       requestId: snapshot.requestId,
-      decision: { behavior: "allow", scope: "once" },
+      decision: { behavior: "allow", scope },
     }).catch((err) => console.error("Failed to approve command:", err));
   }
 
@@ -2361,7 +2361,25 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               </button>
               <button
                 type="button"
-                onClick={approveCommand}
+                onClick={() => approveCommand("run")}
+                title="Approve this exact command for the rest of this run without re-asking"
+                style={{
+                  height: 26,
+                  padding: "0 10px",
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  color: "var(--fg-subtle)",
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                }}
+              >
+                For this run
+              </button>
+              <button
+                type="button"
+                onClick={() => approveCommand("once")}
                 style={{
                   height: 26,
                   padding: "0 12px",

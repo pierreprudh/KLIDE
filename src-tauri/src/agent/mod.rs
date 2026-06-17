@@ -44,6 +44,10 @@ pub struct AgentRunHandle {
     /// channel, which the run loop awaits before running (or skipping) the
     /// command.
     pub pending_permission: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
+    /// Commands the user approved with scope "run"/"project" earlier in this
+    /// run — re-running an identical command skips the prompt, so the agent
+    /// can `cargo check` repeatedly without re-asking each time.
+    pub approved_commands: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 pub struct AgentSupervisorState {
@@ -554,6 +558,7 @@ pub async fn agent_start_run(
                 pending_diff: std::sync::Mutex::new(None),
                 pending_question: std::sync::Mutex::new(None),
                 pending_permission: std::sync::Mutex::new(None),
+                approved_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
             },
         );
 
@@ -1087,73 +1092,108 @@ conversation, then ask again._",
                 } else if root.is_none() {
                     tool_result = no_workspace_result();
                 } else {
-                    let request_id = format!("perm_{}_{}", id, call.id);
-                    let perm = serde_json::json!({
-                        "id": request_id,
-                        "runId": id,
-                        "toolCallId": call.id,
-                        "toolName": "run_command",
-                        "input": { "command": command },
-                        "summary": format!("$ {command}"),
-                        "reason": "The agent wants to run a shell command in the workspace.",
-                        "options": [
-                            { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
-                            { "optionId": "deny", "label": "Reject", "behavior": "deny" }
-                        ]
-                    });
-
-                    set_run_status(&app, &id, AgentRunStatus::WaitingForPermission);
-                    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-                    {
+                    // Default 180s; configurable for long builds. Clamped so a
+                    // bad setting can't disable the runaway guard.
+                    let timeout_secs = request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                    // Skip the prompt if this exact command was already approved
+                    // for the run, or is on the project allowlist passed at start.
+                    let pre_approved = {
                         let state = app.state::<AgentSupervisorState>();
-                        let mut runs = state
+                        let runs = state
                             .runs
                             .lock()
                             .map_err(|_| "Agent state unavailable".to_string())?;
-                        if let Some(handle) = runs.get_mut(&id) {
-                            *handle.pending_permission.lock().unwrap() = Some(tx);
-                        }
-                    }
-
-                    emit(AgentEvent::PermissionRequested {
-                        run_id: id.clone(),
-                        request: perm,
-                        ts: now_ms(),
-                    })?;
-
-                    let decision = tokio::select! {
-                        _ = cancel.cancelled() => {
-                            set_run_status(&app, &id, AgentRunStatus::Running);
-                            finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
-                            return Ok(());
-                        }
-                        result = rx => result.unwrap_or_else(|_| "{\"behavior\":\"deny\"}".to_string()),
+                        let run_ok = runs
+                            .get(&id)
+                            .map(|h| h.approved_commands.lock().unwrap().contains(&command))
+                            .unwrap_or(false);
+                        run_ok || request.command_allowlist.iter().any(|c| c == &command)
                     };
 
-                    set_run_status(&app, &id, AgentRunStatus::Running);
-                    let decision_val: serde_json::Value =
-                        serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
-                    let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
-
-                    emit(AgentEvent::PermissionResolved {
-                        run_id: id.clone(),
-                        request_id: request_id.clone(),
-                        decision: decision_val.clone(),
-                        ts: now_ms(),
-                    })?;
-
-                    tool_result = if allowed {
-                        // Default 180s; configurable for long builds. Clamped so a
-                        // bad setting can't disable the runaway guard.
-                        let timeout_secs = request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
-                        run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await
+                    if pre_approved {
+                        tool_result =
+                            run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await;
                     } else {
-                        ToolResult {
-                            ok: false,
-                            content: "Rejected by user: command not run.".to_string(),
-                            metadata: None,
+                        let request_id = format!("perm_{}_{}", id, call.id);
+                        let perm = serde_json::json!({
+                            "id": request_id,
+                            "runId": id,
+                            "toolCallId": call.id,
+                            "toolName": "run_command",
+                            "input": { "command": command },
+                            "summary": format!("$ {command}"),
+                            "reason": "The agent wants to run a shell command in the workspace.",
+                            "options": [
+                                { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
+                                { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
+                                { "optionId": "deny", "label": "Reject", "behavior": "deny" }
+                            ]
+                        });
+
+                        set_run_status(&app, &id, AgentRunStatus::WaitingForPermission);
+                        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+                        {
+                            let state = app.state::<AgentSupervisorState>();
+                            let mut runs = state
+                                .runs
+                                .lock()
+                                .map_err(|_| "Agent state unavailable".to_string())?;
+                            if let Some(handle) = runs.get_mut(&id) {
+                                *handle.pending_permission.lock().unwrap() = Some(tx);
+                            }
                         }
-                    };
+
+                        emit(AgentEvent::PermissionRequested {
+                            run_id: id.clone(),
+                            request: perm,
+                            ts: now_ms(),
+                        })?;
+
+                        let decision = tokio::select! {
+                            _ = cancel.cancelled() => {
+                                set_run_status(&app, &id, AgentRunStatus::Running);
+                                finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                                return Ok(());
+                            }
+                            result = rx => result.unwrap_or_else(|_| "{\"behavior\":\"deny\"}".to_string()),
+                        };
+
+                        set_run_status(&app, &id, AgentRunStatus::Running);
+                        let decision_val: serde_json::Value =
+                            serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
+                        let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
+                        let scope = decision_val.get("scope").and_then(|s| s.as_str()).unwrap_or("once");
+
+                        emit(AgentEvent::PermissionResolved {
+                            run_id: id.clone(),
+                            request_id: request_id.clone(),
+                            decision: decision_val.clone(),
+                            ts: now_ms(),
+                        })?;
+
+                        // Remember run/project-scoped approvals so an identical
+                        // command later in this run runs without re-asking.
+                        if allowed && (scope == "run" || scope == "project") {
+                            let state = app.state::<AgentSupervisorState>();
+                            let runs = state
+                                .runs
+                                .lock()
+                                .map_err(|_| "Agent state unavailable".to_string())?;
+                            if let Some(handle) = runs.get(&id) {
+                                handle.approved_commands.lock().unwrap().insert(command.clone());
+                            }
+                        }
+
+                        tool_result = if allowed {
+                            run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await
+                        } else {
+                            ToolResult {
+                                ok: false,
+                                content: "Rejected by user: command not run.".to_string(),
+                                metadata: None,
+                            }
+                        };
+                    }
                 }
             } else if matches!(find_tool_kind(&call.name), Some(ToolKind::Write)) {
                 let root = match request.workspace_root.as_deref() {

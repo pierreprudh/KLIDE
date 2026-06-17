@@ -87,6 +87,10 @@ pub struct StartRunRequest {
     /// harness default (180s); a hang guard, not a task limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_timeout_secs: Option<u64>,
+    /// Commands pre-approved for `run_command` (exact match) — the project
+    /// allowlist, so trusted commands skip the approval prompt.
+    #[serde(default)]
+    pub command_allowlist: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
