@@ -58,6 +58,8 @@ import {
   fuzzyFiles,
   loadConversations,
   saveConversations,
+  loadPanelSession,
+  savePanelSession,
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
@@ -98,11 +100,14 @@ type Props = {
   width: number;
   fill?: boolean;
   /**
-   * Stable identity for this panel. When the workbench view is unmounted
-   * (user switches to Settings / Mission Control) the AiPanel component
-   * unmounts with it; passing a stable `panelId` lets us re-attach to the
-   * same conversation history on the next mount, so the user does not lose
-   * their in-flight thread when they come back. Defaults to a fresh id.
+   * Stable identity for this panel (provider/model prefs are keyed by it).
+   * When the workbench view is unmounted (user switches to Settings /
+   * Mission Control) the AiPanel unmounts with it. On remount we re-attach
+   * to the *in-flight* conversation only — see the per-panel `PanelSession`
+   * record (`loadPanelSession`/`savePanelSession`). If the previous chat had
+   * already finished, the panel starts a fresh conversation instead of
+   * reopening it, so quick chats don't pile into one ever-growing transcript.
+   * Finished chats remain resumable from the history dropdown.
    */
   panelId?: string;
   model: string;
@@ -294,7 +299,16 @@ export function AiPanel({
   // Mission Control's "running" / "waiting" row alive) closes over it.
   // Was further down; the view-switch bug surfaced when we replaced a
   // random UUID with this stable id and TypeScript started complaining.
-  const [currentId, setCurrentId] = useState<string>(() => panelId ?? genId());
+  const [currentId, setCurrentId] = useState<string>(() => {
+    // Re-attach to a conversation only when one was in-flight (or explicitly
+    // resumed) at the last unmount — e.g. the panel remounted mid-run after a
+    // view switch. If the previous conversation already finished, or there
+    // was none, start a fresh id so quick chats stay their own runs instead
+    // of piling into one ever-growing transcript. Panel identity (provider/
+    // model prefs) still lives under `panelId` separately.
+    const prior = panelId ? loadPanelSession(panelId) : null;
+    return prior?.active ? prior.convoId : genId();
+  });
   const [input, setInput] = useState("");
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -1037,7 +1051,12 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     // every subsequent chat gets its own transcript.
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
-    setCurrentId(genId());
+    const nid = genId();
+    setCurrentId(nid);
+    // Fresh chat, no run yet → inactive. A remount before the first send
+    // simply starts fresh again (nothing to lose); the first send flips it
+    // active so a mid-run view switch re-attaches.
+    if (panelId) savePanelSession(panelId, nid, false);
   }
 
   // Write a structured memory note to .klide/memory/. Delegates to
@@ -1143,6 +1162,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     setCurrentId(c.id);
     setMsgs(c.msgs);
     msgsRef.current = c.msgs;
+    // Explicit resume is intent to continue this thread, so keep it pinned
+    // across a remount (view switch) until it finishes or the user starts a
+    // new chat — mirrors the in-flight re-attach path.
+    if (panelId) savePanelSession(panelId, c.id, true);
     // No usage stored with history → estimate until this chat's next turn.
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
@@ -1171,7 +1194,14 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   function deleteConversation(id: string, e: ReactMouseEvent) {
     e.stopPropagation();
     setConversations((prev) => { const next = prev.filter((c) => c.id !== id); saveConversations(next); return next; });
-    if (id === currentId) { setMsgs([]); setCurrentId(genId()); setMeasuredPromptTokens(null); setMeasuredUsageTokens(null); }
+    if (id === currentId) {
+      setMsgs([]);
+      const nid = genId();
+      setCurrentId(nid);
+      if (panelId) savePanelSession(panelId, nid, false);
+      setMeasuredPromptTokens(null);
+      setMeasuredUsageTokens(null);
+    }
   }
 
   // Only auto-scroll on token updates when the user is at the bottom.
@@ -1660,6 +1690,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
       const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
       const maxParallelTools = harnessSettings?.maxParallelTools;
+      // Mark this conversation in-flight so a mid-run view switch re-attaches
+      // to it rather than starting fresh on remount.
+      if (panelId) savePanelSession(panelId, currentId, true);
       const session = await startAgentRun({
         runId: currentId,
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
@@ -1684,6 +1717,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       next[i] = { role: "assistant", content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.` };
       commit(next);
     }
+    // Turn settled (done or errored): the conversation is no longer in-flight,
+    // so reopening the panel after this point starts a fresh chat. A queued
+    // follow-up turn flips it back to active when it starts.
+    if (panelId) savePanelSession(panelId, currentId, false);
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     // Flush any pending delta that hasn't been rendered yet
     if (pendingDelta.content || pendingDelta.thinking) {

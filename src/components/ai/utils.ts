@@ -94,3 +94,44 @@ export function saveConversations<T>(list: T[], key?: string) {
     /* storage full or unavailable */
   }
 }
+
+// A panel's *conversation* identity is separate from its *panel* identity
+// (provider/model prefs, keyed by panelId). We persist a tiny per-panel
+// record so a transient unmount (view switch) mid-run can re-attach to the
+// in-flight conversation, while reopening the panel after the conversation
+// finished starts a fresh one — otherwise quick chats pile into a single
+// ever-growing transcript that replays its whole history on every turn.
+const PANEL_SESSION_PREFIX = "klide.panelSession.";
+
+export interface PanelSession {
+  convoId: string;
+  /** True while a run is in-flight (or a history convo was explicitly
+   *  resumed). On the next mount, only an active session re-attaches; an
+   *  inactive one means the conversation is done, so the panel starts fresh. */
+  active: boolean;
+}
+
+export function loadPanelSession(panelId: string): PanelSession | null {
+  try {
+    const raw = localStorage.getItem(PANEL_SESSION_PREFIX + panelId);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (p && typeof p.convoId === "string" && typeof p.active === "boolean") {
+      return p as PanelSession;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function savePanelSession(panelId: string, convoId: string, active: boolean) {
+  try {
+    localStorage.setItem(
+      PANEL_SESSION_PREFIX + panelId,
+      JSON.stringify({ convoId, active })
+    );
+  } catch {
+    /* storage full or unavailable */
+  }
+}
