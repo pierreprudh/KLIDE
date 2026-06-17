@@ -377,6 +377,9 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         output_tokens,
         files_touched,
         cost_usd,
+        // OpenCode nests sub-agents as their own sessions (linked via
+        // `parent_id`), so they show as rows rather than an inline count.
+        subagent_count: 0,
         parent_id,
     })
 }

@@ -83,6 +83,13 @@ export type Run = {
   costUsd?: number | null;
   updatedMs: number;
   createdMs: number;
+  /**
+   * Sub-agents this run spawned, counted from its own transcript (Claude's
+   * `Agent`/`Task` tool calls). For sources whose sub-agents are separate
+   * sessions (OpenCode), those nest as child rows via `parentId` instead and
+   * this stays 0. Absent/0 when the source exposes no sub-agent calls.
+   */
+  subagentCount?: number;
   /** When this run was spawned by another run (e.g. @explore sub-agent). */
   parentId?: string;
 };
@@ -123,6 +130,7 @@ type AgentRunDto = {
   filesTouched?: number;
   costUsd?: number | null;
   status: string;
+  subagentCount?: number;
   parentId?: string;
 };
 
@@ -385,6 +393,7 @@ function fromDto(a: AgentRunDto): Run {
     costUsd: a.costUsd,
     updatedMs: a.updatedMs ?? 0,
     createdMs: a.createdMs ?? a.updatedMs ?? 0,
+    subagentCount: a.subagentCount,
     parentId: a.parentId,
   };
 }

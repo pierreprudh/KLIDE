@@ -237,6 +237,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         output_tokens,
         files_touched: files.len() as u32,
         cost_usd,
+        subagent_count: 0, // Codex's rollout log doesn't expose sub-agent calls.
         parent_id: None,
     })
 }

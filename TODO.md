@@ -76,7 +76,7 @@ seconds: what is running, what needs me, and what changed?
 
 - [ ] Review queue: failed, waiting, idle, and completed delegated runs have explicit reasons and a clear next action.
 - [ ] Evidence summaries: each run row shows last meaningful event, branch/worktree, files touched, diff/review entry point, tokens/cost, and memory status.
-- [ ] Delegate observability: fix Claude routine design in Mission Control and restore missing sub-agent visibility for Claude conversations.
+- [x] Delegate observability: fix Claude routine design in Mission Control and restore missing sub-agent visibility for Claude conversations. (Claude parser now counts `Agent`/`Task` sub-agent calls and excludes inline `isSidechain` turns from message_count, surfaced as a row chip + detail-pane stat; removed the Claude-only `extract_routine_heading` title-hijack so routine badging is now one source-agnostic path in TS `runRoutineInfo`.)
 - [ ] Reviewable memory: completed runs draft memory notes that can be accepted, edited, or skipped before becoming durable project memory.
 - [ ] Settings performance: reduce settings open lag; defer usage/provider stat work so the settings surface opens immediately.
 - [ ] Product restraint: keep multi-account setup, natural-language scheduling, and proactive suggestions parked until the review/evidence loop feels excellent.

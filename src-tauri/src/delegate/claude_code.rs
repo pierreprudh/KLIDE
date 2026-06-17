@@ -1,6 +1,6 @@
 use super::runs::{
-    cap_messages, clean_title, extract_routine_heading, extract_user_text, mtime_ms, project_name,
-    recency_status, tool_file_path, AgentRun, RunMessage,
+    cap_messages, clean_title, extract_user_text, mtime_ms, project_name, recency_status,
+    tool_file_path, AgentRun, RunMessage,
 };
 use std::collections::HashSet;
 use super::{shell_quote, Delegate, RunCandidate, RunParser};
@@ -111,11 +111,21 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let mut created_ms: i64 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     let mut files: HashSet<String> = HashSet::new();
+    let mut subagent_count: u32 = 0;
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => continue,
         };
+        // Sub-agent (Task / Agent) turns are recorded inline with this flag.
+        // They're the sub-agent's *own* back-and-forth, not the operator's
+        // conversation, so they don't count toward this run's message_count
+        // and their `Agent` calls don't inflate the sub-agent tally (a
+        // sub-agent that spawns its own sub-agent is the child's concern).
+        let is_sidechain = v
+            .get("isSidechain")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
         // Capture first timestamp as creation time
         if created_ms == 0 {
             if let Some(ts) = v.get("ts").and_then(|t| t.as_i64()) {
@@ -134,21 +144,18 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         }
         match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => {
-                count += 1;
-                if title.is_none() {
-                    if let Some(t) = v.get("message").and_then(extract_user_text) {
-                        title = Some(clean_title(&t));
+                if !is_sidechain {
+                    count += 1;
+                    if title.is_none() {
+                        if let Some(t) = v.get("message").and_then(extract_user_text) {
+                            title = Some(clean_title(&t));
+                        }
                     }
                 }
             }
             Some("assistant") => {
-                count += 1;
-                if title.is_none() {
-                    if let Some(text) = v.get("message").and_then(message_text) {
-                        if let Some(heading) = extract_routine_heading(&text) {
-                            title = Some(heading);
-                        }
-                    }
+                if !is_sidechain {
+                    count += 1;
                 }
                 if model.is_none() {
                     model = v
@@ -183,6 +190,13 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                             if let Some(path) = tool_file_path(name, input) {
                                 files.insert(path);
                             }
+                            // Claude spawns sub-agents through the `Task` tool
+                            // (older builds) or the `Agent` tool (current). Each
+                            // call is one sub-agent; we tally them from the main
+                            // transcript only — sidechain turns are skipped above.
+                            if !is_sidechain && (name == "Agent" || name == "Task") {
+                                subagent_count += 1;
+                            }
                         }
                     }
                 }
@@ -216,6 +230,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         output_tokens,
         files_touched: files.len() as u32,
         cost_usd,
+        subagent_count,
         parent_id: None,
     })
 }
@@ -344,6 +359,28 @@ mod tests {
         .unwrap();
         let run = parse_run(&p).unwrap();
         assert_eq!(run.files_touched, 2, "Bash should not be counted, dedupe should drop the re-edit");
+    }
+
+    #[test]
+    fn counts_sub_agents_and_excludes_sidechain_turns() {
+        // Two Agent calls in the main transcript = 2 sub-agents. The
+        // sidechain assistant turn (the sub-agent's own reply) must not
+        // count toward message_count, and an Agent call *inside* a sidechain
+        // belongs to the child run, so it doesn't inflate this run's tally.
+        let home = temp_home("subagents");
+        let p = home.join("session.jsonl");
+        std::fs::write(
+            &p,
+            concat!(
+                r#"{"type":"user","ts":1000,"cwd":"/proj","message":{"content":"do two things"}}"#, "\n",
+                r#"{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","name":"Agent","input":{}},{"type":"tool_use","name":"Task","input":{}}]}}"#, "\n",
+                r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub-agent working"},{"type":"tool_use","name":"Agent","input":{}}]}}"#, "\n",
+            ),
+        )
+        .unwrap();
+        let run = parse_run(&p).unwrap();
+        assert_eq!(run.subagent_count, 2, "two main-transcript Agent/Task calls");
+        assert_eq!(run.message_count, 2, "sidechain assistant turn is excluded");
     }
 
     #[test]

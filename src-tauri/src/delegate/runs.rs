@@ -37,6 +37,12 @@ pub struct AgentRun {
     /// subscription, passthrough, or unknown models.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Number of sub-agents this run spawned, counted from the transcript's
+    /// own tool calls (Claude's `Agent` / `Task` tool). 0 when the source
+    /// doesn't expose sub-agent calls or none ran. Distinct from `parent_id`,
+    /// which links a run to a *separate* parent session; here the sub-agents
+    /// live inside this run's own log, so we surface a count rather than rows.
+    pub subagent_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>, // set when we can infer parent from spawn mapping
 }
@@ -84,39 +90,6 @@ pub(crate) fn project_name(cwd: &str) -> Option<String> {
 pub(crate) fn clean_title(s: &str) -> String {
     let one = s.split('\n').next().unwrap_or(s).trim();
     one.chars().take(120).collect()
-}
-
-pub(crate) fn extract_routine_heading(s: &str) -> Option<String> {
-    for line in s.lines() {
-        let cleaned = line
-            .trim()
-            .trim_start_matches('#')
-            .trim()
-            .trim_matches('*')
-            .trim();
-        if cleaned.is_empty() {
-            continue;
-        }
-        let lower = cleaned.to_lowercase();
-        let has_cadence = lower.contains("daily")
-            || lower.contains("weekly")
-            || lower.contains("monthly")
-            || lower.contains("routine")
-            || lower.contains("recurring")
-            || lower.contains("scheduled");
-        let has_report_term = lower.contains("recap")
-            || lower.contains("review")
-            || lower.contains("check-in")
-            || lower.contains("check in")
-            || lower.contains("standup")
-            || lower.contains("status")
-            || lower.contains("digest")
-            || lower.contains("report");
-        if has_cadence && has_report_term {
-            return Some(clean_title(cleaned));
-        }
-    }
-    None
 }
 
 pub(crate) fn recency_status(updated_ms: i64) -> String {
@@ -229,16 +202,6 @@ mod tests {
         let t = clean_title(&long);
         assert_eq!(t.chars().count(), 120);
         assert!(!t.contains('\n'));
-    }
-
-    #[test]
-    fn routine_heading_needs_cadence_and_report_term() {
-        assert_eq!(
-            extract_routine_heading("## Daily standup recap\nbody").as_deref(),
-            Some("Daily standup recap")
-        );
-        assert_eq!(extract_routine_heading("## Daily notes"), None);
-        assert_eq!(extract_routine_heading("## Status report"), None);
     }
 
     #[test]

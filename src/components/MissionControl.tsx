@@ -698,6 +698,9 @@ function RunRow({
             {showEvidence && formatFilesTouched(run.filesTouched) ? ` · ${formatFilesTouched(run.filesTouched)}` : ""}
             {showEvidence && formatCost(run.costUsd) ? ` · ${formatCost(run.costUsd)}` : ""}
             {showEvidence && tokenSummary ? ` · ${tokenSummary}` : ""}
+            {showEvidence && run.subagentCount
+              ? ` · ${run.subagentCount} sub-agent${run.subagentCount > 1 ? "s" : ""}`
+              : ""}
             {" · "}
             {relativeTime(run.updatedMs)}
           </span>
@@ -1251,6 +1254,8 @@ function RunEvidenceStrip({ run }: { run: Run }) {
     if (files) meta.push(<EvidenceMeta key="files" label="Files" value={files} />);
     if (cost) meta.push(<EvidenceMeta key="cost" label="Cost" value={cost} />);
     if (tokens) meta.push(<EvidenceMeta key="tokens" label="Tokens" value={tokens} />);
+    if (run.subagentCount)
+      meta.push(<EvidenceMeta key="subagents" label="Sub-agents" value={String(run.subagentCount)} />);
   }
   meta.push(<EvidenceMeta key="activity" label="Seen" value={relativeTime(run.updatedMs)} />);
 
