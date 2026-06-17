@@ -351,6 +351,36 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         output_tokens,
     );
 
+    // "What the run last did": the newest assistant message's text parts,
+    // assembled the same way read_run does. Same schema (part.message_id +
+    // time_created) the detail reader uses.
+    let last_event: Option<String> = (|| -> Option<String> {
+        let msg_id: String = conn
+            .query_row(
+                "SELECT id FROM message WHERE session_id = ?1 \
+                 AND json_extract(data, '$.role') = 'assistant' \
+                 ORDER BY time_created DESC, id DESC LIMIT 1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .ok()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT data FROM part WHERE message_id = ?1 \
+                 ORDER BY time_created ASC, id ASC",
+            )
+            .ok()?;
+        let parts: Vec<serde_json::Value> = stmt
+            .query_map([&msg_id], |row| {
+                let raw: String = row.get(0)?;
+                Ok(serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null))
+            })
+            .ok()?
+            .filter_map(|r| r.ok())
+            .collect();
+        message_text(&parts).map(|t| clean_title(&t))
+    })();
+
     Some(AgentRun {
         status,
         project,
@@ -380,6 +410,7 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         // OpenCode nests sub-agents as their own sessions (linked via
         // `parent_id`), so they show as rows rather than an inline count.
         subagent_count: 0,
+        last_event,
         parent_id,
     })
 }

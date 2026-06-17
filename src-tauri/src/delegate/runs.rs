@@ -43,6 +43,13 @@ pub struct AgentRun {
     /// which links a run to a *separate* parent session; here the sub-agents
     /// live inside this run's own log, so we surface a count rather than rows.
     pub subagent_count: u32,
+    /// One-line summary of the run's most recent assistant turn — "what it
+    /// last did" — for the board's evidence line. The session title is the
+    /// *first* user message, which goes stale on a long run; this answers
+    /// "what changed?" at a glance. `None` when the source has no assistant
+    /// turn yet or doesn't expose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>, // set when we can infer parent from spawn mapping
 }

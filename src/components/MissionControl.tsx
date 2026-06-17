@@ -657,6 +657,22 @@ function RunRow({
             {run.title}
           </span>
         </span>
+          {!compact && run.lastEvent ? (
+            <span
+              title={run.lastEvent}
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-muted)",
+                lineHeight: 1.3,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+              }}
+            >
+              {run.lastEvent}
+            </span>
+          ) : null}
           <span
             style={{
               fontSize: 11,

@@ -127,6 +127,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     let mut cost_sum: f64 = 0.0;
     let mut files: HashSet<String> = HashSet::new();
+    let mut last_event: Option<String> = None;
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -168,6 +169,10 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                     }
                 }
                 if role == "assistant" {
+                    // Newest assistant turn wins — "what the run last did".
+                    if let Some(t) = message_text(message) {
+                        last_event = Some(clean_title(&t));
+                    }
                     if model.is_none() {
                         model = message
                             .get("model")
@@ -249,6 +254,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         files_touched: files.len() as u32,
         cost_usd,
         subagent_count: 0, // omp's session record doesn't expose sub-agent calls.
+        last_event,
         parent_id: None,
     })
 }

@@ -90,6 +90,13 @@ export type Run = {
    * this stays 0. Absent/0 when the source exposes no sub-agent calls.
    */
   subagentCount?: number;
+  /**
+   * One-line summary of the run's most recent assistant turn ("what it last
+   * did"). The title is the *first* user message, which goes stale on a long
+   * run; this answers "what changed?". Absent when the source exposes no
+   * assistant turn yet.
+   */
+  lastEvent?: string;
   /** When this run was spawned by another run (e.g. @explore sub-agent). */
   parentId?: string;
 };
@@ -131,6 +138,7 @@ type AgentRunDto = {
   costUsd?: number | null;
   status: string;
   subagentCount?: number;
+  lastEvent?: string;
   parentId?: string;
 };
 
@@ -394,6 +402,7 @@ function fromDto(a: AgentRunDto): Run {
     updatedMs: a.updatedMs ?? 0,
     createdMs: a.createdMs ?? a.updatedMs ?? 0,
     subagentCount: a.subagentCount,
+    lastEvent: a.lastEvent,
     parentId: a.parentId,
   };
 }

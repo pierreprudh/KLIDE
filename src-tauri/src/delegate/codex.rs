@@ -1,4 +1,6 @@
-use super::runs::{cap_messages, mtime_ms, project_name, recency_status, tool_file_path};
+use super::runs::{
+    cap_messages, clean_title, mtime_ms, project_name, recency_status, tool_file_path,
+};
 use std::collections::HashSet;
 use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
 use std::collections::HashMap;
@@ -125,6 +127,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
     let mut count: u32 = 0;
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     let mut files: HashSet<String> = HashSet::new();
+    let mut last_event: Option<String> = None;
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -185,6 +188,14 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
                             }
                         }
                     }
+                    // Track the newest assistant message as the run's last event.
+                    if p.get("type").and_then(|t| t.as_str()) == Some("message")
+                        && p.get("role").and_then(|r| r.as_str()) == Some("assistant")
+                    {
+                        if let Some(t) = message_text(p) {
+                            last_event = Some(clean_title(&t));
+                        }
+                    }
                 }
             }
             Some("event_msg") => {
@@ -238,6 +249,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         files_touched: files.len() as u32,
         cost_usd,
         subagent_count: 0, // Codex's rollout log doesn't expose sub-agent calls.
+        last_event,
         parent_id: None,
     })
 }

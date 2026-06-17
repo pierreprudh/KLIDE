@@ -112,6 +112,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let (mut input_tokens, mut output_tokens): (i64, i64) = (0, 0);
     let mut files: HashSet<String> = HashSet::new();
     let mut subagent_count: u32 = 0;
+    let mut last_event: Option<String> = None;
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -156,6 +157,10 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
             Some("assistant") => {
                 if !is_sidechain {
                     count += 1;
+                    // Newest assistant turn wins — "what the run last did".
+                    if let Some(t) = v.get("message").and_then(message_text) {
+                        last_event = Some(clean_title(&t));
+                    }
                 }
                 if model.is_none() {
                     model = v
@@ -231,6 +236,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         files_touched: files.len() as u32,
         cost_usd,
         subagent_count,
+        last_event,
         parent_id: None,
     })
 }
@@ -326,6 +332,8 @@ mod tests {
         assert_eq!(run.git_branch.as_deref(), Some("main"));
         assert_eq!(run.created_ms, 1000);
         assert_eq!(run.message_count, 2);
+        // Last assistant turn, first line — "what the run last did".
+        assert_eq!(run.last_event.as_deref(), Some("On it."));
         // Cache reads excluded, cache creation counted.
         assert_eq!(run.input_tokens, 150);
         assert_eq!(run.output_tokens, 20);
