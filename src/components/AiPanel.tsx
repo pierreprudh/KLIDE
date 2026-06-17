@@ -51,6 +51,7 @@ import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
+import { eventsToMsgs } from "./ai/eventsToMsgs";
 import {
   genId,
   deriveTitle,
@@ -989,6 +990,30 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     if (saved && saved.msgs.length > 0) {
       setMsgs(saved.msgs);
       msgsRef.current = saved.msgs;
+    }
+    // Reconnect to a run that progressed while the panel was unmounted: the
+    // harness keeps running in Rust and writes the transcript, but the live
+    // event stream is per-mount and doesn't survive a view switch. So if a
+    // mid-run switch left us with just the user message, rebuild from the
+    // on-disk transcript — which has the (possibly finished) assistant reply.
+    // Klide runs only (currentId == transcript id); delegates use the PTY.
+    if (!providerDelegatesWork) {
+      const baseLen = msgsRef.current.length;
+      void (async () => {
+        try {
+          const events = await invoke<AgentEvent[]>("agent_read_run", { runId: currentId });
+          const replayed = eventsToMsgs(events);
+          // Adopt only if the user did nothing since mount (msgs length is
+          // still the restored snapshot) and the transcript is richer —
+          // guards against clobbering a chat the user already started typing.
+          if (msgsRef.current.length === baseLen && replayed.length > baseLen) {
+            setMsgs(replayed);
+            msgsRef.current = replayed;
+          }
+        } catch {
+          /* no transcript for this id (brand-new chat) — nothing to reconnect */
+        }
+      })();
     }
     // Intentionally only the *initial* currentId matters — subsequent
     // edits (loadConversation, newConversation) own the active id.
