@@ -22,6 +22,7 @@ import {
   subscribeKlideConvos,
   type KlideConvo,
 } from "../klideConvos";
+import { listMemory } from "../memory";
 import type { ThemeId } from "../theme";
 import {
   BOARD_SECTION_HINT,
@@ -559,12 +560,15 @@ function RunRow({
   onSelect,
   action,
   compact,
+  hasMemory,
 }: {
   run: Run;
   selected: boolean;
   onSelect: () => void;
   action?: React.ReactNode;
   compact?: boolean;
+  /** A durable Project Memory note exists for this run (matched by runId). */
+  hasMemory?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const tokenSummary = runTokenSummary(run);
@@ -703,6 +707,14 @@ function RunRow({
               : ""}
             {" · "}
             {relativeTime(run.updatedMs)}
+            {hasMemory ? (
+              <span
+                title="A Project Memory note is saved for this run"
+                style={{ color: "var(--accent)" }}
+              >
+                {" · "}memory
+              </span>
+            ) : null}
           </span>
       </span>
       {rightRail}
@@ -1240,7 +1252,7 @@ function EvidenceMeta({ label, value, title }: { label: string; value: string; t
   );
 }
 
-function RunEvidenceStrip({ run }: { run: Run }) {
+function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean }) {
   const reason = runBoardReason(run);
   const section = boardSectionForRun(run);
   const files = formatFilesTouched(run.filesTouched);
@@ -1256,6 +1268,13 @@ function RunEvidenceStrip({ run }: { run: Run }) {
     if (tokens) meta.push(<EvidenceMeta key="tokens" label="Tokens" value={tokens} />);
     if (run.subagentCount)
       meta.push(<EvidenceMeta key="subagents" label="Sub-agents" value={String(run.subagentCount)} />);
+  }
+  // Memory status closes the review loop: a finished run with no note is a
+  // candidate for "Save memory". Saved notes are shown whatever the status.
+  if (hasMemory) {
+    meta.push(<EvidenceMeta key="memory" label="Memory" value="Saved" />);
+  } else if (run.status === "done") {
+    meta.push(<EvidenceMeta key="memory" label="Memory" value="Not saved" />);
   }
   meta.push(<EvidenceMeta key="activity" label="Seen" value={relativeTime(run.updatedMs)} />);
 
@@ -2559,6 +2578,7 @@ function RunDetail({
   run,
   messages,
   firstUserMessage,
+  hasMemory,
   onOpenInAiPanel,
   onResumeKlide,
   onReviewDiff,
@@ -2567,6 +2587,8 @@ function RunDetail({
 }: {
   run: Run;
   messages?: RunMessage[];
+  /** A durable Project Memory note exists for this run (matched by runId). */
+  hasMemory?: boolean;
   /** First user message of a Klide run — used as the task prompt when
    *  handing the run off to an external CLI. */
   firstUserMessage: string | null;
@@ -2631,7 +2653,7 @@ function RunDetail({
         <RoutineBadge run={run} />
       </div>
 
-      <RunEvidenceStrip run={run} />
+      <RunEvidenceStrip run={run} hasMemory={hasMemory} />
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <CopyButton value={run.path || null} label="Copy log path" />
@@ -2890,6 +2912,31 @@ export function MissionControl({
   // First user message of the currently selected Klide run. Used as the
   // task prompt when handing the run off to a CLI via "Open in {CLI}".
   const [firstUserMessage, setFirstUserMessage] = useState<string | null>(null);
+  // Run ids that already have a durable Project Memory note (matched by the
+  // note's `runId` frontmatter). Drives the "memory saved" evidence signal so
+  // the board shows which completed runs are remembered vs still un-captured.
+  // Re-runs when a Save-memory action settles (`summarizingFromRunId` clears).
+  const [memoryRunIds, setMemoryRunIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!workspaceRoot) {
+      setMemoryRunIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    listMemory(workspaceRoot)
+      .then((entries) => {
+        if (cancelled) return;
+        setMemoryRunIds(
+          new Set(entries.map((e) => e.runId).filter((id): id is string => !!id))
+        );
+      })
+      .catch(() => {
+        /* no .klide/memory/ yet, or outside Tauri — leave the set empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceRoot, summarizingFromRunId]);
 
   // Initial load (and refresh) — just the most-recent page.
   async function load() {
@@ -3265,6 +3312,7 @@ export function MissionControl({
                           <RunRow
                             run={run}
                             selected={parentSelected}
+                            hasMemory={memoryRunIds.has(run.id)}
                             onSelect={() => selectRun(run)}
                             action={
                               sendable ? (
@@ -3334,6 +3382,7 @@ export function MissionControl({
                                 run={child}
                                 selected={childSelected}
                                 compact
+                                hasMemory={memoryRunIds.has(child.id)}
                                 onSelect={() => selectRun(child)}
                                 action={
                                   childSendable ? (
@@ -3417,6 +3466,7 @@ export function MissionControl({
             firstUserMessage={
               selectedConvo.messages.find((m) => m.role === "user")?.text ?? null
             }
+            hasMemory={memoryRunIds.has(selectedConvo.id)}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
@@ -3427,6 +3477,7 @@ export function MissionControl({
           <RunDetail
             run={selected}
             firstUserMessage={firstUserMessage}
+            hasMemory={memoryRunIds.has(selected.id)}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
