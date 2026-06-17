@@ -382,7 +382,11 @@ const MODEL_LOGO_RULES: { pattern: RegExp; Comp: LogoComp }[] = [
   { pattern: /deepseek/i, Comp: DeepSeekLogo },
   { pattern: /minimax/i, Comp: MiniMaxLogo },
   { pattern: /kimi/i, Comp: KimiLogo },
-  { pattern: /claude/i, Comp: ClaudeCodeLogo },
+  // Anthropic API models (claude-*) → the Anthropic company mark, NOT the
+  // Claude Code *CLI product* logo. A Klide conversation on the Anthropic API
+  // is not a Claude Code session; the CLI logo stays reserved for source
+  // === "claude-code" (handled directly in SourceLogo/ConversationAvatar).
+  { pattern: /claude/i, Comp: AnthropicMark },
   // Codex CLI only — keep this before the OpenAI rule so a literal "codex"
   // model still wears the Codex mark.
   { pattern: /codex/i, Comp: CodexLogo },

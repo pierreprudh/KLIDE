@@ -1,4 +1,4 @@
-use super::types::{AgentEvent, AgentRunSummary};
+use super::types::{AgentContentBlock, AgentEvent, AgentRunSummary};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -100,18 +100,24 @@ pub fn write_summary(runs_dir: &Path, summary: &AgentRunSummary) -> Result<(), S
     // them. The transcript is the source of truth — callers that already
     // computed values (none today) can pass them in and skip the re-walk.
     let mut summary = summary.clone();
-    if summary.input_tokens == 0
-        && summary.output_tokens == 0
-        && summary.files_touched == 0
-        && summary.cost_usd.is_none()
-    {
-        if let Ok(events) = read_events(runs_dir, &summary.id) {
+    if let Ok(events) = read_events(runs_dir, &summary.id) {
+        // Stats are additive sums — only fill them when the caller left them
+        // at zero (no caller pre-fills them today).
+        if summary.input_tokens == 0
+            && summary.output_tokens == 0
+            && summary.files_touched == 0
+            && summary.cost_usd.is_none()
+        {
             let (input, output, files) = summarize_event_stats(&events);
             summary.input_tokens = input;
             summary.output_tokens = output;
             summary.files_touched = files;
             summary.cost_usd = crate::pricing::cost_for_run(&summary.model, input, output);
         }
+        // last_event tracks the *latest* assistant turn, so recompute it every
+        // write — the transcript grows as the run progresses. Klide's own
+        // transcripts are bounded (≤16 turns), so the re-read is cheap.
+        summary.last_event = last_assistant_summary(&events);
     }
     let path = summary_path(runs_dir, &summary.id);
     let encoded = serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?;
@@ -145,6 +151,45 @@ pub(crate) fn summarize_event_stats(events: &[AgentEvent]) -> (i64, i64, u32) {
         }
     }
     (input, output, files.len() as u32)
+}
+
+/// One-line summary of the run's most recent assistant turn — "what it last
+/// did" — for the Mission Control row. Text blocks concatenate; tool calls
+/// collapse to `[tool: <name>]`; thinking is dropped. The newest assistant
+/// turn wins, capped to a single 120-char line. `None` when there's no
+/// assistant turn with renderable content yet.
+pub(crate) fn last_assistant_summary(events: &[AgentEvent]) -> Option<String> {
+    let mut last: Option<String> = None;
+    for event in events {
+        if let AgentEvent::AssistantMessage { content, .. } = event {
+            let mut buf = String::new();
+            for block in content {
+                match block {
+                    AgentContentBlock::Text { text } => {
+                        let t = text.trim();
+                        if !t.is_empty() {
+                            if !buf.is_empty() {
+                                buf.push('\n');
+                            }
+                            buf.push_str(t);
+                        }
+                    }
+                    AgentContentBlock::ToolCall { name, .. } => {
+                        if !buf.is_empty() {
+                            buf.push('\n');
+                        }
+                        buf.push_str(&format!("[tool: {name}]"));
+                    }
+                    _ => {} // thinking blocks have no place in a one-line résumé
+                }
+            }
+            let trimmed = buf.trim();
+            if !trimmed.is_empty() {
+                last = Some(trimmed.lines().next().unwrap_or(trimmed).chars().take(120).collect());
+            }
+        }
+    }
+    last
 }
 
 pub fn read_events(runs_dir: &Path, run_id: &str) -> Result<Vec<AgentEvent>, String> {
@@ -219,6 +264,41 @@ mod tests {
             }),
             ts: 1,
         }
+    }
+
+    fn assistant_with_text(id: &str, text: &str) -> AgentEvent {
+        AgentEvent::AssistantMessage {
+            run_id: id.to_string(),
+            message_id: "m".to_string(),
+            content: vec![AgentContentBlock::Text {
+                text: text.to_string(),
+            }],
+            usage: None,
+            ts: 1,
+        }
+    }
+
+    #[test]
+    fn last_assistant_summary_takes_newest_turn_first_line() {
+        let id = "r";
+        let events = vec![
+            assistant_with_text(id, "first turn"),
+            file_changed(id, "src/a.rs"),
+            assistant_with_text(id, "done — committed the fix\nextra line"),
+        ];
+        // Newest assistant turn wins; only its first line, trimmed.
+        assert_eq!(
+            last_assistant_summary(&events).as_deref(),
+            Some("done — committed the fix")
+        );
+    }
+
+    #[test]
+    fn last_assistant_summary_none_without_assistant_text() {
+        let id = "r";
+        // Usage-only assistant turns carry no renderable content.
+        let events = vec![assistant_with_usage(id, 10, 5)];
+        assert_eq!(last_assistant_summary(&events), None);
     }
 
     #[test]
@@ -304,6 +384,7 @@ mod tests {
             output_tokens: 0,
             files_touched: 0,
             cost_usd: None,
+            last_event: None,
             parent_id: None,
         };
         write_summary(&dir, &summary).unwrap();

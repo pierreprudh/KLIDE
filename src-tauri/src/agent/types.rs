@@ -147,6 +147,11 @@ pub struct AgentRunSummary {
     /// passthrough / unknown models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// One-line summary of the run's most recent assistant turn — "what it
+    /// last did" — for the Mission Control row. Enriched from the transcript
+    /// by `write_summary` when absent. `None` before any assistant turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }

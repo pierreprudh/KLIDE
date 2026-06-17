@@ -627,6 +627,7 @@ async fn run_agent_loop(
         output_tokens: 0,
         files_touched: 0,
         cost_usd: None,
+        last_event: None,
         parent_id: request.parent_id.clone(),
     };
     write_summary(&runs_dir, &summary)?;
