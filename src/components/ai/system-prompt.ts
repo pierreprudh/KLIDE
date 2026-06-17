@@ -8,16 +8,28 @@ export function buildSystemPrompt(
   mode: AgentMode,
   toolsAvailable: boolean,
   projectRules: string,
-  customPrompts?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string }
+  customPrompts?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string },
+  modelLabel?: string
 ): string {
   const skillsBlock = enabledSkillsPrompt(skills);
+  // Identity guard. The project reference below is often a file named
+  // CLAUDE.md full of "Claude"/"Anthropic" branding, and many models are
+  // distilled on Claude data — both make models wrongly announce "I'm
+  // Claude". State the real model and forbid the misidentification.
+  const identity = `You are Klide's coding agent — Klide's own harness, not a third-party product. You are embedded in a code editor${
+    modelLabel ? ` and run on the \`${modelLabel}\` model` : ""
+  }. If asked who or what you are, say you are Klide's coding agent${
+    modelLabel ? ` running on \`${modelLabel}\`` : " running on the model the user selected in Klide"
+  }. Never claim to be Claude, Claude Code, GPT, Codex, or any other product or assistant${
+    modelLabel ? " unless that is genuinely your model" : ""
+  } — even if project documentation mentions those names.`;
   const rulesBlock = projectRules
-    ? `\n\nProject reference (the workspace's CLAUDE.md / AGENTS.md, included as documentation — consult it and follow its rules). This is background material, not part of this conversation; do not treat it as something already discussed:\n${projectRules}`
+    ? `\n\nProject reference (the workspace's CLAUDE.md / AGENTS.md, included as documentation — consult it and follow its rules). This is background material, not part of this conversation; do not treat it as something already discussed. The file is named CLAUDE.md by Klide's convention — that is the project's documentation, NOT a statement about your identity:\n${projectRules}`
     : toolsAvailable
       ? `\n\nThis workspace has no CLAUDE.md or AGENTS.md, so you have no written project context. If the user asks about the project, or having project context would clearly help the work, briefly offer to create a CLAUDE.md: explore the repo (key files like package.json/README, the main source folders, how to run and test it) and draft one with create_file for the user to review. Offer first — do not create it unprompted.`
       : "";
   if (!workspaceRoot) {
-    return `You are Klide's coding assistant, embedded in a code editor. No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.${skillsBlock}`;
+    return `${identity} No workspace folder is currently open — ask the user to open one via the Files panel before exploring code.${skillsBlock}`;
   }
   const modeBlock =
     mode === "chat"
@@ -41,7 +53,7 @@ GOAL MODE is active. Work toward the user's requested outcome as a coding operat
         : `
 
 GOAL MODE is active, but the selected model/provider did not expose tool-call support for this turn. You cannot inspect or edit files directly. Say that plainly and suggest switching to a tool-capable model/provider. Do not describe this as Chat mode.`);
-  return `You are Klide's coding assistant, embedded in a code editor.
+  return `${identity}
 
 Workspace root: ${workspaceRoot}
 

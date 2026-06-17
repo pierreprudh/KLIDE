@@ -765,11 +765,13 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       effectiveMode,
       toolsAvailableForDraft,
       projectRules,
-      harnessSettings
+      harnessSettings,
+      model
     );
   }, [
     effectiveMode,
     harnessSettings,
+    model,
     projectRules,
     provider,
     skills,
@@ -1703,7 +1705,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
 
 Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
-        : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings);
+        : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
       // Context window: num_ctx only matters for Ollama (other adapters
       // ignore it). Prefer an explicit per-model override from settings,
       // else the model's detected trained window (contextLimit), so each
