@@ -6,7 +6,7 @@ pub mod types;
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,
     execute_write_tool_preview, find_tool_kind, parse_tool_calls, recover_text_tool_calls,
-    schemas_for_mode, tool_summary, NormalizedToolCall, ToolKind,
+    run_command_capture, schemas_for_mode, tool_summary, NormalizedToolCall, ToolKind,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -39,6 +39,11 @@ pub struct AgentRunHandle {
     /// The agent_resolve_question command sends the user's typed answer
     /// through the channel, which the run loop awaits before continuing.
     pub pending_question: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
+    /// Same pattern as `pending_diff`, but for `run_command` approval. The
+    /// agent_resolve_permission command sends the decision JSON through the
+    /// channel, which the run loop awaits before running (or skipping) the
+    /// command.
+    pub pending_permission: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
 }
 
 pub struct AgentSupervisorState {
@@ -548,6 +553,7 @@ pub async fn agent_start_run(
                 cancel: cancel.clone(),
                 pending_diff: std::sync::Mutex::new(None),
                 pending_question: std::sync::Mutex::new(None),
+                pending_permission: std::sync::Mutex::new(None),
             },
         );
 
@@ -1060,6 +1066,92 @@ conversation, then ask again._",
                     },
                     metadata: None,
                 };
+            } else if matches!(find_tool_kind(&call.name), Some(ToolKind::Command)) {
+                // Run a shell command — but only after the user approves it,
+                // the same permission gate diff review is for edits. Emit a
+                // permission request, stash a oneshot, wait for the decision.
+                let command = call
+                    .input
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let root = request.workspace_root.clone();
+                if command.is_empty() {
+                    tool_result = ToolResult {
+                        ok: false,
+                        content: "run_command requires a non-empty command.".to_string(),
+                        metadata: None,
+                    };
+                } else if root.is_none() {
+                    tool_result = no_workspace_result();
+                } else {
+                    let request_id = format!("perm_{}_{}", id, call.id);
+                    let perm = serde_json::json!({
+                        "id": request_id,
+                        "runId": id,
+                        "toolCallId": call.id,
+                        "toolName": "run_command",
+                        "input": { "command": command },
+                        "summary": format!("$ {command}"),
+                        "reason": "The agent wants to run a shell command in the workspace.",
+                        "options": [
+                            { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
+                            { "optionId": "deny", "label": "Reject", "behavior": "deny" }
+                        ]
+                    });
+
+                    set_run_status(&app, &id, AgentRunStatus::WaitingForPermission);
+                    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+                    {
+                        let state = app.state::<AgentSupervisorState>();
+                        let mut runs = state
+                            .runs
+                            .lock()
+                            .map_err(|_| "Agent state unavailable".to_string())?;
+                        if let Some(handle) = runs.get_mut(&id) {
+                            *handle.pending_permission.lock().unwrap() = Some(tx);
+                        }
+                    }
+
+                    emit(AgentEvent::PermissionRequested {
+                        run_id: id.clone(),
+                        request: perm,
+                        ts: now_ms(),
+                    })?;
+
+                    let decision = tokio::select! {
+                        _ = cancel.cancelled() => {
+                            set_run_status(&app, &id, AgentRunStatus::Running);
+                            finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                            return Ok(());
+                        }
+                        result = rx => result.unwrap_or_else(|_| "{\"behavior\":\"deny\"}".to_string()),
+                    };
+
+                    set_run_status(&app, &id, AgentRunStatus::Running);
+                    let decision_val: serde_json::Value =
+                        serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
+                    let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
+
+                    emit(AgentEvent::PermissionResolved {
+                        run_id: id.clone(),
+                        request_id: request_id.clone(),
+                        decision: decision_val.clone(),
+                        ts: now_ms(),
+                    })?;
+
+                    tool_result = if allowed {
+                        run_command_capture(root.as_deref().unwrap_or("."), &command)
+                    } else {
+                        ToolResult {
+                            ok: false,
+                            content: "Rejected by user: command not run.".to_string(),
+                            metadata: None,
+                        }
+                    };
+                }
             } else if matches!(find_tool_kind(&call.name), Some(ToolKind::Write)) {
                 let root = match request.workspace_root.as_deref() {
                     Some(root) => root,
@@ -1275,8 +1367,28 @@ pub async fn agent_submit_user_turn(
 // pause for permissions/diffs yet; writing fake "resolved" events here would
 // corrupt transcript ordering and let a UI believe approval was enforced.
 #[tauri::command]
-pub async fn agent_resolve_permission(_decision: PermissionDecisionRequest) -> Result<(), String> {
-    Err("The harness does not pause for permissions yet; nothing to resolve.".to_string())
+pub async fn agent_resolve_permission(
+    state: tauri::State<'_, AgentSupervisorState>,
+    decision: PermissionDecisionRequest,
+) -> Result<(), String> {
+    let runs = state
+        .runs
+        .lock()
+        .map_err(|_| "Agent state is unavailable".to_string())?;
+    match runs.get(&decision.run_id) {
+        Some(handle) => {
+            let sender = handle.pending_permission.lock().unwrap().take();
+            if let Some(tx) = sender {
+                // Forward the full decision JSON; the run loop parses it back
+                // to read the behavior (allow/deny) and future scope.
+                let _ = tx.send(decision.decision.to_string());
+                Ok(())
+            } else {
+                Err("No pending permission request for this run.".to_string())
+            }
+        }
+        None => Err(format!("No known run with id {}", decision.run_id)),
+    }
 }
 
 #[tauri::command]

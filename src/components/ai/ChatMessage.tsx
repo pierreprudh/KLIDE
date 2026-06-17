@@ -127,43 +127,85 @@ function summarizeArgs(args: unknown): string {
 // Minimalist tool-call line, à la Claude Code's `⏺ Read(file)`: one slim
 // mono row — tool glyph, tool name, primary arg — expandable to the full
 // args JSON.
-function ToolCallRow({ name, args }: { name: string; args: unknown }) {
+function ToolCallRow({ name, args, repeated = false }: { name: string; args: unknown; repeated?: boolean }) {
   const argsText = formatJson(args);
   const summary = summarizeArgs(args);
   return (
-    <details style={{ margin: "3px 0 0" }}>
+    <details style={{ margin: repeated ? "3px 0 -3px" : "5px 0 -3px" }}>
       <summary
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "2px 0",
+          gap: repeated ? 7 : 8,
+          padding: "0",
           cursor: "pointer",
           listStyle: "none",
           userSelect: "none",
           minWidth: 0,
+          paddingLeft: repeated ? 9 : 0,
         }}
       >
-        <span aria-hidden style={{ display: "grid", placeItems: "center", color: "var(--fg-subtle)", flexShrink: 0 }}>
-          <ToolIcon name={name} />
-        </span>
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 11.5,
-            color: "var(--fg-strong)",
-            fontWeight: 500,
-            flexShrink: 0,
-          }}
-        >
-          {name}
-        </span>
+        {repeated ? (
+          <span
+            aria-hidden
+            style={{
+              position: "relative",
+              width: 18,
+              height: 13,
+              flexShrink: 0,
+              color: "var(--fg-dim)",
+              transform: "translateY(-1px)",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                left: 6,
+                top: 0,
+                bottom: 3,
+                width: 1,
+                borderRadius: 999,
+                background: "currentColor",
+                opacity: 0.42,
+              }}
+            />
+            <span
+              style={{
+                position: "absolute",
+                left: 6,
+                right: 1,
+                bottom: 3,
+                height: 1,
+                borderRadius: 999,
+                background: "currentColor",
+                opacity: 0.42,
+              }}
+            />
+          </span>
+        ) : (
+          <>
+            <span aria-hidden style={{ display: "grid", placeItems: "center", color: "var(--fg-subtle)", flexShrink: 0 }}>
+              <ToolIcon name={name} />
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 11.5,
+                color: "var(--fg-strong)",
+                fontWeight: 500,
+                flexShrink: 0,
+              }}
+            >
+              {name}
+            </span>
+          </>
+        )}
         {summary && (
           <span
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 11.5,
-              color: "var(--fg-subtle)",
+              color: repeated ? "var(--fg-dim)" : "var(--fg-subtle)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -208,39 +250,76 @@ function summarizeResult(content: string): { line: string; extra: string } {
 // Indented result line under its tool call — `⎿ <first line> · N lines`,
 // expandable to the full markdown-rendered content. Errors tint the
 // connector with --danger; in-flight calls pulse.
-function ToolResultRow({ content, active }: { content: string; active: boolean }) {
+function ToolResultRow({ content, active, toolName }: { content: string; active: boolean; toolName?: string }) {
   const pending = active && /^Running /.test(content);
   const isError = /^(Tool error from|Error:)/.test(content);
   const { line, extra } = summarizeResult(content);
+  const label = toolName || (pending ? content.replace(/^Running\s+/, "").replace(/\.\.\.$/, "") : "tool");
   return (
-    <details style={{ margin: "0 0 3px", paddingLeft: 20 }}>
+    <details className="klide-tool-result-row" style={{ margin: pending ? "0 0 5px" : "-2px 0 6px", paddingLeft: 34 }}>
       <summary
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 7,
-          padding: "1px 0",
+          gap: 6,
+          padding: 0,
           cursor: pending ? "default" : "pointer",
           listStyle: "none",
           userSelect: "none",
           minWidth: 0,
+          color: isError ? "var(--danger)" : "var(--fg-dim)",
         }}
       >
         {pending ? (
-          <DotGridLoader size={12} label="Tool running" />
+          <DotGridLoader size={11} label="Tool running" />
         ) : (
           <span
             aria-hidden
             style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              color: isError ? "var(--danger)" : "var(--fg-dim)",
+              position: "relative",
+              width: 15,
+              height: 14,
               flexShrink: 0,
+              transform: "translateY(-2px)",
             }}
           >
-            ⎿
+            <span
+              style={{
+                position: "absolute",
+                left: 5,
+                top: 0,
+                bottom: 3,
+                width: 1,
+                borderRadius: 999,
+                background: "currentColor",
+                opacity: 0.48,
+              }}
+            />
+            <span
+              style={{
+                position: "absolute",
+                left: 5,
+                right: 0,
+                bottom: 3,
+                height: 1,
+                borderRadius: 999,
+                background: "currentColor",
+                opacity: 0.48,
+              }}
+            />
           </span>
         )}
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: isError ? "var(--danger)" : "var(--fg-subtle)",
+            flexShrink: 0,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {pending ? "running" : label}
+        </span>
         <span
           style={{
             fontFamily: "var(--font-mono)",
@@ -251,13 +330,13 @@ function ToolResultRow({ content, active }: { content: string; active: boolean }
             whiteSpace: "nowrap",
           }}
         >
-          {pending ? "Running…" : line}
+          {pending ? label : line}
         </span>
         {!pending && extra && (
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 10,
+              fontSize: 10.5,
               color: "var(--fg-dim)",
               flexShrink: 0,
             }}
@@ -351,7 +430,7 @@ function MessageMeta({ meta }: { meta: { ms?: number; tokens?: number; promptTok
 
 export function renderMessageBody(m: Msg, active = false): ReactElement {
   if (m.role === "tool") {
-    return <ToolResultRow content={m.content} active={active} />;
+    return <ToolResultRow content={m.content} active={active} toolName={m.toolName} />;
   }
 
   if (m.role === "assistant") {
@@ -394,12 +473,12 @@ export function renderMessageBody(m: Msg, active = false): ReactElement {
           <ThinkingBlock text={mergedThinking} streaming={streaming} />
         )}
         {visibleContent && (
-          <div style={{ marginBottom: m.toolCalls?.length ? 6 : 0, fontSize: 13, lineHeight: 1.65 }}>
+          <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 13, lineHeight: 1.58 }}>
             {renderMarkdown(visibleContent)}
           </div>
         )}
         {m.toolCalls?.map((tc, i) => (
-          <ToolCallRow key={i} name={tc.name} args={tc.args} />
+          <ToolCallRow key={i} name={tc.name} args={tc.args} repeated={i > 0 && m.toolCalls?.[i - 1]?.name === tc.name} />
         ))}
         {m.meta && !active && visibleContent !== "" && !m.toolCalls?.length && (
           <MessageMeta meta={m.meta} />

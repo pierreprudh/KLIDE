@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -938,6 +939,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     // exit on its own. Clear any visible Q&A card so the UI doesn't show a
     // question whose answer can never arrive.
     setPendingQuestion(null);
+    setPendingPermission(null);
     setQuestionAnswer("");
   }
 
@@ -959,6 +961,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   const STICK_THRESHOLD_PX = 48;
   const stickToBottomRef = useRef(true);
   const [stickToBottom, setStickToBottom] = useState(true);
+  const [todoDockHeight, setTodoDockHeight] = useState(0);
 
   function forceStickToBottom() {
     stickToBottomRef.current = true;
@@ -1073,6 +1076,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     // Same for any in-flight Q&A card — a fresh chat shouldn't inherit
     // the previous turn's question.
     setPendingQuestion(null);
+    setPendingPermission(null);
     setQuestionAnswer("");
     // Fresh id per chat — the prior "reset to panelId" pattern was
     // re-threading the previous transcript into the new run via the
@@ -1218,6 +1222,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     // Loaded history can't have a live Q&A pending — clear the card so
     // we don't show a question the new run hasn't asked yet.
     setPendingQuestion(null);
+    setPendingPermission(null);
     setQuestionAnswer("");
     // Switching conversations is a navigation event: jump to the bottom
     // of the new chat. Without this, an old scroll position from the
@@ -1243,11 +1248,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   // The ref read is intentional — we don't want a state dependency here,
   // which would re-arm the effect on every scroll event and create a
   // feedback loop. See the `stickToBottomRef` block above.
-  useEffect(() => {
-    if (!stickToBottomRef.current) return;
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight });
+    const nextHeight = el.scrollHeight;
+    if (stickToBottomRef.current) el.scrollTo({ top: nextHeight });
   }, [msgs]);
 
   // Load a resumed conversation from Mission Control. After loading, ping
@@ -1440,6 +1445,14 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     question: string;
   } | null>(null);
   const [questionAnswer, setQuestionAnswer] = useState("");
+  // Permission UI is not rendered yet, but the stream stores/resolves the
+  // pending request so the harness state stays consistent.
+  const [, setPendingPermission] = useState<{
+    runId: string;
+    requestId: string;
+    command: string;
+    summary: string;
+  } | null>(null);
 
   async function runHarnessTurn(turn: QueuedTurn, generation: number) {
     if (queueGenerationRef.current !== generation) return;
@@ -1656,6 +1669,22 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           if (!pendingQuestion || pendingQuestion.requestId === event.requestId) {
             setQuestionAnswer("");
           }
+          break;
+        }
+        case "permission_requested": {
+          const req = event.request as { id: string; summary?: string; input?: { command?: string } };
+          setPendingPermission({
+            runId: event.runId,
+            requestId: req.id,
+            command: req.input?.command ?? "",
+            summary: req.summary ?? req.input?.command ?? "command",
+          });
+          break;
+        }
+        case "permission_resolved": {
+          setPendingPermission((current) =>
+            current && current.requestId === event.requestId ? null : current
+          );
           break;
         }
         case "file_changed": {
@@ -1877,6 +1906,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     if (!pendingQuestion) return;
     const snapshot = pendingQuestion;
     setPendingQuestion(null);
+    setPendingPermission(null);
     setQuestionAnswer("");
     try {
       await resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: questionAnswer });
@@ -1889,6 +1919,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     if (!pendingQuestion) return;
     const snapshot = pendingQuestion;
     setPendingQuestion(null);
+    setPendingPermission(null);
     setQuestionAnswer("");
     void resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: "(skipped)" }).catch((err) => {
       console.error("Failed to skip question:", err);
@@ -2086,7 +2117,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
-          style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : 12, fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0 }}
+          style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : "10px 12px 12px", fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, overscrollBehavior: "contain" }}
         >
         {providerDelegatesWork ? (
           <DelegateTerminalSurface
@@ -2123,7 +2154,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             const queued = m.queueState === "queued";
             const running = m.queueState === "running";
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "16px 0" }}>
+              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 12px" }}>
                 <div className={running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined}
                   style={{ maxWidth: "88%", background: running ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))" : queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "13px 13px 4px 13px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1, backgroundSize: running ? "220% 100%" : undefined }}>
                   {m.content}
@@ -2133,7 +2164,16 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           }
 
           if (m.role === "tool") {
-            return <div key={i} className="ai-msg-in" style={{ margin: "0 0 2px 32px" }}>{renderMessageBody(m, activeToolRunning)}</div>;
+            const previousAssistant = [...msgs.slice(0, i)]
+              .reverse()
+              .find((msg) => msg.role === "assistant");
+            const repeatedToolBurst =
+              previousAssistant?.role === "assistant" &&
+              previousAssistant.toolCalls &&
+              previousAssistant.toolCalls.length > 1 &&
+              previousAssistant.toolCalls.every((tc) => tc.name === previousAssistant.toolCalls?.[0]?.name);
+            if (repeatedToolBurst && previousAssistant.toolCalls?.[0]?.name === m.toolName) return null;
+            return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px" }}>{renderMessageBody(m, activeToolRunning)}</div>;
           }
 
           // One avatar per response: multi-turn tool runs produce several
@@ -2143,7 +2183,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           const prevMsg = msgs[i - 1];
           const showAvatar = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "16px 0" : "4px 0" }}>
+            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0" }}>
               {showAvatar ? (
                 <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
                   <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
@@ -2190,7 +2230,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             style={{
               position: "absolute",
               left: "50%",
-              bottom: 8,
+              bottom: todoDockHeight + 8,
               transform: "translateX(-50%)",
               zIndex: 7,
               display: "inline-flex",
@@ -2228,11 +2268,91 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </svg>
           </span>
         )}
-        <TodoStrip workspaceRoot={workspaceRoot} conversationId={currentId} goal={msgs.find((m) => m.role === "user")?.content.trim() || undefined} />
+        <TodoStrip
+          workspaceRoot={workspaceRoot}
+          conversationId={currentId}
+          goal={msgs.find((m) => m.role === "user")?.content.trim() || undefined}
+          onDockHeightChange={setTodoDockHeight}
+        />
       </div>
 
       {!providerDelegatesWork && (
       <div style={{ padding: "0 10px 10px" }}>
+        {pendingPermission && (
+          <div
+            className="ai-qa-card"
+            style={{
+              marginBottom: 8,
+              padding: "10px 12px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid color-mix(in srgb, var(--accent) 30%, var(--border))",
+              background: "color-mix(in srgb, var(--accent-soft) 35%, var(--bg-elevated))",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ color: "var(--accent)" }}>
+                <polyline points="4 17 10 11 4 5" />
+                <line x1="12" y1="19" x2="20" y2="19" />
+              </svg>
+              Run command?
+            </div>
+            <div
+              style={{
+                color: "var(--fg-strong)",
+                fontSize: 12.5,
+                fontFamily: "var(--font-mono)",
+                lineHeight: 1.5,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                padding: "8px 10px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border-strong)",
+                background: "var(--bg)",
+              }}
+            >
+              {pendingPermission.command}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+              <button
+                type="button"
+                onClick={rejectCommand}
+                style={{
+                  height: 26,
+                  padding: "0 10px",
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  color: "var(--fg-subtle)",
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                }}
+              >
+                Reject
+              </button>
+              <button
+                type="button"
+                onClick={approveCommand}
+                style={{
+                  height: 26,
+                  padding: "0 12px",
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  color: "var(--accent-fg, #fff)",
+                  background: "var(--accent)",
+                  border: "1px solid var(--accent)",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                }}
+              >
+                Approve &amp; run
+              </button>
+            </div>
+          </div>
+        )}
         {pendingQuestion && (
           <div
             className="ai-qa-card"

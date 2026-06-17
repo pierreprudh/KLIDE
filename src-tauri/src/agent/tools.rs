@@ -71,6 +71,11 @@ pub enum ToolKind {
     // by name. A Pause entry has no run_read / run_write_preview; the harness's
     // pause arm handles the interaction.
     Pause,
+    // Runs a shell command after the user approves it (permission gate, like
+    // diff review is for edits). The harness's Command arm emits a permission
+    // request, waits for approval, then calls `run_command_capture`. Goal-mode
+    // only — any command can mutate the workspace.
+    Command,
 }
 
 // Tool executions receive a `Workspace`, never a raw root string — resolving
@@ -368,6 +373,21 @@ fn registry() -> Vec<ToolEntry> {
             run_read: None,
             run_write_preview: Some(preview_create_skill),
             summary: default_summary,
+        },
+        // `run_command` does not execute here — the loop dispatches on
+        // `kind == ToolKind::Command`, emits a permission request, and only
+        // runs the command (via `run_command_capture`) once the user approves.
+        ToolEntry {
+            kind: ToolKind::Command,
+            schema: schema("run_command", "Run a shell command in the workspace and return its stdout, stderr, and exit code. Use this to run tests, build, typecheck, lint, install dependencies, or any CLI step — it is how you verify your own work. Every command is shown to the user for approval before it runs. Commands run from the workspace root; keep them non-interactive (no prompts/pagers).",
+                serde_json::json!({
+                    "command": { "type": "string", "description": "The shell command to run, e.g. 'npm test' or 'cargo check'." }
+                }),
+                &["command"]),
+            run_read: None,
+            run_write_preview: None,
+            summary: |call| call.input.get("command").and_then(|v| v.as_str())
+                .map(|c| format!("$ {c}")).unwrap_or_else(|| "run_command".to_string()),
         },
         // The `userAnswerQuestion` tool does not actually execute — the agent
         // loop dispatches on `kind == ToolKind::Pause` and pauses the run via
@@ -864,6 +884,66 @@ fn err(content: String) -> ToolResult {
     ToolResult {
         ok: false,
         content,
+        metadata: None,
+    }
+}
+
+/// Run an approved shell command from the workspace root and capture its
+/// output. Called by the harness's Command arm only *after* the user approves
+/// the permission request — never directly from the tool registry. stdout and
+/// stderr are returned together with the exit code; output is truncated so a
+/// chatty build can't blow the context window. The result is `ok: true` only on
+/// a zero exit so the model can tell success from failure.
+pub fn run_command_capture(root: &str, command: &str) -> ToolResult {
+    const MAX_OUTPUT: usize = 16_000;
+    // Go through Workspace so the run dir honors the same root invariant the
+    // file tools use (and fails clearly if no workspace is open).
+    let ws = match Workspace::new(root) {
+        Ok(ws) => ws,
+        Err(e) => return err(format!("Cannot run command: {e}")),
+    };
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(ws.root())
+        .output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => return err(format!("Failed to run command: {e}")),
+    };
+    let code = output.status.code();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut body = String::new();
+    if !stdout.trim().is_empty() {
+        body.push_str(stdout.trim_end());
+    }
+    if !stderr.trim().is_empty() {
+        if !body.is_empty() {
+            body.push_str("\n");
+        }
+        body.push_str("stderr:\n");
+        body.push_str(stderr.trim_end());
+    }
+    if body.is_empty() {
+        body.push_str("(no output)");
+    }
+    if body.len() > MAX_OUTPUT {
+        let mut cut = MAX_OUTPUT;
+        while !body.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        body.truncate(cut);
+        body.push_str("\n…(output truncated)");
+    }
+    let header = match code {
+        Some(0) => "Command succeeded (exit 0).".to_string(),
+        Some(c) => format!("Command failed (exit {c})."),
+        None => "Command terminated by a signal.".to_string(),
+    };
+    ToolResult {
+        ok: code == Some(0),
+        content: format!("{header}\n\n{body}"),
         metadata: None,
     }
 }
@@ -2211,6 +2291,23 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
         (ws, dir)
+    }
+
+    #[test]
+    fn run_command_capture_reports_output_and_exit() {
+        let dir = std::env::temp_dir().join(format!("klide-runcmd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_str().unwrap();
+
+        let ok = run_command_capture(root, "echo hello");
+        assert!(ok.ok, "exit 0 → ok");
+        assert!(ok.content.contains("hello"), "stdout captured: {}", ok.content);
+        assert!(ok.content.contains("exit 0"));
+
+        let fail = run_command_capture(root, "exit 3");
+        assert!(!fail.ok, "non-zero exit → not ok");
+        assert!(fail.content.contains("exit 3"), "exit code surfaced: {}", fail.content);
     }
 
     #[test]

@@ -96,9 +96,11 @@ function ProgressBar({ percent }: { percent: number }) {
 // the side margins. No shadow — it cast a dark halo (the "black bars") in dark
 // themes; the hairline border alone defines the panel.
 const glassCard: CSSProperties = {
-  background: "var(--bg-elevated)",
+  background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
   border: "none",
   borderTop: "1px solid var(--border-strong)",
+  backdropFilter: "blur(10px)",
+  WebkitBackdropFilter: "blur(10px)",
 };
 
 // Floats just above the composer, INSIDE the conversation area. It must not
@@ -120,10 +122,12 @@ export function TodoStrip({
   workspaceRoot,
   conversationId,
   goal: goalProp,
+  onDockHeightChange,
 }: {
   workspaceRoot: string | null;
   conversationId: string;
   goal?: string;
+  onDockHeightChange?: (height: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -187,6 +191,10 @@ export function TodoStrip({
 
   const visible = !dismissed && !(total === 0 && recentEvents.length === 0);
 
+  useEffect(() => {
+    onDockHeightChange?.(visible ? (open ? 116 : 32) : 0);
+  }, [visible, open, onDockHeightChange]);
+
   if (!visible) return null;
 
   if (!open) {
@@ -210,6 +218,7 @@ export function TodoStrip({
             color: "var(--fg)",
             cursor: "pointer",
             textAlign: "left",
+            animation: "klide-todo-collapse-in var(--motion-med) var(--ease-soft)",
           }}
         >
           <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, whiteSpace: "nowrap" }}>
@@ -249,6 +258,7 @@ export function TodoStrip({
   return (
     <div style={dockWrap}>
       <section
+        className="klide-todo-strip"
         aria-label="Agent todo progress"
         style={{
           ...glassCard,
@@ -262,6 +272,7 @@ export function TodoStrip({
           height: 116,
           overflow: "hidden",
           borderRadius: "14px 14px 0 0",
+          animation: "klide-todo-open-in var(--motion-slow) var(--ease-soft)",
         }}
       >
         {/* header: GOAL · progress bar · percentage */}
@@ -334,11 +345,15 @@ export function TodoStrip({
         >
           {visibleItems.map((item, idx) => {
             const hot = recentIds.has(item.id);
+            const active = !item.done && idx === visibleItems.findIndex((candidate) => !candidate.done);
             const isLast = idx === visibleItems.length - 1;
-            const treeColor = "color-mix(in srgb, var(--fg-dim) 32%, transparent)";
+            const treeColor = active
+              ? "color-mix(in srgb, var(--accent) 55%, transparent)"
+              : "color-mix(in srgb, var(--fg-dim) 30%, transparent)";
             return (
               <div
                 key={item.id}
+                className={active ? "klide-todo-row-active" : undefined}
                 style={{
                   position: "relative",
                   display: "grid",
@@ -384,12 +399,17 @@ export function TodoStrip({
                     placeItems: "center",
                     background: item.done
                       ? "var(--accent)"
-                      : "var(--bg-elevated)",
+                      : active
+                        ? "color-mix(in srgb, var(--accent) 9%, var(--bg-elevated))"
+                        : "color-mix(in srgb, var(--bg-elevated) 76%, transparent)",
                     border: item.done
                       ? "none"
-                      : "1.5px solid color-mix(in srgb, var(--fg-dim) 38%, transparent)",
+                      : active
+                        ? "1.5px solid color-mix(in srgb, var(--accent) 74%, transparent)"
+                        : "1.5px solid color-mix(in srgb, var(--fg-dim) 34%, transparent)",
                     color: item.done ? "var(--bg-elevated)" : "transparent",
-                    transition: "background var(--motion-med) var(--ease-out)",
+                    boxShadow: active ? "0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent)" : "none",
+                    transition: "background var(--motion-med) var(--ease-out), border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)",
                   }}
                 >
                   {item.done && <CheckIcon />}
@@ -402,10 +422,10 @@ export function TodoStrip({
                     whiteSpace: "nowrap",
                     fontSize: 12.5,
                     lineHeight: "17px",
-                    fontWeight: hot && !item.done ? 480 : 400,
-                    color: item.done ? "var(--fg-subtle)" : "var(--fg-strong)",
+                    fontWeight: active ? 430 : hot && !item.done ? 420 : 400,
+                    color: item.done ? "var(--fg-subtle)" : active ? "var(--fg-strong)" : "var(--fg)",
                     textDecoration: item.done ? "line-through" : "none",
-                    textDecorationColor: item.done ? "color-mix(in srgb, var(--fg-dim) 55%, transparent)" : undefined,
+                    textDecorationColor: item.done ? "color-mix(in srgb, var(--fg-dim) 62%, transparent)" : undefined,
                   }}
                 >
                   {item.text}

@@ -1210,6 +1210,70 @@ select.klide-field {
   opacity: 1;
 }
 
+.klide-tool-result-row > summary::-webkit-details-marker,
+.klide-tool-result-row > summary::marker {
+  display: none;
+  content: "";
+}
+
+.klide-tool-result-row > summary {
+  opacity: 0.82;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-tool-result-row > summary:hover {
+  opacity: 1;
+}
+
+.klide-tool-result-row[open] > summary {
+  opacity: 1;
+}
+
+.klide-todo-strip {
+  transform-origin: 50% 100%;
+}
+
+.klide-todo-row-active::after {
+  content: "";
+  position: absolute;
+  left: 31px;
+  right: 2px;
+  bottom: 1px;
+  height: 1px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 54%, transparent),
+    transparent 72%
+  );
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+@keyframes klide-todo-open-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scaleY(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@keyframes klide-todo-collapse-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes klide-orbit-loader {
   to {
     transform: rotate(360deg);
