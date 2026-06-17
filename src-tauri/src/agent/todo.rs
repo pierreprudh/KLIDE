@@ -215,6 +215,19 @@ pub fn clear_done(root: &str, scope: &str) -> Result<String, String> {
     Ok(format!("Cleared {removed} completed todo(s)."))
 }
 
+/// Remove every todo (done and pending). Use to start a fresh plan.
+pub fn clear_all(root: &str, scope: &str) -> Result<String, String> {
+    let mut store = load(root, scope);
+    let removed_items: Vec<TodoItem> = store.todos.drain(..).collect();
+    let removed = removed_items.len();
+    let at = now_ms();
+    for item in removed_items {
+        push_event(&mut store, "remove", Some(item.id), Some(item.text), None, Some(item.done), at);
+    }
+    save(root, scope, &store)?;
+    Ok(format!("Cleared {removed} todo(s)."))
+}
+
 /// Update the text of a todo item.
 pub fn update_text(root: &str, scope: &str, id: &str, text: String) -> Result<String, String> {
     let mut store = load(root, scope);

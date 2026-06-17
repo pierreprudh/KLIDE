@@ -263,12 +263,12 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::ReadOnly,
-            schema: schema("update_todo_list", "Add, complete, uncomplete, edit, remove, or clear todos. This directly modifies the project's task list for multi-session continuity. Returns the updated list.",
+            schema: schema("update_todo_list", "Add, complete, uncomplete, edit, remove, or clear todos. This directly modifies the project's task list for multi-session continuity. Returns the updated list. IMPORTANT: before laying out a brand-new plan, call action 'clear' once to remove the previous plan's leftover items, then 'add' the new steps.",
                 serde_json::json!({
                     "action": {
                         "type": "string",
-                        "enum": ["add", "complete", "uncomplete", "edit", "remove", "clear_done"],
-                        "description": "add=create new, complete=mark done, uncomplete=mark pending, edit=change text, remove=delete by id, clear_done=remove all completed."
+                        "enum": ["add", "complete", "uncomplete", "edit", "remove", "clear_done", "clear"],
+                        "description": "add=create new, complete=mark done, uncomplete=mark pending, edit=change text, remove=delete by id, clear_done=remove all completed, clear=remove ALL todos to start a fresh plan."
                     },
                     "id": { "type": "string", "description": "Item id (e.g. T1). Required for complete/uncomplete/edit/remove." },
                     "text": { "type": "string", "description": "Task text. Required for add and edit." }
@@ -314,6 +314,7 @@ fn registry() -> Vec<ToolEntry> {
                         todo::remove_todo(root, run_id, id)
                     }
                     "clear_done" => todo::clear_done(root, run_id),
+                    "clear" => todo::clear_all(root, run_id),
                     _ => return err(format!("Unknown action: {action}")),
                 };
                 match result {

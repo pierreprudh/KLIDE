@@ -299,44 +299,69 @@ export function CheckIcon() {
 
 export function AssistantPlaceholderLoader() {
   return (
-    <span className="ai-assistant-placeholder-loader" aria-label="Assistant is working">
-      <span />
-      <span />
-      <span />
+    <span style={{ display: "inline-flex", alignItems: "center", height: 22 }}>
+      <DotGridLoader size={18} color="var(--fg-dim)" label="Assistant is working" />
     </span>
   );
 }
 
-// 3×3 dot-grid loader — sweeps the grid in reverse while a tool executes.
-// Sized for inline use next to 11px mono text (default 13px box).
-export function DotGridLoader({ size = 13, color = "var(--accent)" }: { size?: number; color?: string }) {
-  const dot = Math.max(2, Math.round(size / 4.5));
+// Orbit loader — shared by TTFT waiting and tool execution, so the panel has
+// one visual language for "working".
+export function DotGridLoader({
+  size = 18,
+  color = "var(--accent)",
+  label = "Working",
+}: {
+  size?: number;
+  color?: string;
+  label?: string;
+}) {
+  const dot = Math.max(2, Math.round(size / 5.2));
   return (
     <span
-      aria-label="Tool running"
+      aria-label={label}
       style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(3, 1fr)",
-        gap: Math.max(1, Math.round(size / 14)),
+        position: "relative",
+        display: "inline-block",
         width: size,
         height: size,
         flexShrink: 0,
         color,
+        animation: "klide-orbit-loader 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite",
+        verticalAlign: "middle",
+        transformOrigin: "50% 50%",
       }}
     >
-      {Array.from({ length: 9 }, (_, i) => (
+      {[
+        { top: 1, left: "50%", transform: "translateX(-50%)" },
+        { top: "50%", right: 1, transform: "translateY(-50%)" },
+        { bottom: 1, left: "50%", transform: "translateX(-50%)" },
+        { top: "50%", left: 1, transform: "translateY(-50%)" },
+      ].map((pos, i) => (
         <span
           key={i}
           style={{
+            position: "absolute",
+            ...pos,
             width: dot,
             height: dot,
             borderRadius: "50%",
-            background: "currentColor",
-            placeSelf: "center",
-            animation: "klide-dotgrid 1.4s ease-in-out infinite",
-            animationDelay: `${(8 - i) * 0.1}s`,
+            color: "currentColor",
+            transformOrigin: "50% 50%",
           }}
-        />
+        >
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: "50%",
+              background: "currentColor",
+              animation: "klide-orbit-dot-morph 1.8s ease-in-out infinite",
+              animationDelay: `${i * -0.45}s`,
+            }}
+          />
+        </span>
       ))}
     </span>
   );

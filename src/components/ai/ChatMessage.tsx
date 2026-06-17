@@ -227,7 +227,7 @@ function ToolResultRow({ content, active }: { content: string; active: boolean }
         }}
       >
         {pending ? (
-          <DotGridLoader size={13} />
+          <DotGridLoader size={12} label="Tool running" />
         ) : (
           <span
             aria-hidden
@@ -401,7 +401,9 @@ export function renderMessageBody(m: Msg, active = false): ReactElement {
         {m.toolCalls?.map((tc, i) => (
           <ToolCallRow key={i} name={tc.name} args={tc.args} />
         ))}
-        {m.meta && !active && visibleContent !== "" && <MessageMeta meta={m.meta} />}
+        {m.meta && !active && visibleContent !== "" && !m.toolCalls?.length && (
+          <MessageMeta meta={m.meta} />
+        )}
       </>
     );
   }

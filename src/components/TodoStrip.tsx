@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 type TodoItem = {
   id: string;
@@ -28,7 +28,7 @@ type TodoStore = {
 
 function CheckIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 6L9 17l-5-5" />
     </svg>
   );
@@ -51,28 +51,92 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+function CloseIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+  );
+}
+
 function safeScope(scope: string): string {
   return scope.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
+// Minimalist progress: a 3px hairline track with a green fill.
+function ProgressBar({ percent }: { percent: number }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        position: "relative",
+        height: 3,
+        minWidth: 40,
+        overflow: "hidden",
+        borderRadius: 999,
+        background: "color-mix(in srgb, var(--fg-dim) 16%, transparent)",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          inset: "0 auto 0 0",
+          width: `${percent}%`,
+          background: "var(--accent)",
+          borderRadius: 999,
+          transition: "width var(--motion-med) var(--ease-out)",
+        }}
+      />
+    </span>
+  );
+}
+
+// Opaque narrow panel that floats over the bottom of the conversation and
+// docks onto the composer. Narrower than the chat, so messages stay visible in
+// the side margins. No shadow — it cast a dark halo (the "black bars") in dark
+// themes; the hairline border alone defines the panel.
+const glassCard: CSSProperties = {
+  background: "var(--bg-elevated)",
+  border: "none",
+  borderTop: "1px solid var(--border-strong)",
+};
+
+// Floats just above the composer, INSIDE the conversation area. It must not
+// overlap the composer (no negative bottom): the chatbox is wider than this
+// narrow bar, so any overlap makes the composer's rounded top corners peek out
+// on either side of the bar.
+const dockWrap: CSSProperties = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  display: "flex",
+  justifyContent: "center",
+  pointerEvents: "none",
+  zIndex: 6,
+};
+
 export function TodoStrip({
   workspaceRoot,
   conversationId,
+  goal: goalProp,
 }: {
   workspaceRoot: string | null;
   conversationId: string;
+  goal?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const [items, setItems] = useState<TodoItem[]>([]);
   const [events, setEvents] = useState<TodoEvent[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!workspaceRoot) {
-      setItems([]);
-      setEvents([]);
-      return;
-    }
+    // Drop the previous conversation's list right away so it never flashes
+    // under a freshly-started one before the new file loads.
+    setItems([]);
+    setEvents([]);
+    if (!workspaceRoot) return;
 
     const todoPath = `.agents/todos/${safeScope(conversationId)}.json`;
     async function load() {
@@ -99,6 +163,7 @@ export function TodoStrip({
 
   useEffect(() => {
     setOpen(true);
+    setDismissed(false);
   }, [conversationId]);
 
   const total = items.length;
@@ -107,72 +172,74 @@ export function TodoStrip({
   const recentEvents = [...events].sort((a, b) => b.seq - a.seq).slice(0, 5);
   const recentIds = new Set(recentEvents.map((event) => event.todo_id).filter(Boolean));
   const visibleItems = items;
-  const goal = items.find((item) => !item.done)?.text ?? items[0]?.text ?? recentEvents[0]?.text ?? "Working through the plan";
+  // Prefer the user's actual ask (the goal write-up) over the current step.
+  const goal = goalProp?.replace(/\s+/g, " ").trim() || items[0]?.text || recentEvents[0]?.text || "Working through the plan";
 
-  if (total === 0 && recentEvents.length === 0) return null;
+  const allDone = total > 0 && done === total;
+
+  // When the plan finishes, collapse to the slim pill so the agent's final
+  // output stays visible (a tall card would sit over it like a dark box). If
+  // work resumes after a dismiss, bring the box back.
+  useEffect(() => {
+    if (allDone) setOpen(false);
+    else setDismissed(false);
+  }, [allDone]);
+
+  const visible = !dismissed && !(total === 0 && recentEvents.length === 0);
+
+  if (!visible) return null;
 
   if (!open) {
     return (
-      <div style={{ marginBottom: -1 }}>
+      <div style={dockWrap}>
         <button
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open agent todo panel"
           style={{
-            width: "min(780px, calc(100% - 88px))",
+            ...glassCard,
+            pointerEvents: "auto",
+            width: "min(620px, calc(100% - 48px))",
             minHeight: 32,
-            margin: "0 auto",
             display: "grid",
-            gridTemplateColumns: "minmax(140px, 1fr) minmax(120px, 30%) auto auto",
+            gridTemplateColumns: "minmax(0, 1fr) minmax(32px, 26%) auto auto",
             alignItems: "center",
-            gap: 8,
-            padding: "5px 9px 5px 12px",
-            borderRadius: "14px 14px 0 0",
-            border: "1px solid color-mix(in srgb, var(--border-strong) 22%, transparent)",
-            borderBottomColor: "transparent",
-            background: "transparent",
+            gap: 12,
+            padding: "6px 14px 7px 14px",
+            borderRadius: "12px 12px 0 0",
             color: "var(--fg)",
-            boxShadow: "none",
             cursor: "pointer",
             textAlign: "left",
           }}
         >
-          <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
-            <span style={{ color: "var(--fg-strong)", fontSize: 11.5, fontWeight: 560, whiteSpace: "nowrap" }}>
-              Goal:
+          <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, whiteSpace: "nowrap" }}>
+            <span style={{ color: "var(--fg-dim)", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Goal
             </span>
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-subtle)", fontSize: 11.5, fontWeight: 380 }}>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-strong)", fontSize: 12, fontWeight: 460 }}>
               {goal}
             </span>
           </span>
-          <span
-            aria-hidden
-            style={{
-              position: "relative",
-              height: 6,
-              overflow: "hidden",
-              borderRadius: "var(--radius-sm)",
-              border: "none",
-              background: "color-mix(in srgb, var(--fg-dim) 12%, transparent)",
-            }}
-          >
-            <span
-              style={{
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: 0,
-                width: `${percent}%`,
-                background: "color-mix(in srgb, var(--accent) 78%, transparent)",
-                transition: "width var(--motion-med) var(--ease-out)",
-              }}
-            />
-          </span>
+          <ProgressBar percent={percent} />
           <span style={{ color: "var(--fg-subtle)", fontSize: 11.5, fontWeight: 500, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
             {percent}%
           </span>
-          <span style={{ color: "var(--fg-dim)", display: "grid", placeItems: "center" }}>
-            <ChevronIcon open={false} />
+          <span style={{ display: "flex", alignItems: "center", gap: 2, color: "var(--fg-dim)" }}>
+            <span style={{ display: "grid", placeItems: "center" }}>
+              <ChevronIcon open={false} />
+            </span>
+            {allDone && (
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label="Dismiss completed todo panel"
+                onClick={(e) => { e.stopPropagation(); setDismissed(true); }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setDismissed(true); } }}
+                style={{ width: 18, height: 18, display: "grid", placeItems: "center", cursor: "pointer" }}
+              >
+                <CloseIcon />
+              </span>
+            )}
           </span>
         </button>
       </div>
@@ -180,184 +247,168 @@ export function TodoStrip({
   }
 
   return (
-    <div
-      style={{
-        marginBottom: -1,
-      }}
-    >
+    <div style={dockWrap}>
       <section
         aria-label="Agent todo progress"
         style={{
+          ...glassCard,
+          pointerEvents: "auto",
           position: "relative",
-          width: "min(780px, calc(100% - 88px))",
-          margin: "0 auto",
-          padding: "15px 22px 12px",
+          width: "min(620px, calc(100% - 48px))",
+          padding: "11px 16px 12px 18px",
           display: "grid",
           gridTemplateRows: "auto minmax(0, 1fr)",
-          gap: 12,
-          height: 144,
+          gap: 9,
+          height: 116,
           overflow: "hidden",
-          borderRadius: "18px 18px 0 0",
-          border: "1px solid color-mix(in srgb, var(--border-strong) 22%, transparent)",
-          borderBottomColor: "transparent",
-          background: "transparent",
-          boxShadow: "none",
+          borderRadius: "14px 14px 0 0",
         }}
       >
-        <button
-          onClick={() => setOpen(false)}
-          aria-label="Close agent todo panel"
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            width: 24,
-            height: 24,
-            display: "grid",
-            placeItems: "center",
-            borderRadius: "var(--radius-md)",
-            border: "none",
-            background: "transparent",
-            color: "var(--fg-subtle)",
-            cursor: "pointer",
-          }}
-        >
-          <ChevronIcon open={true} />
-        </button>
-
+        {/* header: GOAL · progress bar · percentage */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 38%) minmax(48px, auto)",
+            gridTemplateColumns: "minmax(0, 1fr) minmax(32px, 30%) auto auto",
             alignItems: "center",
-            gap: 18,
-            paddingRight: 24,
+            gap: 12,
           }}
         >
-          <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
-            <span style={{ color: "var(--fg-strong)", fontSize: 13.5, fontWeight: 560, letterSpacing: 0 }}>
-              Goal:
+          <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, whiteSpace: "nowrap" }}>
+            <span style={{ color: "var(--fg-dim)", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Goal
             </span>
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-subtle)", fontSize: 12.5, fontWeight: 360 }}>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-strong)", fontSize: 12.5, fontWeight: 480 }}>
               {goal}
             </span>
           </span>
-          <span style={{ display: "grid", gap: 5, minWidth: 0 }}>
-            <span
-              aria-hidden
+          <ProgressBar percent={percent} />
+          <span style={{ color: "var(--fg-subtle)", fontSize: 11.5, fontWeight: 500, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+            {percent}%
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <button
+              onClick={() => setOpen(false)}
+              aria-label="Collapse agent todo panel"
               style={{
-                position: "relative",
-                height: 8,
-                overflow: "hidden",
-                borderRadius: 999,
+                width: 18,
+                height: 18,
+                display: "grid",
+                placeItems: "center",
                 border: "none",
-                background: "color-mix(in srgb, var(--fg-dim) 10%, transparent)",
+                background: "transparent",
+                color: "var(--fg-dim)",
+                cursor: "pointer",
               }}
             >
-              <span
+              <ChevronIcon open={true} />
+            </button>
+            {allDone && (
+              <button
+                onClick={() => setDismissed(true)}
+                aria-label="Dismiss completed todo panel"
                 style={{
-                  position: "absolute",
-                  top: 0,
-                  bottom: 0,
-                  left: 0,
-                  width: `${percent}%`,
-                  background: "color-mix(in srgb, var(--accent) 76%, transparent)",
-                  transition: "width var(--motion-med) var(--ease-out)",
+                  width: 18,
+                  height: 18,
+                  display: "grid",
+                  placeItems: "center",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--fg-dim)",
+                  cursor: "pointer",
                 }}
-              />
-            </span>
-          </span>
-          <span style={{ color: "var(--fg-subtle)", fontSize: 12.5, fontWeight: 500, fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-            {percent}%
+              >
+                <CloseIcon />
+              </button>
+            )}
           </span>
         </div>
 
+        {/* scrollable list: left spine + oval checkboxes + ruled rows */}
         <div
+          className="todo-scroll"
           style={{
             position: "relative",
             overflowY: "auto",
-            padding: "0 10px 0 0",
-            maxHeight: 80,
-            scrollbarWidth: "thin",
+            padding: "1px 8px 1px 0",
           }}
         >
-          <span
-            aria-hidden
-            style={{
-              position: "absolute",
-              left: 26,
-              top: -4,
-              bottom: 0,
-              width: 1,
-              background: "color-mix(in srgb, var(--danger) 42%, var(--border))",
-              opacity: 0.72,
-            }}
-          />
-          {visibleItems.map((item) => {
+          {visibleItems.map((item, idx) => {
             const hot = recentIds.has(item.id);
+            const isLast = idx === visibleItems.length - 1;
+            const treeColor = "color-mix(in srgb, var(--fg-dim) 32%, transparent)";
             return (
               <div
                 key={item.id}
                 style={{
                   position: "relative",
                   display: "grid",
-                  gridTemplateColumns: "52px minmax(0, 1fr)",
+                  gridTemplateColumns: "26px minmax(0, 1fr)",
                   alignItems: "center",
-                  gap: 12,
-                  minHeight: 27,
-                  color: item.done ? "var(--fg-subtle)" : "var(--fg)",
+                  gap: 8,
+                  minHeight: 20,
                 }}
               >
+                {/* tree spine — full height for ├, half (top→node) for └ on the last row */}
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    left: 9,
+                    top: 0,
+                    bottom: isLast ? "50%" : 0,
+                    width: 1,
+                    background: treeColor,
+                  }}
+                />
+                {/* tree branch — horizontal tick from the spine to the node */}
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    left: 9,
+                    width: 9,
+                    top: "50%",
+                    height: 1,
+                    background: treeColor,
+                  }}
+                />
                 <span
                   style={{
                     position: "relative",
                     zIndex: 1,
-                    justifySelf: "center",
-                    width: 20,
-                    height: 20,
+                    justifySelf: "end",
+                    width: 11,
+                    height: 13,
                     borderRadius: "50%",
                     display: "grid",
                     placeItems: "center",
-                    background: item.done ? "color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))" : "color-mix(in srgb, var(--bg-elevated) 86%, transparent)",
+                    background: item.done
+                      ? "var(--accent)"
+                      : "var(--bg-elevated)",
                     border: item.done
-                      ? "1px solid color-mix(in srgb, var(--accent) 58%, var(--border))"
-                      : "1px solid color-mix(in srgb, var(--fg-dim) 28%, transparent)",
-                    color: item.done ? "var(--accent)" : "transparent",
+                      ? "none"
+                      : "1.5px solid color-mix(in srgb, var(--fg-dim) 38%, transparent)",
+                    color: item.done ? "var(--bg-elevated)" : "transparent",
+                    transition: "background var(--motion-med) var(--ease-out)",
                   }}
                 >
                   {item.done && <CheckIcon />}
                 </span>
                 <span
                   style={{
-                    position: "relative",
                     minWidth: 0,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    fontSize: 13,
-                    lineHeight: "18px",
-                    fontWeight: hot && !item.done ? 480 : 380,
-                    opacity: item.done ? 0.7 : 1,
-                    borderBottom: "1px solid color-mix(in srgb, var(--border-strong) 42%, transparent)",
-                    paddingBottom: 3,
+                    fontSize: 12.5,
+                    lineHeight: "17px",
+                    fontWeight: hot && !item.done ? 480 : 400,
+                    color: item.done ? "var(--fg-subtle)" : "var(--fg-strong)",
+                    textDecoration: item.done ? "line-through" : "none",
+                    textDecorationColor: item.done ? "color-mix(in srgb, var(--fg-dim) 55%, transparent)" : undefined,
                   }}
                 >
-                  {item.done && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: "absolute",
-                        left: 0,
-                        right: 0,
-                        top: "45%",
-                        height: 1,
-                        borderRadius: 999,
-                        background: "color-mix(in srgb, var(--warning) 58%, transparent)",
-                        opacity: 0.72,
-                      }}
-                    />
-                  )}
-                  <span style={{ position: "relative" }}>{item.text}</span>
+                  {item.text}
                 </span>
               </div>
             );

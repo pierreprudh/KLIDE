@@ -2112,6 +2112,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         {msgs.map((m, i) => {
           const isLast = i === msgs.length - 1;
           const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls;
+          const activeToolRunning =
+            streaming &&
+            isLast &&
+            m.role === "tool" &&
+            /^Running /.test(m.content);
           const isStreamingActive = streaming && isLast && m.role === "assistant" && m.content !== "";
 
           if (m.role === "user") {
@@ -2128,7 +2133,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           }
 
           if (m.role === "tool") {
-            return <div key={i} className="ai-msg-in" style={{ margin: "0 0 2px 32px" }}>{renderMessageBody(m, streaming)}</div>;
+            return <div key={i} className="ai-msg-in" style={{ margin: "0 0 2px 32px" }}>{renderMessageBody(m, activeToolRunning)}</div>;
           }
 
           // One avatar per response: multi-turn tool runs produce several
@@ -2147,7 +2152,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                 <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
               )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
-                {isAssistantPlaceholder ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
+                {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
               </div>
             </div>
           );
@@ -2187,7 +2192,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               left: "50%",
               bottom: 8,
               transform: "translateX(-50%)",
-              zIndex: 5,
+              zIndex: 7,
               display: "inline-flex",
               alignItems: "center",
               gap: 4,
@@ -2196,7 +2201,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               color: streaming ? "var(--accent)" : "var(--fg-subtle)",
               cursor: "pointer",
               opacity: 0.7,
-              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
+              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), bottom var(--motion-med) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.opacity = "1";
@@ -2223,10 +2228,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </svg>
           </span>
         )}
+        <TodoStrip workspaceRoot={workspaceRoot} conversationId={currentId} goal={msgs.find((m) => m.role === "user")?.content.trim() || undefined} />
       </div>
 
       {!providerDelegatesWork && (
-      <div style={{ padding: 10 }}>
+      <div style={{ padding: "0 10px 10px" }}>
         {pendingQuestion && (
           <div
             className="ai-qa-card"
@@ -2359,7 +2365,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             )}
           </div>
         )}
-        <TodoStrip workspaceRoot={workspaceRoot} conversationId={currentId} />
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
