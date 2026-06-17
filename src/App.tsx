@@ -69,6 +69,9 @@ export type HarnessSettings = {
    *  default (50). A runaway-loop guard; raise it for big multi-file / multi-
    *  agent tasks. The conversation can always be continued past the cap. */
   maxTurns?: number;
+  /** Seconds a run_command may run before it's killed. Absent → 180. Raise it
+   *  for slow builds; a hang guard, not a task limit. */
+  commandTimeoutSecs?: number;
   /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent
    *  request slots). Absent → Ollama's own default. */
   serverConcurrency?: number;

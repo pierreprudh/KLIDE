@@ -78,6 +78,7 @@ type AiHarnessSettings = {
   reflectionLevels?: Record<string, string>;
   maxParallelTools?: number;
   maxTurns?: number;
+  commandTimeoutSecs?: number;
   serverConcurrency?: number;
   autoMemoryOnRunDone?: boolean;
 };
@@ -1756,6 +1757,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
       const maxParallelTools = harnessSettings?.maxParallelTools;
       const maxTurns = harnessSettings?.maxTurns;
+      const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
       // Mark this conversation in-flight so a mid-run view switch re-attaches
       // to it rather than starting fresh on remount.
       if (panelId) savePanelSession(panelId, currentId, true);
@@ -1771,6 +1773,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         reflectionLevel,
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
+        commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }

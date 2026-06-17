@@ -83,6 +83,10 @@ pub struct StartRunRequest {
     /// harness default; a runaway-loop guard, not a task-size limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
+    /// Seconds a `run_command` may run before it's killed. `None` uses the
+    /// harness default (180s); a hang guard, not a task limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_timeout_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }

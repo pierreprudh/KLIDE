@@ -894,7 +894,7 @@ fn err(content: String) -> ToolResult {
 /// stderr are returned together with the exit code; output is truncated so a
 /// chatty build can't blow the context window. The result is `ok: true` only on
 /// a zero exit so the model can tell success from failure.
-pub fn run_command_capture(root: &str, command: &str) -> ToolResult {
+pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -> ToolResult {
     const MAX_OUTPUT: usize = 16_000;
     // Go through Workspace so the run dir honors the same root invariant the
     // file tools use (and fails clearly if no workspace is open).
@@ -902,14 +902,36 @@ pub fn run_command_capture(root: &str, command: &str) -> ToolResult {
         Ok(ws) => ws,
         Err(e) => return err(format!("Cannot run command: {e}")),
     };
-    let output = std::process::Command::new("sh")
+    // `kill_on_drop(true)` + a timeout around `wait_with_output` means a command
+    // that never exits (a dev server, a watch task, an interactive prompt) is
+    // killed when the timeout future is dropped — the run can't hang forever.
+    let spawned = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(ws.root())
-        .output();
-    let output = match output {
-        Ok(o) => o,
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+    let child = match spawned {
+        Ok(c) => c,
         Err(e) => return err(format!("Failed to run command: {e}")),
+    };
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return err(format!("Failed to run command: {e}")),
+        Err(_) => {
+            return err(format!(
+                "Command timed out after {timeout_secs}s and was stopped. \
+                 If it legitimately needs longer, raise the command timeout in \
+                 Settings → Harness; otherwise run a faster, non-interactive command."
+            ))
+        }
     };
     let code = output.status.code();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -2293,21 +2315,26 @@ mod tests {
         (ws, dir)
     }
 
-    #[test]
-    fn run_command_capture_reports_output_and_exit() {
+    #[tokio::test]
+    async fn run_command_capture_reports_output_and_exit() {
         let dir = std::env::temp_dir().join(format!("klide-runcmd-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let root = dir.to_str().unwrap();
 
-        let ok = run_command_capture(root, "echo hello");
+        let ok = run_command_capture(root, "echo hello", 30).await;
         assert!(ok.ok, "exit 0 → ok");
         assert!(ok.content.contains("hello"), "stdout captured: {}", ok.content);
         assert!(ok.content.contains("exit 0"));
 
-        let fail = run_command_capture(root, "exit 3");
+        let fail = run_command_capture(root, "exit 3", 30).await;
         assert!(!fail.ok, "non-zero exit → not ok");
         assert!(fail.content.contains("exit 3"), "exit code surfaced: {}", fail.content);
+
+        // A command that outlives the timeout is killed and reported, not hung.
+        let slow = run_command_capture(root, "sleep 10", 1).await;
+        assert!(!slow.ok, "timed-out command → not ok");
+        assert!(slow.content.contains("timed out"), "timeout surfaced: {}", slow.content);
     }
 
     #[test]

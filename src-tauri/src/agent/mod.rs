@@ -1143,7 +1143,10 @@ conversation, then ask again._",
                     })?;
 
                     tool_result = if allowed {
-                        run_command_capture(root.as_deref().unwrap_or("."), &command)
+                        // Default 180s; configurable for long builds. Clamped so a
+                        // bad setting can't disable the runaway guard.
+                        let timeout_secs = request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                        run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await
                     } else {
                         ToolResult {
                             ok: false,

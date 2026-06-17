@@ -84,7 +84,7 @@ for custom/MCP-style tools loaded at runtime.
 
 | Tool | Purpose | Lineage |
 |---|---|---|
-| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. | CC/CX/OC (bash tool) + K (approval gate) |
+| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. Killed after a **timeout** (default 180s, Settings → Harness) so a hung command can't stall the run; output capped at 16KB. | CC/CX/OC (bash tool) + K (approval gate) |
 
 ### Pause (Goal only) — 1
 

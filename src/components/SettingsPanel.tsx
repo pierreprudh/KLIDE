@@ -96,8 +96,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -2407,6 +2407,26 @@ export function SettingsPanel({
                         ]}
                         onChange={(v) =>
                           onHarnessSettingsChange?.({ ...harnessSettings, maxTurns: v === undefined ? undefined : Number(v) })
+                        }
+                      />
+                    }
+                  />
+                  <Row
+                    title="Command timeout"
+                    description="How long an agent-run shell command (run_command) may run before it's killed — a hang guard against dev servers / watch tasks / prompts. Raise it for slow builds. Default 180s."
+                    control={
+                      <Segmented
+                        label="Command timeout"
+                        value={harnessSettings?.commandTimeoutSecs}
+                        options={[
+                          { label: "Default", value: undefined },
+                          { label: "60s", value: 60 },
+                          { label: "180s", value: 180 },
+                          { label: "300s", value: 300 },
+                          { label: "600s", value: 600 },
+                        ]}
+                        onChange={(v) =>
+                          onHarnessSettingsChange?.({ ...harnessSettings, commandTimeoutSecs: v === undefined ? undefined : Number(v) })
                         }
                       />
                     }

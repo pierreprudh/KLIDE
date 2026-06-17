@@ -266,6 +266,9 @@ export type StartAgentRunInput = {
   /** Max tool turns before handing back to the user. Omit for the harness
    *  default; a runaway-loop guard, not a task-size limit. */
   maxTurns?: number;
+  /** Seconds a run_command may run before it's killed. Omit for the harness
+   *  default (180s). */
+  commandTimeoutSecs?: number;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };
