@@ -9,6 +9,7 @@ mod models;
 mod pricing;
 mod providers;
 mod pty;
+mod search;
 mod skills;
 mod workspace;
 
@@ -408,137 +409,14 @@ fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
 
 // ── Find in files ───────────────────────────────────────────────────────
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SearchMatch {
-    file: String,
-    line: usize,
-    column: usize,
-    content: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SearchResult {
-    matches: Vec<SearchMatch>,
-    file_count: usize,
-    capped: bool,
-}
-
 #[tauri::command]
 fn search_in_files(
     workspace_root: String,
     pattern: String,
     include: Option<String>,
-) -> Result<SearchResult, String> {
-    if pattern.trim().is_empty() {
-        return Err("Pattern cannot be empty".to_string());
-    }
-    let root = std::path::Path::new(&workspace_root);
-    if !root.is_dir() {
-        return Err("Workspace root is not a directory".to_string());
-    }
-
-    const CAP: usize = 500;
-    let mut matches: Vec<SearchMatch> = Vec::new();
-    let mut file_count = 0_u32;
-    let mut capped = false;
-
-    let include_filter = include
-        .as_ref()
-        .filter(|s| !s.trim().is_empty() && s.as_str() != "*")
-        .map(|s| {
-            let s = s.trim();
-            if s.starts_with('*') {
-                &s[1..]
-            } else {
-                s
-            }
-        })
-        .map(|s| s.to_lowercase());
-
-    let mut pending: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            if matches.len() >= CAP {
-                capped = true;
-                break;
-            }
-            let path = entry.path();
-            let ft = match entry.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            if ft.is_dir() {
-                if !matches!(
-                    name.as_str(),
-                    ".git"
-                        | "node_modules"
-                        | "target"
-                        | "dist"
-                        | ".next"
-                        | ".cache"
-                        | ".venv"
-                        | "__pycache__"
-                ) {
-                    pending.push(path);
-                }
-                continue;
-            }
-            if ft.is_file() {
-                if let Some(ref filter) = include_filter {
-                    if !name.ends_with(filter) {
-                        continue;
-                    }
-                }
-                if path.metadata().map(|m| m.len() > 500_000).unwrap_or(true) {
-                    continue;
-                }
-                let content = match std::fs::read_to_string(&path) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let rel = path
-                    .strip_prefix(root)
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string_lossy().to_string());
-                let mut found_in_file = false;
-                for (idx, line) in content.lines().enumerate() {
-                    if matches.len() >= CAP {
-                        capped = true;
-                        break;
-                    }
-                    if let Some(col) = line.find(&pattern) {
-                        if !found_in_file {
-                            file_count += 1;
-                            found_in_file = true;
-                        }
-                        matches.push(SearchMatch {
-                            file: rel.clone(),
-                            line: idx + 1,
-                            column: col + 1,
-                            content: line.chars().take(300).collect(),
-                        });
-                    }
-                }
-            }
-        }
-        if capped {
-            break;
-        }
-    }
-
-    Ok(SearchResult {
-        matches,
-        file_count: file_count as usize,
-        capped,
-    })
+) -> Result<search::SearchResult, String> {
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    search::search_workspace(&ws, &pattern, include.as_deref())
 }
 
 #[tauri::command]

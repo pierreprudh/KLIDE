@@ -134,6 +134,32 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
         })
 }
 
+/// The handful of provider quirks the run loop's behavior depends on, gathered
+/// in one place so the loop asks about a capability instead of comparing
+/// provider names inline. Keyed on the provider id; add a quirk here rather
+/// than threading another `provider == "..."` branch through the loop.
+struct ProviderCaps {
+    /// Replay continuation history as structured tool messages (assistant
+    /// `tool_calls` + `role:"tool"`). Ollama's native `/api/chat` is the lone
+    /// exception: the structured shape makes those models imitate fake tool
+    /// text, so it gets the text-fold workaround instead. Every OpenAI-wire
+    /// provider (including Ollama over `/v1`) gets the faithful structured replay.
+    structured_replay: bool,
+    /// Keep Chat-mode context minimal — skip injecting the project TODO list.
+    /// Small local backends (MLX, Ollama) made a bare "hello" feel broken when
+    /// handed project metadata, so their chat turns stay tiny.
+    minimal_chat_context: bool,
+}
+
+impl ProviderCaps {
+    fn for_provider(provider: &str) -> Self {
+        Self {
+            structured_replay: provider != "ollama",
+            minimal_chat_context: matches!(provider, "mlx" | "ollama"),
+        }
+    }
+}
+
 fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) -> Vec<serde_json::Value> {
     let mut user_text = request.initial_text.clone();
     if !request.attachments.is_empty() {
@@ -150,7 +176,7 @@ fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) ->
     // Inject initial todo list as context for tool-capable/project turns.
     // Local chat should stay tiny; sending project metadata to MLX/Ollama for
     // "hello" made prompt processing feel broken.
-    let should_include_todos = !(matches!(request.provider.as_str(), "mlx" | "ollama")
+    let should_include_todos = !(ProviderCaps::for_provider(&request.provider).minimal_chat_context
         && matches!(request.mode, AgentMode::Chat));
     if should_include_todos {
         if let Some(cwd) = &request.workspace_root {
@@ -530,6 +556,61 @@ fn finish_cancelled<E: FnMut(AgentEvent) -> Result<(), String>>(
     )
 }
 
+/// What a pause settled to: the user's reply, or cancellation while waiting.
+/// On `Cancelled` the caller settles the run via `finish_cancelled` and returns
+/// — only it can return out of the run loop, so the pause can't do it here.
+enum PauseOutcome {
+    Resolved(String),
+    Cancelled,
+}
+
+/// Every run pause is the same shape: flip the run to a waiting status, stash a
+/// oneshot the matching `agent_resolve_*` command unblocks, emit the request
+/// event (*after* the sender is in place, so a fast reply can't race past it),
+/// then await the reply or cancellation and restore `Running`. Only four things
+/// vary — which `pending_*` slot to fill, the waiting status, the request event,
+/// and the default used if the channel closes — so those are the parameters.
+/// This is the one place the question / permission / diff pauses share.
+async fn pause_for_user<E, S>(
+    app: &tauri::AppHandle,
+    id: &str,
+    waiting: AgentRunStatus,
+    request_event: AgentEvent,
+    default_on_close: &str,
+    cancel: &CancellationToken,
+    emit: &mut E,
+    stash: S,
+) -> Result<PauseOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+    S: FnOnce(&AgentRunHandle, tokio::sync::oneshot::Sender<String>),
+{
+    set_run_status(app, id, waiting);
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    {
+        let state = app.state::<AgentSupervisorState>();
+        let mut runs = state
+            .runs
+            .lock()
+            .map_err(|_| "Agent state unavailable".to_string())?;
+        if let Some(handle) = runs.get_mut(id) {
+            stash(handle, tx);
+        }
+    }
+
+    emit(request_event)?;
+
+    let reply = tokio::select! {
+        _ = cancel.cancelled() => {
+            set_run_status(app, id, AgentRunStatus::Running);
+            return Ok(PauseOutcome::Cancelled);
+        }
+        result = rx => result.unwrap_or_else(|_| default_on_close.to_string()),
+    };
+    set_run_status(app, id, AgentRunStatus::Running);
+    Ok(PauseOutcome::Resolved(reply))
+}
+
 #[tauri::command]
 pub async fn agent_start_run(
     app: tauri::AppHandle,
@@ -677,11 +758,10 @@ async fn run_agent_loop(
     // turn would arrive as a fresh chat — the "agent has no memory"
     // bug the user kept hitting.
     if resuming {
-        // Only Ollama's native `/api/chat` needs the text-fold workaround.
-        // Every OpenAI-wire provider (incl. Ollama over `/v1` and custom
-        // self-hosted endpoints) gets the faithful structured replay — the
-        // text-fold poisons those models into imitating fake tool text.
-        let structured_replay = request.provider != "ollama";
+        // See ProviderCaps::structured_replay: Ollama's native `/api/chat` is
+        // the lone provider that needs the text-fold workaround; every
+        // OpenAI-wire provider gets the faithful structured replay.
+        let structured_replay = ProviderCaps::for_provider(&request.provider).structured_replay;
         let prior = reconstruct_prior_messages(&prior_events, structured_replay);
         // `provider_messages` always returns `[..., user]` with the new
         // turn at the tail. Pop it, splice the history in, push it back.
@@ -1026,36 +1106,31 @@ conversation, then ask again._",
                     .to_string();
                 let request_id = format!("q_{}_{}", id, call.id);
 
-                set_run_status(&app, &id, AgentRunStatus::WaitingForPermission);
-                let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-                {
-                    let state = app.state::<AgentSupervisorState>();
-                    let mut runs = state
-                        .runs
-                        .lock()
-                        .map_err(|_| "Agent state unavailable".to_string())?;
-                    if let Some(handle) = runs.get_mut(&id) {
+                let answer = match pause_for_user(
+                    &app,
+                    &id,
+                    AgentRunStatus::WaitingForPermission,
+                    AgentEvent::UserQuestionRequested {
+                        run_id: id.clone(),
+                        request_id: request_id.clone(),
+                        question: question.clone(),
+                        ts: now_ms(),
+                    },
+                    "(skipped)",
+                    &cancel,
+                    &mut emit,
+                    |handle, tx| {
                         *handle.pending_question.lock().unwrap() = Some(tx);
-                    }
-                }
-
-                emit(AgentEvent::UserQuestionRequested {
-                    run_id: id.clone(),
-                    request_id: request_id.clone(),
-                    question: question.clone(),
-                    ts: now_ms(),
-                })?;
-
-                let answer = tokio::select! {
-                    _ = cancel.cancelled() => {
-                        set_run_status(&app, &id, AgentRunStatus::Running);
+                    },
+                )
+                .await?
+                {
+                    PauseOutcome::Cancelled => {
                         finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                         return Ok(());
                     }
-                    result = rx => result.unwrap_or_else(|_| "(skipped)".to_string()),
+                    PauseOutcome::Resolved(answer) => answer,
                 };
-
-                set_run_status(&app, &id, AgentRunStatus::Running);
 
                 emit(AgentEvent::UserQuestionResolved {
                     run_id: id.clone(),
@@ -1132,35 +1207,31 @@ conversation, then ask again._",
                             ]
                         });
 
-                        set_run_status(&app, &id, AgentRunStatus::WaitingForPermission);
-                        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-                        {
-                            let state = app.state::<AgentSupervisorState>();
-                            let mut runs = state
-                                .runs
-                                .lock()
-                                .map_err(|_| "Agent state unavailable".to_string())?;
-                            if let Some(handle) = runs.get_mut(&id) {
+                        let decision = match pause_for_user(
+                            &app,
+                            &id,
+                            AgentRunStatus::WaitingForPermission,
+                            AgentEvent::PermissionRequested {
+                                run_id: id.clone(),
+                                request: perm,
+                                ts: now_ms(),
+                            },
+                            "{\"behavior\":\"deny\"}",
+                            &cancel,
+                            &mut emit,
+                            |handle, tx| {
                                 *handle.pending_permission.lock().unwrap() = Some(tx);
-                            }
-                        }
-
-                        emit(AgentEvent::PermissionRequested {
-                            run_id: id.clone(),
-                            request: perm,
-                            ts: now_ms(),
-                        })?;
-
-                        let decision = tokio::select! {
-                            _ = cancel.cancelled() => {
-                                set_run_status(&app, &id, AgentRunStatus::Running);
+                            },
+                        )
+                        .await?
+                        {
+                            PauseOutcome::Cancelled => {
                                 finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                                 return Ok(());
                             }
-                            result = rx => result.unwrap_or_else(|_| "{\"behavior\":\"deny\"}".to_string()),
+                            PauseOutcome::Resolved(decision) => decision,
                         };
 
-                        set_run_status(&app, &id, AgentRunStatus::Running);
                         let decision_val: serde_json::Value =
                             serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
                         let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
@@ -1229,36 +1300,30 @@ conversation, then ask again._",
                 };
 
                 // Pause for diff review
-                set_run_status(&app, &id, AgentRunStatus::WaitingForDiff);
-                let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-                {
-                    let state = app.state::<AgentSupervisorState>();
-                    let mut runs = state
-                        .runs
-                        .lock()
-                        .map_err(|_| "Agent state unavailable".to_string())?;
-                    if let Some(handle) = runs.get_mut(&id) {
+                let decision = match pause_for_user(
+                    &app,
+                    &id,
+                    AgentRunStatus::WaitingForDiff,
+                    AgentEvent::DiffProposed {
+                        run_id: id.clone(),
+                        proposal: proposal.clone(),
+                        ts: now_ms(),
+                    },
+                    "reject",
+                    &cancel,
+                    &mut emit,
+                    |handle, tx| {
                         *handle.pending_diff.lock().unwrap() = Some(tx);
-                    }
-                }
-
-                emit(AgentEvent::DiffProposed {
-                    run_id: id.clone(),
-                    proposal: proposal.clone(),
-                    ts: now_ms(),
-                })?;
-
-                // Wait for diff resolution, cancellation, or channel close
-                let decision = tokio::select! {
-                    _ = cancel.cancelled() => {
-                        set_run_status(&app, &id, AgentRunStatus::Running);
+                    },
+                )
+                .await?
+                {
+                    PauseOutcome::Cancelled => {
                         finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                         return Ok(());
                     }
-                    result = rx => result.unwrap_or_else(|_| "reject".to_string()),
+                    PauseOutcome::Resolved(decision) => decision,
                 };
-
-                set_run_status(&app, &id, AgentRunStatus::Running);
 
                 let decision_obj = serde_json::json!({ "behavior": decision });
                 emit(AgentEvent::DiffResolved {
@@ -1947,6 +2012,26 @@ mod replay_tests {
         let out = reconstruct_prior_messages(&events, false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
+    }
+
+    #[test]
+    fn provider_caps_isolate_the_quirks() {
+        // Native Ollama is the only provider on the text-fold path.
+        let ollama = ProviderCaps::for_provider("ollama");
+        assert!(!ollama.structured_replay);
+        assert!(ollama.minimal_chat_context);
+
+        // MLX is local (minimal chat) but OpenAI-wire (structured replay).
+        let mlx = ProviderCaps::for_provider("mlx");
+        assert!(mlx.structured_replay);
+        assert!(mlx.minimal_chat_context);
+
+        // Hosted + custom providers: structured replay, full chat context.
+        for id in ["anthropic", "openai", "my-self-hosted-endpoint"] {
+            let caps = ProviderCaps::for_provider(id);
+            assert!(caps.structured_replay, "{id}");
+            assert!(!caps.minimal_chat_context, "{id}");
+        }
     }
 
     // --- Structured replay (OpenAI-wire / custom self-hosted providers) ---
