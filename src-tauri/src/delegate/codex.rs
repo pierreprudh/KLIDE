@@ -241,6 +241,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         model,
         cwd,
         git_branch: branch,
+        worktree: None, // filled centrally in list_agent_runs from cwd
         created_ms: updated_ms, // fallback to mtime
         updated_ms,
         message_count: count,

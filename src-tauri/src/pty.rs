@@ -14,10 +14,26 @@ pub struct DelegatePtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     cwd: Option<String>,
+    provider: String,
 }
 
 pub struct DelegatePtyState {
     pub sessions: Mutex<HashMap<String, DelegatePtySession>>,
+}
+
+impl DelegatePtyState {
+    /// Is a delegate PTY for `provider` currently live? Used by account
+    /// switching to refuse swapping a CLI's credentials out from under a
+    /// running session (it would refresh its token and write back to the
+    /// store we're replacing). Only covers Klide-spawned PTYs — a CLI running
+    /// in an external terminal is invisible to us.
+    pub fn has_live_session(&self, provider: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .any(|s| s.provider == provider)
+    }
 }
 
 #[tauri::command]
@@ -175,6 +191,7 @@ pub fn delegate_pty_spawn(
             writer,
             master,
             cwd,
+            provider: provider.clone(),
         },
     );
 

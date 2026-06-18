@@ -228,6 +228,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         model,
         cwd,
         git_branch: branch,
+        worktree: None, // filled centrally in list_agent_runs from cwd
         created_ms,
         updated_ms,
         message_count: count,

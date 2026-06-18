@@ -50,8 +50,40 @@ pub struct AgentRun {
     /// turn yet or doesn't expose one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event: Option<String>,
+    /// Name of the linked git worktree the run executed in, when `cwd` is a
+    /// linked worktree rather than the repo's main checkout. `None` for runs in
+    /// a main working copy (the common case) or outside a git repo. Derived from
+    /// `cwd` in `list_agent_runs`; adapters leave it `None`. See [`worktree_label`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>, // set when we can infer parent from spawn mapping
+}
+
+/// Name of the linked git worktree at `cwd`, or `None` if `cwd` is a main
+/// working copy / not a repo. Cheap by design — no `git` subprocess: a linked
+/// worktree's `.git` is a *file* (a `gitdir: …/worktrees/<name>` pointer),
+/// whereas a main checkout's `.git` is a directory. We stat `.git`, and only
+/// when it's a file read it to recover the worktree name (falling back to the
+/// `cwd` basename if the pointer is unparseable). One `stat` + at most one tiny
+/// read per run — negligible against the session-log reads already happening.
+pub(crate) fn worktree_label(cwd: &str) -> Option<String> {
+    let dot_git = std::path::Path::new(cwd).join(".git");
+    let meta = std::fs::metadata(&dot_git).ok()?;
+    if !meta.is_file() {
+        // A directory (main checkout) or absent → not a linked worktree.
+        return None;
+    }
+    let pointer = std::fs::read_to_string(&dot_git).ok()?;
+    // A linked worktree points at "…/.git/worktrees/<name>". Require that
+    // marker so a submodule pointer ("…/.git/modules/<name>") doesn't match.
+    pointer
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("gitdir:"))
+        .and_then(|p| p.trim().split("/worktrees/").nth(1))
+        .and_then(|rest| rest.split('/').next())
+        .map(str::to_string)
+        .filter(|n| !n.is_empty())
 }
 
 // One readable line of a run's conversation, for the Mission Control detail
@@ -255,6 +287,44 @@ mod tests {
         assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "   " })), None);
         // Bare word without a separator (looks like a glob, not a file).
         assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "foo" })), None);
+    }
+
+    #[test]
+    fn worktree_label_reads_linked_worktree_pointer() {
+        let dir = std::env::temp_dir().join("klide_wt_test_linked");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".git"),
+            "gitdir: /Users/x/proj/.git/worktrees/feature-login\n",
+        )
+        .unwrap();
+        assert_eq!(
+            worktree_label(dir.to_str().unwrap()).as_deref(),
+            Some("feature-login")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn worktree_label_none_for_main_checkout_and_submodule() {
+        // Main checkout: .git is a directory.
+        let main = std::env::temp_dir().join("klide_wt_test_main");
+        let _ = std::fs::remove_dir_all(&main);
+        std::fs::create_dir_all(main.join(".git")).unwrap();
+        assert_eq!(worktree_label(main.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&main);
+
+        // Submodule: .git is a file, but points at modules/, not worktrees/.
+        let sub = std::env::temp_dir().join("klide_wt_test_sub");
+        let _ = std::fs::remove_dir_all(&sub);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join(".git"), "gitdir: ../.git/modules/vendor\n").unwrap();
+        assert_eq!(worktree_label(sub.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&sub);
+
+        // No git at all.
+        assert_eq!(worktree_label("/nonexistent/klide/path"), None);
     }
 
     #[test]

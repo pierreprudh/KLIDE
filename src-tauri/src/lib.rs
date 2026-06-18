@@ -1,3 +1,4 @@
+mod accounts;
 mod adapters;
 mod agent;
 mod custom_providers;
@@ -238,6 +239,36 @@ fn ai_clear_provider_key_reference(provider: String) -> Result<(), String> {
 #[tauri::command]
 fn custom_provider_list() -> Vec<custom_providers::CustomProvider> {
     custom_providers::list()
+}
+
+// Account snapshots for delegate CLIs (Codex / Claude Code / OpenCode). List
+// saved snapshots with active-detection, and snapshot the current login. No
+// activation/switching yet — see `accounts.rs`.
+#[tauri::command]
+fn accounts_list(provider: String) -> accounts::AccountsView {
+    accounts::list(&provider)
+}
+
+#[tauri::command]
+fn account_save_current(provider: String, name: String) -> Result<accounts::Account, String> {
+    accounts::save_current(&provider, &name)
+}
+
+#[tauri::command]
+fn account_activate(
+    provider: String,
+    name: String,
+    delegate_state: tauri::State<DelegatePtyState>,
+) -> Result<(), String> {
+    // Live-run guard: a running delegate refreshes its token and writes back
+    // to the store we're about to swap, so refuse while one is live.
+    if delegate_state.has_live_session(&provider) {
+        return Err(format!(
+            "A {} session is live in Klide — finish or stop it before switching accounts.",
+            provider
+        ));
+    }
+    accounts::activate(&provider, &name)
 }
 
 /// Tell the backend which folder is open, so `${VAR}` token references can
@@ -833,6 +864,13 @@ fn list_agent_runs(
     // we passed to delegate_pty_spawn).
     let (by_delegate, by_external) = crate::pty::read_delegate_sessions_by_id(&app);
     for run in runs.iter_mut() {
+        // Evidence: surface the linked git worktree a run executed in (when its
+        // cwd is one), so the board can answer "where did this happen?".
+        if run.worktree.is_none() {
+            if let Some(cwd) = run.cwd.as_deref() {
+                run.worktree = crate::delegate::worktree_label(cwd);
+            }
+        }
         if run.parent_id.is_none() {
             if let Some(mapping) = by_delegate
                 .get(&run.id)
@@ -1038,6 +1076,9 @@ pub fn run() {
             custom_provider_list,
             custom_provider_upsert,
             custom_provider_remove,
+            accounts_list,
+            account_save_current,
+            account_activate,
             set_active_workspace,
             ai_chat,
             local_servers::ai_local_server_start,

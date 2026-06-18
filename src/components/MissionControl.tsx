@@ -719,6 +719,7 @@ function RunRow({
               </>
             )}
             {run.branch ? ` · ${run.branch}` : ""}
+            {showEvidence && run.worktree ? ` · in ${run.worktree}` : ""}
             {showEvidence && formatFilesTouched(run.filesTouched) ? ` · ${formatFilesTouched(run.filesTouched)}` : ""}
             {showEvidence && formatCost(run.costUsd) ? ` · ${formatCost(run.costUsd)}` : ""}
             {showEvidence && tokenSummary ? ` · ${tokenSummary}` : ""}
@@ -1340,6 +1341,15 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
     <EvidenceMeta key="section" label="Board" value={BOARD_SECTION_LABEL[section]} title={BOARD_SECTION_HINT[section]} />,
   ];
   if (run.branch) meta.push(<EvidenceMeta key="branch" label="Branch" value={run.branch} />);
+  if (run.worktree)
+    meta.push(
+      <EvidenceMeta
+        key="worktree"
+        label="Worktree"
+        value={run.worktree}
+        title="Ran in a linked git worktree, not the repo's main checkout"
+      />,
+    );
   if (run.status !== "error") {
     if (files) meta.push(<EvidenceMeta key="files" label="Files" value={files} />);
     if (cost) meta.push(<EvidenceMeta key="cost" label="Cost" value={cost} />);

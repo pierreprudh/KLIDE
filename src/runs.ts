@@ -68,6 +68,8 @@ export type Run = {
   project: string | null;
   cwd: string | null;
   branch: string | null;
+  /** Linked git worktree the run executed in; null for a main checkout. */
+  worktree?: string | null;
   messageCount: number;
   /** Real token usage summed from the session log; absent when the source doesn't record it. */
   inputTokens?: number;
@@ -129,6 +131,7 @@ type AgentRunDto = {
   cwd: string | null;
   project: string | null;
   gitBranch: string | null;
+  worktree?: string | null;
   createdMs?: number;
   updatedMs: number;
   messageCount: number;
@@ -390,6 +393,7 @@ function fromDto(a: AgentRunDto): Run {
     project: a.project ?? null,
     cwd: a.cwd ?? null,
     branch: a.gitBranch ?? null,
+    worktree: a.worktree ?? null,
     messageCount: a.messageCount ?? 0,
     inputTokens: a.inputTokens ?? 0,
     outputTokens: a.outputTokens ?? 0,
