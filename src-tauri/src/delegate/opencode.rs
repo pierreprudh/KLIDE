@@ -400,6 +400,7 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
         model: model_raw.as_deref().and_then(model_label),
         cwd,
         git_branch: branch,
+        worktree: None, // filled centrally in list_agent_runs from cwd
         created_ms: time_created,
         updated_ms: time_updated,
         message_count: message_count as u32,

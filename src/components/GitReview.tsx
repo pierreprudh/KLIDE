@@ -625,6 +625,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
   const [actionMessage, setActionMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [commitLoading, setCommitLoading] = useState(false);
+  const [prComposer, setPrComposer] = useState<{ title: string; body: string } | null>(null);
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT);
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -863,14 +864,24 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
       if (selectedPr?.number === n) setSelectedPr(null);
     } catch { /* message already shown */ }
   }
-  async function createPr() {
+  // Inline composer instead of window.prompt() — Tauri's macOS webview returns
+  // null from prompt(), so the old flow silently did nothing.
+  function createPr() {
     if (!workspaceRoot) return;
-    const title = prompt("Pull request title", commitMessage || "");
-    if (!title || !title.trim()) return;
-    const body = prompt("Description (optional)") ?? "";
+    setPrComposer({ title: commitMessage || "", body: "" });
+  }
+  async function submitPr() {
+    if (!workspaceRoot || !prComposer || !prComposer.title.trim()) return;
     try {
-      const url = await withAction("Pull request created", () => invoke<string>("create_pr", { workspaceRoot, title: title.trim(), body: body.trim() || null }));
+      const url = await withAction("Pull request created", () =>
+        invoke<string>("create_pr", {
+          workspaceRoot,
+          title: prComposer.title.trim(),
+          body: prComposer.body.trim() || null,
+        })
+      );
       void url;
+      setPrComposer(null);
       await refreshPrs();
     } catch { /* message already shown */ }
   }
@@ -1204,6 +1215,65 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           {totalAdditions === 0 ? "clean" : `${totalAdditions} change${totalAdditions === 1 ? "" : "s"}`}
         </span>
       </div>
+      {prComposer && (
+        <div
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setPrComposer(null); }}
+          style={{
+            position: "absolute", inset: 0, zIndex: 20, display: "flex",
+            alignItems: "center", justifyContent: "center",
+            background: "color-mix(in srgb, var(--bg) 60%, transparent)",
+            backdropFilter: "blur(2px)",
+          }}
+        >
+          <div
+            className="glass-chrome"
+            style={{
+              width: 460, maxWidth: "90%", padding: 18, borderRadius: "var(--radius-md)",
+              border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 13, color: "var(--fg-strong)" }}>Open a pull request</div>
+            <input
+              autoFocus
+              value={prComposer.title}
+              placeholder="Pull request title"
+              onChange={(e) => setPrComposer({ ...prComposer, title: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Escape") setPrComposer(null); }}
+              aria-label="Pull request title"
+              className="klide-field"
+              style={{ height: 36, padding: "0 12px", fontSize: 13 }}
+            />
+            <textarea
+              value={prComposer.body}
+              placeholder="Description (optional)"
+              onChange={(e) => setPrComposer({ ...prComposer, body: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Escape") setPrComposer(null); }}
+              aria-label="Pull request description"
+              className="klide-field"
+              rows={5}
+              style={{ padding: "10px 12px", fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <TopAction onClick={() => setPrComposer(null)} title="Cancel">Cancel</TopAction>
+              <button
+                onClick={() => void submitPr()}
+                disabled={!prComposer.title.trim()}
+                title="Create the pull request"
+                style={{
+                  height: 32, padding: "0 14px", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 12,
+                  cursor: prComposer.title.trim() ? "pointer" : "not-allowed",
+                  background: prComposer.title.trim() ? "var(--accent)" : "var(--bg-hover)",
+                  color: prComposer.title.trim() ? "#fff" : "var(--fg-subtle)",
+                  border: "1px solid " + (prComposer.title.trim() ? "color-mix(in srgb, var(--accent) 60%, #000)" : "var(--border)"),
+                }}
+              >
+                Create PR
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

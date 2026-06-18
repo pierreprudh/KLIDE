@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -19,6 +20,7 @@ import {
   upsertCustomProvider,
   type CustomProvider,
 } from "../customProviders";
+import { useFlipIndicator } from "../hooks/useFlipIndicator";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
 import {
@@ -117,6 +119,74 @@ type SubscriptionStatus = {
   commandPath?: string | null;
   loginOptions: string[];
 };
+
+// Account snapshots (mirrors `accounts::Account*` serde camelCase output).
+type AccountIdentity = {
+  authMode?: string;
+  accountId?: string;
+  keyFingerprint?: string;
+  email?: string;
+  detail?: string;
+};
+type AccountRow = {
+  name: string;
+  savedMs: number;
+  identity: AccountIdentity;
+  active: boolean;
+};
+type AccountsView = {
+  provider: string;
+  accounts: AccountRow[];
+  currentUnsaved?: AccountIdentity;
+  present: boolean;
+};
+
+// A short human label for a login: "email · detail" when an email is known,
+// "API key ••fingerprint" for key-based logins, else the detail/auth mode.
+function identityLabel(id: AccountIdentity): string {
+  if (id.email) return id.detail ? `${id.email} · ${id.detail}` : id.email;
+  if (id.keyFingerprint) return `API key ••${id.keyFingerprint.slice(0, 4)}`;
+  return id.detail || id.authMode || "Unrecognised login";
+}
+
+// A line icon for an account, picked from its name so "work" vs "home/personal"
+// read at a glance — no color dot. Falls back to a neutral person. Stroke style
+// matches the rest of the app's icons (24-grid, round caps, currentColor).
+function AccountIcon({ name, size = 15 }: { name: string; size?: number }) {
+  const n = name.toLowerCase();
+  const glyph = /(work|job|office|corp|company|client)/.test(n) ? (
+    <>
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </>
+  ) : /(home|personal|perso|me|self|side)/.test(n) ? (
+    <>
+      <path d="M3 10.5 12 4l9 6.5" />
+      <path d="M5 10v10h14V10" />
+    </>
+  ) : (
+    <>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-3.5 3.6-5.5 8-5.5s8 2 8 5.5" />
+    </>
+  );
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      {glyph}
+    </svg>
+  );
+}
 
 const subscriptionProviders: {
   id: SubscriptionProviderId;
@@ -573,17 +643,21 @@ function GhostButton({
 function LinkButton({
   children,
   onClick,
+  disabled,
 }: {
   children: ReactNode;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className="klide-button klide-button-secondary"
       style={{
         height: 32,
+        ...(disabled ? { opacity: 0.5, cursor: "not-allowed" } : null),
       }}
     >
       {children}
@@ -1629,6 +1703,269 @@ function RegionEditor({
   );
 }
 
+// One provider's account switcher, inline in its connection row: a compact
+// pill showing the active account that opens a menu to switch between saved
+// accounts or snapshot the current login. Self-contained — loads its own view.
+function AccountControl({
+  provider,
+  title,
+  connected,
+}: {
+  provider: string;
+  title: string;
+  connected: boolean;
+}) {
+  const [view, setView] = useState<AccountsView | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null); // name being activated
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null); // inline save name
+  const [err, setErr] = useState<string | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // Anchor rect captured when the menu opens, so the portalled menu can be
+  // fixed-positioned over everything (it would otherwise be clipped by the
+  // settings panel's own overflow / stacking context).
+  const [rect, setRect] = useState<DOMRect | null>(null);
+
+  async function refresh() {
+    try {
+      setView(await invoke<AccountsView>("accounts_list", { provider }));
+    } catch {
+      setView(null);
+    }
+  }
+
+  async function activate(name: string) {
+    setBusy(name);
+    setErr(null);
+    try {
+      await invoke("account_activate", { provider, name });
+      await refresh();
+      setOpen(false);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function save(rawName: string) {
+    const name = rawName.trim();
+    if (!name) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await invoke("account_save_current", { provider, name });
+      setDraft(null);
+      await refresh();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
+
+  const accounts = view?.accounts ?? [];
+  const active = accounts.find((a) => a.active);
+  const unsaved = view?.currentUnsaved;
+  const claudeNote = provider === "claude-code";
+
+  // Trigger label: active account name, else the unsaved login, else a prompt.
+  const triggerLabel = active
+    ? active.name
+    : unsaved
+    ? identityLabel(unsaved)
+    : connected
+    ? "Save login"
+    : "Not connected";
+
+  function openMenu() {
+    if (btnRef.current) setRect(btnRef.current.getBoundingClientRect());
+    setOpen(true);
+  }
+  function closeMenu() {
+    setOpen(false);
+    setDraft(null);
+    setErr(null);
+  }
+
+  const menuItemBase: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    textAlign: "left",
+    padding: "7px 10px",
+    borderRadius: "var(--radius-sm)",
+    border: "none",
+    background: "transparent",
+    color: "var(--fg)",
+  };
+
+  const menuWidth = 280;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => (open ? closeMenu() : openMenu())}
+        disabled={!connected && accounts.length === 0}
+        title={active ? identityLabel(active.identity) : triggerLabel}
+        className="klide-button klide-button-secondary"
+        style={{
+          height: 32,
+          maxWidth: 220,
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          padding: "0 10px",
+          opacity: !connected && accounts.length === 0 ? 0.55 : 1,
+        }}
+      >
+        {active && <AccountIcon name={active.name} size={14} />}
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: 170,
+            fontWeight: active ? 600 : 500,
+          }}
+        >
+          {triggerLabel}
+        </span>
+        <ChevronDown />
+      </button>
+
+      {open && rect &&
+        createPortal(
+          <>
+            <div onMouseDown={closeMenu} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+            <div
+              className="klide-surface"
+              style={{
+                position: "fixed",
+                top: rect.bottom + 6,
+                left: Math.max(8, rect.right - menuWidth),
+                zIndex: 999,
+                width: menuWidth,
+                padding: 6,
+                borderRadius: "var(--radius-md)",
+                boxShadow: "0 12px 36px rgba(0,0,0,0.32)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+              }}
+            >
+            {accounts.length === 0 && !unsaved && (
+              <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--fg-dim)" }}>
+                {connected ? "No saved accounts yet." : `${title} isn't logged in.`}
+              </div>
+            )}
+
+            {accounts.map((acc) => (
+              <button
+                key={acc.name}
+                type="button"
+                onClick={() => !acc.active && void activate(acc.name)}
+                disabled={busy !== null}
+                style={{
+                  ...menuItemBase,
+                  background: acc.active ? "var(--bg-hover)" : "transparent",
+                  cursor: acc.active || busy ? "default" : "pointer",
+                }}
+                onMouseEnter={(e) => { if (!acc.active && !busy) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { if (!acc.active) e.currentTarget.style.background = "transparent"; }}
+              >
+                <span style={{ flexShrink: 0, display: "flex", color: "var(--fg-dim)" }}>
+                  <AccountIcon name={acc.name} size={16} />
+                </span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {acc.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {identityLabel(acc.identity)}
+                  </div>
+                </span>
+                {busy === acc.name ? (
+                  <span style={{ fontSize: 11, color: "var(--fg-dim)", flexShrink: 0 }}>switching…</span>
+                ) : acc.active ? (
+                  <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", flexShrink: 0 }}>active</span>
+                ) : null}
+              </button>
+            ))}
+
+            {(accounts.length > 0 || unsaved) && (
+              <div style={{ height: 1, background: "var(--border)", margin: "4px 6px" }} />
+            )}
+
+            {draft !== null ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 6px" }}>
+                <input
+                  autoFocus
+                  value={draft}
+                  placeholder={unsaved ? "Name this login" : "e.g. work, personal"}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void save(draft);
+                    if (e.key === "Escape") setDraft(null);
+                  }}
+                  aria-label={`New ${title} account name`}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="klide-field"
+                  style={{ flex: 1, minWidth: 0, height: 32, padding: "0 10px", fontSize: 12.5 }}
+                />
+                <LinkButton onClick={() => void save(draft)} disabled={saving || !draft.trim()}>
+                  {saving ? "…" : "Save"}
+                </LinkButton>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setDraft(""); setErr(null); }}
+                disabled={!connected}
+                style={{
+                  ...menuItemBase,
+                  cursor: connected ? "pointer" : "not-allowed",
+                  color: connected ? "var(--fg)" : "var(--fg-subtle)",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                }}
+                onMouseEnter={(e) => { if (connected) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >
+                <span style={{ width: 14, flexShrink: 0, color: "var(--fg-dim)" }}>＋</span>
+                {unsaved ? "Save current login as…" : "Save current login…"}
+              </button>
+            )}
+
+            {claudeNote && draft !== null && (
+              <div style={{ padding: "2px 12px 6px", fontSize: 10.5, color: "var(--fg-subtle)", lineHeight: 1.4 }}>
+                Reads Claude Code's keychain — you may see a one-time macOS prompt.
+              </div>
+            )}
+
+            {err && (
+              <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--danger, #e5484d)", lineHeight: 1.4 }}>
+                {err}
+              </div>
+            )}
+            </div>
+          </>,
+          document.body
+        )}
+    </div>
+  );
+}
+
 export function SettingsPanel({
   theme,
   onThemeChange,
@@ -1679,6 +2016,12 @@ export function SettingsPanel({
   const [activeSection, setActiveSection] = useState<SectionId>(
     isSectionId(initialSection) ? initialSection : "general"
   );
+  // The active-section card + capsule is a single element that FLIP-slides
+  // between rows on switch (same hook as the activity bar / tab underline).
+  const navFlip = useFlipIndicator(activeSection, { size: 31, active: true });
+  // Hover is React-controlled (not imperative .style mutation) so the tint
+  // always clears on re-render — otherwise a hovered row stays highlighted.
+  const [hoveredSection, setHoveredSection] = useState<SectionId | null>(null);
   // Sections that have been opened at least once. Only these mount their
   // subtree (see `Section`); the rest stay unmounted so their per-provider
   // status `invoke`s don't fire on open. The starting section is pre-seeded.
@@ -1820,7 +2163,7 @@ export function SettingsPanel({
         minWidth: 0,
         minHeight: 0,
         display: "grid",
-        gridTemplateColumns: "284px minmax(0, 1fr)",
+        gridTemplateColumns: "236px minmax(0, 1fr)",
         background: "var(--bg)",
       }}
     >
@@ -1852,31 +2195,69 @@ export function SettingsPanel({
           Back to app
         </button>
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <nav
+          ref={navFlip.trackRef}
+          data-flip={navFlip.flip}
+          style={{ position: "relative", display: "flex", flexDirection: "column", gap: 7 }}
+        >
+          {/* The single moving card — slides between rows on switch. The
+              capsule rides along as its child so both animate together. */}
+          <span
+            className="klide-flip-indicator"
+            aria-hidden="true"
+            style={{
+              ...navFlip.style,
+              left: 22,
+              right: 0,
+              height: 31,
+              boxSizing: "border-box",
+              borderRadius: 9,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              boxShadow: "0 1px 2px rgba(28,28,28,0.05)",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                left: -15,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 3,
+                height: 16,
+                borderRadius: 3,
+                background: "var(--fg-strong)",
+              }}
+            />
+          </span>
           {sections.map((section) => {
             const active = activeSection === section.id;
             return (
               <button
                 key={section.id}
+                ref={navFlip.setItemRef(section.id)}
                 type="button"
                 onClick={() => goToSection(section.id)}
-                onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+                onMouseEnter={() => setHoveredSection(section.id)}
+                onMouseLeave={() => setHoveredSection((h) => (h === section.id ? null : h))}
                 style={{
-                  height: 32,
+                  position: "relative",
+                  zIndex: 1,
+                  height: 29,
                   padding: "0 10px",
+                  marginLeft: 22,
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
+                  gap: 9,
                   color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                  background: active ? "var(--bg-hover)" : "transparent",
-                  borderRadius: "var(--radius-sm)",
+                  background: !active && hoveredSection === section.id ? "var(--bg-hover)" : "transparent",
+                  borderRadius: 9,
                   justifyContent: "flex-start",
                   fontSize: 13,
-                  fontWeight: active ? 500 : 400,
-                  border: "none",
+                  fontWeight: active ? 600 : 400,
+                  border: "1px solid transparent",
                   cursor: "pointer",
-                  transition: "background 0.08s ease, color 0.08s ease",
+                  transition: "color 0.15s ease, font-weight 0.15s ease",
                 }}
               >
                 <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", flexShrink: 0 }}>
@@ -2479,88 +2860,114 @@ export function SettingsPanel({
               </SettingBlock>
               <SettingBlock title="Harness">
                 <Panel>
-                  <p style={{ margin: "0 0 10px", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
-                    Toggle which tools each run mode can call. Disabled tools are hidden from the model entirely.
-                  </p>
-                  {(["plan", "goal"] as const).map((mode) => (
-                    <div key={mode} style={{ marginBottom: 14 }}>
-                      <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 5 }}>
-                        {mode.charAt(0).toUpperCase() + mode.slice(1)} mode tools
-                      </label>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        {(["read_file","list_dir","glob","grep","get_git_status","get_git_diff","clean_context","web_search","web_fetch","write_file","create_file","create_skill"] as const).map((tool) => {
-                          const key = `${mode}.${tool}`;
-                          const overrides = harnessSettings?.toolOverrides ?? {};
-                          const enabled = overrides[key] !== false;
-                          return (
-                            <label
-                              key={tool}
-                              style={{
-                                display: "flex", alignItems: "center", gap: 4,
-                                fontSize: 11, color: "var(--fg-subtle)", cursor: "pointer",
-                                padding: "3px 7px", borderRadius: "var(--radius-sm)",
-                                background: enabled ? "var(--bg-hover)" : "transparent",
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={enabled}
-                                onChange={(e) => {
-                                  const next = { ...(harnessSettings?.toolOverrides ?? {}), [key]: e.target.checked ? true : false };
+                  {/* Tools per mode — one toggle chip per tool. Enabled chips
+                      carry the accent tint + check; disabled ones are quiet and
+                      hidden from the model entirely. */}
+                  <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)" }}>
+                    <div className="klide-row-title" style={{ marginBottom: 3 }}>Tools per mode</div>
+                    <p style={{ margin: "0 0 14px", color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.45 }}>
+                      Choose which tools each run mode can call. Disabled tools are hidden from the model entirely.
+                    </p>
+                    {(["plan", "goal"] as const).map((mode, idx) => (
+                      <div key={mode} style={{ marginBottom: idx === 0 ? 16 : 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0, color: "var(--fg-dim)", marginBottom: 8 }}>
+                          {mode.charAt(0).toUpperCase() + mode.slice(1)} mode
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {(["read_file","list_dir","glob","grep","get_git_status","get_git_diff","clean_context","web_search","web_fetch","write_file","create_file","create_skill"] as const).map((tool) => {
+                            const key = `${mode}.${tool}`;
+                            const enabled = (harnessSettings?.toolOverrides ?? {})[key] !== false;
+                            return (
+                              <button
+                                key={tool}
+                                type="button"
+                                aria-pressed={enabled}
+                                onClick={() => {
+                                  const next = { ...(harnessSettings?.toolOverrides ?? {}), [key]: !enabled };
                                   onHarnessSettingsChange?.({ ...harnessSettings, toolOverrides: next });
                                 }}
-                                style={{ accentColor: "var(--accent)" }}
-                              />
-                              {tool}
-                            </label>
-                          );
-                        })}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  height: 27,
+                                  padding: "0 10px",
+                                  borderRadius: 999,
+                                  border: `1px solid ${enabled ? "color-mix(in srgb, var(--accent) 32%, var(--border))" : "var(--border)"}`,
+                                  background: enabled ? "var(--accent-soft)" : "var(--bg-elevated)",
+                                  color: enabled ? "var(--accent)" : "var(--fg-subtle)",
+                                  fontSize: 11.5,
+                                  fontWeight: enabled ? 600 : 500,
+                                  fontFamily: "var(--font-mono)",
+                                  cursor: "pointer",
+                                  transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
+                                }}
+                              >
+                                <span aria-hidden style={{ display: "grid", placeItems: "center", width: 11, height: 11, flexShrink: 0 }}>
+                                  {enabled ? (
+                                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                                      <path d="M2.5 6.2l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  ) : (
+                                    <span style={{ width: 6, height: 6, borderRadius: "50%", border: "1px solid var(--border-strong)" }} />
+                                  )}
+                                </span>
+                                {tool}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                  <p style={{ margin: "10px 0", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1.45 }}>
-                    Override the system prompt per mode. Leave blank to use the built-in defaults.
-                  </p>
-                  <div style={{ margin: "10px 0 14px" }}>
-                    <Row
-                      title="Auto-draft memory on run done"
-                      description="When a Klide agent run finishes cleanly, generate a Project Memory note from the conversation and park it as a draft to review (accept / edit / skip) in the Memory modal before it becomes durable. The Summarize header action still writes directly."
-                      control={
-                        <Toggle
-                          checked={harnessSettings?.autoMemoryOnRunDone !== false}
-                          onChange={(v) => onHarnessSettingsChange?.({ ...harnessSettings, autoMemoryOnRunDone: v ? undefined : false })}
-                          label="Auto-draft memory on run done"
-                        />
-                      }
-                    />
+                    ))}
                   </div>
-                  {(["chat", "plan", "goal"] as const).map((mode) => (
-                    <div key={mode} style={{ marginBottom: 14 }}>
-                      <label style={{ display: "block", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600, marginBottom: 5 }}>
-                        {mode.charAt(0).toUpperCase() + mode.slice(1)} mode prompt
-                      </label>
-                      <textarea
-                        value={(harnessSettings as any)?.[`${mode}Prompt`] ?? ""}
-                        onChange={(e) => {
-                          const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
-                          onHarnessSettingsChange?.(next);
-                        }}
-                        placeholder={`Use default ${mode} prompt`}
-                        rows={3}
-                        className="klide-field"
-                        style={{
-                          width: "100%",
-                          resize: "vertical",
-                          fontSize: 11.5,
-                          fontFamily: "var(--font-mono)",
-                          padding: "7px 9px",
-                          outline: "none",
-                          lineHeight: 1.5,
-                          minHeight: 60,
-                        }}
+
+                  {/* Memory drafting */}
+                  <Row
+                    title="Auto-draft memory on run done"
+                    description="When a Klide agent run finishes cleanly, generate a Project Memory note from the conversation and park it as a draft to review (accept / edit / skip) in the Memory modal before it becomes durable. The Summarize header action still writes directly."
+                    control={
+                      <Toggle
+                        checked={harnessSettings?.autoMemoryOnRunDone !== false}
+                        onChange={(v) => onHarnessSettingsChange?.({ ...harnessSettings, autoMemoryOnRunDone: v ? undefined : false })}
+                        label="Auto-draft memory on run done"
                       />
-                    </div>
-                  ))}
+                    }
+                  />
+
+                  {/* System prompts per mode */}
+                  <div style={{ padding: "16px 18px" }}>
+                    <div className="klide-row-title" style={{ marginBottom: 3 }}>System prompts</div>
+                    <p style={{ margin: "0 0 14px", color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.45 }}>
+                      Override the system prompt per mode. Leave blank to use the built-in defaults.
+                    </p>
+                    {(["chat", "plan", "goal"] as const).map((mode, idx) => (
+                      <div key={mode} style={{ marginBottom: idx === 2 ? 0 : 14 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0, color: "var(--fg-dim)", marginBottom: 7 }}>
+                          {mode.charAt(0).toUpperCase() + mode.slice(1)} mode
+                        </div>
+                        <textarea
+                          value={(harnessSettings as any)?.[`${mode}Prompt`] ?? ""}
+                          onChange={(e) => {
+                            const next = { ...harnessSettings, [`${mode}Prompt`]: e.target.value || undefined };
+                            onHarnessSettingsChange?.(next);
+                          }}
+                          placeholder={`Use default ${mode} prompt`}
+                          rows={3}
+                          className="klide-field"
+                          style={{
+                            width: "100%",
+                            resize: "vertical",
+                            fontSize: 11.5,
+                            fontFamily: "var(--font-mono)",
+                            padding: "7px 9px",
+                            outline: "none",
+                            lineHeight: 1.5,
+                            minHeight: 60,
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Connections">
@@ -2649,26 +3056,22 @@ export function SettingsPanel({
               <CenteredLoader label="Checking subscriptions…" />
             ) : (
               <>
-              <SettingBlock title="Subscription Connections">
+              <SettingBlock title="Connections & Accounts">
                 <Panel>
                   {subscriptionProviders.map((provider) => {
                     const status = subscriptionStatuses[provider.id];
-                    const tone = status?.connected
-                      ? "ok"
-                      : status?.installed
-                      ? "warn"
-                      : "idle";
-                    const label = status?.connected
-                      ? "Connected"
-                      : status?.installed
-                      ? "Installed"
-                      : "Missing";
                     return (
                       <Row
                         key={provider.id}
                         title={provider.title}
                         description={status?.detail || provider.description}
-                        control={<StatusPill tone={tone}>{label}</StatusPill>}
+                        control={
+                          <AccountControl
+                            provider={provider.id}
+                            title={provider.title}
+                            connected={!!status?.connected}
+                          />
+                        }
                         leading={<ProviderLogo id={provider.id as ProviderId} />}
                       />
                     );
