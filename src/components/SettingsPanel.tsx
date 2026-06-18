@@ -19,6 +19,7 @@ import {
   upsertCustomProvider,
   type CustomProvider,
 } from "../customProviders";
+import { useFlipIndicator } from "../hooks/useFlipIndicator";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
 import {
@@ -1679,6 +1680,12 @@ export function SettingsPanel({
   const [activeSection, setActiveSection] = useState<SectionId>(
     isSectionId(initialSection) ? initialSection : "general"
   );
+  // The active-section card + capsule is a single element that FLIP-slides
+  // between rows on switch (same hook as the activity bar / tab underline).
+  const navFlip = useFlipIndicator(activeSection, { size: 31, active: true });
+  // Hover is React-controlled (not imperative .style mutation) so the tint
+  // always clears on re-render — otherwise a hovered row stays highlighted.
+  const [hoveredSection, setHoveredSection] = useState<SectionId | null>(null);
   // Sections that have been opened at least once. Only these mount their
   // subtree (see `Section`); the rest stay unmounted so their per-provider
   // status `invoke`s don't fire on open. The starting section is pre-seeded.
@@ -1820,7 +1827,7 @@ export function SettingsPanel({
         minWidth: 0,
         minHeight: 0,
         display: "grid",
-        gridTemplateColumns: "284px minmax(0, 1fr)",
+        gridTemplateColumns: "236px minmax(0, 1fr)",
         background: "var(--bg)",
       }}
     >
@@ -1852,31 +1859,69 @@ export function SettingsPanel({
           Back to app
         </button>
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <nav
+          ref={navFlip.trackRef}
+          data-flip={navFlip.flip}
+          style={{ position: "relative", display: "flex", flexDirection: "column", gap: 7 }}
+        >
+          {/* The single moving card — slides between rows on switch. The
+              capsule rides along as its child so both animate together. */}
+          <span
+            className="klide-flip-indicator"
+            aria-hidden="true"
+            style={{
+              ...navFlip.style,
+              left: 22,
+              right: 0,
+              height: 31,
+              boxSizing: "border-box",
+              borderRadius: 9,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              boxShadow: "0 1px 2px rgba(28,28,28,0.05)",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                left: -15,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 3,
+                height: 16,
+                borderRadius: 3,
+                background: "var(--fg-strong)",
+              }}
+            />
+          </span>
           {sections.map((section) => {
             const active = activeSection === section.id;
             return (
               <button
                 key={section.id}
+                ref={navFlip.setItemRef(section.id)}
                 type="button"
                 onClick={() => goToSection(section.id)}
-                onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+                onMouseEnter={() => setHoveredSection(section.id)}
+                onMouseLeave={() => setHoveredSection((h) => (h === section.id ? null : h))}
                 style={{
-                  height: 32,
+                  position: "relative",
+                  zIndex: 1,
+                  height: 29,
                   padding: "0 10px",
+                  marginLeft: 22,
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
+                  gap: 9,
                   color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                  background: active ? "var(--bg-hover)" : "transparent",
-                  borderRadius: "var(--radius-sm)",
+                  background: !active && hoveredSection === section.id ? "var(--bg-hover)" : "transparent",
+                  borderRadius: 9,
                   justifyContent: "flex-start",
                   fontSize: 13,
-                  fontWeight: active ? 500 : 400,
-                  border: "none",
+                  fontWeight: active ? 600 : 400,
+                  border: "1px solid transparent",
                   cursor: "pointer",
-                  transition: "background 0.08s ease, color 0.08s ease",
+                  transition: "color 0.15s ease, font-weight 0.15s ease",
                 }}
               >
                 <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", flexShrink: 0 }}>
