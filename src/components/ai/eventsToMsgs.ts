@@ -38,6 +38,23 @@ export function eventsToConversation(
     });
   }
 
+  // A run that ended in failure (e.g. the provider returned a 500) has no
+  // assistant turn to fold, so a resumed panel would otherwise show the user
+  // message and nothing else — reading as an empty or hung run. Surface the
+  // error as a trailing system line so the resumed view explains itself.
+  // `aborted` (a user-initiated Stop) is intentionally silent, matching the
+  // live run path in AiPanel.
+  const runError = events.find(
+    (e): e is Extract<AgentEvent, { type: "run_error" }> =>
+      e.type === "run_error" && e.error.code !== "aborted",
+  );
+  if (runError) {
+    msgs.push({
+      role: "system",
+      content: `Run failed: ${runError.error.message}`,
+    });
+  }
+
   return {
     id: runId,
     title,

@@ -103,7 +103,9 @@ type Props = {
     initialTask: string | null;
   } | null;
   onPendingAiPanelConsumed: () => void;
-  resumeConversation: Conversation | null;
+  // A resumed Klide run targeted at one panel by id — only the matching panel
+  // adopts the conversation, so a resume click never clobbers other panels.
+  resumeTarget: { panelId: string; convo: Conversation } | null;
   onResumeConsumed: () => void;
 
   // Quick view
@@ -172,7 +174,7 @@ export function AnchoredWorkbench(props: Props) {
     onPanelHeightChange,
     pendingAiPanel,
     onPendingAiPanelConsumed,
-    resumeConversation,
+    resumeTarget,
     onResumeConsumed,
     previewPath,
     onClosePreview,
@@ -341,7 +343,7 @@ export function AnchoredWorkbench(props: Props) {
         harnessSettings={harnessSettings}
         onDuplicate={onDuplicateAiPanel}
         onClose={aiPanels.length > 1 ? () => onCloseAiPanel(safeId) : undefined}
-        resumeConversation={resumeConversation}
+        resumeConversation={resumeTarget?.panelId === safeId ? resumeTarget.convo : null}
         onResumeConsumed={onResumeConsumed}
         onMemoryWritten={onMemoryWritten}
         onSkillGenerated={onSkillGenerated}

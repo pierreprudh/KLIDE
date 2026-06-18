@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -150,7 +151,14 @@ function App() {
   const [sidebarSlot2, setSidebarSlot2] = useState<Panel | null>(
     () => localStorage.getItem("klide-sidebar-slot2") as Panel | null
   );
-  const [resumeConversation, setResumeConversation] = useState<Conversation | null>(null);
+  // A resumed Klide run, targeted at one specific panel by id. Without the
+  // panelId every mounted AiPanel would adopt the same conversation (they all
+  // receive this prop in one render), so a resume click would clobber every
+  // open panel instead of landing in one. Mirrors `pendingAiPanel`'s keying.
+  const [resumeTarget, setResumeTarget] = useState<{ panelId: string; convo: Conversation } | null>(null);
+  // Tracks which panel a given run was resumed into (runId → panelId), so
+  // re-resuming the same run focuses its panel instead of opening a duplicate.
+  const resumePanelsRef = useRef<Map<string, string>>(new Map());
   // AI panel spawn queue: when Mission Control asks to open a fresh panel
   // pinned to a delegate provider, we set this and the matching <AiPanel>
   // picks it up on mount, sets its initial provider + resume/task, then
@@ -527,8 +535,12 @@ function App() {
             stopAfterRejection={stopAfterRejection}
             skills={skills}
             harnessSettings={harnessSettings}
-            resumeConversation={resumeConversation}
-            onResumeConsumed={() => setResumeConversation(null)}
+            resumeConversation={
+              resumeTarget?.panelId === (aiPanels[0]?.id ?? "ai-main")
+                ? resumeTarget.convo
+                : null
+            }
+            onResumeConsumed={() => setResumeTarget(null)}
           />
         );
       default:
@@ -621,8 +633,24 @@ function App() {
     try {
       const events = await invoke<AgentEvent[]>("agent_read_run", { runId });
       const convo = eventsToConversation(events, runId, eventsToTitle(events));
-      setResumeConversation(convo);
-      togglePanel("ai");
+      // Open one fresh panel and land the resumed run in it — never broadcast
+      // to existing panels. Resume is triggered from the Mission Control view,
+      // so switch back to the workbench (where AI panels render) and ensure the
+      // AI surface is visible without toggling it off when it already is —
+      // matches the CLI handoff path (`openRunInAiPanel`).
+      setView("workbench");
+      if (!aiVisible) togglePanel("ai");
+      // Don't stack duplicates: if this run is already open in a panel that's
+      // still around, just focus it. Re-clicking Resume on the same run would
+      // otherwise pile up identical panels (each offset by appendAiPanel).
+      const existing = resumePanelsRef.current.get(runId);
+      if (existing && aiPanels.some((p) => p.id === existing)) {
+        focusPanel(existing);
+        return;
+      }
+      const panelId = appendAiPanel();
+      resumePanelsRef.current.set(runId, panelId);
+      setResumeTarget({ panelId, convo });
     } catch (e) {
       setFileNotice(e instanceof Error ? e.message : String(e));
     }
@@ -1216,8 +1244,8 @@ function App() {
                 }}
                 pendingAiPanel={pendingAiPanel}
                 onPendingAiPanelConsumed={() => setPendingAiPanel(null)}
-                resumeConversation={resumeConversation}
-                onResumeConsumed={() => setResumeConversation(null)}
+                resumeTarget={resumeTarget}
+                onResumeConsumed={() => setResumeTarget(null)}
                 previewPath={previewPath}
                 onClosePreview={() => setPreviewPath(null)}
                 onMemoryWritten={(entry) => {
@@ -1453,8 +1481,10 @@ function App() {
                         onClose={
                           aiPanels.length > 1 ? () => closeAiPanel(panel.id) : undefined
                         }
-                        resumeConversation={resumeConversation}
-                        onResumeConsumed={() => setResumeConversation(null)}
+                        resumeConversation={
+                          resumeTarget?.panelId === panel.id ? resumeTarget.convo : null
+                        }
+                        onResumeConsumed={() => setResumeTarget(null)}
                         onMemoryWritten={(entry) => {
                           setMemoryRefreshKey((k) => k + 1);
                           setFileNotice(

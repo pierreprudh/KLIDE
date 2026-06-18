@@ -817,7 +817,6 @@ function AttentionQueueItem({
   onSelect,
   onResumeKlide,
   onOpenInAiPanel,
-  onQuickSend,
 }: {
   run: Run;
   reason: RunAttention;
@@ -827,38 +826,47 @@ function AttentionQueueItem({
   onSelect: () => void;
   onResumeKlide?: (runId: string) => void;
   onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
-  onQuickSend?: (taskId: string) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const subtitle = attentionSubtitle(reason, run.source);
 
+  // The "jump back into this run" action — resume in Klide, or re-open the CLI
+  // session in an AI panel. Shared across the reason kinds whose next step is
+  // "get back in there": failed (retry), awaiting_input (answer it), and idle
+  // (nudge / take over).
+  const resumeAction: React.ReactNode | null =
+    run.source === "klide" && onResumeKlide ? (
+      <ResumeKlide runId={run.id} onResume={onResumeKlide} />
+    ) : (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") &&
+      onOpenInAiPanel ? (
+      <ResumeCli
+        source={run.source}
+        onResume={() =>
+          onOpenInAiPanel({
+            provider: run.source as "claude-code" | "codex" | "opencode",
+            workspaceRoot: run.cwd,
+            resumeSessionId: run.id,
+          })
+        }
+      />
+    ) : null;
+
   // Pick the inline action. The hover-revealed slot mirrors RunRow's pattern
-  // so the row stays quiet until the user reaches for it.
+  // so the row stays quiet until the user reaches for it. Every reason kind now
+  // surfaces its own next step, so the queue is actionable without first
+  // drilling into the detail pane.
   let action: React.ReactNode | null = null;
   if (isTask && (run.status === "queued" || run.status === "error")) {
-    action = onQuickSend ? (
-      <QuickSend taskId={run.id} onSent={onSelect} />
-    ) : null;
-  } else if (reason.kind === "failed") {
-    if (run.source === "klide" && onResumeKlide) {
-      action = <ResumeKlide runId={run.id} onResume={onResumeKlide} />;
-    } else if (
-      (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") &&
-      onOpenInAiPanel
-    ) {
-      action = (
-        <ResumeCli
-          source={run.source}
-          onResume={() =>
-            onOpenInAiPanel({
-              provider: run.source as "claude-code" | "codex" | "opencode",
-              workspaceRoot: run.cwd,
-              resumeSessionId: run.id,
-            })
-          }
-        />
-      );
-    }
+    action = <QuickSend taskId={run.id} onSent={onSelect} />;
+  } else if (
+    reason.kind === "failed" ||
+    reason.kind === "awaiting_input" ||
+    reason.kind === "idle"
+  ) {
+    action = resumeAction;
+  } else if (reason.kind === "awaiting_review") {
+    // The review surface is the detail pane; the action just selects the row.
+    action = <ReviewAction onReview={onSelect} />;
   }
 
   return (
@@ -1138,6 +1146,56 @@ function ResumeCli({
     >
       <ResumeIcon />
     </span>
+  );
+}
+
+// Inline action for an "awaiting review" queue row. The review surface is the
+// run's detail pane, so this just selects the run — but giving it an explicit
+// affordance (rather than relying on a bare row click) keeps the queue reading
+// as a list of actions. Same hover-revealed slot as ResumeKlide / QuickSend.
+function ReviewAction({ onReview }: { onReview: () => void }) {
+  return (
+    <span
+      role="button"
+      aria-label="Review output"
+      title="Review output"
+      onClick={(e) => {
+        e.stopPropagation();
+        onReview();
+      }}
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: "var(--accent)",
+        background: "var(--accent-soft)",
+      }}
+    >
+      <ReviewIcon />
+    </span>
+  );
+}
+
+function ReviewIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
   );
 }
 
