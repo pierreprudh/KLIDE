@@ -51,7 +51,7 @@ export function FloatingPanel({
 
   function beginResize(
     e: ReactMouseEvent<HTMLDivElement>,
-    axis: "x" | "y" | "xy"
+    axis: "x" | "y" | "xy" | "x-left"
   ) {
     e.preventDefault();
     e.stopPropagation();
@@ -60,15 +60,36 @@ export function FloatingPanel({
     const startX = e.clientX;
     const startY = e.clientY;
     const startRect = { ...rect };
+    // The left edge resizes against a fixed right edge — dragging left grows
+    // the panel leftward, dragging right shrinks it, while the right edge
+    // stays put. (The AI panel is pinned to the right, so this is its natural
+    // grab edge.)
+    const rightEdge = startRect.x + startRect.w;
     const previousCursor = document.body.style.cursor;
     const previousSelect = document.body.style.userSelect;
     document.body.style.cursor =
-      axis === "x" ? "col-resize" : axis === "y" ? "row-resize" : "nwse-resize";
+      axis === "x" || axis === "x-left"
+        ? "col-resize"
+        : axis === "y"
+          ? "row-resize"
+          : "nwse-resize";
     document.body.style.userSelect = "none";
 
     function onMoveResize(ev: MouseEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
+
+      if (axis === "x-left") {
+        // Keep the right edge anchored: clamp width ourselves (clampRect
+        // clamps w independently of x, which would let the right edge drift),
+        // then derive x from the fixed right edge.
+        const maxW = Math.min(constraints.maxW, rightEdge);
+        const minW = Math.min(constraints.minW, rightEdge);
+        const w = Math.min(maxW, Math.max(minW, startRect.w - dx));
+        onResize({ x: rightEdge - w, y: startRect.y, w, h: startRect.h });
+        return;
+      }
+
       const next: PanelRect = { x: startRect.x, y: startRect.y, w: startRect.w, h: startRect.h };
       if (axis === "x" || axis === "xy") {
         next.w = startRect.w + dx;
@@ -209,6 +230,34 @@ export function FloatingPanel({
       </div>
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {children}
+      </div>
+      {/* Left edge — resize width against a fixed right edge. Mirrors the
+          right-edge handle: a generous invisible hit zone with a hairline that
+          tints sage on hover. */}
+      <div
+        role="separator"
+        aria-label={`Resize ${panelId} width from left`}
+        onMouseDown={(e) => beginResize(e, "x-left")}
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 8,
+          cursor: "col-resize",
+          zIndex: 41,
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: "0 3px",
+            background: "transparent",
+            transition: "background var(--motion-fast) var(--ease-out)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-soft)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        />
       </div>
       {/* Right edge — resize width. Sits inside the panel so it never
           gets clipped by the workbench / root overflow. */}

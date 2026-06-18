@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, type ComponentProps } from "react";
+import { useRef, type ReactNode, type RefObject, type ComponentProps } from "react";
 import type { ProviderId } from "../agent/types";
 import type { Conversation } from "./ai/types";
 import type { HarnessSettings } from "../App";
@@ -504,42 +504,69 @@ function SideSplitter({
   current: number;
   onChange: (next: number) => void;
 }) {
+  // The column itself is 1px so the layout hairline stays crisp. A 1px-wide
+  // drag target is impossible to hit, so we overlay a wider invisible hit zone
+  // (centered, overflowing both sides) that catches the drag and lights up the
+  // visible line on hover.
+  function beginDrag(e: React.MouseEvent, line: HTMLElement | null) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const start = current;
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    if (line) line.style.background = "var(--accent-soft)";
+    function onMove(ev: MouseEvent) {
+      const dx = ev.clientX - startX;
+      const next = side === "left" ? start + dx : start - dx;
+      onChange(next);
+    }
+    function onUp() {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      if (line) line.style.background = "var(--border)";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  const lineRef = useRef<HTMLDivElement>(null);
+
   return (
     <div
+      ref={lineRef}
       role="separator"
       aria-orientation="vertical"
       aria-label={`Resize ${side} panel`}
-      onMouseDown={(e) => {
-        e.preventDefault();
-        const startX = e.clientX;
-        const start = current;
-        const previousCursor = document.body.style.cursor;
-        const previousSelect = document.body.style.userSelect;
-        document.body.style.cursor = "col-resize";
-        document.body.style.userSelect = "none";
-        function onMove(ev: MouseEvent) {
-          const dx = ev.clientX - startX;
-          const next = side === "left" ? start + dx : start - dx;
-          onChange(next);
-        }
-        function onUp() {
-          document.body.style.cursor = previousCursor;
-          document.body.style.userSelect = previousSelect;
-          window.removeEventListener("mousemove", onMove);
-          window.removeEventListener("mouseup", onUp);
-        }
-        window.addEventListener("mousemove", onMove);
-        window.addEventListener("mouseup", onUp);
-      }}
       style={{
         background: "var(--border)",
-        cursor: "col-resize",
         position: "relative",
         transition: "background var(--motion-fast) var(--ease-out)",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-soft)")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "var(--border)")}
-    />
+    >
+      {/* Invisible grab zone — wider than the 1px line, overflows both sides. */}
+      <div
+        onMouseDown={(e) => beginDrag(e, lineRef.current)}
+        onMouseEnter={() => {
+          if (lineRef.current) lineRef.current.style.background = "var(--accent-soft)";
+        }}
+        onMouseLeave={() => {
+          if (lineRef.current) lineRef.current.style.background = "var(--border)";
+        }}
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          left: -5,
+          right: -5,
+          cursor: "col-resize",
+          zIndex: 5,
+        }}
+      />
+    </div>
   );
 }
 
