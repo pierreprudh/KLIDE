@@ -532,6 +532,7 @@ function App() {
             onAvailableModelsChange={(models) => updatePanelModels(aiPanels[0]?.id ?? "ai-main", models)}
             apiKeyVersion={apiKeyVersion}
             requireDiffReview={requireDiffReview}
+            onRequireDiffReviewChange={setRequireDiffReview}
             stopAfterRejection={stopAfterRejection}
             skills={skills}
             harnessSettings={harnessSettings}
@@ -1220,6 +1221,7 @@ function App() {
                 reloadFilesystemSkills={reloadFilesystemSkills}
                 apiKeyVersion={apiKeyVersion}
                 requireDiffReview={requireDiffReview}
+                onRequireDiffReviewChange={setRequireDiffReview}
                 stopAfterRejection={stopAfterRejection}
                 aiModel={aiModel}
                 panelModels={panelModels}
@@ -1474,6 +1476,7 @@ function App() {
                         onAvailableModelsChange={(models) => updatePanelModels(panel.id, models)}
                         apiKeyVersion={apiKeyVersion}
                         requireDiffReview={requireDiffReview}
+                        onRequireDiffReviewChange={setRequireDiffReview}
                         stopAfterRejection={stopAfterRejection}
                         skills={skills}
                         harnessSettings={harnessSettings}
