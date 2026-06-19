@@ -36,7 +36,15 @@ export type Msg =
        *  `source` picks the layout: "manual" (user ran /compact) → a deliberate
        *  full-width divider row; "agent" (inline/automatic) → a slim tool-style
        *  row that nests in the run's tool flow. */
-      compaction?: { count: number; summary: string; source?: "manual" | "agent" };
+      compaction?: {
+        count: number;
+        summary: string;
+        source?: "manual" | "agent";
+        /** Breakdown shown in the marker: conversation messages + tool calls
+         *  folded. Optional for back-compat with markers written before this. */
+        messages?: number;
+        toolCalls?: number;
+      };
     }
   | { role: "tool"; content: string; toolName: string; toolCallId?: string; tool_call_id?: string };
 

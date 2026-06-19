@@ -480,12 +480,16 @@ export function CompactionRow({
   status = "done",
   error,
   source = "agent",
+  messages,
+  toolCalls,
 }: {
   count?: number;
   summary?: string;
   status?: "running" | "done";
   error?: string | null;
   source?: "manual" | "agent";
+  messages?: number;
+  toolCalls?: number;
 }) {
   const label =
     error != null
@@ -493,12 +497,18 @@ export function CompactionRow({
       : status === "running"
         ? "Compacting"
         : "Compacted";
+  // Done marker reports the folded slice as "N messages + M tool calls"; older
+  // markers without the breakdown fall back to the plain turn count.
+  const doneDetail =
+    messages != null || toolCalls != null
+      ? `${messages ?? 0} message${messages === 1 ? "" : "s"} + ${toolCalls ?? 0} tool call${toolCalls === 1 ? "" : "s"}`
+      : `${count ?? 0} earlier turn${count === 1 ? "" : "s"}`;
   const detail =
     error != null
       ? error
       : status === "running"
         ? "older turns…"
-        : `${count ?? 0} earlier turn${count === 1 ? "" : "s"} → summary`;
+        : doneDetail;
   const tone = error != null ? "var(--danger)" : "var(--fg-subtle)";
   const leading =
     error != null ? (
@@ -511,13 +521,11 @@ export function CompactionRow({
 
   // ---- Manual: full-width divider row -------------------------------------
   if (source === "manual") {
-    // The done marker is intentionally bare — just "Compacted" centered in the
-    // divider. The running/error states still carry their detail.
     const head = (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0, color: tone }}>
         {leading}
         <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500 }}>{label}</span>
-        {status !== "done" && <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>}
+        <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>
       </span>
     );
     if (status === "done" && summary) {
@@ -565,7 +573,7 @@ export function CompactionRow({
 
 export function renderMessageBody(m: Msg, active = false): ReactElement {
   if (m.role === "system" && m.compaction) {
-    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} />;
+    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} messages={m.compaction.messages} toolCalls={m.compaction.toolCalls} />;
   }
 
   if (m.role === "tool") {

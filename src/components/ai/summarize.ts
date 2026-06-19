@@ -9,14 +9,22 @@ import { writeMemory, type MemoryEntry, type MemoryInput } from "../../memory";
 import { writeWorkspaceTextFile } from "../../workspaceFs";
 import type { Msg } from "./types";
 
-// StreamChunk is the wire shape `ai_chat` emits via Channel. We don't
-// import it from anywhere because the harness owns it — keep the
-// dependency local to this file.
+// StreamChunk is the wire shape `ai_chat` emits via Channel: incremental
+// `content`/`thinking` fragments (camelCase from Rust's StreamChunk). The
+// legacy `delta`/`text` aliases are kept only as defensive fallbacks.
 type StreamChunk = {
+  content?: string;
+  thinking?: string;
   delta?: string;
   text?: string;
   done?: boolean;
   error?: string;
+};
+
+// The authoritative reply `ai_chat` resolves with (Rust's AiChatResponse).
+type AiChatResult = {
+  content?: string;
+  thinking?: string;
 };
 
 type SummarizeInput = {
@@ -124,26 +132,23 @@ function parseSummaryResponse(text: string): ParsedSummary {
 }
 
 // Pick out file paths mentioned in the conversation. We look for things
-// that look like `src/foo.ts`, `src/components/AiPanel.tsx`, or absolute
-// paths inside the workspace. Best-effort — the summary still works if
-// we miss a few.
-const PATH_RE = /(?:^|\s|`)(`?)([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8})\1(?=$|\s|`|[),.;:])/g;
+// the files the session actually operated on. Grounded in the assistant's
+// tool calls — the `path`/`file_path` argument of any file tool — NOT scraped
+// from prose. (Scraping content used to pull every filename mentioned in a doc,
+// e.g. a CLAUDE.md repo-layout tree, plus false hits like `llama3.1`.)
+const FILE_TOOL_RE = /(file|patch|edit|write|create|delete|move|rename|mkdir)/i;
 function extractFilePaths(msgs: Msg[]): string[] {
   const seen = new Set<string>();
-  const all = msgs
-    .map((m) => {
-      let text = m.content ?? "";
-      if (m.role === "assistant" && m.toolCalls) {
-        text += "\n" + m.toolCalls.map((tc) => JSON.stringify(tc.args ?? "")).join("\n");
-      }
-      return text;
-    })
-    .join("\n");
-  let m: RegExpExecArray | null;
-  while ((m = PATH_RE.exec(all)) !== null) {
-    const path = m[2];
-    if (/^https?:/.test(path)) continue;
-    seen.add(path);
+  for (const m of msgs) {
+    if (m.role !== "assistant" || !m.toolCalls) continue;
+    for (const tc of m.toolCalls) {
+      if (!FILE_TOOL_RE.test(tc.name ?? "")) continue;
+      const args = tc.args;
+      if (!args || typeof args !== "object") continue;
+      const a = args as Record<string, unknown>;
+      const p = a.path ?? a.file_path ?? a.filename ?? a.file ?? a.target ?? a.dest;
+      if (typeof p === "string" && p.trim()) seen.add(p.trim());
+    }
   }
   return Array.from(seen).slice(0, 24);
 }
@@ -156,9 +161,13 @@ function deriveTitle(msgs: Msg[]): string {
   return trimmed.length > 80 ? trimmed.slice(0, 77) + "…" : trimmed;
 }
 
-// Run a 1-shot ai_chat, return the concatenated response text. The
-// stream is for visibility only — we don't pipe it anywhere. If the
-// model errors out we surface the error to the caller.
+// Run a 1-shot ai_chat and return the reply text. The authoritative source is
+// ai_chat's RETURN value (AiChatResponse.content); the stream is only a
+// fallback. (A prior version read only the stream and looked for `delta`/`text`
+// fields that ai_chat never emits — so every summary came back empty, which is
+// what made compaction silently fall back. Use `.content`.) If the reply has no
+// visible content (e.g. a reasoning model that emitted only thinking), fall
+// back to the streamed buffer, then to thinking.
 async function callModel(
   provider: string,
   model: string,
@@ -166,13 +175,13 @@ async function callModel(
 ): Promise<string> {
   const channel = new Channel<StreamChunk>();
   let buffer = "";
+  let streamError: string | null = null;
   channel.onmessage = (chunk) => {
-    if (chunk.error) throw new Error(chunk.error);
+    if (chunk.error) { streamError = chunk.error; return; }
     if (chunk.done) return;
-    const piece = chunk.delta ?? chunk.text ?? "";
-    buffer += piece;
+    buffer += chunk.content ?? chunk.delta ?? chunk.text ?? "";
   };
-  await invoke<unknown>("ai_chat", {
+  const res = await invoke<AiChatResult>("ai_chat", {
     provider,
     model,
     messages,
@@ -180,7 +189,11 @@ async function callModel(
     workspaceRoot: null,
     onChunk: channel,
   });
-  return buffer;
+  if (streamError) throw new Error(streamError);
+  const authoritative = (res?.content ?? "").trim();
+  if (authoritative) return authoritative;
+  if (buffer.trim()) return buffer;
+  return (res?.thinking ?? "").trim();
 }
 
 const COMPACT_PROMPT = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
@@ -204,14 +217,22 @@ function splitIntoChunks(text: string, maxChars: number): string[] {
 
 // Deterministic summary used when the model returns nothing — so compaction
 // still frees the window instead of hard-failing. Built straight from the
-// messages: the original goal, the message count, and the files touched.
+// messages: the user's actual requests (verbatim, so it's accurate) and the
+// files the tool calls actually changed. No prose scraping.
 function fallbackSummary(older: Msg[]): string {
-  const goal = older.find((m) => m.role === "user")?.content?.trim();
+  const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const requests = older
+    .filter((m) => m.role === "user")
+    .map((m) => m.content?.trim())
+    .filter((s): s is string => !!s);
   const files = extractFilePaths(older);
   const parts: string[] = [];
-  if (goal) parts.push(`Goal: ${goal.length > 200 ? goal.slice(0, 199) + "…" : goal}`);
-  parts.push(`Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"} (auto-summary — the model returned no summary text).`);
-  if (files.length) parts.push(`Files touched: ${files.slice(0, 25).join(", ")}`);
+  if (requests.length) parts.push(`Goal: ${clip(requests[0], 200)}`);
+  if (requests.length > 1) {
+    parts.push(`Also asked: ${requests.slice(1, 6).map((r) => clip(r, 80)).join("; ")}`);
+  }
+  if (files.length) parts.push(`Files changed: ${files.join(", ")}`);
+  parts.push(`(${older.length} earlier message${older.length === 1 ? "" : "s"} folded; summary built locally — the model returned no text.)`);
   return parts.join("\n");
 }
 
