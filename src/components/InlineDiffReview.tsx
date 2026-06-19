@@ -15,6 +15,10 @@ type Props = {
   edit: PendingEdit;
   onApply: () => void;
   onReject: () => void;
+  /** Open the full side-by-side diff in the Monaco editor. When provided, the
+   *  ⤢ action opens there (syntax-highlighted); the inline hunk peek stays
+   *  available by clicking the filename. Without it, ⤢ toggles the inline diff. */
+  onOpenChanges?: () => void;
 };
 
 type Row =
@@ -123,7 +127,7 @@ function BareAction({
  *  ✗ cancel / ✓ validate / ⤢ open-changes on the right (the Image-#4 sketch).
  *  Folded by default; "open changes" expands the description + line-numbered
  *  diff in place. Lives inline under the message that proposed the edit. */
-export function InlineDiffReview({ edit, onApply, onReject }: Props) {
+export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Props) {
   const { rows, added, removed } = useMemo(
     () => buildRows(edit.oldContent, edit.newContent),
     [edit.oldContent, edit.newContent]
@@ -170,10 +174,18 @@ export function InlineDiffReview({ edit, onApply, onReject }: Props) {
             </svg>
           )}
         </span>
-        <span
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          title={`${edit.path} — click to ${expanded ? "hide" : "peek at"} the inline diff`}
           style={{
             flex: 1,
             minWidth: 0,
+            padding: 0,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
             fontFamily: "var(--font-mono)",
             fontSize: 12,
             color: "var(--fg-strong)",
@@ -184,10 +196,9 @@ export function InlineDiffReview({ edit, onApply, onReject }: Props) {
             textAlign: "left",
             letterSpacing: "-0.01em",
           }}
-          title={edit.path}
         >
           {edit.path}
-        </span>
+        </button>
         <span style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 600, display: "flex", gap: 6 }}>
           <span style={{ color: "#1f8a3b" }}>+{added}</span>
           <span style={{ color: "#b8323a" }}>−{removed}</span>
@@ -203,14 +214,18 @@ export function InlineDiffReview({ edit, onApply, onReject }: Props) {
               <path d="M20 6 9 17l-5-5" />
             </svg>
           </BareAction>
-          <BareAction label={expanded ? "Hide changes" : "Open changes"} tone="neutral" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? (
+          <BareAction
+            label={onOpenChanges ? "Open changes in editor" : expanded ? "Hide changes" : "Open changes"}
+            tone="neutral"
+            onClick={() => { if (onOpenChanges) onOpenChanges(); else setExpanded((v) => !v); }}
+          >
+            {onOpenChanges || !expanded ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
               </svg>
             ) : (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
               </svg>
             )}
           </BareAction>

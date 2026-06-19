@@ -124,6 +124,8 @@ type Props = {
   apiKeyVersion?: number;
   requireDiffReview: boolean;
   onRequireDiffReviewChange?: (enabled: boolean) => void;
+  /** Open a proposed/applied edit as a full side-by-side diff in the editor. */
+  onOpenDiff?: (edit: { path: string; oldContent: string; newContent: string; isCreate: boolean }) => void;
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
@@ -284,6 +286,7 @@ export function AiPanel({
   apiKeyVersion = 0,
   requireDiffReview,
   onRequireDiffReviewChange,
+  onOpenDiff,
   stopAfterRejection,
   skills,
   projectContext,
@@ -831,7 +834,16 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   // Prefer the model's real prompt-token count when we have it: it already
   // accounts for the system prompt, tool schemas, and full history, so we only
   // add the unsent draft on top. Without it, estimate every message by length.
-  const messageTokens = msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
+  // Messages above the last compaction marker stay visible for reference but no
+  // longer reach the model (the transcript marker collapses them on replay), so
+  // the gauge counts only from that marker onward — otherwise it would over-count
+  // and the auto-compaction safety net would fire in a loop.
+  let lastCompactionIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "system" && (msgs[i] as Extract<Msg, { role: "system" }>).compaction) { lastCompactionIdx = i; break; }
+  }
+  const tokenCountedMsgs = lastCompactionIdx >= 0 ? msgs.slice(lastCompactionIdx) : msgs;
+  const messageTokens = tokenCountedMsgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
   const draftTokens = estimateTokens(input);
   const skillsTokens = estimateTokens(enabledSkillsPrompt(skills));
   const projectRulesTokens = estimateTokens(projectRules);
@@ -916,12 +928,23 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       // is what actually shrinks the next turn's context.
       await invoke("agent_compact_context", { runId: currentId, summary });
       // Mirror it in the panel so the view + gauge reflect the new state.
+      // Break the folded slice into the two things the marker reports:
+      // conversation messages (user + assistant turns) and tool calls.
+      const compactedMessages = older.filter((m) => m.role === "user" || m.role === "assistant").length;
+      const compactedToolCalls = older.reduce(
+        (n, m) => n + (m.role === "assistant" ? m.toolCalls?.length ?? 0 : 0),
+        0,
+      );
       const summaryMsg: Msg = {
         role: "system",
         content: `Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"}:\n${summary}`,
-        compaction: { count: older.length, summary, source },
+        compaction: { count: older.length, summary, source, messages: compactedMessages, toolCalls: compactedToolCalls },
       };
-      const next: Msg[] = [summaryMsg, ...recent];
+      // Keep the whole conversation in the panel for reference; the marker is
+      // just a divider. The model's context is freed via the transcript marker
+      // (replay collapses everything before it), and the token gauge counts
+      // only from the marker onward — so nothing visible is lost.
+      const next: Msg[] = [...older, summaryMsg, ...recent];
       setMsgs(next);
       msgsRef.current = next;
       // Drop the stale measured usage so the gauge falls back to the (now
@@ -2218,12 +2241,15 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             m.role === "tool" &&
             /^Running /.test(m.content);
           const isStreamingActive = streaming && isLast && m.role === "assistant" && m.content !== "";
+          // Messages above the last compaction marker are kept for reference but
+          // no longer in the model's context — dim them so that's legible.
+          const dimmed = lastCompactionIdx > 0 && i < lastCompactionIdx;
 
           if (m.role === "user") {
             const queued = m.queueState === "queued";
             const running = m.queueState === "running";
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 12px" }}>
+              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
                 <div className={running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined}
                   style={{ maxWidth: "88%", background: running ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))" : queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "13px 13px 4px 13px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1, backgroundSize: running ? "220% 100%" : undefined }}>
                   {m.content}
@@ -2242,7 +2268,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               previousAssistant.toolCalls.length > 1 &&
               previousAssistant.toolCalls.every((tc) => tc.name === previousAssistant.toolCalls?.[0]?.name);
             if (repeatedToolBurst && previousAssistant.toolCalls?.[0]?.name === m.toolName) return null;
-            return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px" }}>{renderMessageBody(m, activeToolRunning)}</div>;
+            return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>{renderMessageBody(m, activeToolRunning)}</div>;
           }
 
           // Compaction marker: a system event, not an assistant utterance —
@@ -2263,7 +2289,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           const prevMsg = msgs[i - 1];
           const showAvatar = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0" }}>
+            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {showAvatar ? (
                 <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
                   <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
@@ -2294,6 +2320,12 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               }}
               onApply={handleDiffApply}
               onReject={handleDiffReject}
+              onOpenChanges={onOpenDiff ? () => onOpenDiff({
+                path: pendingDiff.path,
+                oldContent: pendingDiff.oldContent,
+                newContent: pendingDiff.newContent,
+                isCreate: pendingDiff.isCreate,
+              }) : undefined}
             />
           </div>
         )}
