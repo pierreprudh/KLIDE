@@ -442,89 +442,128 @@ function CompactionGlyph() {
   );
 }
 
-// Context-compaction, rendered in the same slim, mono idiom as a tool call —
-// never a coloured container. Three states:
-//   running → loader + "Compacting older turns…"
-//   error   → danger-tinted glyph + the failure reason
-//   done    → a fold glyph + "Compacted N earlier turns", expandable to the
-//             summary the model wrote, now standing in for those turns.
+// A thin hairline used to fill the gutter of the full-width (manual) layout.
+function Hairline() {
+  return <span aria-hidden style={{ flex: 1, height: 1, background: "var(--border)", minWidth: 12 }} />;
+}
+
+const COMPACT_MONO = { fontFamily: "var(--font-mono)", fontSize: 11.5 } as const;
+
+function compactSummaryCard(summary: string, centered: boolean) {
+  return (
+    <div
+      style={{
+        margin: centered ? "7px 0 2px" : "5px 0 3px 20px",
+        padding: "7px 11px",
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: "var(--fg-subtle)",
+        background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+      }}
+    >
+      {renderMarkdown(summary)}
+    </div>
+  );
+}
+
+// Context-compaction. Two layouts, picked by `source`:
+//   "agent"  → a slim, left-aligned mono row in the tool-call idiom, so an
+//              inline/automatic compaction nests in the run's tool flow.
+//   "manual" → a full-width divider row (hairline · label · hairline), reading
+//              as a deliberate conversation boundary the user asked for.
+// Three states either way: running (loader), error (danger), done (expandable).
 export function CompactionRow({
   count,
   summary,
   status = "done",
   error,
+  source = "agent",
 }: {
   count?: number;
   summary?: string;
   status?: "running" | "done";
   error?: string | null;
+  source?: "manual" | "agent";
 }) {
-  const mono = { fontFamily: "var(--font-mono)", fontSize: 11.5 } as const;
+  const label =
+    error != null
+      ? "Compaction failed"
+      : status === "running"
+        ? "Compacting"
+        : "Compacted";
+  const detail =
+    error != null
+      ? error
+      : status === "running"
+        ? "older turns…"
+        : `${count ?? 0} earlier turn${count === 1 ? "" : "s"} → summary`;
+  const tone = error != null ? "var(--danger)" : "var(--fg-subtle)";
+  const leading =
+    error != null ? (
+      <CompactionGlyph />
+    ) : status === "running" ? (
+      <DotGridLoader size={11} label="Compacting" />
+    ) : (
+      <CompactionGlyph />
+    );
 
-  if (error) {
+  // ---- Manual: full-width divider row -------------------------------------
+  if (source === "manual") {
+    const head = (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0, color: tone }}>
+        {leading}
+        <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500 }}>{label}</span>
+        <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>
+      </span>
+    );
+    if (status === "done" && summary) {
+      return (
+        <details style={{ margin: "12px 0" }}>
+          <summary style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+            <Hairline />
+            {head}
+            <Hairline />
+          </summary>
+          {compactSummaryCard(summary, true)}
+        </details>
+      );
+    }
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: "var(--danger)" }}>
-        <CompactionGlyph />
-        <span style={{ ...mono, fontWeight: 500, flexShrink: 0 }}>Compaction failed</span>
-        <span style={{ ...mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{error}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "12px 0" }}>
+        <Hairline />
+        {head}
+        <Hairline />
       </div>
     );
   }
 
-  if (status === "running") {
+  // ---- Agent: slim left-aligned tool-style row ----------------------------
+  if (status === "done" && summary) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: "var(--fg-dim)" }}>
-        <DotGridLoader size={11} label="Compacting" />
-        <span style={{ ...mono, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>Compacting</span>
-        <span style={{ ...mono, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>older turns…</span>
-      </div>
+      <details style={{ margin: "5px 0" }}>
+        <summary style={{ display: "flex", alignItems: "center", gap: 8, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none", minWidth: 0, color: "var(--fg-subtle)" }}>
+          {leading}
+          <span style={{ ...COMPACT_MONO, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>{label}</span>
+          <span style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
+        </summary>
+        {compactSummaryCard(summary, false)}
+      </details>
     );
   }
-
   return (
-    <details style={{ margin: "5px 0" }}>
-      <summary
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: 0,
-          cursor: "pointer",
-          listStyle: "none",
-          userSelect: "none",
-          minWidth: 0,
-          color: "var(--fg-subtle)",
-        }}
-      >
-        <CompactionGlyph />
-        <span style={{ ...mono, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>Compacted</span>
-        <span style={{ ...mono, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {count ?? 0} earlier turn{count === 1 ? "" : "s"} → summary
-        </span>
-      </summary>
-      {summary && (
-        <div
-          style={{
-            margin: "5px 0 3px 20px",
-            padding: "7px 11px",
-            fontSize: 12,
-            lineHeight: 1.55,
-            color: "var(--fg-subtle)",
-            background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        >
-          {renderMarkdown(summary)}
-        </div>
-      )}
-    </details>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: tone }}>
+      {leading}
+      <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>{label}</span>
+      <span style={{ ...COMPACT_MONO, color: tone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
+    </div>
   );
 }
 
 export function renderMessageBody(m: Msg, active = false): ReactElement {
   if (m.role === "system" && m.compaction) {
-    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} />;
+    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} />;
   }
 
   if (m.role === "tool") {

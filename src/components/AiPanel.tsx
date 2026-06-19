@@ -383,6 +383,9 @@ export function AiPanel({
   // freeing the window while keeping recent turns verbatim.
   const [compacting, setCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
+  // Layout of the in-flight compaction: "manual" (/compact) → full-width row,
+  // "agent" (inline/automatic) → slim tool-style row.
+  const [compactSource, setCompactSource] = useState<"manual" | "agent">("manual");
   const [contextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
@@ -896,16 +899,17 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     msgs.length > COMPACT_KEEP_RECENT + 1;
   const showCompactPrompt = canCompact && contextRatio >= 0.8;
 
-  async function compactConversation() {
+  async function compactConversation(source: "manual" | "agent" = "manual") {
     if (!canCompact) return;
+    setCompactSource(source);
     setCompacting(true);
     setCompactError(null);
     try {
       const older = msgs.slice(0, msgs.length - COMPACT_KEEP_RECENT);
       const recent = msgs.slice(msgs.length - COMPACT_KEEP_RECENT);
       if (older.length === 0) return;
-      const summary = await summarizeForCompaction(provider, model, older);
-      if (!summary) throw new Error("The model returned an empty summary.");
+      const summary = await summarizeForCompaction(provider, model, older, effectiveContextLimit);
+      if (!summary) throw new Error("Could not build a summary to compact with.");
       // Write the marker into the transcript the harness replays from — this
       // is what actually shrinks the next turn's context.
       await invoke("agent_compact_context", { runId: currentId, summary });
@@ -913,7 +917,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const summaryMsg: Msg = {
         role: "system",
         content: `Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"}:\n${summary}`,
-        compaction: { count: older.length, summary },
+        compaction: { count: older.length, summary, source },
       };
       const next: Msg[] = [summaryMsg, ...recent];
       setMsgs(next);
@@ -928,6 +932,25 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       setCompacting(false);
     }
   }
+
+  // Safety net: when the conversation actually outgrows the window (the 0.8
+  // prompt was ignored and we're now at/over 100%), compact automatically so it
+  // can't balloon to multiples of the limit. Fires once per overflow episode —
+  // the ref re-arms only after compaction drops the gauge back under the limit.
+  const autoCompactArmedRef = useRef(true);
+  useEffect(() => {
+    if (streaming || compacting || !canCompact) return;
+    // Measure the committed conversation, not the draft being typed.
+    const committedUsed = contextUsed - draftTokens;
+    const rawRatio = effectiveContextLimit > 0 ? committedUsed / effectiveContextLimit : 0;
+    if (rawRatio < 1) {
+      autoCompactArmedRef.current = true;
+      return;
+    }
+    if (!autoCompactArmedRef.current) return;
+    autoCompactArmedRef.current = false;
+    void compactConversation("agent");
+  }, [streaming, compacting, canCompact, contextUsed, draftTokens, effectiveContextLimit]);
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -2222,8 +2245,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           // Compaction marker: a system event, not an assistant utterance —
           // render it avatar-less and indented to align with tool output.
           if (m.role === "system" && m.compaction) {
+            const manual = m.compaction.source === "manual";
             return (
-              <div key={i} className="ai-msg-in" style={{ margin: "10px 0 10px 32px" }}>
+              <div key={i} className="ai-msg-in" style={{ margin: manual ? "4px 0" : "10px 0 10px 32px" }}>
                 {renderMessageBody(m)}
               </div>
             );
@@ -2251,8 +2275,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           );
         })}
         {(compacting || compactError) && (
-          <div className="ai-msg-in" style={{ margin: "6px 0 8px 32px" }}>
-            <CompactionRow status="running" error={compactError} />
+          <div className="ai-msg-in" style={{ margin: compactSource === "manual" ? "6px 0" : "6px 0 8px 32px" }}>
+            <CompactionRow status="running" error={compactError} source={compactSource} />
           </div>
         )}
         {pendingDiff && (
@@ -2457,15 +2481,16 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           </div>
         )}
         {showCompactPrompt && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 6px", fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              Context {Math.round(contextRatio * 100)}% full
-            </span>
-            <button type="button" onClick={() => void compactConversation()}
-              style={{ flexShrink: 0, padding: "1px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-strong)", background: "transparent", color: "var(--fg-strong)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-              /compact
+          <div style={{ padding: "0 2px 6px" }}>
+            <button type="button" onClick={() => void compactConversation()} title="Summarize older turns to free up context"
+              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid transparent", background: "transparent", color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", fontSize: 11.5, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M3 4h10" /><path d="M5 8h6" /><path d="M6.5 12h3" />
+              </svg>
+              Compact
+              <span style={{ opacity: 0.55 }}>{Math.round(contextRatio * 100)}%</span>
             </button>
           </div>
         )}

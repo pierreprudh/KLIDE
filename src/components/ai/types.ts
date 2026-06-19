@@ -31,9 +31,12 @@ export type Msg =
       role: "system";
       content: string;
       /** Set when this system message is a context-compaction marker, so the
-       *  chat renders it as a slim tool-style card instead of a text blob.
-       *  `content` is kept as a plain-text fallback (serialization, search). */
-      compaction?: { count: number; summary: string };
+       *  chat renders it as a compaction card instead of a text blob.
+       *  `content` is kept as a plain-text fallback (serialization, search).
+       *  `source` picks the layout: "manual" (user ran /compact) → a deliberate
+       *  full-width divider row; "agent" (inline/automatic) → a slim tool-style
+       *  row that nests in the run's tool flow. */
+      compaction?: { count: number; summary: string; source?: "manual" | "agent" };
     }
   | { role: "tool"; content: string; toolName: string; toolCallId?: string; tool_call_id?: string };
 

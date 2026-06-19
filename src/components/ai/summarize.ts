@@ -69,8 +69,12 @@ function serializeConversation(msgs: Msg[]): string {
       body = body ? `${body}\n${toolLines}` : toolLines;
     }
     if (!body.trim()) continue;
-    // Trim long assistant outputs so the summarize prompt stays small.
-    if (role === "Assistant" && body.length > 4000) {
+    // Trim long outputs so the summarize prompt stays small. Tool results
+    // (file dumps, command output) are the bulkiest and least essential for a
+    // summary, so cap them hardest; assistant prose gets a looser cap.
+    if (role.startsWith("Tool") && body.length > 1500) {
+      body = body.slice(0, 1500) + "\n…(truncated)";
+    } else if (role === "Assistant" && body.length > 4000) {
       body = body.slice(0, 4000) + "\n…(truncated)";
     }
     lines.push(`${role}: ${body}`);
@@ -179,23 +183,94 @@ async function callModel(
   return buffer;
 }
 
-// Summarize the older slice of a conversation so it can REPLACE those turns
-// as context while recent turns continue verbatim. Different intent from the
-// memory note above: this output is fed straight back to the model as a system
-// message (via the ContextCompacted transcript marker), so it must preserve
-// the working state, not read like a report. Returns the trimmed summary text.
+const COMPACT_PROMPT = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
+
+Earlier conversation:
+`;
+
+const COMPACT_PARTIAL_PROMPT = `Summarize this PART of an earlier coding conversation into terse notes-to-self: the goal, decisions, files/functions touched, facts established, and unfinished work. No preamble, no addressing the reader. These notes will be merged with notes from the other parts.
+
+Conversation part:
+`;
+
+// Cut text into chunks no larger than maxChars, so each summarize call fits the
+// model's window even when the conversation is many times the window.
+function splitIntoChunks(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return text ? [text] : [];
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += maxChars) chunks.push(text.slice(i, i + maxChars));
+  return chunks;
+}
+
+// Deterministic summary used when the model returns nothing — so compaction
+// still frees the window instead of hard-failing. Built straight from the
+// messages: the original goal, the message count, and the files touched.
+function fallbackSummary(older: Msg[]): string {
+  const goal = older.find((m) => m.role === "user")?.content?.trim();
+  const files = extractFilePaths(older);
+  const parts: string[] = [];
+  if (goal) parts.push(`Goal: ${goal.length > 200 ? goal.slice(0, 199) + "…" : goal}`);
+  parts.push(`Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"} (auto-summary — the model returned no summary text).`);
+  if (files.length) parts.push(`Files touched: ${files.slice(0, 25).join(", ")}`);
+  return parts.join("\n");
+}
+
+// Summarize the older slice of a conversation so it can REPLACE those turns as
+// context while recent turns continue verbatim. The output is fed straight back
+// to the model as a system message (via the ContextCompacted marker), so it
+// must preserve the working state, not read like a report.
+//
+// Crucially, the summarize call must itself fit the model's window — the whole
+// point is that the conversation has OUTGROWN it. So we cap the text fed per
+// call to a fraction of `contextWindow`; an oversized history is summarized in
+// chunks and the chunk-summaries are then combined (map-reduce). Never returns
+// empty: if the model produces nothing, a deterministic fallback stands in.
 export async function summarizeForCompaction(
   provider: string,
   model: string,
-  older: Msg[]
+  older: Msg[],
+  contextWindow?: number
 ): Promise<string> {
-  const convo = serializeConversation(older);
-  const prompt = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
+  // ~4 chars/token; spend ~45% of the window on input, leaving room for the
+  // prompt scaffold and the model's reply. Floor keeps tiny windows workable.
+  const windowTokens = contextWindow && contextWindow > 0 ? contextWindow : 32_000;
+  const perCallChars = Math.max(8_000, Math.floor(windowTokens * 0.45) * 4);
 
-Earlier conversation:
-${convo}`;
-  const text = await callModel(provider, model, [{ role: "user", content: prompt }]);
-  return text.trim();
+  const convo = serializeConversation(older);
+  const chunks = splitIntoChunks(convo, perCallChars);
+  if (chunks.length === 0) return fallbackSummary(older);
+
+  // Fits in one call — summarize directly.
+  if (chunks.length === 1) {
+    const text = (await callModel(provider, model, [{ role: "user", content: COMPACT_PROMPT + chunks[0] }])).trim();
+    return text || fallbackSummary(older);
+  }
+
+  // Too big — map each chunk to partial notes, then reduce to one summary.
+  const partials: string[] = [];
+  for (const chunk of chunks) {
+    const part = (await callModel(provider, model, [{ role: "user", content: COMPACT_PARTIAL_PROMPT + chunk }])).trim();
+    if (part) partials.push(part);
+  }
+  if (partials.length === 0) return fallbackSummary(older);
+
+  let combined = partials.join("\n\n");
+  // The merged notes are usually small; if they still overflow, fold them again.
+  while (combined.length > perCallChars) {
+    const reChunks = splitIntoChunks(combined, perCallChars);
+    const reduced: string[] = [];
+    for (const chunk of reChunks) {
+      const part = (await callModel(provider, model, [{ role: "user", content: COMPACT_PARTIAL_PROMPT + chunk }])).trim();
+      if (part) reduced.push(part);
+    }
+    if (reduced.length === 0) break;
+    const next = reduced.join("\n\n");
+    if (next.length >= combined.length) break; // not shrinking — stop
+    combined = next;
+  }
+
+  const text = (await callModel(provider, model, [{ role: "user", content: COMPACT_PROMPT + combined }])).trim();
+  return text || combined || fallbackSummary(older);
 }
 
 // Generate the structured note WITHOUT persisting it. Returns a
