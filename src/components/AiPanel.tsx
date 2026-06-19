@@ -2648,9 +2648,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   title={requireDiffReview
                     ? "Reviewing every edit. Click to auto-accept (edits apply without a prompt; still checkpointed)."
                     : "Auto-accepting edits — they apply without a prompt (still checkpointed). Click to review each edit."}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 24, width: width < 360 ? 28 : 32, flexShrink: 0, padding: 0, borderRadius: 999, border: "1px solid transparent", background: requireDiffReview ? "transparent" : "color-mix(in srgb, var(--accent) 14%, transparent)", color: requireDiffReview ? "var(--fg-subtle)" : "var(--accent)", cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)" }}
-                  onMouseEnter={(e) => { if (!streaming && requireDiffReview) e.currentTarget.style.color = "var(--fg-strong)"; }}
-                  onMouseLeave={(e) => { if (requireDiffReview) e.currentTarget.style.color = "var(--fg-subtle)"; }}>
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 24, width: 22, flexShrink: 0, padding: 0, border: "none", background: "transparent", color: requireDiffReview ? "var(--fg-dim)" : "var(--accent)", cursor: streaming ? "default" : "pointer", transition: "color var(--motion-fast) var(--ease-out)" }}
+                  onMouseEnter={(e) => { if (!streaming && requireDiffReview) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                  onMouseLeave={(e) => { if (requireDiffReview) e.currentTarget.style.color = "var(--fg-dim)"; }}>
                   {requireDiffReview ? (
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
                   ) : (
