@@ -9,7 +9,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { DiffModal } from "./DiffModal";
+import { InlineDiffReview } from "./InlineDiffReview";
+import { InlineCommandReview } from "./InlineCommandReview";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   estimateProjectContextTokens,
@@ -2223,6 +2224,21 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           );
         })}
+        {pendingDiff && (
+          <div style={{ margin: "2px 0 4px 32px" }}>
+            <InlineDiffReview
+              edit={{
+                path: pendingDiff.path,
+                oldContent: pendingDiff.oldContent,
+                newContent: pendingDiff.newContent,
+                isCreate: pendingDiff.isCreate,
+                reason: pendingDiff.reason,
+              }}
+              onApply={handleDiffApply}
+              onReject={handleDiffReject}
+            />
+          </div>
+        )}
           </>
         )}
         </div>
@@ -2305,97 +2321,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       {!providerDelegatesWork && (
       <div style={{ padding: "0 10px 10px" }}>
         {pendingPermission && (
-          <div
-            className="ai-qa-card"
-            style={{
-              marginBottom: 8,
-              padding: "10px 12px",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid color-mix(in srgb, var(--accent) 30%, var(--border))",
-              background: "color-mix(in srgb, var(--accent-soft) 35%, var(--bg-elevated))",
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ color: "var(--accent)" }}>
-                <polyline points="4 17 10 11 4 5" />
-                <line x1="12" y1="19" x2="20" y2="19" />
-              </svg>
-              Run command?
-            </div>
-            <div
-              style={{
-                color: "var(--fg-strong)",
-                fontSize: 12.5,
-                fontFamily: "var(--font-mono)",
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                padding: "8px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border-strong)",
-                background: "var(--bg)",
-              }}
-            >
-              {pendingPermission.command}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
-              <button
-                type="button"
-                onClick={rejectCommand}
-                style={{
-                  height: 26,
-                  padding: "0 10px",
-                  fontSize: 11.5,
-                  fontWeight: 500,
-                  color: "var(--fg-subtle)",
-                  background: "transparent",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                Reject
-              </button>
-              <button
-                type="button"
-                onClick={() => approveCommand("run")}
-                title="Approve this exact command for the rest of this run without re-asking"
-                style={{
-                  height: 26,
-                  padding: "0 10px",
-                  fontSize: 11.5,
-                  fontWeight: 500,
-                  color: "var(--fg-subtle)",
-                  background: "transparent",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                For this run
-              </button>
-              <button
-                type="button"
-                onClick={() => approveCommand("once")}
-                style={{
-                  height: 26,
-                  padding: "0 12px",
-                  fontSize: 11.5,
-                  fontWeight: 600,
-                  color: "var(--accent-fg, #fff)",
-                  background: "var(--accent)",
-                  border: "1px solid var(--accent)",
-                  borderRadius: "var(--radius-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                Approve &amp; run
-              </button>
-            </div>
-          </div>
+          <InlineCommandReview
+            command={pendingPermission.command}
+            onReject={rejectCommand}
+            onApproveOnce={() => approveCommand("once")}
+          />
         )}
         {pendingQuestion && (
           <div
@@ -2798,19 +2728,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       </div>
       )}
     </aside>
-    {pendingDiff && (
-      <DiffModal
-        edit={{
-          path: pendingDiff.path,
-          oldContent: pendingDiff.oldContent,
-          newContent: pendingDiff.newContent,
-          isCreate: pendingDiff.isCreate,
-          reason: pendingDiff.reason,
-        }}
-        onApply={handleDiffApply}
-        onReject={handleDiffReject}
-      />
-    )}
     </>
   );
 }

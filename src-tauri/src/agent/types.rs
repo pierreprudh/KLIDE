@@ -128,6 +128,39 @@ pub struct DiffDecisionRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentValidationCheckSummary {
+    pub id: String,
+    pub label: String,
+    pub status: String,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentValidationSummary {
+    pub status: String,
+    #[serde(default)]
+    pub checks: Vec<AgentValidationCheckSummary>,
+    #[serde(default)]
+    pub files_changed: u32,
+    #[serde(default)]
+    pub commands_run: u32,
+    #[serde(default)]
+    pub commands_failed: u32,
+    #[serde(default)]
+    pub diff_reviews: u32,
+    #[serde(default)]
+    pub permissions_approved: u32,
+    #[serde(default)]
+    pub permissions_denied: u32,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentRunSummary {
     pub id: String,
     pub path: String,
@@ -164,6 +197,8 @@ pub struct AgentRunSummary {
     /// by `write_summary` when absent. `None` before any assistant turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<AgentValidationSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }

@@ -24,6 +24,12 @@ _Avoid_: job, session, execution
 The Rust loop that drives a Klide-native run: provider streaming, tool dispatch, transcript writes, cancellation. There is exactly one; UI surfaces observe it, they don't reimplement it.
 _Avoid_: agent loop, runner, executor
 
+**Harness contract**:
+The written interface of the Harness: modes, tool capabilities, permission
+rules, diff review, dynamic tools, transcript evidence, and anti-slop
+expectations. `HARNESS_CONTRACT.md` is the source of truth for this contract.
+_Avoid_: implementation notes, rough docs
+
 **Mode**:
 The capability tier of a run — `chat` (no tools), `plan` (read-only tools), `goal` (full tools). Decided when the run starts.
 _Avoid_: agent type, permission level
@@ -31,6 +37,24 @@ _Avoid_: agent type, permission level
 **Tool**:
 A workspace-rooted capability the model can call during a run (read_file, grep, write_file…). Defined by a schema and an execution, which belong together.
 _Avoid_: function, action
+
+**Tool capability**:
+The trust effect of a Tool — read workspace, write workspace, run command,
+pause for user, or future network access. Modes permit capabilities; individual
+Tool names do not bypass that policy.
+_Avoid_: tool category, permission flag
+
+**Permission engine**:
+The Harness decision path that classifies a Tool capability against the Mode,
+emits a permission request when needed, remembers per-run approvals/rejections,
+and only then executes command-capability Tools.
+_Avoid_: confirmation modal, approval UI
+
+**Validation contract**:
+The evidence snapshot derived from the Transcript that says whether a Run's
+changes were diff-reviewed and command-validated. It is a guardrail against AI
+slop, not a proof that the implementation is correct.
+_Avoid_: test result, quality score, correctness
 
 **Agent event**:
 A typed event a run emits (token, tool call, status change). The only way any surface learns what a run is doing.

@@ -33,6 +33,8 @@ import {
   fetchRunMessages,
   formatCost,
   formatFilesTouched,
+  formatValidationStatus,
+  formatValidationTitle,
   runAttentionReason,
   runBoardReason,
   runNeedsAttention,
@@ -1337,6 +1339,7 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
   const files = formatFilesTouched(run.filesTouched);
   const cost = formatCost(run.costUsd);
   const tokens = runTokenSummary(run);
+  const validation = formatValidationStatus(run.validation);
   const meta: React.ReactNode[] = [
     <EvidenceMeta key="section" label="Board" value={BOARD_SECTION_LABEL[section]} title={BOARD_SECTION_HINT[section]} />,
   ];
@@ -1348,6 +1351,15 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
         label="Worktree"
         value={run.worktree}
         title="Ran in a linked git worktree, not the repo's main checkout"
+      />,
+    );
+  if (validation)
+    meta.push(
+      <EvidenceMeta
+        key="validation"
+        label="Validation"
+        value={validation}
+        title={formatValidationTitle(run.validation)}
       />,
     );
   if (run.status !== "error") {
