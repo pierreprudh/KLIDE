@@ -26,6 +26,7 @@ type StartRunRequest = {
   maxParallelTools?: number;
   maxTurns?: number;
   commandTimeoutSecs?: number;
+  requireDiffReview?: boolean;
   parentId?: string;
 };
 
@@ -73,6 +74,7 @@ export async function startAgentRun(
       maxParallelTools: input.maxParallelTools,
       maxTurns: input.maxTurns,
       commandTimeoutSecs: input.commandTimeoutSecs,
+      requireDiffReview: input.requireDiffReview,
       parentId: input.parentId,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,

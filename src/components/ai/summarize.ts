@@ -9,14 +9,22 @@ import { writeMemory, type MemoryEntry, type MemoryInput } from "../../memory";
 import { writeWorkspaceTextFile } from "../../workspaceFs";
 import type { Msg } from "./types";
 
-// StreamChunk is the wire shape `ai_chat` emits via Channel. We don't
-// import it from anywhere because the harness owns it — keep the
-// dependency local to this file.
+// StreamChunk is the wire shape `ai_chat` emits via Channel: incremental
+// `content`/`thinking` fragments (camelCase from Rust's StreamChunk). The
+// legacy `delta`/`text` aliases are kept only as defensive fallbacks.
 type StreamChunk = {
+  content?: string;
+  thinking?: string;
   delta?: string;
   text?: string;
   done?: boolean;
   error?: string;
+};
+
+// The authoritative reply `ai_chat` resolves with (Rust's AiChatResponse).
+type AiChatResult = {
+  content?: string;
+  thinking?: string;
 };
 
 type SummarizeInput = {
@@ -69,8 +77,12 @@ function serializeConversation(msgs: Msg[]): string {
       body = body ? `${body}\n${toolLines}` : toolLines;
     }
     if (!body.trim()) continue;
-    // Trim long assistant outputs so the summarize prompt stays small.
-    if (role === "Assistant" && body.length > 4000) {
+    // Trim long outputs so the summarize prompt stays small. Tool results
+    // (file dumps, command output) are the bulkiest and least essential for a
+    // summary, so cap them hardest; assistant prose gets a looser cap.
+    if (role.startsWith("Tool") && body.length > 1500) {
+      body = body.slice(0, 1500) + "\n…(truncated)";
+    } else if (role === "Assistant" && body.length > 4000) {
       body = body.slice(0, 4000) + "\n…(truncated)";
     }
     lines.push(`${role}: ${body}`);
@@ -120,26 +132,23 @@ function parseSummaryResponse(text: string): ParsedSummary {
 }
 
 // Pick out file paths mentioned in the conversation. We look for things
-// that look like `src/foo.ts`, `src/components/AiPanel.tsx`, or absolute
-// paths inside the workspace. Best-effort — the summary still works if
-// we miss a few.
-const PATH_RE = /(?:^|\s|`)(`?)([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8})\1(?=$|\s|`|[),.;:])/g;
+// the files the session actually operated on. Grounded in the assistant's
+// tool calls — the `path`/`file_path` argument of any file tool — NOT scraped
+// from prose. (Scraping content used to pull every filename mentioned in a doc,
+// e.g. a CLAUDE.md repo-layout tree, plus false hits like `llama3.1`.)
+const FILE_TOOL_RE = /(file|patch|edit|write|create|delete|move|rename|mkdir)/i;
 function extractFilePaths(msgs: Msg[]): string[] {
   const seen = new Set<string>();
-  const all = msgs
-    .map((m) => {
-      let text = m.content ?? "";
-      if (m.role === "assistant" && m.toolCalls) {
-        text += "\n" + m.toolCalls.map((tc) => JSON.stringify(tc.args ?? "")).join("\n");
-      }
-      return text;
-    })
-    .join("\n");
-  let m: RegExpExecArray | null;
-  while ((m = PATH_RE.exec(all)) !== null) {
-    const path = m[2];
-    if (/^https?:/.test(path)) continue;
-    seen.add(path);
+  for (const m of msgs) {
+    if (m.role !== "assistant" || !m.toolCalls) continue;
+    for (const tc of m.toolCalls) {
+      if (!FILE_TOOL_RE.test(tc.name ?? "")) continue;
+      const args = tc.args;
+      if (!args || typeof args !== "object") continue;
+      const a = args as Record<string, unknown>;
+      const p = a.path ?? a.file_path ?? a.filename ?? a.file ?? a.target ?? a.dest;
+      if (typeof p === "string" && p.trim()) seen.add(p.trim());
+    }
   }
   return Array.from(seen).slice(0, 24);
 }
@@ -152,9 +161,13 @@ function deriveTitle(msgs: Msg[]): string {
   return trimmed.length > 80 ? trimmed.slice(0, 77) + "…" : trimmed;
 }
 
-// Run a 1-shot ai_chat, return the concatenated response text. The
-// stream is for visibility only — we don't pipe it anywhere. If the
-// model errors out we surface the error to the caller.
+// Run a 1-shot ai_chat and return the reply text. The authoritative source is
+// ai_chat's RETURN value (AiChatResponse.content); the stream is only a
+// fallback. (A prior version read only the stream and looked for `delta`/`text`
+// fields that ai_chat never emits — so every summary came back empty, which is
+// what made compaction silently fall back. Use `.content`.) If the reply has no
+// visible content (e.g. a reasoning model that emitted only thinking), fall
+// back to the streamed buffer, then to thinking.
 async function callModel(
   provider: string,
   model: string,
@@ -162,13 +175,13 @@ async function callModel(
 ): Promise<string> {
   const channel = new Channel<StreamChunk>();
   let buffer = "";
+  let streamError: string | null = null;
   channel.onmessage = (chunk) => {
-    if (chunk.error) throw new Error(chunk.error);
+    if (chunk.error) { streamError = chunk.error; return; }
     if (chunk.done) return;
-    const piece = chunk.delta ?? chunk.text ?? "";
-    buffer += piece;
+    buffer += chunk.content ?? chunk.delta ?? chunk.text ?? "";
   };
-  await invoke<unknown>("ai_chat", {
+  const res = await invoke<AiChatResult>("ai_chat", {
     provider,
     model,
     messages,
@@ -176,26 +189,109 @@ async function callModel(
     workspaceRoot: null,
     onChunk: channel,
   });
-  return buffer;
+  if (streamError) throw new Error(streamError);
+  const authoritative = (res?.content ?? "").trim();
+  if (authoritative) return authoritative;
+  if (buffer.trim()) return buffer;
+  return (res?.thinking ?? "").trim();
 }
 
-// Summarize the older slice of a conversation so it can REPLACE those turns
-// as context while recent turns continue verbatim. Different intent from the
-// memory note above: this output is fed straight back to the model as a system
-// message (via the ContextCompacted transcript marker), so it must preserve
-// the working state, not read like a report. Returns the trimmed summary text.
+const COMPACT_PROMPT = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
+
+Earlier conversation:
+`;
+
+const COMPACT_PARTIAL_PROMPT = `Summarize this PART of an earlier coding conversation into terse notes-to-self: the goal, decisions, files/functions touched, facts established, and unfinished work. No preamble, no addressing the reader. These notes will be merged with notes from the other parts.
+
+Conversation part:
+`;
+
+// Cut text into chunks no larger than maxChars, so each summarize call fits the
+// model's window even when the conversation is many times the window.
+function splitIntoChunks(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return text ? [text] : [];
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += maxChars) chunks.push(text.slice(i, i + maxChars));
+  return chunks;
+}
+
+// Deterministic summary used when the model returns nothing — so compaction
+// still frees the window instead of hard-failing. Built straight from the
+// messages: the user's actual requests (verbatim, so it's accurate) and the
+// files the tool calls actually changed. No prose scraping.
+function fallbackSummary(older: Msg[]): string {
+  const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const requests = older
+    .filter((m) => m.role === "user")
+    .map((m) => m.content?.trim())
+    .filter((s): s is string => !!s);
+  const files = extractFilePaths(older);
+  const parts: string[] = [];
+  if (requests.length) parts.push(`Goal: ${clip(requests[0], 200)}`);
+  if (requests.length > 1) {
+    parts.push(`Also asked: ${requests.slice(1, 6).map((r) => clip(r, 80)).join("; ")}`);
+  }
+  if (files.length) parts.push(`Files changed: ${files.join(", ")}`);
+  parts.push(`(${older.length} earlier message${older.length === 1 ? "" : "s"} folded; summary built locally — the model returned no text.)`);
+  return parts.join("\n");
+}
+
+// Summarize the older slice of a conversation so it can REPLACE those turns as
+// context while recent turns continue verbatim. The output is fed straight back
+// to the model as a system message (via the ContextCompacted marker), so it
+// must preserve the working state, not read like a report.
+//
+// Crucially, the summarize call must itself fit the model's window — the whole
+// point is that the conversation has OUTGROWN it. So we cap the text fed per
+// call to a fraction of `contextWindow`; an oversized history is summarized in
+// chunks and the chunk-summaries are then combined (map-reduce). Never returns
+// empty: if the model produces nothing, a deterministic fallback stands in.
 export async function summarizeForCompaction(
   provider: string,
   model: string,
-  older: Msg[]
+  older: Msg[],
+  contextWindow?: number
 ): Promise<string> {
-  const convo = serializeConversation(older);
-  const prompt = `You are compacting the earlier part of an ongoing coding conversation. Your summary will REPLACE those earlier turns as the assistant's memory, while a few of the most recent turns continue verbatim after it. Preserve everything needed to keep working: the user's goal, decisions made, files/functions touched, facts the assistant established, and any unfinished work. Be concise (a tight paragraph or a few bullets). Do not invent anything, and do not address the user — write it as notes-to-self.
+  // ~4 chars/token; spend ~45% of the window on input, leaving room for the
+  // prompt scaffold and the model's reply. Floor keeps tiny windows workable.
+  const windowTokens = contextWindow && contextWindow > 0 ? contextWindow : 32_000;
+  const perCallChars = Math.max(8_000, Math.floor(windowTokens * 0.45) * 4);
 
-Earlier conversation:
-${convo}`;
-  const text = await callModel(provider, model, [{ role: "user", content: prompt }]);
-  return text.trim();
+  const convo = serializeConversation(older);
+  const chunks = splitIntoChunks(convo, perCallChars);
+  if (chunks.length === 0) return fallbackSummary(older);
+
+  // Fits in one call — summarize directly.
+  if (chunks.length === 1) {
+    const text = (await callModel(provider, model, [{ role: "user", content: COMPACT_PROMPT + chunks[0] }])).trim();
+    return text || fallbackSummary(older);
+  }
+
+  // Too big — map each chunk to partial notes, then reduce to one summary.
+  const partials: string[] = [];
+  for (const chunk of chunks) {
+    const part = (await callModel(provider, model, [{ role: "user", content: COMPACT_PARTIAL_PROMPT + chunk }])).trim();
+    if (part) partials.push(part);
+  }
+  if (partials.length === 0) return fallbackSummary(older);
+
+  let combined = partials.join("\n\n");
+  // The merged notes are usually small; if they still overflow, fold them again.
+  while (combined.length > perCallChars) {
+    const reChunks = splitIntoChunks(combined, perCallChars);
+    const reduced: string[] = [];
+    for (const chunk of reChunks) {
+      const part = (await callModel(provider, model, [{ role: "user", content: COMPACT_PARTIAL_PROMPT + chunk }])).trim();
+      if (part) reduced.push(part);
+    }
+    if (reduced.length === 0) break;
+    const next = reduced.join("\n\n");
+    if (next.length >= combined.length) break; // not shrinking — stop
+    combined = next;
+  }
+
+  const text = (await callModel(provider, model, [{ role: "user", content: COMPACT_PROMPT + combined }])).trim();
+  return text || combined || fallbackSummary(older);
 }
 
 // Generate the structured note WITHOUT persisting it. Returns a

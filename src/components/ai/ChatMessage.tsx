@@ -428,7 +428,154 @@ function MessageMeta({ meta }: { meta: { ms?: number; tokens?: number; promptTok
   );
 }
 
+// Fold glyph that marks a compaction — three collapsing rules, echoing the
+// "many turns → fewer" idea. Shared by every compaction state.
+function CompactionGlyph() {
+  return (
+    <span aria-hidden style={{ display: "grid", placeItems: "center", color: "currentColor", flexShrink: 0 }}>
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 4h10" />
+        <path d="M5 8h6" />
+        <path d="M6.5 12h3" />
+      </svg>
+    </span>
+  );
+}
+
+// A thin hairline used to fill the gutter of the full-width (manual) layout.
+function Hairline() {
+  return <span aria-hidden style={{ flex: 1, height: 1, background: "var(--border)", minWidth: 12 }} />;
+}
+
+const COMPACT_MONO = { fontFamily: "var(--font-mono)", fontSize: 11.5 } as const;
+
+function compactSummaryCard(summary: string, centered: boolean) {
+  return (
+    <div
+      style={{
+        margin: centered ? "7px 0 2px" : "5px 0 3px 20px",
+        padding: "7px 11px",
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: "var(--fg-subtle)",
+        background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+      }}
+    >
+      {renderMarkdown(summary)}
+    </div>
+  );
+}
+
+// Context-compaction. Two layouts, picked by `source`:
+//   "agent"  → a slim, left-aligned mono row in the tool-call idiom, so an
+//              inline/automatic compaction nests in the run's tool flow.
+//   "manual" → a full-width divider row (hairline · label · hairline), reading
+//              as a deliberate conversation boundary the user asked for.
+// Three states either way: running (loader), error (danger), done (expandable).
+export function CompactionRow({
+  count,
+  summary,
+  status = "done",
+  error,
+  source = "agent",
+  messages,
+  toolCalls,
+}: {
+  count?: number;
+  summary?: string;
+  status?: "running" | "done";
+  error?: string | null;
+  source?: "manual" | "agent";
+  messages?: number;
+  toolCalls?: number;
+}) {
+  const label =
+    error != null
+      ? "Compaction failed"
+      : status === "running"
+        ? "Compacting"
+        : "Compacted";
+  // Done marker reports the folded slice as "N messages + M tool calls"; older
+  // markers without the breakdown fall back to the plain turn count.
+  const doneDetail =
+    messages != null || toolCalls != null
+      ? `${messages ?? 0} message${messages === 1 ? "" : "s"} + ${toolCalls ?? 0} tool call${toolCalls === 1 ? "" : "s"}`
+      : `${count ?? 0} earlier turn${count === 1 ? "" : "s"}`;
+  const detail =
+    error != null
+      ? error
+      : status === "running"
+        ? "older turns…"
+        : doneDetail;
+  const tone = error != null ? "var(--danger)" : "var(--fg-subtle)";
+  const leading =
+    error != null ? (
+      <CompactionGlyph />
+    ) : status === "running" ? (
+      <DotGridLoader size={11} label="Compacting" />
+    ) : (
+      <CompactionGlyph />
+    );
+
+  // ---- Manual: full-width divider row -------------------------------------
+  if (source === "manual") {
+    const head = (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0, color: tone }}>
+        {leading}
+        <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500 }}>{label}</span>
+        <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>
+      </span>
+    );
+    if (status === "done" && summary) {
+      return (
+        <details style={{ margin: "12px 0" }}>
+          <summary style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+            <Hairline />
+            {head}
+            <Hairline />
+          </summary>
+          {compactSummaryCard(summary, true)}
+        </details>
+      );
+    }
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "12px 0" }}>
+        <Hairline />
+        {head}
+        <Hairline />
+      </div>
+    );
+  }
+
+  // ---- Agent: slim left-aligned tool-style row ----------------------------
+  if (status === "done" && summary) {
+    return (
+      <details style={{ margin: "5px 0" }}>
+        <summary style={{ display: "flex", alignItems: "center", gap: 8, padding: 0, cursor: "pointer", listStyle: "none", userSelect: "none", minWidth: 0, color: "var(--fg-subtle)" }}>
+          {leading}
+          <span style={{ ...COMPACT_MONO, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>{label}</span>
+          <span style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
+        </summary>
+        {compactSummaryCard(summary, false)}
+      </details>
+    );
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: tone }}>
+      {leading}
+      <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>{label}</span>
+      <span style={{ ...COMPACT_MONO, color: tone, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
+    </div>
+  );
+}
+
 export function renderMessageBody(m: Msg, active = false): ReactElement {
+  if (m.role === "system" && m.compaction) {
+    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} messages={m.compaction.messages} toolCalls={m.compaction.toolCalls} />;
+  }
+
   if (m.role === "tool") {
     return <ToolResultRow content={m.content} active={active} toolName={m.toolName} />;
   }

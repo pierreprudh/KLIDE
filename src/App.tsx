@@ -27,6 +27,7 @@ import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { MemoryModal } from "./components/MemoryModal";
 import { FileViewerPanel } from "./components/FileViewerPanel";
+import { DiffViewerPanel } from "./components/DiffViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ProfileModal } from "./components/ProfileModal";
@@ -148,6 +149,7 @@ function App() {
     () => localStorage.getItem("klide-skills-visible") === "true"
   );
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [diffView, setDiffView] = useState<{ path: string; oldContent: string; newContent: string; isCreate: boolean } | null>(null);
   const [sidebarSlot2, setSidebarSlot2] = useState<Panel | null>(
     () => localStorage.getItem("klide-sidebar-slot2") as Panel | null
   );
@@ -532,6 +534,8 @@ function App() {
             onAvailableModelsChange={(models) => updatePanelModels(aiPanels[0]?.id ?? "ai-main", models)}
             apiKeyVersion={apiKeyVersion}
             requireDiffReview={requireDiffReview}
+            onRequireDiffReviewChange={setRequireDiffReview}
+            onOpenDiff={setDiffView}
             stopAfterRejection={stopAfterRejection}
             skills={skills}
             harnessSettings={harnessSettings}
@@ -1220,6 +1224,8 @@ function App() {
                 reloadFilesystemSkills={reloadFilesystemSkills}
                 apiKeyVersion={apiKeyVersion}
                 requireDiffReview={requireDiffReview}
+                onRequireDiffReviewChange={setRequireDiffReview}
+                onOpenDiff={setDiffView}
                 stopAfterRejection={stopAfterRejection}
                 aiModel={aiModel}
                 panelModels={panelModels}
@@ -1403,6 +1409,36 @@ function App() {
                     />
                   </div>
                 )}
+                {diffView && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      top: 8,
+                      width: "min(900px, calc(100% - 16px))",
+                      height: "calc(100% - 16px)",
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--panel-border)",
+                      borderRadius: "var(--radius-md)",
+                      boxShadow: "var(--panel-shadow)",
+                      zIndex: 21,
+                      display: "flex",
+                      flexDirection: "column",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <DiffViewerPanel
+                      key={diffView.path}
+                      path={diffView.path}
+                      original={diffView.oldContent}
+                      modified={diffView.newContent}
+                      language={detectLanguage(diffView.path)}
+                      isCreate={diffView.isCreate}
+                      theme={theme}
+                      onClose={() => setDiffView(null)}
+                    />
+                  </div>
+                )}
                 {terminalVisible && (
                   <FloatingPanel
                     panelId="terminal"
@@ -1474,6 +1510,8 @@ function App() {
                         onAvailableModelsChange={(models) => updatePanelModels(panel.id, models)}
                         apiKeyVersion={apiKeyVersion}
                         requireDiffReview={requireDiffReview}
+                        onRequireDiffReviewChange={setRequireDiffReview}
+                        onOpenDiff={setDiffView}
                         stopAfterRejection={stopAfterRejection}
                         skills={skills}
                         harnessSettings={harnessSettings}

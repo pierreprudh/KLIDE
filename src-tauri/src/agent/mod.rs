@@ -1,14 +1,16 @@
+#[cfg(test)]
+mod eval;
 pub mod todo;
 pub mod tools;
 pub mod transcripts;
 pub mod types;
-#[cfg(test)]
-mod eval;
 
 use self::tools::{
-    apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,
-    execute_write_tool_preview, find_tool_kind, parse_tool_calls, recover_text_tool_calls,
-    run_command_capture, schemas_for_mode, tool_summary, NormalizedToolCall, ToolKind,
+    apply_write, clean_context_ids, clear_run_snapshots, dynamic_tool_command,
+    execute_read_only_tool, execute_write_tool_preview, find_tool_kind_for_workspace,
+    parse_tool_calls, recover_text_tool_calls, run_command_capture_in, schemas_for_mode,
+    tool_allowed_in_mode, tool_kind_label, tool_summary_for_workspace, NormalizedToolCall,
+    ToolKind,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -19,7 +21,7 @@ use self::types::{
     AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
-use crate::{ai_chat, AiUsage, StreamChunk};
+use crate::{ai_chat, AiChatResponse, AiUsage, StreamChunk};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,6 +52,15 @@ pub struct AgentRunHandle {
     /// run — re-running an identical command skips the prompt, so the agent
     /// can `cargo check` repeatedly without re-asking each time.
     pub approved_commands: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Edit proposals the user already rejected this run, keyed by
+    /// `<path>::<new_hash>`. If the model proposes the byte-identical change
+    /// again, the loop auto-declines it instead of re-prompting — so a single
+    /// "Reject" sticks and the agent is told to try something different rather
+    /// than re-surfacing the same diff.
+    pub rejected_edits: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Shell commands the user rejected this run. Same idea as `rejected_edits`:
+    /// proposing the exact same command again is auto-declined, not re-asked.
+    pub rejected_commands: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 pub struct AgentSupervisorState {
@@ -160,7 +171,11 @@ impl ProviderCaps {
     }
 }
 
-fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) -> Vec<serde_json::Value> {
+fn provider_messages(
+    request: &StartRunRequest,
+    system: String,
+    run_id: &str,
+) -> Vec<serde_json::Value> {
     let mut user_text = request.initial_text.clone();
     if !request.attachments.is_empty() {
         let attachments = request
@@ -176,7 +191,8 @@ fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) ->
     // Inject initial todo list as context for tool-capable/project turns.
     // Local chat should stay tiny; sending project metadata to MLX/Ollama for
     // "hello" made prompt processing feel broken.
-    let should_include_todos = !(ProviderCaps::for_provider(&request.provider).minimal_chat_context
+    let should_include_todos = !(ProviderCaps::for_provider(&request.provider)
+        .minimal_chat_context
         && matches!(request.mode, AgentMode::Chat));
     if should_include_todos {
         if let Some(cwd) = &request.workspace_root {
@@ -491,6 +507,18 @@ fn no_workspace_result() -> ToolResult {
     }
 }
 
+fn tool_not_allowed_result(mode: &AgentMode, name: &str, kind: ToolKind) -> ToolResult {
+    ToolResult {
+        ok: false,
+        content: format!(
+            "Tool '{name}' has {} capability and is not available in {:?} mode.",
+            tool_kind_label(kind),
+            mode
+        ),
+        metadata: None,
+    }
+}
+
 /// Run read-only tool calls concurrently, capped at `max_parallel` at a time,
 /// and return their results keyed by call id. Each call runs on a blocking
 /// thread (the tools are synchronous filesystem/network ops). A task that
@@ -642,6 +670,8 @@ pub async fn agent_start_run(
                 pending_question: std::sync::Mutex::new(None),
                 pending_permission: std::sync::Mutex::new(None),
                 approved_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
+                rejected_edits: std::sync::Mutex::new(std::collections::HashSet::new()),
+                rejected_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
             },
         );
 
@@ -665,6 +695,237 @@ pub async fn agent_start_run(
     });
 
     Ok(StartRunResponse { run_id: id })
+}
+
+/// The most-recent tool results are never compacted — they are the model's
+/// active working set. A task like "read these N files, then summarize each"
+/// needs the reads it just made to stay verbatim through the synthesis turn;
+/// gutting them out from under the model forces a re-read, whose fresh result
+/// the next pass guts again — a compaction death-spiral. Protecting a recency
+/// window stops that loop: recent reads survive, and any re-read lands inside
+/// the protected zone instead of feeding the spiral.
+const KEEP_RECENT_TOOL_RESULTS: usize = 8;
+
+/// Rough prompt-token footprint of the whole message array. Compaction is
+/// triggered off this, not a message count, so a short conversation keeps full
+/// fidelity and we only sacrifice old tool results when the prompt genuinely
+/// approaches the model's context window. The ~4-chars-per-token heuristic is
+/// the same one the frontend token meter uses; serializing each message also
+/// counts `tool_calls` and JSON punctuation, which biases the estimate high —
+/// the safe direction (compact a little early rather than overflow).
+fn estimate_prompt_tokens(messages: &[serde_json::Value]) -> usize {
+    messages.iter().map(|m| m.to_string().len()).sum::<usize>() / 4
+}
+
+/// Prompt-token budget above which older tool results get compacted. Carves
+/// headroom out of the context window for the model's reply (`reply_reserve`,
+/// i.e. `num_predict`) and the tool schemas the loop also ships each turn, so
+/// the prompt never crowds the response out of the window.
+fn compaction_threshold(context_window: usize, reply_reserve: usize) -> usize {
+    let schema_reserve = context_window / 8;
+    context_window
+        .saturating_sub(reply_reserve)
+        .saturating_sub(schema_reserve)
+        .max(1)
+}
+
+/// Auto-compaction, expressed purely. Replaces the body of *older* verbose
+/// `role: "tool"` messages with a short `[compacted: <name>]` placeholder so a
+/// long conversation doesn't blow the model's context window — while leaving
+/// the system prompt (`skip(1)`) and the most recent [`KEEP_RECENT_TOOL_RESULTS`]
+/// results intact. Compacts oldest-first and stops after 5 rewrites per pass;
+/// the loop calls it each turn, so it catches up gradually. No I/O: it just
+/// mutates `messages`, which makes it unit-testable without a supervisor.
+fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
+    // Indices of every long tool result, oldest-first.
+    let long_tool_results: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .skip(1) // never the system prompt
+        .filter(|(_, m)| {
+            m.get("role").and_then(|v| v.as_str()) == Some("tool")
+                && m.get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0)
+                    > 200
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    // Everything but the recency window is eligible; cap rewrites per pass.
+    let eligible = long_tool_results.len().saturating_sub(KEEP_RECENT_TOOL_RESULTS);
+    for &i in long_tool_results.iter().take(eligible).take(5) {
+        let msg = &mut messages[i];
+        let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+        msg["content"] = serde_json::Value::String(format!("[compacted: {name}]"));
+        if let Some(obj) = msg.as_object_mut() {
+            obj.remove("name");
+        }
+    }
+}
+
+/// The pure outcome of interpreting one assistant turn's provider response —
+/// the heart of the run loop with every Tauri / channel / filesystem
+/// dependency stripped out. `decide_turn` decides whether the model produced a
+/// final answer or wants to call tools, and assembles the exact content blocks
+/// the loop emits. Keeping the decision pure makes it unit-testable without
+/// standing up a supervisor or an app handle.
+enum TurnDecision {
+    /// The model produced a tool-free answer — the run is complete. `content`
+    /// is the finalized `AssistantMessage` body: thinking promoted to the
+    /// answer when `content` was empty (otherwise preserved as its own block),
+    /// with the truncation notice appended when the provider cut the reply off.
+    Final { content: Vec<AgentContentBlock> },
+    /// The model requested one or more tools. `content` is the assistant body
+    /// (thinking + text + tool-call blocks); `tool_calls` are the normalized,
+    /// id-stamped calls the loop executes in order.
+    Continue {
+        content: Vec<AgentContentBlock>,
+        tool_calls: Vec<NormalizedToolCall>,
+    },
+}
+
+/// One turn's decision plus the provider-wire assistant message the loop pushes
+/// into `messages` (so the next turn replays this turn's reasoning + tool
+/// calls). The loop pushes `assistant_message`, then acts on `decision`.
+struct TurnStep {
+    assistant_message: serde_json::Value,
+    decision: TurnDecision,
+}
+
+/// Interpret one assistant turn purely: normalize tool calls (including the
+/// text-embedded recovery path for local models that narrate calls instead of
+/// emitting the structured field), stamp fallback ids unique across the run,
+/// and assemble the content blocks. `prior_turns` + `turn` only feed the id
+/// stamping; everything else is derived from `response`.
+fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: usize) -> TurnStep {
+    let mut tool_calls = parse_tool_calls(&response.tool_calls);
+    let mut raw_tool_calls = response.tool_calls.clone();
+    let mut content_text = response.content.clone();
+    let mut thinking_text = response.thinking.clone();
+    // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
+    // `<|tool_call_start|>…<|tool_call_end|>` text instead of the structured
+    // field — and route that text into *either* the content or the
+    // reasoning/thinking channel (LFM2.5 emits into thinking). Scan the
+    // content first, then the thinking, so the call is recovered wherever
+    // it lands. Only attempt it when the structured field came back empty
+    // so we never second-guess a well-behaved provider.
+    if tool_calls.is_empty() {
+        let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
+        if recovered.is_empty() {
+            if let Some(th) = thinking_text.as_deref() {
+                let (rt, cleaned_thinking) = recover_text_tool_calls(th);
+                if !rt.is_empty() {
+                    recovered = rt;
+                    cleaned_content = content_text.clone();
+                    thinking_text = if cleaned_thinking.is_empty() {
+                        None
+                    } else {
+                        Some(cleaned_thinking)
+                    };
+                }
+            }
+        }
+        if !recovered.is_empty() {
+            // Synthesize a structured tool_calls payload so the assistant
+            // turn we replay back to the model is coherent (tool call →
+            // tool result), and strip the raw tokens from the content.
+            raw_tool_calls = recovered
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "function": { "name": c.name, "arguments": c.input }
+                    })
+                })
+                .collect();
+            tool_calls = recovered;
+            content_text = cleaned_content;
+        }
+    }
+    // Fallback ids ("tool_<idx>") are only unique within one response —
+    // stamp the turn so ids stay unique across the whole run (checkpoints
+    // and the frontend reducer key on them). Offset by the turns already on
+    // disk so follow-up turns in a reused conversation don't reuse an id
+    // from an earlier turn and clobber its checkpoint file.
+    let turn_label = prior_turns + turn;
+    for call in tool_calls.iter_mut() {
+        if call.id.starts_with("tool_") {
+            call.id = format!("turn{turn_label}_{}", call.id);
+        }
+    }
+    let tool_calls = tool_calls;
+    let assistant_message = assistant_provider_message(&content_text, &raw_tool_calls);
+
+    if tool_calls.is_empty() {
+        let mut content = Vec::new();
+        // Thinking models (LFM2.5) can route the entire final answer into
+        // the reasoning channel and leave `content` empty. An empty answer
+        // helps no one and renders as an open "thought process" with no
+        // body — so when content is empty, promote the thinking to the
+        // answer. Models that separate reasoning from answer (non-empty
+        // content) keep thinking as its own disclosure, unchanged.
+        let thinking = thinking_text.filter(|t| !t.trim().is_empty());
+        let mut answer_text = if content_text.trim().is_empty() {
+            thinking.clone().unwrap_or_default()
+        } else {
+            if let Some(t) = thinking.clone() {
+                content.push(AgentContentBlock::Thinking { text: t });
+            }
+            content_text.clone()
+        };
+        // Ollama reports `done_reason: "length"` when the reply was cut off
+        // because the KV cache (num_ctx) filled mid-generation — the model
+        // didn't "decide" to stop, it ran out of room. Without this the
+        // answer just ends mid-sentence and looks complete. Flag it inline
+        // and point at the fix (raise the context window for this model).
+        if response.stop_reason.as_deref() == Some("length") {
+            answer_text.push_str(
+                "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
+mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
+conversation, then ask again._",
+            );
+        }
+        content.push(AgentContentBlock::Text { text: answer_text });
+        TurnStep {
+            assistant_message,
+            decision: TurnDecision::Final { content },
+        }
+    } else {
+        let mut content = Vec::new();
+        // Preserve the reasoning channel on tool-calling turns too. The frontend
+        // keys its "thought process" disclosure off a Thinking block, so without
+        // this the reasoning streamed live is wiped at finalization — a turn that
+        // reasons and then calls a tool (LFM2.5 routes both through the thinking
+        // channel) renders as a vanished thought process with no body. The
+        // no-tool branch above already does this; keep the two consistent.
+        if let Some(t) = thinking_text.as_deref() {
+            if !t.trim().is_empty() {
+                content.push(AgentContentBlock::Thinking {
+                    text: t.to_string(),
+                });
+            }
+        }
+        if !content_text.trim().is_empty() {
+            content.push(AgentContentBlock::Text {
+                text: content_text.clone(),
+            });
+        }
+        for call in &tool_calls {
+            content.push(AgentContentBlock::ToolCall {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            });
+        }
+        TurnStep {
+            assistant_message,
+            decision: TurnDecision::Continue {
+                content,
+                tool_calls,
+            },
+        }
+    }
 }
 
 async fn run_agent_loop(
@@ -722,6 +983,7 @@ async fn run_agent_loop(
         files_touched: 0,
         cost_usd: None,
         last_event: None,
+        validation: None,
         parent_id: request.parent_id.clone(),
     };
     write_summary(&runs_dir, &summary)?;
@@ -770,7 +1032,11 @@ async fn run_agent_loop(
             messages.push(new_user);
         }
     }
-    let tools = schemas_for_mode(&request.mode, &request.disabled_tools);
+    let tools = schemas_for_mode(
+        &request.mode,
+        &request.disabled_tools,
+        request.workspace_root.as_deref(),
+    );
     // Count this turn's user message on top of the turns already on disk so
     // the Mission Control "Messages" tally reflects the whole conversation.
     let mut message_count = prior_turns as u32 + 1;
@@ -784,33 +1050,25 @@ async fn run_agent_loop(
     // or multi-agent work. Clamped to a hard ceiling so a stuck loop can't burn
     // tokens forever. The conversation can always be continued past the cap.
     const DEFAULT_MAX_TURNS: usize = 50;
-    let max_turns = request.max_turns.unwrap_or(DEFAULT_MAX_TURNS).clamp(1, 1000);
-    const COMPACT_AFTER: usize = 14;
+    let max_turns = request
+        .max_turns
+        .unwrap_or(DEFAULT_MAX_TURNS)
+        .clamp(1, 1000);
+    // Compaction is token-budget driven, not message-count driven: resolve the
+    // model's context window once (explicit `num_ctx` for local models, else a
+    // per-family fallback) and only trim once the prompt actually crowds it.
+    let context_window = request
+        .num_ctx
+        .unwrap_or_else(|| crate::models::fallback_context_window(&request.provider, &request.model));
+    let compact_threshold =
+        compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
 
     for turn in 0..max_turns {
-        // Auto-compaction: trim verbose tool results from older turns
-        if messages.len() > COMPACT_AFTER {
-            let mut compacted = 0;
-            for msg in messages.iter_mut().skip(1) {
-                if compacted >= 5 {
-                    break;
-                }
-                if msg.get("role").and_then(|v| v.as_str()) == Some("tool") {
-                    let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-                    let content_len = msg
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.len())
-                        .unwrap_or(0);
-                    if content_len > 200 {
-                        msg["content"] = serde_json::Value::String(format!("[compacted: {name}]"));
-                        if let Some(obj) = msg.as_object_mut() {
-                            obj.remove("name");
-                        }
-                        compacted += 1;
-                    }
-                }
-            }
+        // Auto-compaction: trim verbose tool results from older turns once the
+        // prompt approaches the context window. The recency window inside
+        // `compact_old_tool_results` keeps the active working set verbatim.
+        if estimate_prompt_tokens(&messages) > compact_threshold {
+            compact_old_tool_results(&mut messages);
         }
         let assistant_id = message_id("assistant");
         let stream_run_id = id.clone();
@@ -902,153 +1160,57 @@ async fn run_agent_loop(
             }
         };
 
-        let mut tool_calls = parse_tool_calls(&response.tool_calls);
-        let mut raw_tool_calls = response.tool_calls.clone();
-        let mut content_text = response.content.clone();
-        let mut thinking_text = response.thinking.clone();
-        // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
-        // `<|tool_call_start|>…<|tool_call_end|>` text instead of the structured
-        // field — and route that text into *either* the content or the
-        // reasoning/thinking channel (LFM2.5 emits into thinking). Scan the
-        // content first, then the thinking, so the call is recovered wherever
-        // it lands. Only attempt it when the structured field came back empty
-        // so we never second-guess a well-behaved provider.
-        if tool_calls.is_empty() {
-            // Try content; if nothing there, try thinking and clean *it*
-            // instead so the recovered tokens don't surface as raw reasoning.
-            let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
-            if recovered.is_empty() {
-                if let Some(th) = thinking_text.as_deref() {
-                    let (rt, cleaned_thinking) = recover_text_tool_calls(th);
-                    if !rt.is_empty() {
-                        recovered = rt;
-                        cleaned_content = content_text.clone();
-                        thinking_text = if cleaned_thinking.is_empty() {
-                            None
-                        } else {
-                            Some(cleaned_thinking)
-                        };
-                    }
-                }
-            }
-            if !recovered.is_empty() {
-                // Synthesize a structured tool_calls payload so the assistant
-                // turn we replay back to the model is coherent (tool call →
-                // tool result), and strip the raw tokens from the content.
-                raw_tool_calls = recovered
-                    .iter()
-                    .map(|c| {
-                        serde_json::json!({
-                            "function": { "name": c.name, "arguments": c.input }
-                        })
-                    })
-                    .collect();
-                tool_calls = recovered;
-                content_text = cleaned_content;
-            }
-        }
-        // Fallback ids ("tool_<idx>") are only unique within one response —
-        // stamp the turn so ids stay unique across the whole run (checkpoints
-        // and the frontend reducer key on them). Offset by the turns already on
-        // disk so follow-up turns in a reused conversation don't reuse an id
-        // from an earlier turn and clobber its checkpoint file.
-        let turn_label = prior_turns + turn;
-        for call in tool_calls.iter_mut() {
-            if call.id.starts_with("tool_") {
-                call.id = format!("turn{turn_label}_{}", call.id);
-            }
-        }
-        let tool_calls = tool_calls;
-        messages.push(assistant_provider_message(&content_text, &raw_tool_calls));
+        // Interpret the turn purely: normalize/recover tool calls, stamp ids,
+        // and assemble the content blocks. The loop stays responsible for the
+        // side effects (push to `messages`, emit events, settle the run).
+        let TurnStep {
+            assistant_message,
+            decision,
+        } = decide_turn(&response, prior_turns, turn);
+        messages.push(assistant_message);
         message_count += 1;
 
-        if tool_calls.is_empty() {
-            let mut content = Vec::new();
-            // Thinking models (LFM2.5) can route the entire final answer into
-            // the reasoning channel and leave `content` empty. An empty answer
-            // helps no one and renders as an open "thought process" with no
-            // body — so when content is empty, promote the thinking to the
-            // answer. Models that separate reasoning from answer (non-empty
-            // content) keep thinking as its own disclosure, unchanged.
-            let thinking = thinking_text.filter(|t| !t.trim().is_empty());
-            let mut answer_text = if content_text.trim().is_empty() {
-                thinking.clone().unwrap_or_default()
-            } else {
-                if let Some(t) = thinking.clone() {
-                    content.push(AgentContentBlock::Thinking { text: t });
-                }
-                content_text.clone()
-            };
-            // Ollama reports `done_reason: "length"` when the reply was cut off
-            // because the KV cache (num_ctx) filled mid-generation — the model
-            // didn't "decide" to stop, it ran out of room. Without this the
-            // answer just ends mid-sentence and looks complete. Flag it inline
-            // and point at the fix (raise the context window for this model).
-            if response.stop_reason.as_deref() == Some("length") {
-                answer_text.push_str(
-                    "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
-mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
-conversation, then ask again._",
-                );
+        let tool_calls = match decision {
+            TurnDecision::Final { content } => {
+                emit(AgentEvent::AssistantMessage {
+                    run_id: id.clone(),
+                    message_id: assistant_id,
+                    content,
+                    usage: agent_usage_from(response.usage.clone()),
+                    ts: now_ms(),
+                })?;
+                emit(AgentEvent::RunResult {
+                    run_id: id.clone(),
+                    result: serde_json::json!({ "status": "done" }),
+                    ts: now_ms(),
+                })?;
+                set_run_status(&app, &id, AgentRunStatus::Done);
+                write_summary(
+                    &runs_dir,
+                    &AgentRunSummary {
+                        status: "done".to_string(),
+                        updated_ms: now_ms(),
+                        message_count,
+                        ..summary.clone()
+                    },
+                )?;
+                completed = true;
+                break;
             }
-            content.push(AgentContentBlock::Text { text: answer_text });
-            emit(AgentEvent::AssistantMessage {
-                run_id: id.clone(),
-                message_id: assistant_id,
+            TurnDecision::Continue {
                 content,
-                usage: agent_usage_from(response.usage.clone()),
-                ts: now_ms(),
-            })?;
-            emit(AgentEvent::RunResult {
-                run_id: id.clone(),
-                result: serde_json::json!({ "status": "done" }),
-                ts: now_ms(),
-            })?;
-            set_run_status(&app, &id, AgentRunStatus::Done);
-            write_summary(
-                &runs_dir,
-                &AgentRunSummary {
-                    status: "done".to_string(),
-                    updated_ms: now_ms(),
-                    message_count,
-                    ..summary.clone()
-                },
-            )?;
-            completed = true;
-            break;
-        }
-
-        let mut content = Vec::new();
-        // Preserve the reasoning channel on tool-calling turns too. The frontend
-        // keys its "thought process" disclosure off a Thinking block, so without
-        // this the reasoning streamed live is wiped at finalization — a turn that
-        // reasons and then calls a tool (LFM2.5 routes both through the thinking
-        // channel) renders as a vanished thought process with no body. The
-        // no-tool branch above already does this; keep the two consistent.
-        if let Some(t) = thinking_text.as_deref() {
-            if !t.trim().is_empty() {
-                content.push(AgentContentBlock::Thinking { text: t.to_string() });
+                tool_calls,
+            } => {
+                emit(AgentEvent::AssistantMessage {
+                    run_id: id.clone(),
+                    message_id: assistant_id,
+                    content,
+                    usage: agent_usage_from(response.usage.clone()),
+                    ts: now_ms(),
+                })?;
+                tool_calls
             }
-        }
-        if !content_text.trim().is_empty() {
-            content.push(AgentContentBlock::Text {
-                text: content_text.clone(),
-            });
-        }
-        for call in &tool_calls {
-            content.push(AgentContentBlock::ToolCall {
-                tool_call_id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.input.clone(),
-            });
-        }
-        emit(AgentEvent::AssistantMessage {
-            run_id: id.clone(),
-            message_id: assistant_id,
-            content,
-            usage: agent_usage_from(response.usage.clone()),
-            ts: now_ms(),
-        })?;
+        };
 
         // Parallel read-only tools: when the user opts in (cap > 1) and a turn
         // requests several read-only calls, run them concurrently up front and
@@ -1064,7 +1226,12 @@ conversation, then ask again._",
             if let Some(root) = request.workspace_root.as_deref() {
                 let read_calls: Vec<NormalizedToolCall> = tool_calls
                     .iter()
-                    .filter(|c| matches!(find_tool_kind(&c.name), Some(ToolKind::ReadOnly)))
+                    .filter(|c| {
+                        matches!(
+                            find_tool_kind_for_workspace(&c.name, Some(root)),
+                            Some(ToolKind::ReadOnly)
+                        )
+                    })
                     .cloned()
                     .collect();
                 if read_calls.len() > 1 {
@@ -1079,18 +1246,33 @@ conversation, then ask again._",
                 finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                 return Ok(());
             }
+            let kind = find_tool_kind_for_workspace(&call.name, request.workspace_root.as_deref());
             emit(AgentEvent::ToolCallStarted {
                 run_id: id.clone(),
                 tool_call_id: call.id.clone(),
                 name: call.name.clone(),
                 input: call.input.clone(),
-                summary: tool_summary(&call),
+                summary: tool_summary_for_workspace(&call, request.workspace_root.as_deref()),
                 ts: now_ms(),
             })?;
 
             let tool_result: ToolResult;
 
-            if matches!(find_tool_kind(&call.name), Some(ToolKind::Pause)) {
+            if let Some(kind) = kind {
+                if !tool_allowed_in_mode(&request.mode, kind) {
+                    tool_result = tool_not_allowed_result(&request.mode, &call.name, kind);
+                    emit(AgentEvent::ToolCallFinished {
+                        run_id: id.clone(),
+                        tool_call_id: call.id.clone(),
+                        result: tool_result.clone(),
+                        ts: now_ms(),
+                    })?;
+                    messages.push(tool_provider_message(&call, &tool_result));
+                    continue;
+                }
+            }
+
+            if matches!(kind, Some(ToolKind::Pause)) {
                 // Pause for a typed Q&A. The question is read from the tool
                 // input; the answer comes back through `agent_resolve_question`,
                 // which sends via the oneshot we stash in `pending_question`.
@@ -1148,127 +1330,240 @@ conversation, then ask again._",
                     },
                     metadata: None,
                 };
-            } else if matches!(find_tool_kind(&call.name), Some(ToolKind::Command)) {
+            } else if matches!(kind, Some(ToolKind::Command)) {
                 // Run a shell command — but only after the user approves it,
                 // the same permission gate diff review is for edits. Emit a
                 // permission request, stash a oneshot, wait for the decision.
-                let command = call
-                    .input
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
                 let root = request.workspace_root.clone();
-                if command.is_empty() {
-                    tool_result = ToolResult {
-                        ok: false,
-                        content: "run_command requires a non-empty command.".to_string(),
-                        metadata: None,
-                    };
-                } else if root.is_none() {
+                if root.is_none() {
                     tool_result = no_workspace_result();
                 } else {
-                    // Default 180s; configurable for long builds. Clamped so a
-                    // bad setting can't disable the runaway guard.
-                    let timeout_secs = request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
-                    // Skip the prompt if this exact command was already approved
-                    // for the run, or is on the project allowlist passed at start.
-                    let pre_approved = {
-                        let state = app.state::<AgentSupervisorState>();
-                        let runs = state
-                            .runs
-                            .lock()
-                            .map_err(|_| "Agent state unavailable".to_string())?;
-                        let run_ok = runs
-                            .get(&id)
-                            .map(|h| h.approved_commands.lock().unwrap().contains(&command))
-                            .unwrap_or(false);
-                        run_ok || request.command_allowlist.iter().any(|c| c == &command)
+                    let root_value = root.as_deref().unwrap_or(".");
+                    let invocation = if call.name == "run_command" {
+                        let command = call
+                            .input
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if command.is_empty() {
+                            Err(ToolResult {
+                                ok: false,
+                                content: "run_command requires a non-empty command.".to_string(),
+                                metadata: None,
+                            })
+                        } else {
+                            // Default 180s; configurable for long builds. Clamped
+                            // so a bad setting can't disable the runaway guard.
+                            let timeout_secs =
+                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                            Ok((
+                                "run_command".to_string(),
+                                command.clone(),
+                                root_value.to_string(),
+                                timeout_secs,
+                                format!("$ {command}"),
+                                "The agent wants to run a shell command in the workspace."
+                                    .to_string(),
+                            ))
+                        }
+                    } else {
+                        match dynamic_tool_command(&call.name, &call.input, root_value) {
+                            Some(Ok(invocation)) => Ok((
+                                invocation.tool_name,
+                                invocation.command,
+                                invocation.cwd,
+                                invocation.timeout_secs,
+                                invocation.summary,
+                                invocation.reason,
+                            )),
+                            Some(Err(result)) => Err(result),
+                            None => Err(ToolResult {
+                                ok: false,
+                                content: format!("Unknown command-capability tool: {}", call.name),
+                                metadata: None,
+                            }),
+                        }
                     };
 
-                    if pre_approved {
-                        tool_result =
-                            run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await;
-                    } else {
-                        let request_id = format!("perm_{}_{}", id, call.id);
-                        let perm = serde_json::json!({
-                            "id": request_id,
-                            "runId": id,
-                            "toolCallId": call.id,
-                            "toolName": "run_command",
-                            "input": { "command": command },
-                            "summary": format!("$ {command}"),
-                            "reason": "The agent wants to run a shell command in the workspace.",
-                            "options": [
-                                { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
-                                { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
-                                { "optionId": "deny", "label": "Reject", "behavior": "deny" }
-                            ]
-                        });
+                    match invocation {
+                        Err(result) => {
+                            tool_result = result;
+                        }
+                        Ok((
+                            permission_tool_name,
+                            command,
+                            cwd,
+                            timeout_secs,
+                            permission_summary,
+                            reason,
+                        )) => {
+                            let approval_key = if cwd == root_value {
+                                command.clone()
+                            } else {
+                                format!("{cwd} :: {command}")
+                            };
+                            // Skip the prompt if this exact command/cwd was
+                            // already approved for the run, or is on the project
+                            // allowlist passed at start.
+                            let (pre_approved, pre_rejected) = {
+                                let state = app.state::<AgentSupervisorState>();
+                                let runs = state
+                                    .runs
+                                    .lock()
+                                    .map_err(|_| "Agent state unavailable".to_string())?;
+                                let handle = runs.get(&id);
+                                let run_ok = handle
+                                    .map(|h| {
+                                        h.approved_commands.lock().unwrap().contains(&approval_key)
+                                    })
+                                    .unwrap_or(false);
+                                let rejected = handle
+                                    .map(|h| {
+                                        h.rejected_commands.lock().unwrap().contains(&approval_key)
+                                    })
+                                    .unwrap_or(false);
+                                (
+                                    run_ok
+                                        || request
+                                            .command_allowlist
+                                            .iter()
+                                            .any(|c| c == &command || c == &approval_key),
+                                    rejected,
+                                )
+                            };
 
-                        let decision = match pause_for_user(
-                            &app,
-                            &id,
-                            AgentRunStatus::WaitingForPermission,
-                            AgentEvent::PermissionRequested {
-                                run_id: id.clone(),
-                                request: perm,
-                                ts: now_ms(),
-                            },
-                            "{\"behavior\":\"deny\"}",
-                            &cancel,
-                            &mut emit,
-                            |handle, tx| {
-                                *handle.pending_permission.lock().unwrap() = Some(tx);
-                            },
-                        )
-                        .await?
-                        {
-                            PauseOutcome::Cancelled => {
-                                finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
-                                return Ok(());
-                            }
-                            PauseOutcome::Resolved(decision) => decision,
-                        };
+                            if pre_approved {
+                                tool_result = run_command_capture_in(
+                                    root_value,
+                                    &cwd,
+                                    &command,
+                                    timeout_secs,
+                                )
+                                .await;
+                            } else if pre_rejected {
+                                // The user already rejected this exact command this run.
+                                // Don't re-prompt — tell the model so it changes course.
+                                tool_result = ToolResult {
+                                    ok: false,
+                                    content: "You already proposed this exact command and the user rejected it. \
+Do not run it again — take a different approach or ask the user what they'd prefer."
+                                        .to_string(),
+                                    metadata: None,
+                                };
+                            } else {
+                                let request_id = format!("perm_{}_{}", id, call.id);
+                                let perm = serde_json::json!({
+                                    "id": request_id,
+                                    "runId": id,
+                                    "toolCallId": call.id,
+                                    "toolName": permission_tool_name,
+                                    "input": { "command": command, "cwd": cwd },
+                                    "summary": permission_summary,
+                                    "reason": reason,
+                                    "options": [
+                                        { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
+                                        { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
+                                        { "optionId": "deny", "label": "Reject", "behavior": "deny" }
+                                    ]
+                                });
 
-                        let decision_val: serde_json::Value =
-                            serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
-                        let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
-                        let scope = decision_val.get("scope").and_then(|s| s.as_str()).unwrap_or("once");
+                                let decision = match pause_for_user(
+                                    &app,
+                                    &id,
+                                    AgentRunStatus::WaitingForPermission,
+                                    AgentEvent::PermissionRequested {
+                                        run_id: id.clone(),
+                                        request: perm,
+                                        ts: now_ms(),
+                                    },
+                                    "{\"behavior\":\"deny\"}",
+                                    &cancel,
+                                    &mut emit,
+                                    |handle, tx| {
+                                        *handle.pending_permission.lock().unwrap() = Some(tx);
+                                    },
+                                )
+                                .await?
+                                {
+                                    PauseOutcome::Cancelled => {
+                                        finish_cancelled(
+                                            &mut emit,
+                                            &app,
+                                            &runs_dir,
+                                            &id,
+                                            &summary,
+                                            message_count,
+                                        )?;
+                                        return Ok(());
+                                    }
+                                    PauseOutcome::Resolved(decision) => decision,
+                                };
 
-                        emit(AgentEvent::PermissionResolved {
-                            run_id: id.clone(),
-                            request_id: request_id.clone(),
-                            decision: decision_val.clone(),
-                            ts: now_ms(),
-                        })?;
+                                let decision_val: serde_json::Value =
+                                    serde_json::from_str(&decision)
+                                        .unwrap_or(serde_json::json!({ "behavior": "deny" }));
+                                let allowed = decision_val.get("behavior").and_then(|b| b.as_str())
+                                    == Some("allow");
+                                let scope = decision_val
+                                    .get("scope")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("once");
 
-                        // Remember run/project-scoped approvals so an identical
-                        // command later in this run runs without re-asking.
-                        if allowed && (scope == "run" || scope == "project") {
-                            let state = app.state::<AgentSupervisorState>();
-                            let runs = state
-                                .runs
-                                .lock()
-                                .map_err(|_| "Agent state unavailable".to_string())?;
-                            if let Some(handle) = runs.get(&id) {
-                                handle.approved_commands.lock().unwrap().insert(command.clone());
+                                emit(AgentEvent::PermissionResolved {
+                                    run_id: id.clone(),
+                                    request_id: request_id.clone(),
+                                    decision: decision_val.clone(),
+                                    ts: now_ms(),
+                                })?;
+
+                                // Remember run/project-scoped approvals so an identical
+                                // command later in this run runs without re-asking.
+                                if allowed && (scope == "run" || scope == "project") {
+                                    let state = app.state::<AgentSupervisorState>();
+                                    let runs = state
+                                        .runs
+                                        .lock()
+                                        .map_err(|_| "Agent state unavailable".to_string())?;
+                                    if let Some(handle) = runs.get(&id) {
+                                        handle
+                                            .approved_commands
+                                            .lock()
+                                            .unwrap()
+                                            .insert(approval_key.clone());
+                                    }
+                                }
+
+                                tool_result = if allowed {
+                                    run_command_capture_in(root_value, &cwd, &command, timeout_secs)
+                                        .await
+                                } else {
+                                    // Remember the rejection so re-proposing the same
+                                    // command is auto-declined instead of re-asked.
+                                    let state = app.state::<AgentSupervisorState>();
+                                    if let Ok(runs) = state.runs.lock() {
+                                        if let Some(handle) = runs.get(&id) {
+                                            handle
+                                                .rejected_commands
+                                                .lock()
+                                                .unwrap()
+                                                .insert(approval_key.clone());
+                                        }
+                                    }
+                                    ToolResult {
+                                        ok: false,
+                                        content: "Rejected by user: command not run. Do not propose this exact \
+command again — take a different approach or ask the user what they'd prefer."
+                                            .to_string(),
+                                        metadata: None,
+                                    }
+                                };
                             }
                         }
-
-                        tool_result = if allowed {
-                            run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await
-                        } else {
-                            ToolResult {
-                                ok: false,
-                                content: "Rejected by user: command not run.".to_string(),
-                                metadata: None,
-                            }
-                        };
                     }
                 }
-            } else if matches!(find_tool_kind(&call.name), Some(ToolKind::Write)) {
+            } else if matches!(kind, Some(ToolKind::Write)) {
                 let root = match request.workspace_root.as_deref() {
                     Some(root) => root,
                     None => {
@@ -1299,30 +1594,80 @@ conversation, then ask again._",
                     }
                 };
 
-                // Pause for diff review
-                let decision = match pause_for_user(
-                    &app,
-                    &id,
-                    AgentRunStatus::WaitingForDiff,
-                    AgentEvent::DiffProposed {
+                // Identical to a change the user already rejected this run?
+                // (Same path + same resulting content.) Auto-decline without a
+                // second diff prompt so one "Reject" sticks; tell the model to
+                // change course rather than re-surfacing the same diff.
+                let edit_key = format!("{}::{}", proposal.path, proposal.new_hash);
+                let already_rejected = {
+                    let state = app.state::<AgentSupervisorState>();
+                    state
+                        .runs
+                        .lock()
+                        .ok()
+                        .and_then(|runs| {
+                            runs.get(&id)
+                                .map(|h| h.rejected_edits.lock().unwrap().contains(&edit_key))
+                        })
+                        .unwrap_or(false)
+                };
+                if already_rejected {
+                    tool_result = ToolResult {
+                        ok: false,
+                        content: format!(
+                            "You already proposed this exact change to {} and the user rejected it. \
+Do not propose it again — take a different approach or ask the user what they'd prefer.",
+                            proposal.path
+                        ),
+                        metadata: None,
+                    };
+                    emit(AgentEvent::ToolCallFinished {
+                        run_id: id.clone(),
+                        tool_call_id: call.id.clone(),
+                        result: tool_result.clone(),
+                        ts: now_ms(),
+                    })?;
+                    messages.push(tool_provider_message(&call, &tool_result));
+                    continue;
+                }
+
+                // Auto-accept mode (require_diff_review == Some(false)): apply
+                // without pausing. Still emit the proposed diff so the edit stays
+                // visible in the conversation, and the checkpoint written below
+                // keeps it revertable — which is what makes auto-accept safe.
+                // Otherwise pause for diff review (the default).
+                let decision = if request.require_diff_review == Some(false) {
+                    emit(AgentEvent::DiffProposed {
                         run_id: id.clone(),
                         proposal: proposal.clone(),
                         ts: now_ms(),
-                    },
-                    "reject",
-                    &cancel,
-                    &mut emit,
-                    |handle, tx| {
-                        *handle.pending_diff.lock().unwrap() = Some(tx);
-                    },
-                )
-                .await?
-                {
-                    PauseOutcome::Cancelled => {
-                        finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
-                        return Ok(());
+                    })?;
+                    "apply".to_string()
+                } else {
+                    match pause_for_user(
+                        &app,
+                        &id,
+                        AgentRunStatus::WaitingForDiff,
+                        AgentEvent::DiffProposed {
+                            run_id: id.clone(),
+                            proposal: proposal.clone(),
+                            ts: now_ms(),
+                        },
+                        "reject",
+                        &cancel,
+                        &mut emit,
+                        |handle, tx| {
+                            *handle.pending_diff.lock().unwrap() = Some(tx);
+                        },
+                    )
+                    .await?
+                    {
+                        PauseOutcome::Cancelled => {
+                            finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                            return Ok(());
+                        }
+                        PauseOutcome::Resolved(decision) => decision,
                     }
-                    PauseOutcome::Resolved(decision) => decision,
                 };
 
                 let decision_obj = serde_json::json!({ "behavior": decision });
@@ -1369,10 +1714,23 @@ conversation, then ask again._",
                         }
                     }
                 } else {
+                    // Remember this rejection so a byte-identical re-proposal is
+                    // auto-declined above instead of prompting again.
+                    let state = app.state::<AgentSupervisorState>();
+                    if let Ok(runs) = state.runs.lock() {
+                        if let Some(handle) = runs.get(&id) {
+                            handle
+                                .rejected_edits
+                                .lock()
+                                .unwrap()
+                                .insert(edit_key.clone());
+                        }
+                    }
                     tool_result = ToolResult {
                         ok: false,
                         content: format!(
-                            "Rejected by user: {} was not {}.",
+                            "Rejected by user: {} was not {}. Do not propose this exact change again — \
+take a different approach or ask the user what they'd prefer.",
                             proposal.path,
                             if proposal.is_create {
                                 "created"
@@ -1866,13 +2224,16 @@ mod replay_tests {
             summary: "we set up auth and fixed the parser".into(),
             ts: 9,
         };
-        let out = reconstruct_prior_messages(&[
-            user_msg("old turn 1"),
-            assistant_text("old reply 1"),
-            compacted,
-            user_msg("recent question"),
-            assistant_text("recent answer"),
-        ], false);
+        let out = reconstruct_prior_messages(
+            &[
+                user_msg("old turn 1"),
+                assistant_text("old reply 1"),
+                compacted,
+                user_msg("recent question"),
+                assistant_text("recent answer"),
+            ],
+            false,
+        );
         // Everything before the marker collapses into one system summary;
         // the two recent turns replay verbatim after it.
         assert_eq!(out.len(), 3, "got: {out:?}");
@@ -1917,11 +2278,14 @@ mod replay_tests {
         // The orphan tool_call_finished event from a prior turn is
         // not emitted as its own message; it waits for the closing
         // assistant turn and gets appended to that text.
-        let out = reconstruct_prior_messages(&[
-            assistant_text("let me check"),
-            tool_result("tc1", "file contents"),
-            assistant_text("done"),
-        ], false);
+        let out = reconstruct_prior_messages(
+            &[
+                assistant_text("let me check"),
+                tool_result("tc1", "file contents"),
+                assistant_text("done"),
+            ],
+            false,
+        );
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["role"], "assistant");
         assert_eq!(out[0]["content"], "let me check");
@@ -1969,7 +2333,8 @@ mod replay_tests {
         // message) has its orphan tool result dropped. Re-emitting it
         // as `role: "tool"` is exactly the Ollama parse-error case
         // we just fixed.
-        let out = reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")], false);
+        let out =
+            reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")], false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
     }
@@ -1979,12 +2344,15 @@ mod replay_tests {
         // A buffered tool result from a previous turn must not leak
         // into the next user turn — the model shouldn't see a
         // tool result on the wrong side of a user message.
-        let out = reconstruct_prior_messages(&[
-            user_msg("first turn"),
-            tool_result("tc1", "stale result"),
-            user_msg("second turn"),
-            assistant_text("second answer"),
-        ], false);
+        let out = reconstruct_prior_messages(
+            &[
+                user_msg("first turn"),
+                tool_result("tc1", "stale result"),
+                user_msg("second turn"),
+                assistant_text("second answer"),
+            ],
+            false,
+        );
         assert_eq!(out.len(), 3);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "first turn");
@@ -2129,6 +2497,266 @@ mod replay_tests {
             .contains("did the thing"));
         assert_eq!(out[1]["content"], "new");
         assert_eq!(out[2]["content"], "new reply");
+    }
+}
+
+#[cfg(test)]
+mod turn_decision_tests {
+    //! `decide_turn` is the pure heart of the run loop: provider response in,
+    //! a Final-or-Continue decision out, with no Tauri/channel/fs dependency.
+    //! These pin the branches the loop used to do inline — terminal vs tool
+    //! turn, thinking promotion, the truncation notice, text-embedded tool-call
+    //! recovery, and id stamping — plus the bounded auto-compaction pass.
+
+    use super::*;
+
+    fn response(
+        content: &str,
+        thinking: Option<&str>,
+        tool_calls: Vec<serde_json::Value>,
+    ) -> AiChatResponse {
+        AiChatResponse {
+            content: content.to_string(),
+            thinking: thinking.map(String::from),
+            tool_calls,
+            usage: None,
+            stop_reason: None,
+        }
+    }
+
+    fn structured_call(name: &str, args: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "function": { "name": name, "arguments": args } })
+    }
+
+    #[test]
+    fn tool_free_response_is_final_with_the_answer() {
+        let step = decide_turn(&response("All done.", None, vec![]), 0, 0);
+        match step.decision {
+            TurnDecision::Final { content } => {
+                assert_eq!(content.len(), 1);
+                assert!(
+                    matches!(&content[0], AgentContentBlock::Text { text } if text == "All done.")
+                );
+            }
+            _ => panic!("expected Final"),
+        }
+        // No tool calls → the wire message carries no tool_calls field.
+        assert_eq!(step.assistant_message["content"], "All done.");
+        assert!(step.assistant_message.get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn empty_content_promotes_thinking_to_the_answer() {
+        // LFM2.5 routes the whole answer into the reasoning channel. The final
+        // text should be the thinking, with NO separate Thinking block.
+        let step = decide_turn(&response("", Some("The answer is 42."), vec![]), 0, 0);
+        match step.decision {
+            TurnDecision::Final { content } => {
+                assert_eq!(content.len(), 1);
+                assert!(
+                    matches!(&content[0], AgentContentBlock::Text { text } if text == "The answer is 42.")
+                );
+            }
+            _ => panic!("expected Final"),
+        }
+    }
+
+    #[test]
+    fn thinking_is_preserved_as_its_own_block_when_content_is_present() {
+        let step = decide_turn(&response("Here.", Some("reasoning"), vec![]), 0, 0);
+        match step.decision {
+            TurnDecision::Final { content } => {
+                assert_eq!(content.len(), 2);
+                assert!(
+                    matches!(&content[0], AgentContentBlock::Thinking { text } if text == "reasoning")
+                );
+                assert!(matches!(&content[1], AgentContentBlock::Text { text } if text == "Here."));
+            }
+            _ => panic!("expected Final"),
+        }
+    }
+
+    #[test]
+    fn length_stop_reason_appends_the_truncation_notice() {
+        let mut resp = response("partial answer", None, vec![]);
+        resp.stop_reason = Some("length".to_string());
+        let step = decide_turn(&resp, 0, 0);
+        match step.decision {
+            TurnDecision::Final { content } => match &content[0] {
+                AgentContentBlock::Text { text } => {
+                    assert!(text.starts_with("partial answer"));
+                    assert!(text.contains("Response cut off"));
+                }
+                _ => panic!("expected Text"),
+            },
+            _ => panic!("expected Final"),
+        }
+    }
+
+    #[test]
+    fn structured_tool_call_continues_with_a_toolcall_block() {
+        let resp = response(
+            "",
+            None,
+            vec![structured_call(
+                "read_file",
+                serde_json::json!({ "path": "a.rs" }),
+            )],
+        );
+        let step = decide_turn(&resp, 0, 0);
+        match step.decision {
+            TurnDecision::Continue {
+                content,
+                tool_calls,
+            } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].name, "read_file");
+                assert!(content.iter().any(
+                    |b| matches!(b, AgentContentBlock::ToolCall { name, .. } if name == "read_file")
+                ));
+            }
+            _ => panic!("expected Continue"),
+        }
+        // The wire message replays the structured call back to the model.
+        assert!(step.assistant_message["tool_calls"].is_array());
+    }
+
+    #[test]
+    fn fallback_tool_ids_are_stamped_with_the_run_turn() {
+        // A provider that returns no id falls back to "tool_<idx>"; the loop
+        // stamps it with prior_turns + turn so ids stay unique across the run.
+        let resp = response(
+            "",
+            None,
+            vec![serde_json::json!({ "function": { "name": "grep", "arguments": {} } })],
+        );
+        let step = decide_turn(&resp, 3, 2);
+        match step.decision {
+            TurnDecision::Continue { tool_calls, .. } => {
+                assert_eq!(tool_calls[0].id, "turn5_tool_0");
+            }
+            _ => panic!("expected Continue"),
+        }
+    }
+
+    #[test]
+    fn text_embedded_tool_call_is_recovered_into_continue() {
+        // Local models that narrate a call as text instead of the structured
+        // field still get routed to Continue, and the raw tokens are stripped.
+        let content = "Let me read it. <|tool_call_start|>[{\"name\":\"read_file\",\"arguments\":{\"path\":\"x.md\"}}]<|tool_call_end|>";
+        let step = decide_turn(&response(content, None, vec![]), 0, 0);
+        match step.decision {
+            TurnDecision::Continue {
+                tool_calls,
+                content,
+            } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].name, "read_file");
+                // The cleaned text keeps the prose, drops the special tokens.
+                let has_clean_text = content.iter().any(|b| matches!(b, AgentContentBlock::Text { text } if text.contains("Let me read it.") && !text.contains("tool_call_start")));
+                assert!(has_clean_text);
+            }
+            _ => panic!("expected Continue"),
+        }
+    }
+
+    fn tool_msg(name: &str, content: &str) -> serde_json::Value {
+        serde_json::json!({ "role": "tool", "name": name, "content": content })
+    }
+
+    #[test]
+    fn compaction_rewrites_old_tool_results_and_keeps_the_system_prompt() {
+        let long = "x".repeat(250);
+        // One result past the recency window, so exactly the oldest is eligible.
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "x".repeat(300) })];
+        for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 1) {
+            messages.push(tool_msg("read_file", &long));
+        }
+        compact_old_tool_results(&mut messages);
+        // System prompt untouched even though it is long.
+        assert_eq!(messages[0]["content"].as_str().unwrap().len(), 300);
+        // The single oldest result collapsed; its name dropped.
+        assert_eq!(messages[1]["content"], "[compacted: read_file]");
+        assert!(messages[1].get("name").is_none());
+        // Everything inside the recency window survives verbatim.
+        assert_eq!(messages.last().unwrap()["content"].as_str().unwrap().len(), 250);
+    }
+
+    #[test]
+    fn compaction_preserves_the_recent_working_set() {
+        let long = "x".repeat(250);
+        // Exactly the window's worth of reads — nothing is old enough to gut.
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
+        for _ in 0..KEEP_RECENT_TOOL_RESULTS {
+            messages.push(tool_msg("read_file", &long));
+        }
+        compact_old_tool_results(&mut messages);
+        let compacted = messages
+            .iter()
+            .filter(|m| m["content"].as_str() == Some("[compacted: read_file]"))
+            .count();
+        assert_eq!(compacted, 0, "recent reads must stay verbatim for synthesis");
+    }
+
+    #[test]
+    fn token_estimate_scales_with_content_and_threshold_reserves_headroom() {
+        let small = vec![serde_json::json!({ "role": "user", "content": "hi" })];
+        let big = vec![tool_msg("read_file", &"x".repeat(40_000))];
+        assert!(estimate_prompt_tokens(&big) > estimate_prompt_tokens(&small));
+        // ~40k chars ≈ 10k tokens by the /4 heuristic.
+        assert!((9_000..=11_000).contains(&estimate_prompt_tokens(&big)));
+
+        // 8k window, 2k reply reserve, 1k schema reserve (window/8) → 5k prompt.
+        assert_eq!(compaction_threshold(8_192, 2_048), 8_192 - 2_048 - 1_024);
+        // Pathological tiny window never yields a zero threshold.
+        assert_eq!(compaction_threshold(0, 4_096), 1);
+    }
+
+    #[test]
+    fn compaction_holds_off_until_the_prompt_crowds_the_window() {
+        // A handful of large reads that fit a roomy window: no compaction yet.
+        let long = "x".repeat(2_000);
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
+        for _ in 0..6 {
+            messages.push(tool_msg("read_file", &long));
+        }
+        let window = 200_000;
+        if estimate_prompt_tokens(&messages) > compaction_threshold(window, 4_096) {
+            compact_old_tool_results(&mut messages);
+        }
+        assert!(
+            messages
+                .iter()
+                .all(|m| m["content"].as_str() != Some("[compacted: read_file]")),
+            "a small prompt under a large window must not be compacted"
+        );
+    }
+
+    #[test]
+    fn compaction_leaves_short_tool_results_alone() {
+        let mut messages = vec![
+            serde_json::json!({ "role": "system", "content": "sys" }),
+            tool_msg("grep", "short result"),
+        ];
+        compact_old_tool_results(&mut messages);
+        assert_eq!(messages[1]["content"], "short result");
+        assert_eq!(messages[1]["name"], "grep");
+    }
+
+    #[test]
+    fn compaction_stops_after_five_rewrites_per_pass() {
+        let long = "y".repeat(250);
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
+        // 5 + window eligible, but a single pass caps at 5 rewrites.
+        for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 7) {
+            messages.push(tool_msg("read_file", &long));
+        }
+        compact_old_tool_results(&mut messages);
+        let compacted = messages
+            .iter()
+            .filter(|m| m["content"].as_str() == Some("[compacted: read_file]"))
+            .count();
+        assert_eq!(compacted, 5);
     }
 }
 

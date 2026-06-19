@@ -330,7 +330,7 @@ fn codex_context_window(model: &str) -> Option<usize> {
         .map(|window| window as usize)
 }
 
-fn fallback_context_window(provider: &str, model: &str) -> usize {
+pub(crate) fn fallback_context_window(provider: &str, model: &str) -> usize {
     let lower = model.to_lowercase();
     if provider == "claude-code" || lower.starts_with("claude-") {
         200_000

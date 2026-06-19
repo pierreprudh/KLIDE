@@ -82,6 +82,8 @@ type Props = {
   reloadFilesystemSkills: () => Promise<void>;
   apiKeyVersion: number;
   requireDiffReview: boolean;
+  onRequireDiffReviewChange?: (enabled: boolean) => void;
+  onOpenDiff?: (edit: { path: string; oldContent: string; newContent: string; isCreate: boolean }) => void;
   stopAfterRejection: boolean;
   aiModel: string;
   panelModels: Record<string, string[]>;
@@ -160,6 +162,8 @@ export function AnchoredWorkbench(props: Props) {
     reloadFilesystemSkills,
     apiKeyVersion,
     requireDiffReview,
+    onRequireDiffReviewChange,
+    onOpenDiff,
     stopAfterRejection,
     aiModel,
     panelModels,
@@ -338,6 +342,8 @@ export function AnchoredWorkbench(props: Props) {
         onAvailableModelsChange={(models) => updatePanelModels(safeId, models)}
         apiKeyVersion={apiKeyVersion}
         requireDiffReview={requireDiffReview}
+        onRequireDiffReviewChange={onRequireDiffReviewChange}
+        onOpenDiff={onOpenDiff}
         stopAfterRejection={stopAfterRejection}
         skills={skills}
         harnessSettings={harnessSettings}

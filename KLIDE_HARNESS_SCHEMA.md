@@ -47,11 +47,17 @@ Tools are filtered by **kind** per mode (`tools.rs:list_tools`):
 | Mode | Tools exposed |
 |---|---|
 | **Chat** | none — converse from visible context only |
-| **Plan** | `ReadOnly` tools only (12) + dynamic tools — inspect, never edit |
-| **Goal** | all kinds (17) + dynamic tools — inspect + diff-reviewed edits + approval-gated commands + pause |
+| **Plan** | `ReadOnly` tools only (12) — inspect, never edit or execute shell-backed dynamic tools |
+| **Goal** | all kinds (17) + dynamic command tools — inspect + diff-reviewed edits + approval-gated commands + pause |
 
-*Dynamic tools* (`load_dynamic_tools`) are additionally available in Plan/Goal
-for custom/MCP-style tools loaded at runtime.
+*Dynamic tools* (`load_dynamic_tools`) are shell-backed command tools loaded at
+runtime from `.agents/tools.json`. They are Goal-only and pass through the same
+permission gate, timeout, cwd validation, and transcript evidence path as
+`run_command`. See [`HARNESS_CONTRACT.md`](./HARNESS_CONTRACT.md).
+
+Run summaries also include transcript-derived validation evidence: file changes,
+diff-review count, command count, failed commands, permission decisions, and
+warnings for unverified implementation work.
 
 ## Tool registry (`src-tauri/src/agent/tools.rs`)
 

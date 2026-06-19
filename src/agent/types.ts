@@ -269,6 +269,9 @@ export type StartAgentRunInput = {
   /** Seconds a run_command may run before it's killed. Omit for the harness
    *  default (180s). */
   commandTimeoutSecs?: number;
+  /** Whether file edits pause for diff review. Omit/true = review every edit;
+   *  false = auto-accept (edits apply without a prompt; still checkpointed). */
+  requireDiffReview?: boolean;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };

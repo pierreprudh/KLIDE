@@ -1,4 +1,7 @@
-use super::types::{AgentContentBlock, AgentEvent, AgentRunSummary};
+use super::types::{
+    AgentContentBlock, AgentEvent, AgentRunSummary, AgentValidationCheckSummary,
+    AgentValidationSummary,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -118,6 +121,7 @@ pub fn write_summary(runs_dir: &Path, summary: &AgentRunSummary) -> Result<(), S
         // write — the transcript grows as the run progresses. Klide's own
         // transcripts are bounded (≤16 turns), so the re-read is cheap.
         summary.last_event = last_assistant_summary(&events);
+        summary.validation = Some(summarize_validation(&events));
     }
     let path = summary_path(runs_dir, &summary.id);
     let encoded = serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?;
@@ -153,6 +157,181 @@ pub(crate) fn summarize_event_stats(events: &[AgentEvent]) -> (i64, i64, u32) {
     (input, output, files.len() as u32)
 }
 
+pub(crate) fn summarize_validation(events: &[AgentEvent]) -> AgentValidationSummary {
+    use std::collections::{HashMap, HashSet};
+
+    let mut tool_names: HashMap<String, String> = HashMap::new();
+    let mut command_ids: HashSet<String> = HashSet::new();
+    let mut files: HashSet<String> = HashSet::new();
+    let mut commands_run = 0u32;
+    let mut commands_failed = 0u32;
+    let mut diff_reviews = 0u32;
+    let mut applied_diffs = 0u32;
+    let mut rejected_diffs = 0u32;
+    let mut permissions_approved = 0u32;
+    let mut permissions_denied = 0u32;
+
+    for event in events {
+        match event {
+            AgentEvent::ToolCallStarted {
+                tool_call_id, name, ..
+            } => {
+                tool_names.insert(tool_call_id.clone(), name.clone());
+                if name == "run_command" {
+                    command_ids.insert(tool_call_id.clone());
+                }
+            }
+            AgentEvent::PermissionRequested { request, .. } => {
+                if request
+                    .get("input")
+                    .and_then(|input| input.get("command"))
+                    .and_then(|command| command.as_str())
+                    .is_some()
+                {
+                    if let Some(tool_call_id) = request.get("toolCallId").and_then(|v| v.as_str()) {
+                        command_ids.insert(tool_call_id.to_string());
+                    }
+                }
+            }
+            AgentEvent::PermissionResolved { decision, .. } => {
+                if decision.get("behavior").and_then(|b| b.as_str()) == Some("allow") {
+                    permissions_approved += 1;
+                } else {
+                    permissions_denied += 1;
+                }
+            }
+            AgentEvent::ToolCallFinished {
+                tool_call_id,
+                result,
+                ..
+            } => {
+                if command_ids.contains(tool_call_id)
+                    || tool_names
+                        .get(tool_call_id)
+                        .map(|name| name == "run_command")
+                        == Some(true)
+                {
+                    commands_run += 1;
+                    if !result.ok {
+                        commands_failed += 1;
+                    }
+                }
+            }
+            AgentEvent::DiffResolved { decision, .. } => {
+                diff_reviews += 1;
+                if decision.get("behavior").and_then(|b| b.as_str()) == Some("apply") {
+                    applied_diffs += 1;
+                } else {
+                    rejected_diffs += 1;
+                }
+            }
+            AgentEvent::FileChanged { path, .. } => {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    files.insert(trimmed.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let files_changed = files.len() as u32;
+    let mut checks = Vec::new();
+    let mut warnings = Vec::new();
+
+    if files_changed > 0 {
+        checks.push(AgentValidationCheckSummary {
+            id: "diff-review".to_string(),
+            label: "Changed files passed Diff review".to_string(),
+            status: if applied_diffs > 0 {
+                "passed"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            required: true,
+            evidence: Some(format!(
+                "{applied_diffs} applied, {rejected_diffs} rejected"
+            )),
+        });
+    } else {
+        checks.push(AgentValidationCheckSummary {
+            id: "diff-review".to_string(),
+            label: "No file changes required Diff review".to_string(),
+            status: "skipped".to_string(),
+            required: false,
+            evidence: None,
+        });
+    }
+
+    if commands_run > 0 {
+        checks.push(AgentValidationCheckSummary {
+            id: "command-validation".to_string(),
+            label: "Command validation completed".to_string(),
+            status: if commands_failed == 0 {
+                "passed"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            required: files_changed > 0,
+            evidence: Some(format!(
+                "{} passed, {} failed",
+                commands_run.saturating_sub(commands_failed),
+                commands_failed
+            )),
+        });
+    } else {
+        checks.push(AgentValidationCheckSummary {
+            id: "command-validation".to_string(),
+            label: if files_changed > 0 {
+                "No validation command recorded after file changes".to_string()
+            } else {
+                "No validation command needed for read-only run".to_string()
+            },
+            status: "skipped".to_string(),
+            required: files_changed > 0,
+            evidence: None,
+        });
+        if files_changed > 0 {
+            warnings.push("Files changed without a recorded validation command.".to_string());
+        }
+    }
+
+    if permissions_denied > 0 {
+        warnings.push(format!(
+            "{permissions_denied} command permission request(s) denied."
+        ));
+    }
+
+    let status = if commands_failed > 0
+        || checks
+            .iter()
+            .any(|check| check.required && check.status == "failed")
+    {
+        "failed"
+    } else if files_changed > 0 && commands_run == 0 {
+        "unverified"
+    } else if files_changed == 0 && commands_run == 0 {
+        "skipped"
+    } else {
+        "passed"
+    }
+    .to_string();
+
+    AgentValidationSummary {
+        status,
+        checks,
+        files_changed,
+        commands_run,
+        commands_failed,
+        diff_reviews,
+        permissions_approved,
+        permissions_denied,
+        warnings,
+    }
+}
+
 /// One-line summary of the run's most recent assistant turn — "what it last
 /// did" — for the Mission Control row. Text blocks concatenate; tool calls
 /// collapse to `[tool: <name>]`; thinking is dropped. The newest assistant
@@ -185,7 +364,15 @@ pub(crate) fn last_assistant_summary(events: &[AgentEvent]) -> Option<String> {
             }
             let trimmed = buf.trim();
             if !trimmed.is_empty() {
-                last = Some(trimmed.lines().next().unwrap_or(trimmed).chars().take(120).collect());
+                last = Some(
+                    trimmed
+                        .lines()
+                        .next()
+                        .unwrap_or(trimmed)
+                        .chars()
+                        .take(120)
+                        .collect(),
+                );
             }
         }
     }
@@ -240,7 +427,7 @@ pub fn list_summaries(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::types::AgentUsage;
+    use crate::agent::types::{AgentUsage, ToolResult};
 
     fn file_changed(id: &str, path: &str) -> AgentEvent {
         AgentEvent::FileChanged {
@@ -274,6 +461,60 @@ mod tests {
                 text: text.to_string(),
             }],
             usage: None,
+            ts: 1,
+        }
+    }
+
+    fn tool_started(id: &str, tool_call_id: &str, name: &str) -> AgentEvent {
+        AgentEvent::ToolCallStarted {
+            run_id: id.to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            name: name.to_string(),
+            input: serde_json::json!({}),
+            summary: name.to_string(),
+            ts: 1,
+        }
+    }
+
+    fn tool_finished(id: &str, tool_call_id: &str, ok: bool) -> AgentEvent {
+        AgentEvent::ToolCallFinished {
+            run_id: id.to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            result: ToolResult {
+                ok,
+                content: if ok { "ok" } else { "failed" }.to_string(),
+                metadata: None,
+            },
+            ts: 1,
+        }
+    }
+
+    fn permission_requested(id: &str, request_id: &str, tool_call_id: &str) -> AgentEvent {
+        AgentEvent::PermissionRequested {
+            run_id: id.to_string(),
+            request: serde_json::json!({
+                "id": request_id,
+                "toolCallId": tool_call_id,
+                "input": { "command": "npm test" }
+            }),
+            ts: 1,
+        }
+    }
+
+    fn permission_resolved(id: &str, request_id: &str, behavior: &str) -> AgentEvent {
+        AgentEvent::PermissionResolved {
+            run_id: id.to_string(),
+            request_id: request_id.to_string(),
+            decision: serde_json::json!({ "behavior": behavior }),
+            ts: 1,
+        }
+    }
+
+    fn diff_resolved(id: &str, behavior: &str) -> AgentEvent {
+        AgentEvent::DiffResolved {
+            run_id: id.to_string(),
+            proposal_id: "proposal-1".to_string(),
+            decision: serde_json::json!({ "behavior": behavior }),
             ts: 1,
         }
     }
@@ -343,6 +584,69 @@ mod tests {
     }
 
     #[test]
+    fn summarize_validation_marks_read_only_run_skipped() {
+        let id = "test-run";
+        let summary = summarize_validation(&[assistant_with_text(id, "inspected the code")]);
+
+        assert_eq!(summary.status, "skipped");
+        assert_eq!(summary.files_changed, 0);
+        assert_eq!(summary.commands_run, 0);
+        assert!(summary.warnings.is_empty());
+        assert_eq!(summary.checks[0].status, "skipped");
+        assert_eq!(summary.checks[1].status, "skipped");
+    }
+
+    #[test]
+    fn summarize_validation_marks_changed_files_without_command_unverified() {
+        let id = "test-run";
+        let summary =
+            summarize_validation(&[diff_resolved(id, "apply"), file_changed(id, "src/main.rs")]);
+
+        assert_eq!(summary.status, "unverified");
+        assert_eq!(summary.files_changed, 1);
+        assert_eq!(summary.commands_run, 0);
+        assert_eq!(summary.diff_reviews, 1);
+        assert!(
+            summary
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("without a recorded validation command"))
+        );
+    }
+
+    #[test]
+    fn summarize_validation_marks_failed_command_failed() {
+        let id = "test-run";
+        let call_id = "tool-1";
+        let summary = summarize_validation(&[
+            tool_started(id, call_id, "run_command"),
+            tool_finished(id, call_id, false),
+        ]);
+
+        assert_eq!(summary.status, "failed");
+        assert_eq!(summary.commands_run, 1);
+        assert_eq!(summary.commands_failed, 1);
+    }
+
+    #[test]
+    fn summarize_validation_counts_permission_backed_dynamic_commands() {
+        let id = "test-run";
+        let call_id = "tool-1";
+        let request_id = "permission-1";
+        let summary = summarize_validation(&[
+            tool_started(id, call_id, "npm_test"),
+            permission_requested(id, request_id, call_id),
+            permission_resolved(id, request_id, "allow"),
+            tool_finished(id, call_id, true),
+        ]);
+
+        assert_eq!(summary.status, "passed");
+        assert_eq!(summary.commands_run, 1);
+        assert_eq!(summary.commands_failed, 0);
+        assert_eq!(summary.permissions_approved, 1);
+    }
+
+    #[test]
     fn write_summary_enriches_from_transcript_when_zero() {
         // Set up a temp runs dir, append two events, call write_summary
         // with the new fields at their default (0/None), and verify the
@@ -352,20 +656,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let id = "enrich-1";
         // Append events directly (write_summary expects them to exist).
-        append_event(
-            &dir,
-            id,
-            0,
-            &file_changed(id, "src/a.rs"),
-        )
-        .unwrap();
-        append_event(
-            &dir,
-            id,
-            1,
-            &assistant_with_usage(id, 100, 50),
-        )
-        .unwrap();
+        append_event(&dir, id, 0, &file_changed(id, "src/a.rs")).unwrap();
+        append_event(&dir, id, 1, &assistant_with_usage(id, 100, 50)).unwrap();
         let summary = AgentRunSummary {
             id: id.to_string(),
             path: String::new(),
@@ -385,6 +677,7 @@ mod tests {
             files_touched: 0,
             cost_usd: None,
             last_event: None,
+            validation: None,
             parent_id: None,
         };
         write_summary(&dir, &summary).unwrap();
@@ -394,6 +687,50 @@ mod tests {
         assert!(on_disk.contains("\"outputTokens\": 50"));
         assert!(on_disk.contains("\"filesTouched\": 1"));
         assert!(on_disk.contains("\"costUsd\": 0.00105"), "got: {on_disk}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_summary_enriches_validation_from_transcript() {
+        let dir = std::env::temp_dir().join("klide-transcripts-test-validation");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = "validation-1";
+        let call_id = "tool-1";
+        append_event(&dir, id, 0, &diff_resolved(id, "apply")).unwrap();
+        append_event(&dir, id, 1, &file_changed(id, "src/main.rs")).unwrap();
+        append_event(&dir, id, 2, &tool_started(id, call_id, "run_command")).unwrap();
+        append_event(&dir, id, 3, &tool_finished(id, call_id, true)).unwrap();
+
+        let summary = AgentRunSummary {
+            id: id.to_string(),
+            path: String::new(),
+            source: "klide".to_string(),
+            title: "t".to_string(),
+            status: "done".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            cwd: None,
+            project: None,
+            git_branch: None,
+            created_ms: 0,
+            updated_ms: 0,
+            message_count: 1,
+            input_tokens: 0,
+            output_tokens: 0,
+            files_touched: 0,
+            cost_usd: None,
+            last_event: None,
+            validation: None,
+            parent_id: None,
+        };
+        write_summary(&dir, &summary).unwrap();
+        let on_disk = std::fs::read_to_string(dir.join(format!("{id}.summary.json"))).unwrap();
+
+        assert!(on_disk.contains("\"validation\""), "got: {on_disk}");
+        assert!(on_disk.contains("\"status\": \"passed\""), "got: {on_disk}");
+        assert!(on_disk.contains("\"filesChanged\": 1"), "got: {on_disk}");
+        assert!(on_disk.contains("\"commandsRun\": 1"), "got: {on_disk}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

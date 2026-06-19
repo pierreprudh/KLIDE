@@ -62,7 +62,7 @@ pub struct NormalizedToolCall {
 // live in the same entry. The frontend fetches schemas over IPC instead of
 // maintaining its own copy — no drift between the two sides.
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
     ReadOnly,
     Write,
@@ -76,6 +76,49 @@ pub enum ToolKind {
     // request, waits for approval, then calls `run_command_capture`. Goal-mode
     // only — any command can mutate the workspace.
     Command,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolCapability {
+    ReadWorkspace,
+    WriteWorkspace,
+    RunCommand,
+    PauseForUser,
+    #[allow(dead_code)]
+    Network,
+}
+
+impl ToolKind {
+    pub fn capability(self) -> ToolCapability {
+        match self {
+            ToolKind::ReadOnly => ToolCapability::ReadWorkspace,
+            ToolKind::Write => ToolCapability::WriteWorkspace,
+            ToolKind::Command => ToolCapability::RunCommand,
+            ToolKind::Pause => ToolCapability::PauseForUser,
+        }
+    }
+}
+
+pub fn tool_allowed_in_mode(mode: &AgentMode, kind: ToolKind) -> bool {
+    match mode {
+        AgentMode::Chat => false,
+        AgentMode::Plan => kind == ToolKind::ReadOnly,
+        AgentMode::Goal => true,
+    }
+}
+
+pub fn tool_kind_label(kind: ToolKind) -> &'static str {
+    tool_capability_label(kind.capability())
+}
+
+pub fn tool_capability_label(capability: ToolCapability) -> &'static str {
+    match capability {
+        ToolCapability::ReadWorkspace => "read workspace",
+        ToolCapability::WriteWorkspace => "write workspace",
+        ToolCapability::RunCommand => "run command",
+        ToolCapability::PauseForUser => "pause for user",
+        ToolCapability::Network => "network",
+    }
 }
 
 // Tool executions receive a `Workspace`, never a raw root string — resolving
@@ -410,6 +453,14 @@ fn registry() -> Vec<ToolEntry> {
 }
 
 pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Value> {
+    list_tools_for_workspace(mode, disabled, None)
+}
+
+pub fn list_tools_for_workspace(
+    mode: &AgentMode,
+    disabled: &[String],
+    workspace_root: Option<&str>,
+) -> Vec<serde_json::Value> {
     let reg = registry();
     let kind_filter = match mode {
         AgentMode::Chat => return Vec::new(),
@@ -428,15 +479,27 @@ pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Valu
         })
         .map(|e| e.schema.clone())
         .collect();
-    // Dynamic tools always available in Plan/Goal
-    if mode != &AgentMode::Chat {
-        tools.extend(load_dynamic_tools(None));
+    // Dynamic tools are shell-backed command tools. They are Goal-only and go
+    // through the same permission gate as run_command; Plan stays read-only.
+    if mode == &AgentMode::Goal {
+        tools.extend(
+            load_dynamic_tools(workspace_root)
+                .into_iter()
+                .filter(|schema| {
+                    let name = schema["function"]["name"].as_str().unwrap_or("");
+                    !disabled.iter().any(|d| d == name) && find_builtin_tool_kind(name).is_none()
+                }),
+        );
     }
     tools
 }
 
-pub fn schemas_for_mode(mode: &AgentMode, disabled: &[String]) -> Option<Vec<serde_json::Value>> {
-    let tools = list_tools(mode, disabled);
+pub fn schemas_for_mode(
+    mode: &AgentMode,
+    disabled: &[String],
+    workspace_root: Option<&str>,
+) -> Option<Vec<serde_json::Value>> {
+    let tools = list_tools_for_workspace(mode, disabled, workspace_root);
     if tools.is_empty() {
         None
     } else {
@@ -444,14 +507,21 @@ pub fn schemas_for_mode(mode: &AgentMode, disabled: &[String]) -> Option<Vec<ser
     }
 }
 
-/// Look up a tool by name and return its kind. The registry is the only
-/// module that names a tool; callers (the run loop, the parallel pre-execute
-/// filter) dispatch on this kind, not on a string match.
-pub fn find_tool_kind(name: &str) -> Option<ToolKind> {
+fn find_builtin_tool_kind(name: &str) -> Option<ToolKind> {
     registry()
         .into_iter()
         .find(|e| schema_has_name(&e.schema, name))
         .map(|e| e.kind)
+}
+
+/// Look up a tool by name and return its kind. The registry is the only
+/// module that names a tool; callers (the run loop, the parallel pre-execute
+/// filter) dispatch on this kind, not on a string match. Workspace-aware:
+/// dynamic (workspace-defined) tools resolve to `Command` so they pass through
+/// the same permission gate as `run_command`.
+pub fn find_tool_kind_for_workspace(name: &str, workspace_root: Option<&str>) -> Option<ToolKind> {
+    find_builtin_tool_kind(name)
+        .or_else(|| find_dynamic_tool_def(name, workspace_root).map(|_| ToolKind::Command))
 }
 
 /// Render the per-tool one-liner used on the `ToolCallStarted` event. The
@@ -465,6 +535,29 @@ pub fn tool_summary(call: &NormalizedToolCall) -> String {
         .unwrap_or_else(|| call.name.clone())
 }
 
+pub fn tool_summary_for_workspace(
+    call: &NormalizedToolCall,
+    workspace_root: Option<&str>,
+) -> String {
+    tool_summary(call).or_else_dynamic(call, workspace_root)
+}
+
+trait DynamicSummary {
+    fn or_else_dynamic(self, call: &NormalizedToolCall, workspace_root: Option<&str>) -> String;
+}
+
+impl DynamicSummary for String {
+    fn or_else_dynamic(self, call: &NormalizedToolCall, workspace_root: Option<&str>) -> String {
+        if self != call.name {
+            return self;
+        }
+        match dynamic_tool_command(&call.name, &call.input, workspace_root.unwrap_or("")) {
+            Some(Ok(invocation)) => invocation.summary,
+            _ => self,
+        }
+    }
+}
+
 fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
     schema
         .get("function")
@@ -474,11 +567,6 @@ fn schema_has_name(schema: &serde_json::Value, name: &str) -> bool {
 }
 
 pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall, run_id: &str) -> ToolResult {
-    // Check dynamic tools first
-    if let Some(result) = execute_dynamic_tool(&call.name, &call.input, Some(root)) {
-        return result;
-    }
-    // Then built-in registry
     let ws = match Workspace::new(root) {
         Ok(ws) => ws,
         Err(e) => return err(e),
@@ -488,6 +576,10 @@ pub fn execute_read_only_tool(root: &str, call: &NormalizedToolCall, run_id: &st
         .find(|e| schema_has_name(&e.schema, &call.name));
     let result = match entry.and_then(|e| e.run_read) {
         Some(f) => f(&ws, &call.input, run_id),
+        None if find_dynamic_tool_def(&call.name, Some(root)).is_some() => err(format!(
+            "Dynamic tool '{}' is a command-capability tool. It is available only through the Goal-mode permission gate, not read-only dispatch.",
+            call.name
+        )),
         None => err(format!("Unknown tool: {}", call.name)),
     };
     // A successful read of a file carries a `{snapshotPath, snapshotHash}` blob
@@ -529,13 +621,13 @@ pub fn execute_write_tool_preview(
 
 // ── Dynamic tools from .agents/tools.json ───────────────────────────────
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 struct DynamicToolDef {
     name: String,
     description: String,
     command: String,
     #[serde(default = "default_timeout", alias = "timeout_secs")]
-    _timeout_secs: u64,
+    timeout_secs: u64,
     #[serde(default)]
     cwd: String,
 }
@@ -561,25 +653,36 @@ fn load_tools_from(path: &Path) -> Vec<DynamicToolDef> {
     config.tools
 }
 
-pub fn load_dynamic_tools(workspace_root: Option<&str>) -> Vec<serde_json::Value> {
-    let mut tools = Vec::new();
+fn dynamic_tool_defs(workspace_root: Option<&str>) -> Vec<DynamicToolDef> {
+    let mut defs = Vec::new();
     let home = std::env::var("HOME").unwrap_or_default();
 
-    // Load global tools
     let global_path = Path::new(&home).join(".agents/tools.json");
-    for def in load_tools_from(&global_path) {
-        tools.push(dynamic_tool_schema(&def));
-    }
+    defs.extend(load_tools_from(&global_path));
 
-    // Load workspace tools
     if let Some(root) = workspace_root {
         let workspace_path = Path::new(root).join(".agents/tools.json");
-        for def in load_tools_from(&workspace_path) {
-            tools.push(dynamic_tool_schema(&def));
-        }
+        defs.extend(load_tools_from(&workspace_path));
     }
 
-    tools
+    defs
+}
+
+fn find_dynamic_tool_def(name: &str, workspace_root: Option<&str>) -> Option<DynamicToolDef> {
+    if find_builtin_tool_kind(name).is_some() {
+        return None;
+    }
+    dynamic_tool_defs(workspace_root)
+        .into_iter()
+        .find(|d| d.name == name)
+}
+
+pub fn load_dynamic_tools(workspace_root: Option<&str>) -> Vec<serde_json::Value> {
+    dynamic_tool_defs(workspace_root)
+        .into_iter()
+        .filter(|def| find_builtin_tool_kind(&def.name).is_none())
+        .map(|def| dynamic_tool_schema(&def))
+        .collect()
 }
 
 fn dynamic_tool_schema(def: &DynamicToolDef) -> serde_json::Value {
@@ -598,24 +701,29 @@ fn dynamic_tool_schema(def: &DynamicToolDef) -> serde_json::Value {
     })
 }
 
-pub fn execute_dynamic_tool(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DynamicToolCommand {
+    pub tool_name: String,
+    pub command: String,
+    pub cwd: String,
+    pub timeout_secs: u64,
+    pub summary: String,
+    pub reason: String,
+}
+
+pub fn dynamic_tool_command(
     name: &str,
     input: &serde_json::Value,
-    workspace_root: Option<&str>,
-) -> Option<ToolResult> {
-    let mut all_defs = Vec::new();
-    let home = std::env::var("HOME").unwrap_or_default();
-    all_defs.extend(load_tools_from(
-        &Path::new(&home).join(".agents/tools.json"),
-    ));
-    if let Some(root) = workspace_root {
-        all_defs.extend(load_tools_from(&Path::new(root).join(".agents/tools.json")));
-    }
-    let def = all_defs.iter().find(|d| d.name == name)?;
-    let cwd = if def.cwd == "workspace" {
-        workspace_root.unwrap_or(".")
-    } else {
-        "."
+    workspace_root: &str,
+) -> Option<Result<DynamicToolCommand, ToolResult>> {
+    let def = find_dynamic_tool_def(name, Some(workspace_root))?;
+    let ws = match Workspace::new(workspace_root) {
+        Ok(ws) => ws,
+        Err(e) => return Some(Err(err(format!("Cannot run dynamic tool {name}: {e}")))),
+    };
+    let cwd = match resolve_dynamic_tool_cwd(&ws, &def.cwd) {
+        Ok(cwd) => cwd,
+        Err(e) => return Some(Err(err(e))),
     };
     let args_str = string_arg(input, "args").unwrap_or_default();
     let full_command = if args_str.is_empty() {
@@ -623,45 +731,35 @@ pub fn execute_dynamic_tool(
     } else {
         format!("{} {}", def.command, args_str)
     };
+    let timeout_secs = def.timeout_secs.clamp(1, 1800);
 
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&full_command)
-        .current_dir(cwd)
-        .output();
-    let output = match output {
-        Ok(o) => o,
-        Err(e) => {
-            return Some(ToolResult {
-                ok: false,
-                content: format!("Failed to run {}: {e}", def.name),
-                metadata: None,
-            })
-        }
-    };
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut result = stdout.trim().to_string();
-        if !stderr.trim().is_empty() {
-            result.push_str(&format!("\n\nstderr:\n{}", stderr.trim()));
-        }
-        if result.is_empty() {
-            result = "(command completed successfully)".to_string();
-        }
-        Some(ToolResult {
-            ok: true,
-            content: result.chars().take(4000).collect(),
-            metadata: None,
-        })
+    Some(Ok(DynamicToolCommand {
+        tool_name: def.name.clone(),
+        summary: format!("{}: $ {}", def.name, full_command),
+        reason: format!(
+            "The dynamic tool '{}' wants to run a shell command in the workspace.",
+            def.name
+        ),
+        command: full_command,
+        cwd,
+        timeout_secs,
+    }))
+}
+
+fn resolve_dynamic_tool_cwd(ws: &Workspace, cwd: &str) -> Result<String, String> {
+    let trimmed = cwd.trim();
+    let path = if trimmed.is_empty() || trimmed == "workspace" || trimmed == "." {
+        ws.root().to_path_buf()
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Some(ToolResult {
-            ok: false,
-            content: format!("{} failed: {}", def.name, stderr.trim()),
-            metadata: None,
-        })
+        ws.resolve_existing(trimmed)?
+    };
+    if !path.is_dir() {
+        return Err(format!(
+            "Dynamic tool cwd must resolve to a workspace directory: {}",
+            ws.display(&path)
+        ));
     }
+    Ok(path.to_string_lossy().to_string())
 }
 
 pub fn parse_tool_calls(raw: &[serde_json::Value]) -> Vec<NormalizedToolCall> {
@@ -894,12 +992,30 @@ fn err(content: String) -> ToolResult {
 /// stderr are returned together with the exit code; output is truncated so a
 /// chatty build can't blow the context window. The result is `ok: true` only on
 /// a zero exit so the model can tell success from failure.
+///
+/// Convenience wrapper that runs in the workspace root. Production paths call
+/// `run_command_capture_in` with an explicit cwd (dynamic tools may set one);
+/// this root-cwd form is used by the eval harness and tool tests.
+#[allow(dead_code)]
 pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -> ToolResult {
+    run_command_capture_in(root, root, command, timeout_secs).await
+}
+
+pub async fn run_command_capture_in(
+    root: &str,
+    cwd: &str,
+    command: &str,
+    timeout_secs: u64,
+) -> ToolResult {
     const MAX_OUTPUT: usize = 16_000;
     // Go through Workspace so the run dir honors the same root invariant the
     // file tools use (and fails clearly if no workspace is open).
     let ws = match Workspace::new(root) {
         Ok(ws) => ws,
+        Err(e) => return err(format!("Cannot run command: {e}")),
+    };
+    let cwd = match resolve_command_cwd(&ws, cwd) {
+        Ok(cwd) => cwd,
         Err(e) => return err(format!("Cannot run command: {e}")),
     };
     // `kill_on_drop(true)` + a timeout around `wait_with_output` means a command
@@ -908,7 +1024,7 @@ pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -
     let spawned = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
-        .current_dir(ws.root())
+        .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
@@ -968,6 +1084,24 @@ pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -
         content: format!("{header}\n\n{body}"),
         metadata: None,
     }
+}
+
+fn resolve_command_cwd(ws: &Workspace, cwd: &str) -> Result<PathBuf, String> {
+    let trimmed = cwd.trim();
+    let path = if trimmed.is_empty() || trimmed == "workspace" || trimmed == "." {
+        ws.root().to_path_buf()
+    } else if Path::new(trimmed).is_absolute() {
+        ws.resolve_abs_read(trimmed)?
+    } else {
+        ws.resolve_existing(trimmed)?
+    };
+    if !path.is_dir() {
+        return Err(format!(
+            "command cwd must resolve to a workspace directory: {}",
+            ws.display(&path)
+        ));
+    }
+    Ok(path)
 }
 
 /// Raw string argument — preserves whitespace exactly. Use for file contents
@@ -1036,7 +1170,10 @@ fn read_file(ws: &Workspace, path: &str) -> ToolResult {
                     "Contents of {} ({} lines, {} chars). Lines are numbered `N: `; \
 when editing with write_file, the number prefix is optional — it's stripped \
 automatically.\n```\n{}\n```",
-                    rel, line_count, content.len(), numbered
+                    rel,
+                    line_count,
+                    content.len(),
+                    numbered
                 ),
                 // The execution wrapper reads this back to record a read
                 // snapshot, so a later write_file can flag a stale edit.
@@ -2305,10 +2442,8 @@ mod tests {
     // ── Staleness guard (omp's `#tag`, lite) ─────────────────────────────
 
     fn snapshot_sandbox(label: &str) -> (Workspace, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "klide-snapshot-{label}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("klide-snapshot-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
@@ -2324,17 +2459,125 @@ mod tests {
 
         let ok = run_command_capture(root, "echo hello", 30).await;
         assert!(ok.ok, "exit 0 → ok");
-        assert!(ok.content.contains("hello"), "stdout captured: {}", ok.content);
+        assert!(
+            ok.content.contains("hello"),
+            "stdout captured: {}",
+            ok.content
+        );
         assert!(ok.content.contains("exit 0"));
 
         let fail = run_command_capture(root, "exit 3", 30).await;
         assert!(!fail.ok, "non-zero exit → not ok");
-        assert!(fail.content.contains("exit 3"), "exit code surfaced: {}", fail.content);
+        assert!(
+            fail.content.contains("exit 3"),
+            "exit code surfaced: {}",
+            fail.content
+        );
 
         // A command that outlives the timeout is killed and reported, not hung.
         let slow = run_command_capture(root, "sleep 10", 1).await;
         assert!(!slow.ok, "timed-out command → not ok");
-        assert!(slow.content.contains("timed out"), "timeout surfaced: {}", slow.content);
+        assert!(
+            slow.content.contains("timed out"),
+            "timeout surfaced: {}",
+            slow.content
+        );
+    }
+
+    fn dynamic_tool_sandbox(name: &str, tools_json: &str) -> (String, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("klide-dynamic-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".agents")).unwrap();
+        std::fs::write(dir.join(".agents/tools.json"), tools_json).unwrap();
+        (dir.to_string_lossy().to_string(), dir)
+    }
+
+    #[test]
+    fn dynamic_command_tools_are_goal_only() {
+        let (root, _dir) = dynamic_tool_sandbox(
+            "goal-only",
+            r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"pwd","cwd":"workspace"}]}"#,
+        );
+
+        let plan = list_tools_for_workspace(&AgentMode::Plan, &[], Some(&root));
+        assert!(
+            !plan
+                .iter()
+                .any(|schema| schema["function"]["name"] == "workspace_probe"),
+            "Plan mode must not advertise shell-backed dynamic tools"
+        );
+
+        let goal = list_tools_for_workspace(&AgentMode::Goal, &[], Some(&root));
+        assert!(
+            goal.iter()
+                .any(|schema| schema["function"]["name"] == "workspace_probe"),
+            "Goal mode should advertise dynamic command tools"
+        );
+    }
+
+    #[test]
+    fn dynamic_tools_classify_as_command_capability() {
+        let (root, _dir) = dynamic_tool_sandbox(
+            "kind",
+            r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"pwd","cwd":"workspace"}]}"#,
+        );
+
+        assert_eq!(find_tool_kind_for_workspace("read_file", None), Some(ToolKind::ReadOnly));
+        assert_eq!(
+            find_tool_kind_for_workspace("workspace_probe", Some(&root)),
+            Some(ToolKind::Command)
+        );
+        assert!(tool_allowed_in_mode(&AgentMode::Goal, ToolKind::Command));
+        assert!(!tool_allowed_in_mode(&AgentMode::Plan, ToolKind::Command));
+    }
+
+    #[test]
+    fn dynamic_tools_do_not_execute_through_read_only_dispatch() {
+        let (root, dir) = dynamic_tool_sandbox(
+            "read-dispatch",
+            r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"touch marker","cwd":"workspace"}]}"#,
+        );
+        let call = NormalizedToolCall {
+            id: "call_1".to_string(),
+            name: "workspace_probe".to_string(),
+            input: serde_json::json!({}),
+        };
+
+        let result = execute_read_only_tool(&root, &call, "run-dynamic");
+        assert!(!result.ok);
+        assert!(result.content.contains("command-capability"));
+        assert!(
+            !dir.join("marker").exists(),
+            "read-only dispatch must not run the dynamic shell command"
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_command_is_workspace_rooted_and_timeout_bounded() {
+        let (root, dir) = dynamic_tool_sandbox(
+            "invocation",
+            r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"echo base","cwd":"sub","timeout_secs":9999}]}"#,
+        );
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+
+        let invocation = dynamic_tool_command(
+            "workspace_probe",
+            &serde_json::json!({ "args": "extra" }),
+            &root,
+        )
+        .expect("dynamic tool exists")
+        .expect("dynamic tool command resolves");
+
+        assert_eq!(invocation.command, "echo base extra");
+        assert_eq!(
+            invocation.cwd,
+            std::fs::canonicalize(dir.join("sub"))
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(invocation.timeout_secs, 1800);
+        assert!(invocation.summary.contains("workspace_probe"));
     }
 
     #[test]
@@ -2348,7 +2591,8 @@ mod tests {
         // The model "read" an older version (a different hash).
         record_snapshot(run, &rel, &hash_content("let x = 0;\n"));
 
-        let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
+        let input =
+            serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
         let proposal = preview_write_file(&ws, &input, run).unwrap();
         let reason = proposal.reason.expect("stale edit should carry a reason");
         assert!(reason.contains("changed since"), "got: {reason}");
@@ -2366,9 +2610,13 @@ mod tests {
         // The model read exactly the current content.
         record_snapshot(run, &rel, &hash_content(body));
 
-        let input = serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
+        let input =
+            serde_json::json!({ "path": "a.rs", "old_str": "let x = 1;", "new_str": "let x = 2;" });
         let proposal = preview_write_file(&ws, &input, run).unwrap();
-        assert!(proposal.reason.is_none(), "fresh edit should not be flagged");
+        assert!(
+            proposal.reason.is_none(),
+            "fresh edit should not be flagged"
+        );
     }
 
     // ── Post-edit syntax verification (omp's diagnostics, lite) ──────────

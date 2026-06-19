@@ -49,7 +49,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
         e.preventDefault();
         onClose();
       }}
-      style={{ position: "fixed", inset: 0, zIndex: 50 }}
+      style={{ position: "fixed", inset: 0, zIndex: 9999 }}
     >
       <div
         ref={menuRef}

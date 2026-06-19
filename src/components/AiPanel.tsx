@@ -9,7 +9,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { DiffModal } from "./DiffModal";
+import { InlineDiffReview } from "./InlineDiffReview";
+import { InlineCommandReview } from "./InlineCommandReview";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   estimateProjectContextTokens,
@@ -46,7 +47,7 @@ import { enabledSkillsPrompt, type Skill } from "../skills";
 
 import { ProviderLogo, AssistantPlaceholderLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
-import { renderMessageBody } from "./ai/ChatMessage";
+import { renderMessageBody, CompactionRow } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
@@ -122,6 +123,9 @@ type Props = {
   onAvailableModelsChange: (models: string[]) => void;
   apiKeyVersion?: number;
   requireDiffReview: boolean;
+  onRequireDiffReviewChange?: (enabled: boolean) => void;
+  /** Open a proposed/applied edit as a full side-by-side diff in the editor. */
+  onOpenDiff?: (edit: { path: string; oldContent: string; newContent: string; isCreate: boolean }) => void;
   stopAfterRejection: boolean;
   skills: Skill[];
   projectContext?: ProjectContextSnapshot | null;
@@ -280,7 +284,9 @@ export function AiPanel({
   availableModels,
   onAvailableModelsChange,
   apiKeyVersion = 0,
-  requireDiffReview: _requireDiffReview,
+  requireDiffReview,
+  onRequireDiffReviewChange,
+  onOpenDiff,
   stopAfterRejection,
   skills,
   projectContext,
@@ -382,6 +388,9 @@ export function AiPanel({
   // freeing the window while keeping recent turns verbatim.
   const [compacting, setCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
+  // Layout of the in-flight compaction: "manual" (/compact) → full-width row,
+  // "agent" (inline/automatic) → slim tool-style row.
+  const [compactSource, setCompactSource] = useState<"manual" | "agent">("manual");
   const [contextMode] = useState<ProjectContextMode>(
     () => (localStorage.getItem("klide.contextMode") as ProjectContextMode) || "auto"
   );
@@ -591,6 +600,21 @@ export function AiPanel({
     { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)", run: () => { selectMode("plan"); setInput(""); } },
     { name: "goal", desc: "Switch to Goal mode (can propose edits)", run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
     { name: "clear", desc: "Start a new conversation", run: () => newConversation() },
+    { name: "compact", desc: "Summarize older turns to free up context", run: () => {
+      setInput(""); setSlash(null);
+      if (!canCompact) {
+        const why = providerDelegatesWork
+          ? "This provider manages its own context — nothing to compact here."
+          : streaming
+            ? "Wait for the current turn to finish, then run /compact."
+            : "Nothing to compact yet — the conversation is still short.";
+        const note: Msg = { role: "system", content: why };
+        msgsRef.current = [...msgsRef.current, note];
+        setMsgs(msgsRef.current);
+        return;
+      }
+      void compactConversation();
+    } },
     { name: "handoff", desc: "Save this task state into Project Memory", run: () => saveHandoffToProjectMemory() },
     { name: "explain", desc: "Explain a file — pick one next (read-only)", run: () => {
       setInput("Explain what this file does and how it works: @");
@@ -810,7 +834,16 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
   // Prefer the model's real prompt-token count when we have it: it already
   // accounts for the system prompt, tool schemas, and full history, so we only
   // add the unsent draft on top. Without it, estimate every message by length.
-  const messageTokens = msgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
+  // Messages above the last compaction marker stay visible for reference but no
+  // longer reach the model (the transcript marker collapses them on replay), so
+  // the gauge counts only from that marker onward — otherwise it would over-count
+  // and the auto-compaction safety net would fire in a loop.
+  let lastCompactionIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "system" && (msgs[i] as Extract<Msg, { role: "system" }>).compaction) { lastCompactionIdx = i; break; }
+  }
+  const tokenCountedMsgs = lastCompactionIdx >= 0 ? msgs.slice(lastCompactionIdx) : msgs;
+  const messageTokens = tokenCountedMsgs.reduce((sum, m) => sum + messageTokenEstimate(m), 0);
   const draftTokens = estimateTokens(input);
   const skillsTokens = estimateTokens(enabledSkillsPrompt(skills));
   const projectRulesTokens = estimateTokens(projectRules);
@@ -880,25 +913,38 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     msgs.length > COMPACT_KEEP_RECENT + 1;
   const showCompactPrompt = canCompact && contextRatio >= 0.8;
 
-  async function compactConversation() {
+  async function compactConversation(source: "manual" | "agent" = "manual") {
     if (!canCompact) return;
+    setCompactSource(source);
     setCompacting(true);
     setCompactError(null);
     try {
       const older = msgs.slice(0, msgs.length - COMPACT_KEEP_RECENT);
       const recent = msgs.slice(msgs.length - COMPACT_KEEP_RECENT);
       if (older.length === 0) return;
-      const summary = await summarizeForCompaction(provider, model, older);
-      if (!summary) throw new Error("The model returned an empty summary.");
+      const summary = await summarizeForCompaction(provider, model, older, effectiveContextLimit);
+      if (!summary) throw new Error("Could not build a summary to compact with.");
       // Write the marker into the transcript the harness replays from — this
       // is what actually shrinks the next turn's context.
       await invoke("agent_compact_context", { runId: currentId, summary });
       // Mirror it in the panel so the view + gauge reflect the new state.
+      // Break the folded slice into the two things the marker reports:
+      // conversation messages (user + assistant turns) and tool calls.
+      const compactedMessages = older.filter((m) => m.role === "user" || m.role === "assistant").length;
+      const compactedToolCalls = older.reduce(
+        (n, m) => n + (m.role === "assistant" ? m.toolCalls?.length ?? 0 : 0),
+        0,
+      );
       const summaryMsg: Msg = {
         role: "system",
         content: `Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"}:\n${summary}`,
+        compaction: { count: older.length, summary, source, messages: compactedMessages, toolCalls: compactedToolCalls },
       };
-      const next: Msg[] = [summaryMsg, ...recent];
+      // Keep the whole conversation in the panel for reference; the marker is
+      // just a divider. The model's context is freed via the transcript marker
+      // (replay collapses everything before it), and the token gauge counts
+      // only from the marker onward — so nothing visible is lost.
+      const next: Msg[] = [...older, summaryMsg, ...recent];
       setMsgs(next);
       msgsRef.current = next;
       // Drop the stale measured usage so the gauge falls back to the (now
@@ -911,6 +957,25 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       setCompacting(false);
     }
   }
+
+  // Safety net: when the conversation actually outgrows the window (the 0.8
+  // prompt was ignored and we're now at/over 100%), compact automatically so it
+  // can't balloon to multiples of the limit. Fires once per overflow episode —
+  // the ref re-arms only after compaction drops the gauge back under the limit.
+  const autoCompactArmedRef = useRef(true);
+  useEffect(() => {
+    if (streaming || compacting || !canCompact) return;
+    // Measure the committed conversation, not the draft being typed.
+    const committedUsed = contextUsed - draftTokens;
+    const rawRatio = effectiveContextLimit > 0 ? committedUsed / effectiveContextLimit : 0;
+    if (rawRatio < 1) {
+      autoCompactArmedRef.current = true;
+      return;
+    }
+    if (!autoCompactArmedRef.current) return;
+    autoCompactArmedRef.current = false;
+    void compactConversation("agent");
+  }, [streaming, compacting, canCompact, contextUsed, draftTokens, effectiveContextLimit]);
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1774,6 +1839,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
         commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
+        requireDiffReview,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
@@ -2175,12 +2241,15 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             m.role === "tool" &&
             /^Running /.test(m.content);
           const isStreamingActive = streaming && isLast && m.role === "assistant" && m.content !== "";
+          // Messages above the last compaction marker are kept for reference but
+          // no longer in the model's context — dim them so that's legible.
+          const dimmed = lastCompactionIdx > 0 && i < lastCompactionIdx;
 
           if (m.role === "user") {
             const queued = m.queueState === "queued";
             const running = m.queueState === "running";
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 12px" }}>
+              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
                 <div className={running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined}
                   style={{ maxWidth: "88%", background: running ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))" : queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "13px 13px 4px 13px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1, backgroundSize: running ? "220% 100%" : undefined }}>
                   {m.content}
@@ -2199,7 +2268,18 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               previousAssistant.toolCalls.length > 1 &&
               previousAssistant.toolCalls.every((tc) => tc.name === previousAssistant.toolCalls?.[0]?.name);
             if (repeatedToolBurst && previousAssistant.toolCalls?.[0]?.name === m.toolName) return null;
-            return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px" }}>{renderMessageBody(m, activeToolRunning)}</div>;
+            return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>{renderMessageBody(m, activeToolRunning)}</div>;
+          }
+
+          // Compaction marker: a system event, not an assistant utterance —
+          // render it avatar-less and indented to align with tool output.
+          if (m.role === "system" && m.compaction) {
+            const manual = m.compaction.source === "manual";
+            return (
+              <div key={i} className="ai-msg-in" style={{ margin: manual ? "4px 0" : "10px 0 10px 32px" }}>
+                {renderMessageBody(m)}
+              </div>
+            );
           }
 
           // One avatar per response: multi-turn tool runs produce several
@@ -2209,7 +2289,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           const prevMsg = msgs[i - 1];
           const showAvatar = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0" }}>
+            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {showAvatar ? (
                 <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
                   <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
@@ -2223,6 +2303,32 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           );
         })}
+        {(compacting || compactError) && (
+          <div className="ai-msg-in" style={{ margin: compactSource === "manual" ? "6px 0" : "6px 0 8px 32px" }}>
+            <CompactionRow status="running" error={compactError} source={compactSource} />
+          </div>
+        )}
+        {pendingDiff && (
+          <div style={{ margin: "2px 0 4px 32px" }}>
+            <InlineDiffReview
+              edit={{
+                path: pendingDiff.path,
+                oldContent: pendingDiff.oldContent,
+                newContent: pendingDiff.newContent,
+                isCreate: pendingDiff.isCreate,
+                reason: pendingDiff.reason,
+              }}
+              onApply={handleDiffApply}
+              onReject={handleDiffReject}
+              onOpenChanges={onOpenDiff ? () => onOpenDiff({
+                path: pendingDiff.path,
+                oldContent: pendingDiff.oldContent,
+                newContent: pendingDiff.newContent,
+                isCreate: pendingDiff.isCreate,
+              }) : undefined}
+            />
+          </div>
+        )}
           </>
         )}
         </div>
@@ -2305,97 +2411,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       {!providerDelegatesWork && (
       <div style={{ padding: "0 10px 10px" }}>
         {pendingPermission && (
-          <div
-            className="ai-qa-card"
-            style={{
-              marginBottom: 8,
-              padding: "10px 12px",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid color-mix(in srgb, var(--accent) 30%, var(--border))",
-              background: "color-mix(in srgb, var(--accent-soft) 35%, var(--bg-elevated))",
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ color: "var(--accent)" }}>
-                <polyline points="4 17 10 11 4 5" />
-                <line x1="12" y1="19" x2="20" y2="19" />
-              </svg>
-              Run command?
-            </div>
-            <div
-              style={{
-                color: "var(--fg-strong)",
-                fontSize: 12.5,
-                fontFamily: "var(--font-mono)",
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                padding: "8px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border-strong)",
-                background: "var(--bg)",
-              }}
-            >
-              {pendingPermission.command}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
-              <button
-                type="button"
-                onClick={rejectCommand}
-                style={{
-                  height: 26,
-                  padding: "0 10px",
-                  fontSize: 11.5,
-                  fontWeight: 500,
-                  color: "var(--fg-subtle)",
-                  background: "transparent",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                Reject
-              </button>
-              <button
-                type="button"
-                onClick={() => approveCommand("run")}
-                title="Approve this exact command for the rest of this run without re-asking"
-                style={{
-                  height: 26,
-                  padding: "0 10px",
-                  fontSize: 11.5,
-                  fontWeight: 500,
-                  color: "var(--fg-subtle)",
-                  background: "transparent",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                For this run
-              </button>
-              <button
-                type="button"
-                onClick={() => approveCommand("once")}
-                style={{
-                  height: 26,
-                  padding: "0 12px",
-                  fontSize: 11.5,
-                  fontWeight: 600,
-                  color: "var(--accent-fg, #fff)",
-                  background: "var(--accent)",
-                  border: "1px solid var(--accent)",
-                  borderRadius: "var(--radius-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                Approve &amp; run
-              </button>
-            </div>
-          </div>
+          <InlineCommandReview
+            command={pendingPermission.command}
+            onReject={rejectCommand}
+            onApproveOnce={() => approveCommand("once")}
+          />
         )}
         {pendingQuestion && (
           <div
@@ -2495,24 +2515,18 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           </div>
         )}
-        {(showCompactPrompt || compacting || compactError) && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 6px", fontSize: 11.5 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0, height: 24, padding: "0 10px", borderRadius: 999, border: "1px solid color-mix(in srgb, #A15C00 40%, var(--border))", background: "color-mix(in srgb, #A15C00 12%, var(--bg-elevated))", color: "var(--fg-strong)" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#A15C00", flexShrink: 0 }} />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {compactError
-                  ? `Compact failed: ${compactError}`
-                  : compacting
-                    ? "Compacting older turns…"
-                    : `Context ${Math.round(contextRatio * 100)}% full — compact older turns to free room?`}
-              </span>
-              {showCompactPrompt && !compacting && (
-                <button type="button" onClick={() => void compactConversation()}
-                  style={{ flexShrink: 0, height: 18, padding: "0 8px", borderRadius: 999, border: "none", background: "#A15C00", color: "#fff", fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>
-                  Compact
-                </button>
-              )}
-            </span>
+        {showCompactPrompt && (
+          <div style={{ padding: "0 2px 6px" }}>
+            <button type="button" onClick={() => void compactConversation()} title="Summarize older turns to free up context"
+              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid transparent", background: "transparent", color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", fontSize: 11.5, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M3 4h10" /><path d="M5 8h6" /><path d="M6.5 12h3" />
+              </svg>
+              Compact
+              <span style={{ opacity: 0.55 }}>{Math.round(contextRatio * 100)}%</span>
+            </button>
           </div>
         )}
         {(queuedTurns.length > 0 || autoMemoryNotice) && (
@@ -2623,6 +2637,26 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                     document.body
                   )}
                 </div>
+              )}
+              {effectiveMode === "goal" && onRequireDiffReviewChange && (
+                <button
+                  type="button"
+                  disabled={streaming}
+                  onClick={() => { if (!streaming) onRequireDiffReviewChange(!requireDiffReview); }}
+                  aria-pressed={!requireDiffReview}
+                  aria-label={requireDiffReview ? "Edit review on" : "Edit review: auto-accept"}
+                  title={requireDiffReview
+                    ? "Reviewing every edit. Click to auto-accept (edits apply without a prompt; still checkpointed)."
+                    : "Auto-accepting edits — they apply without a prompt (still checkpointed). Click to review each edit."}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 24, width: 22, flexShrink: 0, padding: 0, border: "none", background: "transparent", color: requireDiffReview ? "var(--fg-dim)" : "var(--accent)", cursor: streaming ? "default" : "pointer", transition: "color var(--motion-fast) var(--ease-out)" }}
+                  onMouseEnter={(e) => { if (!streaming && requireDiffReview) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                  onMouseLeave={(e) => { if (requireDiffReview) e.currentTarget.style.color = "var(--fg-dim)"; }}>
+                  {requireDiffReview ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
+                  )}
+                </button>
               )}
               <ModelPicker
                 provider={provider}
@@ -2798,19 +2832,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       </div>
       )}
     </aside>
-    {pendingDiff && (
-      <DiffModal
-        edit={{
-          path: pendingDiff.path,
-          oldContent: pendingDiff.oldContent,
-          newContent: pendingDiff.newContent,
-          isCreate: pendingDiff.isCreate,
-          reason: pendingDiff.reason,
-        }}
-        onApply={handleDiffApply}
-        onReject={handleDiffReject}
-      />
-    )}
     </>
   );
 }

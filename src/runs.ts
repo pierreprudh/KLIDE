@@ -55,6 +55,26 @@ export type RunRoutineInfo = {
   label: string;
 };
 
+export type RunValidationCheck = {
+  id: string;
+  label: string;
+  status: string;
+  required: boolean;
+  evidence?: string;
+};
+
+export type RunValidationSummary = {
+  status: string;
+  checks: RunValidationCheck[];
+  filesChanged: number;
+  commandsRun: number;
+  commandsFailed: number;
+  diffReviews: number;
+  permissionsApproved: number;
+  permissionsDenied: number;
+  warnings: string[];
+};
+
 export type Run = {
   id: string;
   path: string;
@@ -99,6 +119,8 @@ export type Run = {
    * assistant turn yet.
    */
   lastEvent?: string;
+  /** Transcript-derived evidence snapshot: review and command validation, not proof of correctness. */
+  validation?: RunValidationSummary | null;
   /** When this run was spawned by another run (e.g. @explore sub-agent). */
   parentId?: string;
 };
@@ -142,6 +164,7 @@ type AgentRunDto = {
   status: string;
   subagentCount?: number;
   lastEvent?: string;
+  validation?: RunValidationSummary | null;
   parentId?: string;
 };
 
@@ -407,6 +430,7 @@ function fromDto(a: AgentRunDto): Run {
     createdMs: a.createdMs ?? a.updatedMs ?? 0,
     subagentCount: a.subagentCount,
     lastEvent: a.lastEvent,
+    validation: a.validation ?? null,
     parentId: a.parentId,
   };
 }
@@ -649,4 +673,36 @@ export function formatCost(usd: number | null | undefined): string | null {
 export function formatFilesTouched(n: number | null | undefined): string | null {
   if (n === null || n === undefined || n <= 0) return null;
   return `${n} ${n === 1 ? "file" : "files"}`;
+}
+
+export function formatValidationStatus(validation: RunValidationSummary | null | undefined): string | null {
+  if (!validation) return null;
+  if (validation.status === "passed") return "Passed";
+  if (validation.status === "failed") return "Failed";
+  if (validation.status === "unverified") return "Unverified";
+  if (validation.status === "skipped") return "Skipped";
+  return validation.status
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function formatValidationTitle(validation: RunValidationSummary | null | undefined): string | undefined {
+  if (!validation) return undefined;
+  const parts = [
+    `${validation.filesChanged} ${validation.filesChanged === 1 ? "file" : "files"}`,
+    `${validation.commandsRun} ${validation.commandsRun === 1 ? "command" : "commands"}`,
+  ];
+  if (validation.commandsFailed > 0) {
+    parts.push(`${validation.commandsFailed} failed`);
+  }
+  if (validation.diffReviews > 0) {
+    parts.push(`${validation.diffReviews} diff ${validation.diffReviews === 1 ? "review" : "reviews"}`);
+  }
+  if (validation.permissionsDenied > 0) {
+    parts.push(`${validation.permissionsDenied} denied permission`);
+  }
+  if (validation.warnings.length > 0) {
+    parts.push(validation.warnings[0]);
+  }
+  return parts.join(" · ");
 }
