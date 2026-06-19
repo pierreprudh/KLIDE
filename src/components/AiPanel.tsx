@@ -47,7 +47,7 @@ import { enabledSkillsPrompt, type Skill } from "../skills";
 
 import { ProviderLogo, AssistantPlaceholderLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
-import { renderMessageBody } from "./ai/ChatMessage";
+import { renderMessageBody, CompactionRow } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
@@ -592,6 +592,21 @@ export function AiPanel({
     { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)", run: () => { selectMode("plan"); setInput(""); } },
     { name: "goal", desc: "Switch to Goal mode (can propose edits)", run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
     { name: "clear", desc: "Start a new conversation", run: () => newConversation() },
+    { name: "compact", desc: "Summarize older turns to free up context", run: () => {
+      setInput(""); setSlash(null);
+      if (!canCompact) {
+        const why = providerDelegatesWork
+          ? "This provider manages its own context — nothing to compact here."
+          : streaming
+            ? "Wait for the current turn to finish, then run /compact."
+            : "Nothing to compact yet — the conversation is still short.";
+        const note: Msg = { role: "system", content: why };
+        msgsRef.current = [...msgsRef.current, note];
+        setMsgs(msgsRef.current);
+        return;
+      }
+      void compactConversation();
+    } },
     { name: "handoff", desc: "Save this task state into Project Memory", run: () => saveHandoffToProjectMemory() },
     { name: "explain", desc: "Explain a file — pick one next (read-only)", run: () => {
       setInput("Explain what this file does and how it works: @");
@@ -898,6 +913,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const summaryMsg: Msg = {
         role: "system",
         content: `Compacted ${older.length} earlier message${older.length === 1 ? "" : "s"}:\n${summary}`,
+        compaction: { count: older.length, summary },
       };
       const next: Msg[] = [summaryMsg, ...recent];
       setMsgs(next);
@@ -2203,6 +2219,16 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px" }}>{renderMessageBody(m, activeToolRunning)}</div>;
           }
 
+          // Compaction marker: a system event, not an assistant utterance —
+          // render it avatar-less and indented to align with tool output.
+          if (m.role === "system" && m.compaction) {
+            return (
+              <div key={i} className="ai-msg-in" style={{ margin: "10px 0 10px 32px" }}>
+                {renderMessageBody(m)}
+              </div>
+            );
+          }
+
           // One avatar per response: multi-turn tool runs produce several
           // consecutive assistant/tool messages — only the first assistant
           // bubble after a user message carries the K mark, the rest get a
@@ -2224,6 +2250,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           );
         })}
+        {(compacting || compactError) && (
+          <div className="ai-msg-in" style={{ margin: "6px 0 8px 32px" }}>
+            <CompactionRow status="running" error={compactError} />
+          </div>
+        )}
         {pendingDiff && (
           <div style={{ margin: "2px 0 4px 32px" }}>
             <InlineDiffReview
@@ -2425,24 +2456,17 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           </div>
         )}
-        {(showCompactPrompt || compacting || compactError) && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 6px", fontSize: 11.5 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0, height: 24, padding: "0 10px", borderRadius: 999, border: "1px solid color-mix(in srgb, #A15C00 40%, var(--border))", background: "color-mix(in srgb, #A15C00 12%, var(--bg-elevated))", color: "var(--fg-strong)" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#A15C00", flexShrink: 0 }} />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {compactError
-                  ? `Compact failed: ${compactError}`
-                  : compacting
-                    ? "Compacting older turns…"
-                    : `Context ${Math.round(contextRatio * 100)}% full — compact older turns to free room?`}
-              </span>
-              {showCompactPrompt && !compacting && (
-                <button type="button" onClick={() => void compactConversation()}
-                  style={{ flexShrink: 0, height: 18, padding: "0 8px", borderRadius: 999, border: "none", background: "#A15C00", color: "#fff", fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>
-                  Compact
-                </button>
-              )}
+        {showCompactPrompt && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 2px 6px", fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Context {Math.round(contextRatio * 100)}% full
             </span>
+            <button type="button" onClick={() => void compactConversation()}
+              style={{ flexShrink: 0, padding: "1px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-strong)", background: "transparent", color: "var(--fg-strong)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+              /compact
+            </button>
           </div>
         )}
         {(queuedTurns.length > 0 || autoMemoryNotice) && (

@@ -428,7 +428,105 @@ function MessageMeta({ meta }: { meta: { ms?: number; tokens?: number; promptTok
   );
 }
 
+// Fold glyph that marks a compaction — three collapsing rules, echoing the
+// "many turns → fewer" idea. Shared by every compaction state.
+function CompactionGlyph() {
+  return (
+    <span aria-hidden style={{ display: "grid", placeItems: "center", color: "currentColor", flexShrink: 0 }}>
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 4h10" />
+        <path d="M5 8h6" />
+        <path d="M6.5 12h3" />
+      </svg>
+    </span>
+  );
+}
+
+// Context-compaction, rendered in the same slim, mono idiom as a tool call —
+// never a coloured container. Three states:
+//   running → loader + "Compacting older turns…"
+//   error   → danger-tinted glyph + the failure reason
+//   done    → a fold glyph + "Compacted N earlier turns", expandable to the
+//             summary the model wrote, now standing in for those turns.
+export function CompactionRow({
+  count,
+  summary,
+  status = "done",
+  error,
+}: {
+  count?: number;
+  summary?: string;
+  status?: "running" | "done";
+  error?: string | null;
+}) {
+  const mono = { fontFamily: "var(--font-mono)", fontSize: 11.5 } as const;
+
+  if (error) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: "var(--danger)" }}>
+        <CompactionGlyph />
+        <span style={{ ...mono, fontWeight: 500, flexShrink: 0 }}>Compaction failed</span>
+        <span style={{ ...mono, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{error}</span>
+      </div>
+    );
+  }
+
+  if (status === "running") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: "var(--fg-dim)" }}>
+        <DotGridLoader size={11} label="Compacting" />
+        <span style={{ ...mono, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>Compacting</span>
+        <span style={{ ...mono, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>older turns…</span>
+      </div>
+    );
+  }
+
+  return (
+    <details style={{ margin: "5px 0" }}>
+      <summary
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: 0,
+          cursor: "pointer",
+          listStyle: "none",
+          userSelect: "none",
+          minWidth: 0,
+          color: "var(--fg-subtle)",
+        }}
+      >
+        <CompactionGlyph />
+        <span style={{ ...mono, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>Compacted</span>
+        <span style={{ ...mono, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {count ?? 0} earlier turn{count === 1 ? "" : "s"} → summary
+        </span>
+      </summary>
+      {summary && (
+        <div
+          style={{
+            margin: "5px 0 3px 20px",
+            padding: "7px 11px",
+            fontSize: 12,
+            lineHeight: 1.55,
+            color: "var(--fg-subtle)",
+            background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          {renderMarkdown(summary)}
+        </div>
+      )}
+    </details>
+  );
+}
+
 export function renderMessageBody(m: Msg, active = false): ReactElement {
+  if (m.role === "system" && m.compaction) {
+    return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} />;
+  }
+
   if (m.role === "tool") {
     return <ToolResultRow content={m.content} active={active} toolName={m.toolName} />;
   }

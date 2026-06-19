@@ -516,11 +516,9 @@ fn find_builtin_tool_kind(name: &str) -> Option<ToolKind> {
 
 /// Look up a tool by name and return its kind. The registry is the only
 /// module that names a tool; callers (the run loop, the parallel pre-execute
-/// filter) dispatch on this kind, not on a string match.
-pub fn find_tool_kind(name: &str) -> Option<ToolKind> {
-    find_builtin_tool_kind(name)
-}
-
+/// filter) dispatch on this kind, not on a string match. Workspace-aware:
+/// dynamic (workspace-defined) tools resolve to `Command` so they pass through
+/// the same permission gate as `run_command`.
 pub fn find_tool_kind_for_workspace(name: &str, workspace_root: Option<&str>) -> Option<ToolKind> {
     find_builtin_tool_kind(name)
         .or_else(|| find_dynamic_tool_def(name, workspace_root).map(|_| ToolKind::Command))
@@ -994,6 +992,11 @@ fn err(content: String) -> ToolResult {
 /// stderr are returned together with the exit code; output is truncated so a
 /// chatty build can't blow the context window. The result is `ok: true` only on
 /// a zero exit so the model can tell success from failure.
+///
+/// Convenience wrapper that runs in the workspace root. Production paths call
+/// `run_command_capture_in` with an explicit cwd (dynamic tools may set one);
+/// this root-cwd form is used by the eval harness and tool tests.
+#[allow(dead_code)]
 pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -> ToolResult {
     run_command_capture_in(root, root, command, timeout_secs).await
 }
@@ -2519,7 +2522,7 @@ mod tests {
             r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"pwd","cwd":"workspace"}]}"#,
         );
 
-        assert_eq!(find_tool_kind("read_file"), Some(ToolKind::ReadOnly));
+        assert_eq!(find_tool_kind_for_workspace("read_file", None), Some(ToolKind::ReadOnly));
         assert_eq!(
             find_tool_kind_for_workspace("workspace_probe", Some(&root)),
             Some(ToolKind::Command)

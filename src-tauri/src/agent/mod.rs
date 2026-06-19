@@ -706,6 +706,29 @@ pub async fn agent_start_run(
 /// the protected zone instead of feeding the spiral.
 const KEEP_RECENT_TOOL_RESULTS: usize = 8;
 
+/// Rough prompt-token footprint of the whole message array. Compaction is
+/// triggered off this, not a message count, so a short conversation keeps full
+/// fidelity and we only sacrifice old tool results when the prompt genuinely
+/// approaches the model's context window. The ~4-chars-per-token heuristic is
+/// the same one the frontend token meter uses; serializing each message also
+/// counts `tool_calls` and JSON punctuation, which biases the estimate high —
+/// the safe direction (compact a little early rather than overflow).
+fn estimate_prompt_tokens(messages: &[serde_json::Value]) -> usize {
+    messages.iter().map(|m| m.to_string().len()).sum::<usize>() / 4
+}
+
+/// Prompt-token budget above which older tool results get compacted. Carves
+/// headroom out of the context window for the model's reply (`reply_reserve`,
+/// i.e. `num_predict`) and the tool schemas the loop also ships each turn, so
+/// the prompt never crowds the response out of the window.
+fn compaction_threshold(context_window: usize, reply_reserve: usize) -> usize {
+    let schema_reserve = context_window / 8;
+    context_window
+        .saturating_sub(reply_reserve)
+        .saturating_sub(schema_reserve)
+        .max(1)
+}
+
 /// Auto-compaction, expressed purely. Replaces the body of *older* verbose
 /// `role: "tool"` messages with a short `[compacted: <name>]` placeholder so a
 /// long conversation doesn't blow the model's context window — while leaving
@@ -1031,11 +1054,20 @@ async fn run_agent_loop(
         .max_turns
         .unwrap_or(DEFAULT_MAX_TURNS)
         .clamp(1, 1000);
-    const COMPACT_AFTER: usize = 14;
+    // Compaction is token-budget driven, not message-count driven: resolve the
+    // model's context window once (explicit `num_ctx` for local models, else a
+    // per-family fallback) and only trim once the prompt actually crowds it.
+    let context_window = request
+        .num_ctx
+        .unwrap_or_else(|| crate::models::fallback_context_window(&request.provider, &request.model));
+    let compact_threshold =
+        compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
 
     for turn in 0..max_turns {
-        // Auto-compaction: trim verbose tool results from older turns
-        if messages.len() > COMPACT_AFTER {
+        // Auto-compaction: trim verbose tool results from older turns once the
+        // prompt approaches the context window. The recency window inside
+        // `compact_old_tool_results` keeps the active working set verbatim.
+        if estimate_prompt_tokens(&messages) > compact_threshold {
             compact_old_tool_results(&mut messages);
         }
         let assistant_id = message_id("assistant");
@@ -2651,6 +2683,40 @@ mod turn_decision_tests {
             .filter(|m| m["content"].as_str() == Some("[compacted: read_file]"))
             .count();
         assert_eq!(compacted, 0, "recent reads must stay verbatim for synthesis");
+    }
+
+    #[test]
+    fn token_estimate_scales_with_content_and_threshold_reserves_headroom() {
+        let small = vec![serde_json::json!({ "role": "user", "content": "hi" })];
+        let big = vec![tool_msg("read_file", &"x".repeat(40_000))];
+        assert!(estimate_prompt_tokens(&big) > estimate_prompt_tokens(&small));
+        // ~40k chars ≈ 10k tokens by the /4 heuristic.
+        assert!((9_000..=11_000).contains(&estimate_prompt_tokens(&big)));
+
+        // 8k window, 2k reply reserve, 1k schema reserve (window/8) → 5k prompt.
+        assert_eq!(compaction_threshold(8_192, 2_048), 8_192 - 2_048 - 1_024);
+        // Pathological tiny window never yields a zero threshold.
+        assert_eq!(compaction_threshold(0, 4_096), 1);
+    }
+
+    #[test]
+    fn compaction_holds_off_until_the_prompt_crowds_the_window() {
+        // A handful of large reads that fit a roomy window: no compaction yet.
+        let long = "x".repeat(2_000);
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
+        for _ in 0..6 {
+            messages.push(tool_msg("read_file", &long));
+        }
+        let window = 200_000;
+        if estimate_prompt_tokens(&messages) > compaction_threshold(window, 4_096) {
+            compact_old_tool_results(&mut messages);
+        }
+        assert!(
+            messages
+                .iter()
+                .all(|m| m["content"].as_str() != Some("[compacted: read_file]")),
+            "a small prompt under a large window must not be compacted"
+        );
     }
 
     #[test]
