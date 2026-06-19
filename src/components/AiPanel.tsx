@@ -2648,15 +2648,14 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   title={requireDiffReview
                     ? "Reviewing every edit. Click to auto-accept (edits apply without a prompt; still checkpointed)."
                     : "Auto-accepting edits — they apply without a prompt (still checkpointed). Click to review each edit."}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, height: 24, flexShrink: 0, padding: width < 360 ? "0 8px" : "0 10px", borderRadius: 999, border: "1px solid var(--border-strong)", background: requireDiffReview ? "color-mix(in srgb, var(--panel) 88%, transparent)" : "color-mix(in srgb, var(--accent) 16%, transparent)", color: requireDiffReview ? "var(--fg-subtle)" : "var(--accent)", fontSize: 11, fontWeight: 560, whiteSpace: "nowrap", cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)" }}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 24, width: width < 360 ? 28 : 32, flexShrink: 0, padding: 0, borderRadius: 999, border: "1px solid transparent", background: requireDiffReview ? "transparent" : "color-mix(in srgb, var(--accent) 14%, transparent)", color: requireDiffReview ? "var(--fg-subtle)" : "var(--accent)", cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)" }}
                   onMouseEnter={(e) => { if (!streaming && requireDiffReview) e.currentTarget.style.color = "var(--fg-strong)"; }}
                   onMouseLeave={(e) => { if (requireDiffReview) e.currentTarget.style.color = "var(--fg-subtle)"; }}>
                   {requireDiffReview ? (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
                   ) : (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" /></svg>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" /></svg>
                   )}
-                  {width >= 360 && <span>{requireDiffReview ? "Review" : "Auto"}</span>}
                 </button>
               )}
               <ModelPicker
