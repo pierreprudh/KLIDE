@@ -91,6 +91,13 @@ pub struct StartRunRequest {
     /// allowlist, so trusted commands skip the approval prompt.
     #[serde(default)]
     pub command_allowlist: Vec<String>,
+    /// Whether file edits pause for diff review before applying. `None` or
+    /// `Some(true)` keeps the default review-every-edit behavior; `Some(false)`
+    /// is auto-accept — edits apply without a prompt (still emitted as a diff +
+    /// checkpoint so they stay visible and revertable). Safe because every
+    /// applied edit writes a rollback checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_diff_review: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }

@@ -1631,30 +1631,43 @@ Do not propose it again — take a different approach or ask the user what they'
                     continue;
                 }
 
-                // Pause for diff review
-                let decision = match pause_for_user(
-                    &app,
-                    &id,
-                    AgentRunStatus::WaitingForDiff,
-                    AgentEvent::DiffProposed {
+                // Auto-accept mode (require_diff_review == Some(false)): apply
+                // without pausing. Still emit the proposed diff so the edit stays
+                // visible in the conversation, and the checkpoint written below
+                // keeps it revertable — which is what makes auto-accept safe.
+                // Otherwise pause for diff review (the default).
+                let decision = if request.require_diff_review == Some(false) {
+                    emit(AgentEvent::DiffProposed {
                         run_id: id.clone(),
                         proposal: proposal.clone(),
                         ts: now_ms(),
-                    },
-                    "reject",
-                    &cancel,
-                    &mut emit,
-                    |handle, tx| {
-                        *handle.pending_diff.lock().unwrap() = Some(tx);
-                    },
-                )
-                .await?
-                {
-                    PauseOutcome::Cancelled => {
-                        finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
-                        return Ok(());
+                    })?;
+                    "apply".to_string()
+                } else {
+                    match pause_for_user(
+                        &app,
+                        &id,
+                        AgentRunStatus::WaitingForDiff,
+                        AgentEvent::DiffProposed {
+                            run_id: id.clone(),
+                            proposal: proposal.clone(),
+                            ts: now_ms(),
+                        },
+                        "reject",
+                        &cancel,
+                        &mut emit,
+                        |handle, tx| {
+                            *handle.pending_diff.lock().unwrap() = Some(tx);
+                        },
+                    )
+                    .await?
+                    {
+                        PauseOutcome::Cancelled => {
+                            finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                            return Ok(());
+                        }
+                        PauseOutcome::Resolved(decision) => decision,
                     }
-                    PauseOutcome::Resolved(decision) => decision,
                 };
 
                 let decision_obj = serde_json::json!({ "behavior": decision });

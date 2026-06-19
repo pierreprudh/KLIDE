@@ -281,7 +281,7 @@ export function AiPanel({
   availableModels,
   onAvailableModelsChange,
   apiKeyVersion = 0,
-  requireDiffReview: _requireDiffReview,
+  requireDiffReview,
   stopAfterRejection,
   skills,
   projectContext,
@@ -1814,6 +1814,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
         commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
+        requireDiffReview,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }

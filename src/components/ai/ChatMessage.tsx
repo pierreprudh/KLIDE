@@ -511,11 +511,13 @@ export function CompactionRow({
 
   // ---- Manual: full-width divider row -------------------------------------
   if (source === "manual") {
+    // The done marker is intentionally bare — just "Compacted" centered in the
+    // divider. The running/error states still carry their detail.
     const head = (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0, color: tone }}>
         {leading}
         <span style={{ ...COMPACT_MONO, color: error != null ? "var(--danger)" : "var(--fg-strong)", fontWeight: 500 }}>{label}</span>
-        <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>
+        {status !== "done" && <span style={{ ...COMPACT_MONO, color: tone }}>{detail}</span>}
       </span>
     );
     if (status === "done" && summary) {
