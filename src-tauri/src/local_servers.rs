@@ -94,6 +94,30 @@ async fn mlx_server_ready() -> bool {
         .is_ok()
 }
 
+// mlx_lm.server opens its HTTP port *before* it downloads/loads the model, so a
+// bare TCP check reports "ready" while the first real request still blocks on a
+// multi-minute model load (Hugging Face fetch on first run, Metal load after).
+// Fire one tiny completion so startup only reports ready once the model truly
+// answers — the first user message then hits a warm model instead of eating the
+// cold load. Returns false on error; the caller treats warm-up as best-effort.
+async fn warm_mlx_model(model: &str) -> bool {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "max_tokens": 1,
+        "stream": false,
+    });
+    reqwest::Client::new()
+        .post("http://127.0.0.1:8080/v1/chat/completions")
+        .json(&body)
+        // First run downloads the weights; give it room before giving up.
+        .timeout(Duration::from_secs(600))
+        .send()
+        .await
+        .map(|res| res.status().is_success())
+        .unwrap_or(false)
+}
+
 async fn local_server_ready(provider: &str) -> bool {
     match provider {
         "ollama" => reqwest::get(format!("{OLLAMA_URL}/api/tags"))
@@ -124,8 +148,12 @@ pub(crate) async fn ai_local_server_start(
         return Err(format!("{provider} is not a local server provider"));
     }
 
-    // Already running externally or previously started
+    // Already running externally or previously started. Still warm the model:
+    // the port can be up while the model is unloaded / mid-download.
     if local_server_ready(&provider).await {
+        if provider == "mlx" {
+            let _ = warm_mlx_model(&canonical_mlx_model(&model)).await;
+        }
         return Ok(true);
     }
 
@@ -206,6 +234,11 @@ pub(crate) async fn ai_local_server_start(
         }
 
         if local_server_ready(&provider).await {
+            // Port is up but mlx_lm.server still has to load the model; block on
+            // a warm-up so the first user message lands on a ready model.
+            if provider == "mlx" {
+                let _ = warm_mlx_model(&canonical_mlx_model(&model)).await;
+            }
             let mut procs = state.processes.lock().map_err(|e| e.to_string())?;
             procs.insert(provider, child);
             return Ok(true);

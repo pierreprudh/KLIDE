@@ -469,8 +469,11 @@ pub(crate) async fn ai_model_supports_tools(
         return Ok(matches!(family, Some("deepseek") | Some("qwen2")));
     }
 
+    // mlx_lm.server parses tool calls for models with a tool template (Qwen3,
+    // Llama-3.1, …) and returns OpenAI-format `tool_calls`. The curated MLX
+    // presets are all tool-capable instruct models, so advertise support.
     if provider == "mlx" {
-        return Ok(false);
+        return Ok(true);
     }
 
     Ok(true)
@@ -687,14 +690,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mlx_does_not_advertise_tool_support() {
+    async fn mlx_advertises_tool_support() {
+        // mlx_lm.server returns OpenAI-format tool_calls for the curated
+        // presets, so MLX models run the full tool harness (not chat-only).
         let supports = ai_model_supports_tools(
             "mlx".to_string(),
             "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
         )
         .await
         .unwrap();
-        assert!(!supports);
+        assert!(supports);
     }
 
     #[tokio::test]

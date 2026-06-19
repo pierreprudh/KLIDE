@@ -1332,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn mlx_request_body_omits_tools_even_if_supplied() {
+    fn openai_chat_body_omits_tools_when_include_tools_false() {
         let tools = vec![serde_json::json!({
             "type": "function",
             "function": {

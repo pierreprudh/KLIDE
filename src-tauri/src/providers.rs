@@ -141,12 +141,14 @@ pub const PROVIDERS: &[ProviderEntry] = &[
     ProviderEntry {
         id: "mlx",
         // MLX speaks the OpenAI wire (mlx_lm.server exposes
-        // /v1/chat/completions), but it doesn't accept tools and its
-        // server doesn't return a usage block — encode both as flags.
+        // /v1/chat/completions). Modern mlx_lm.server parses tool calls for
+        // models with a tool template (Qwen3, Llama-3.1) and returns proper
+        // OpenAI `tool_calls`, so tools are on; its server still omits the
+        // usage block, so that flag stays off.
         wire: WireFormat::OpenAi(OpenAiConfig {
             chat_url: "http://127.0.0.1:8080/v1/chat/completions",
             models_url: "http://127.0.0.1:8080/v1/models",
-            include_tools: false,
+            include_tools: true,
             include_usage_in_stream: false,
             supports_reasoning_effort: false,
         }),
