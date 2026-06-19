@@ -4,13 +4,13 @@ This file is loaded automatically when Claude Code works in this directory. Read
 
 ## What Klide is
 
-Klide is a code editor Pierre is building from scratch. Inspired by [Sinew](https://sinew-ide.com/). The goal is a small, fast, AI-first IDE that **looks like a 2026 design tool** but **works like VS Code**.
+Klide is a code editor Pierre is building from scratch. The goal is a small, fast, AI-first IDE that **looks like a 2026 design tool**, **works like a full-featured code editor**, and **treats agents as a first-class surface** — an editor and an agentic control panel in one shell.
 
 Pierre is new to building desktop apps and is learning Rust as he goes. Frame technical explanations for a smart beginner — explain what each piece does, cite docs, and prefer fewer-moving-parts solutions.
 
 ## Vision in one sentence
 
-**VS Code's structure, Linear's aesthetic, Cursor's AI fluency — Tauri-light, local-model-first.**
+**A familiar IDE structure, a calm minimal aesthetic, and fluent AI — Tauri-light, local-model-first, agent-native.**
 
 ## Design philosophy
 
@@ -18,7 +18,7 @@ Pierre is new to building desktop apps and is learning Rust as he goes. Frame te
 
 | ✅ Do | ❌ Don't |
 |---|---|
-| Keep VS Code's structural layout (activity bar, sidebar, tabs, editor, status bar, panel) | Strip out structural elements to "simplify" |
+| Keep the familiar IDE structural layout (activity bar, sidebar, tabs, editor, status bar, panel) | Strip out structural elements to "simplify" |
 | Quiet light/dark palettes with shared app + terminal tokens | Saturated accent colors, gradients, drop shadows |
 | Generous whitespace, thin 1px borders, no heavy dividers | Boxes, frames, busy chrome |
 | Restrained type — Atkinson Hyperlegible for UI, Monaspace for code | Multiple display fonts, decorative weights |
@@ -32,11 +32,11 @@ If a UI element doesn't serve clarity, it doesn't ship.
 | Layer | Tech | Notes |
 |---|---|---|
 | Shell | **Tauri 2** | Rust backend, native webview, ~10 MB binary |
-| Editor | **Monaco** via `@monaco-editor/react` | Same editor as VS Code |
+| Editor | **Monaco** via `@monaco-editor/react` | The browser editor core (also used by VS Code) |
 | Terminal | **xterm.js** + Rust **portable-pty** | Real shell, not a sandbox |
 | Frontend | **React 19 + TypeScript + Vite** | |
-| Local AI | **Ollama** HTTP API on `localhost:11434` | Default model: `llama3.1:8b` |
-| Online AI | Anthropic + OpenAI + Mistral + xAI | Keys in macOS Keychain, never in webview |
+| Local AI | **Ollama** (`localhost:11434`) + **MLX** (`mlx_lm.server` on `:8080`) | Both run the full tool harness; default `llama3.1:8b` |
+| Online AI | Anthropic, OpenAI, Mistral, xAI + self-hosted OpenAI-wire endpoints | Keys in macOS Keychain; self-hosted tokens via `${VAR}` refs |
 | Auto-install | `npx skills add <owner/repo>` | Skill install + uninstall via Rust commands |
 
 ## Repo layout
@@ -147,7 +147,7 @@ AiPanel (view) → startAgentRun() → Rust run_agent_loop()
 - Chat / Plan / Goal modes all go through the harness
 - Write tools pause for diff review via `tokio::sync::oneshot` channels
 - Diff approval triggers `agent_resolve_diff` → harness continues
-- Max 8 turns, cancellation via `CancellationToken`
+- `MAX_TURNS` 16, cancellation via `CancellationToken`, auto-compaction on a recency + token-budget trigger
 
 ### Mission Control → AI panel handoff
 
@@ -163,7 +163,7 @@ Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (
 
 ### v0.2 stabilization focus
 
-Current branch: `feat/project-memory-and-mc-v2`. v0.2 is functionally complete — provider smoke matrix verified 2026-06-08, skill install/uninstall UI is shipped, premium polish pass on the always-visible chrome is shipped.
+Current branch: `feat/harness-audit-and-inline-review`. v0.2 is functionally complete — provider smoke matrix verified, skill install/uninstall UI shipped, premium polish on the always-visible chrome shipped. Recent direction: deepen the agentic control panel (Mission Control + multi-CLI delegates), and make local models (Ollama + MLX) first-class — MLX now warms up at server start and runs the full tool harness, not chat-only.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.
@@ -216,10 +216,10 @@ ToolEntry { kind, schema, run_read, run_write_preview }
 - [x] Monaco editor with syntax highlighting, Cmd+S, 5 themes
 - [x] Status bar — file path, language, git branch, theme/terminal/layout toggles, dot separators
 - [x] Terminal panel with real shell via Rust portable-pty
-- [x] AI panel — streaming chat with Ollama, Anthropic, OpenAI, Mistral, xAI, 14 built-in tools
+- [x] AI panel — streaming chat across Ollama, MLX, Anthropic, OpenAI, Mistral, xAI + self-hosted endpoints, 14 built-in tools, inline diff review + auto-accept toggle
 - [x] Agent mode — goal/plan modes, diff-reviewed edits, tool loop
 - [x] Git panel — full-view Git Review workbench (staging + diffs)
-- [x] Mission Control — aggregate agent run board (Claude Code, Codex, OpenCode, Klide) with handoff to AI panel
+- [x] Mission Control — aggregate agent run board (Claude Code, Codex, OpenCode, Oh My Pi, Klide) with handoff to AI panel
 - [x] Project Memory — durable handoff notes in `.klide/memory/`, opened as a centered modal
 - [x] AI-panel "Summarize" header action — writes a structured memory note from the current conversation
 - [x] AI-panel "Save as skill" sparkle — auto-generates a `SKILL.md` for reusable patterns
@@ -256,4 +256,4 @@ npm run tauri dev      # full dev loop (Vite + Rust hot reload)
 - Monaco React — <https://github.com/suren-atoyan/monaco-react>
 - xterm.js — <https://xtermjs.org/docs/>
 - Ollama API — <https://github.com/ollama/ollama/blob/main/docs/api.md>
-- Inspiration — <https://sinew-ide.com/>
+- MLX LM server — <https://github.com/ml-explore/mlx-lm>
