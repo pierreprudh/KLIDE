@@ -76,15 +76,15 @@ for custom/MCP-style tools loaded at runtime.
 
 | Tool | Purpose | Lineage |
 |---|---|---|
-| `write_file` | Search-and-replace on an existing file. `old_str` is matched tolerantly — leading `N: ` line-number prefixes and indentation differences are forgiven. | **Pi** + CC (`str_replace`) + CX (`apply_patch`) |
-| `create_file` | Create a new file (fails if it exists). | CC/CX |
+| `write_file` | Search-and-replace on an existing file. `old_str` is matched tolerantly — leading `N: ` line-number prefixes and indentation differences are forgiven. After approval, Klide runs built-in Rust/JSON syntax checks and the optional Settings → Harness test-after-edit command. | **Pi** + CC (`str_replace`) + CX (`apply_patch`) |
+| `create_file` | Create a new file (fails if it exists). After approval, Klide runs built-in Rust/JSON syntax checks and the optional Settings → Harness test-after-edit command. | CC/CX |
 | `create_skill` | Save a reusable skill to `.agents/skills/<name>/SKILL.md`. | CC (skills) |
 
 ### Command (Goal only, approval-gated) — 1
 
 | Tool | Purpose | Lineage |
 |---|---|---|
-| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. Killed after a **timeout** (default 180s, Settings → Harness) so a hung command can't stall the run; output capped at 16KB. | CC/CX/OC (bash tool) + K (approval gate) |
+| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every new command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. "Approve for this run" stores the exact command in memory for the current run; "Approve for project" persists it to `.klide/command-allowlist.json` for future Klide runs in that workspace. Killed after a **timeout** (default 180s, Settings → Harness) so a hung command can't stall the run; output capped at 16KB. | CC/CX/OC (bash tool) + K (approval gate) |
 
 ### Pause (Goal only) — 1
 
@@ -127,14 +127,18 @@ into one board.
 sequences (what a model *would* emit) through the **real** execution path
 (`execute_read_only_tool` / `execute_write_tool_preview` + `apply_write` /
 `run_command_capture`) against a fixture workspace, then assert the resulting
-files + tool results. They run as `cargo test` (`agent::eval`). Add a scenario
-by appending to `scenarios()`.
+files + tool results. It also has a scripted model-loop eval: fake provider
+turns emit tool calls, the real tool layer executes, and tool results replay
+into provider-shaped messages before the next turn. They run as `cargo test`
+(`agent::eval`). Add a scenario by appending to `scenarios()` or
+`scripted_model_scenarios()`.
 
 Scope: this evals the harness's **deterministic** behavior (read → edit →
-verify, command success/failure surfacing). The model-in-loop layer — *does the
-agent choose the right tools to finish a task?* — needs the run loop decoupled
-from `tauri::AppHandle` + a mockable provider, and is the documented next step;
-this scenario format is the foundation it will reuse.
+verify, command success/failure surfacing), plus the first model-loop shape:
+did the harness react correctly to a provider that chose tools? The production
+run loop now calls providers through `AgentProviderCaller` (`RealProviderCaller`
+wraps `ai_chat`; tests can inject a mock). A fuller model-in-loop layer still
+needs the remaining loop shell split away from `tauri::AppHandle`.
 
 ## Identity
 

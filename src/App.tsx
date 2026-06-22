@@ -73,6 +73,8 @@ export type HarnessSettings = {
   /** Seconds a run_command may run before it's killed. Absent → 180. Raise it
    *  for slow builds; a hang guard, not a task limit. */
   commandTimeoutSecs?: number;
+  /** Optional command to run after accepted edits/creates. Empty/absent means off. */
+  testAfterEditCommand?: string;
   /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent
    *  request slots). Absent → Ollama's own default. */
   serverConcurrency?: number;

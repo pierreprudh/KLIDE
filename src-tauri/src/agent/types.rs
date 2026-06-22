@@ -87,6 +87,11 @@ pub struct StartRunRequest {
     /// harness default (180s); a hang guard, not a task limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_timeout_secs: Option<u64>,
+    /// Optional project verification command to run after an accepted edit.
+    /// User-configured in Settings → Harness; the edit stays applied, and a
+    /// failing check is returned to the model as a not-ok tool result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_after_edit_command: Option<String>,
     /// Commands pre-approved for `run_command` (exact match) — the project
     /// allowlist, so trusted commands skip the approval prompt.
     #[serde(default)]

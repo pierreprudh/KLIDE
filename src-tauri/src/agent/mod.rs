@@ -1,9 +1,10 @@
+mod command_allowlist;
+#[cfg(test)]
+mod eval;
 pub mod todo;
 pub mod tools;
 pub mod transcripts;
 pub mod types;
-#[cfg(test)]
-mod eval;
 
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, execute_read_only_tool,
@@ -19,10 +20,12 @@ use self::types::{
     AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
-use crate::{ai_chat, AiUsage, StreamChunk};
+use crate::{ai_chat, AiChatResponse, AiUsage, StreamChunk};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tauri::Manager;
@@ -61,6 +64,50 @@ impl Default for AgentSupervisorState {
         Self {
             runs: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+struct ProviderTurnRequest {
+    provider: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    workspace_root: Option<String>,
+    num_ctx: Option<usize>,
+    num_predict: Option<usize>,
+    reflection_level: Option<String>,
+    stream: Channel<StreamChunk>,
+}
+
+trait AgentProviderCaller: Clone + Send + Sync + 'static {
+    fn call<'a>(
+        &'a self,
+        request: ProviderTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>>;
+}
+
+#[derive(Clone, Copy)]
+struct RealProviderCaller;
+
+impl AgentProviderCaller for RealProviderCaller {
+    fn call<'a>(
+        &'a self,
+        request: ProviderTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+        Box::pin(async move {
+            ai_chat(
+                request.provider,
+                request.model,
+                request.messages,
+                request.tools,
+                request.workspace_root,
+                request.num_ctx,
+                request.num_predict,
+                request.reflection_level,
+                request.stream,
+            )
+            .await
+        })
     }
 }
 
@@ -160,7 +207,11 @@ impl ProviderCaps {
     }
 }
 
-fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) -> Vec<serde_json::Value> {
+fn provider_messages(
+    request: &StartRunRequest,
+    system: String,
+    run_id: &str,
+) -> Vec<serde_json::Value> {
     let mut user_text = request.initial_text.clone();
     if !request.attachments.is_empty() {
         let attachments = request
@@ -176,7 +227,8 @@ fn provider_messages(request: &StartRunRequest, system: String, run_id: &str) ->
     // Inject initial todo list as context for tool-capable/project turns.
     // Local chat should stay tiny; sending project metadata to MLX/Ollama for
     // "hello" made prompt processing feel broken.
-    let should_include_todos = !(ProviderCaps::for_provider(&request.provider).minimal_chat_context
+    let should_include_todos = !(ProviderCaps::for_provider(&request.provider)
+        .minimal_chat_context
         && matches!(request.mode, AgentMode::Chat));
     if should_include_todos {
         if let Some(cwd) = &request.workspace_root {
@@ -491,6 +543,35 @@ fn no_workspace_result() -> ToolResult {
     }
 }
 
+async fn run_test_after_edit(
+    root: &str,
+    command: Option<&str>,
+    timeout_secs: u64,
+    result: &mut ToolResult,
+) {
+    let Some(command) = command.map(str::trim).filter(|c| !c.is_empty()) else {
+        return;
+    };
+    let check = run_command_capture(root, command, timeout_secs).await;
+    let status = if check.ok { "passed" } else { "failed" };
+    result.content.push_str(&format!(
+        "\nPost-edit check `{command}` {status}.\n{}",
+        check.content
+    ));
+    result.metadata = Some(serde_json::json!({
+        "testAfterEdit": {
+            "command": command,
+            "ok": check.ok,
+        }
+    }));
+    if !check.ok {
+        result.ok = false;
+        result
+            .content
+            .push_str("\nThe edit was applied; inspect the failing check and fix forward.");
+    }
+}
+
 /// Run read-only tool calls concurrently, capped at `max_parallel` at a time,
 /// and return their results keyed by call id. Each call runs on a blocking
 /// thread (the tools are synchronous filesystem/network ops). A task that
@@ -615,9 +696,17 @@ where
 pub async fn agent_start_run(
     app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
-    request: StartRunRequest,
+    mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
+    if let Some(root) = request.workspace_root.as_deref() {
+        for command in command_allowlist::list(root)? {
+            if !request.command_allowlist.iter().any(|c| c == &command) {
+                request.command_allowlist.push(command);
+            }
+        }
+    }
+
     let runs_dir = app_runs_dir(&app)?;
     // Reuse the client's conversation id when supplied so the transcript on
     // disk shares the AI panel's id (deduped against the in-memory convo in
@@ -657,6 +746,7 @@ pub async fn agent_start_run(
             request,
             on_event,
             cancel,
+            RealProviderCaller,
         )
         .await
         {
@@ -674,6 +764,7 @@ async fn run_agent_loop(
     request: StartRunRequest,
     on_event: Channel<AgentEvent>,
     cancel: CancellationToken,
+    provider_caller: impl AgentProviderCaller,
 ) -> Result<(), String> {
     let cwd = request.workspace_root.clone();
     // A reused id means this is a follow-up turn in an existing conversation
@@ -784,7 +875,10 @@ async fn run_agent_loop(
     // or multi-agent work. Clamped to a hard ceiling so a stuck loop can't burn
     // tokens forever. The conversation can always be continued past the cap.
     const DEFAULT_MAX_TURNS: usize = 50;
-    let max_turns = request.max_turns.unwrap_or(DEFAULT_MAX_TURNS).clamp(1, 1000);
+    let max_turns = request
+        .max_turns
+        .unwrap_or(DEFAULT_MAX_TURNS)
+        .clamp(1, 1000);
     const COMPACT_AFTER: usize = 14;
 
     for turn in 0..max_turns {
@@ -861,17 +955,17 @@ async fn run_agent_loop(
                 finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                 return Ok(());
             }
-            result = ai_chat(
-                request.provider.clone(),
-                request.model.clone(),
-                messages.clone(),
-                tools.clone(),
-                request.workspace_root.clone(),
-                request.num_ctx,
-                request.num_predict,
-                request.reflection_level.clone(),
+            result = provider_caller.call(ProviderTurnRequest {
+                provider: request.provider.clone(),
+                model: request.model.clone(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+                workspace_root: request.workspace_root.clone(),
+                num_ctx: request.num_ctx,
+                num_predict: request.num_predict,
+                reflection_level: request.reflection_level.clone(),
                 stream,
-            ) => result,
+            }) => result,
         };
         let response = match provider_result {
             Ok(response) => response,
@@ -1027,7 +1121,9 @@ conversation, then ask again._",
         // no-tool branch above already does this; keep the two consistent.
         if let Some(t) = thinking_text.as_deref() {
             if !t.trim().is_empty() {
-                content.push(AgentContentBlock::Thinking { text: t.to_string() });
+                content.push(AgentContentBlock::Thinking {
+                    text: t.to_string(),
+                });
             }
         }
         if !content_text.trim().is_empty() {
@@ -1088,7 +1184,7 @@ conversation, then ask again._",
                 ts: now_ms(),
             })?;
 
-            let tool_result: ToolResult;
+            let mut tool_result: ToolResult;
 
             if matches!(find_tool_kind(&call.name), Some(ToolKind::Pause)) {
                 // Pause for a typed Q&A. The question is read from the tool
@@ -1188,8 +1284,12 @@ conversation, then ask again._",
                     };
 
                     if pre_approved {
-                        tool_result =
-                            run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await;
+                        tool_result = run_command_capture(
+                            root.as_deref().unwrap_or("."),
+                            &command,
+                            timeout_secs,
+                        )
+                        .await;
                     } else {
                         let request_id = format!("perm_{}_{}", id, call.id);
                         let perm = serde_json::json!({
@@ -1203,6 +1303,7 @@ conversation, then ask again._",
                             "options": [
                                 { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
                                 { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
+                                { "optionId": "allow_project", "label": "Approve for this project", "behavior": "allow", "scope": "project" },
                                 { "optionId": "deny", "label": "Reject", "behavior": "deny" }
                             ]
                         });
@@ -1226,16 +1327,27 @@ conversation, then ask again._",
                         .await?
                         {
                             PauseOutcome::Cancelled => {
-                                finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                                finish_cancelled(
+                                    &mut emit,
+                                    &app,
+                                    &runs_dir,
+                                    &id,
+                                    &summary,
+                                    message_count,
+                                )?;
                                 return Ok(());
                             }
                             PauseOutcome::Resolved(decision) => decision,
                         };
 
-                        let decision_val: serde_json::Value =
-                            serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
-                        let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
-                        let scope = decision_val.get("scope").and_then(|s| s.as_str()).unwrap_or("once");
+                        let decision_val: serde_json::Value = serde_json::from_str(&decision)
+                            .unwrap_or(serde_json::json!({ "behavior": "deny" }));
+                        let allowed =
+                            decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
+                        let scope = decision_val
+                            .get("scope")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("once");
 
                         emit(AgentEvent::PermissionResolved {
                             run_id: id.clone(),
@@ -1253,12 +1365,28 @@ conversation, then ask again._",
                                 .lock()
                                 .map_err(|_| "Agent state unavailable".to_string())?;
                             if let Some(handle) = runs.get(&id) {
-                                handle.approved_commands.lock().unwrap().insert(command.clone());
+                                handle
+                                    .approved_commands
+                                    .lock()
+                                    .unwrap()
+                                    .insert(command.clone());
+                            }
+                        }
+                        if allowed && scope == "project" {
+                            if let Some(root) = root.as_deref() {
+                                if let Err(err) = command_allowlist::add(root, &command) {
+                                    eprintln!("failed to persist project command allowlist: {err}");
+                                }
                             }
                         }
 
                         tool_result = if allowed {
-                            run_command_capture(root.as_deref().unwrap_or("."), &command, timeout_secs).await
+                            run_command_capture(
+                                root.as_deref().unwrap_or("."),
+                                &command,
+                                timeout_secs,
+                            )
+                            .await
                         } else {
                             ToolResult {
                                 ok: false,
@@ -1356,6 +1484,15 @@ conversation, then ask again._",
                                 let _ = std::fs::write(&checkpoint_file, json);
                             }
                             tool_result = result;
+                            let timeout_secs =
+                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                            run_test_after_edit(
+                                root,
+                                request.test_after_edit_command.as_deref(),
+                                timeout_secs,
+                                &mut tool_result,
+                            )
+                            .await;
                             emit(AgentEvent::FileChanged {
                                 run_id: id.clone(),
                                 path: proposal.path.clone(),
@@ -1866,13 +2003,16 @@ mod replay_tests {
             summary: "we set up auth and fixed the parser".into(),
             ts: 9,
         };
-        let out = reconstruct_prior_messages(&[
-            user_msg("old turn 1"),
-            assistant_text("old reply 1"),
-            compacted,
-            user_msg("recent question"),
-            assistant_text("recent answer"),
-        ], false);
+        let out = reconstruct_prior_messages(
+            &[
+                user_msg("old turn 1"),
+                assistant_text("old reply 1"),
+                compacted,
+                user_msg("recent question"),
+                assistant_text("recent answer"),
+            ],
+            false,
+        );
         // Everything before the marker collapses into one system summary;
         // the two recent turns replay verbatim after it.
         assert_eq!(out.len(), 3, "got: {out:?}");
@@ -1917,11 +2057,14 @@ mod replay_tests {
         // The orphan tool_call_finished event from a prior turn is
         // not emitted as its own message; it waits for the closing
         // assistant turn and gets appended to that text.
-        let out = reconstruct_prior_messages(&[
-            assistant_text("let me check"),
-            tool_result("tc1", "file contents"),
-            assistant_text("done"),
-        ], false);
+        let out = reconstruct_prior_messages(
+            &[
+                assistant_text("let me check"),
+                tool_result("tc1", "file contents"),
+                assistant_text("done"),
+            ],
+            false,
+        );
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["role"], "assistant");
         assert_eq!(out[0]["content"], "let me check");
@@ -1969,7 +2112,8 @@ mod replay_tests {
         // message) has its orphan tool result dropped. Re-emitting it
         // as `role: "tool"` is exactly the Ollama parse-error case
         // we just fixed.
-        let out = reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")], false);
+        let out =
+            reconstruct_prior_messages(&[user_msg("ping"), tool_result("tc1", "pong")], false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
     }
@@ -1979,12 +2123,15 @@ mod replay_tests {
         // A buffered tool result from a previous turn must not leak
         // into the next user turn — the model shouldn't see a
         // tool result on the wrong side of a user message.
-        let out = reconstruct_prior_messages(&[
-            user_msg("first turn"),
-            tool_result("tc1", "stale result"),
-            user_msg("second turn"),
-            assistant_text("second answer"),
-        ], false);
+        let out = reconstruct_prior_messages(
+            &[
+                user_msg("first turn"),
+                tool_result("tc1", "stale result"),
+                user_msg("second turn"),
+                assistant_text("second answer"),
+            ],
+            false,
+        );
         assert_eq!(out.len(), 3);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "first turn");
@@ -2129,6 +2276,137 @@ mod replay_tests {
             .contains("did the thing"));
         assert_eq!(out[1]["content"], "new");
         assert_eq!(out[2]["content"], "new reply");
+    }
+}
+
+#[cfg(test)]
+mod test_after_edit_tests {
+    use super::*;
+
+    fn temp_workspace(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-test-after-edit-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().to_string()
+    }
+
+    fn applied_result() -> ToolResult {
+        ToolResult {
+            ok: true,
+            content: "Applied: edited a.txt.".to_string(),
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_after_edit_pass_keeps_result_ok() {
+        let root = temp_workspace("pass");
+        let mut result = applied_result();
+        run_test_after_edit(&root, Some("echo checked"), 30, &mut result).await;
+        assert!(result.ok);
+        assert!(result
+            .content
+            .contains("Post-edit check `echo checked` passed"));
+        assert!(result.content.contains("checked"));
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("testAfterEdit"))
+                .and_then(|m| m.get("ok"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_after_edit_failure_marks_result_not_ok() {
+        let root = temp_workspace("fail");
+        let mut result = applied_result();
+        run_test_after_edit(&root, Some("exit 7"), 30, &mut result).await;
+        assert!(!result.ok);
+        assert!(result.content.contains("Post-edit check `exit 7` failed"));
+        assert!(result.content.contains("exit 7"));
+        assert!(result.content.contains("fix forward"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn empty_test_after_edit_command_is_noop() {
+        let root = temp_workspace("empty");
+        let mut result = applied_result();
+        run_test_after_edit(&root, Some("   "), 30, &mut result).await;
+        assert_eq!(result.content, "Applied: edited a.txt.");
+        assert!(result.metadata.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod provider_caller_tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct MockProviderCaller {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String, usize, bool)>>>,
+    }
+
+    impl AgentProviderCaller for MockProviderCaller {
+        fn call<'a>(
+            &'a self,
+            request: ProviderTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+            let seen = self.seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push((
+                    request.provider,
+                    request.model,
+                    request.messages.len(),
+                    request.tools.is_some(),
+                ));
+                Ok(AiChatResponse {
+                    content: "synthetic provider response".to_string(),
+                    thinking: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    stop_reason: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_caller_can_be_mocked_without_ai_chat() {
+        let caller = MockProviderCaller::default();
+        let response = caller
+            .call(ProviderTurnRequest {
+                provider: "mock-provider".to_string(),
+                model: "mock-model".to_string(),
+                messages: vec![serde_json::json!({ "role": "user", "content": "hello" })],
+                tools: Some(Vec::new()),
+                workspace_root: Some("/tmp".to_string()),
+                num_ctx: Some(1024),
+                num_predict: Some(128),
+                reflection_level: Some("low".to_string()),
+                stream: Channel::<StreamChunk>::new(|_| Ok(())),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.content, "synthetic provider response");
+        assert_eq!(
+            caller.seen.lock().unwrap().as_slice(),
+            &[(
+                "mock-provider".to_string(),
+                "mock-model".to_string(),
+                1,
+                true
+            )]
+        );
     }
 }
 

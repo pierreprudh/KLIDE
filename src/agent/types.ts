@@ -269,6 +269,8 @@ export type StartAgentRunInput = {
   /** Seconds a run_command may run before it's killed. Omit for the harness
    *  default (180s). */
   commandTimeoutSecs?: number;
+  /** Optional command to run after an accepted edit/create. */
+  testAfterEditCommand?: string;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };

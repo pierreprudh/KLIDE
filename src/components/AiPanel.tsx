@@ -79,6 +79,7 @@ type AiHarnessSettings = {
   maxParallelTools?: number;
   maxTurns?: number;
   commandTimeoutSecs?: number;
+  testAfterEditCommand?: string;
   serverConcurrency?: number;
   autoMemoryOnRunDone?: boolean;
 };
@@ -1758,6 +1759,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const maxParallelTools = harnessSettings?.maxParallelTools;
       const maxTurns = harnessSettings?.maxTurns;
       const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
+      const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
       // Mark this conversation in-flight so a mid-run view switch re-attaches
       // to it rather than starting fresh on remount.
       if (panelId) savePanelSession(panelId, currentId, true);
@@ -1774,6 +1776,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
         commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
+        testAfterEditCommand: testAfterEditCommand || undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
@@ -1930,7 +1933,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     });
   }
 
-  function approveCommand(scope: "once" | "run" = "once") {
+  function approveCommand(scope: "once" | "run" | "project" = "once") {
     if (!pendingPermission) return;
     const snapshot = pendingPermission;
     setPendingPermission(null);
@@ -2376,6 +2379,24 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                 }}
               >
                 For this run
+              </button>
+              <button
+                type="button"
+                onClick={() => approveCommand("project")}
+                title="Approve this exact command for future runs in this workspace"
+                style={{
+                  height: 26,
+                  padding: "0 10px",
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  color: "var(--fg-subtle)",
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  cursor: "pointer",
+                }}
+              >
+                For project
               </button>
               <button
                 type="button"
