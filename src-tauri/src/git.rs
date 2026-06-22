@@ -929,10 +929,14 @@ pub(crate) fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool,
 // A worktree is just a second checkout of the repo on its own branch, in its
 // own directory — so a delegate/Klide run launched with that directory as its
 // cwd works on an isolated branch without touching the main checkout. Klide
-// places them under `<repo>/.klide/worktrees/<name>` (mirroring Anthropic's
-// `.claude/worktrees/`) and excludes that path from `git status` so the
-// checkouts never read as untracked noise. The read side already exists:
-// `delegate::runs::worktree_label` labels a run by the worktree it ran in.
+// places them in a SIBLING dir, `<repo>-worktrees/<name>`, deliberately
+// OUTSIDE the checkout: a worktree inside the repo dumps a full duplicate
+// tree into whatever is watching the workspace (Klide's own file explorer, a
+// `vite`/`cargo` dev watcher when Klide edits itself), which trips reloads and
+// pollutes search. Outside, none of that fires and no `.gitignore` dance is
+// needed. The read side already exists: `delegate::runs::worktree_label`
+// labels a run by the worktree it ran in (it reads the `.git` pointer, so the
+// location doesn't matter).
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -943,9 +947,9 @@ pub(crate) struct WorktreeInfo {
     pub branch: String,
 }
 
-/// Turn a branch name into one safe directory segment under
-/// `.klide/worktrees/`. Keeps `[A-Za-z0-9._-]`; every other run of characters
-/// (including `/`) collapses to a single `-`. Never empty.
+/// Turn a branch name into one safe directory segment for the worktree dir.
+/// Keeps `[A-Za-z0-9._-]`; every other run of characters (including `/`)
+/// collapses to a single `-`. Never empty.
 fn worktree_dir_name(branch: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -964,40 +968,6 @@ fn worktree_dir_name(branch: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-/// The repo's shared `.git` directory, resolved from any checkout (main or a
-/// linked worktree). `--git-common-dir` may be relative to `toplevel`.
-fn git_common_dir(toplevel: &str) -> Result<std::path::PathBuf, String> {
-    let raw = git_output(toplevel, &["rev-parse", "--git-common-dir"])?;
-    let p = std::path::Path::new(raw.trim());
-    Ok(if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::path::Path::new(toplevel).join(p)
-    })
-}
-
-/// Ensure `.klide/worktrees/` is in the repo's local exclude file, so worktree
-/// checkouts never show up as untracked noise. `.git/info/exclude` is
-/// local-only (never committed); idempotent.
-fn ensure_worktrees_excluded(toplevel: &str) -> Result<(), String> {
-    let exclude = git_common_dir(toplevel)?.join("info").join("exclude");
-    let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
-    let entry = ".klide/worktrees/";
-    if existing.lines().any(|l| l.trim() == entry) {
-        return Ok(());
-    }
-    if let Some(parent) = exclude.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create .git/info: {e}"))?;
-    }
-    let mut next = existing;
-    if !next.is_empty() && !next.ends_with('\n') {
-        next.push('\n');
-    }
-    next.push_str(entry);
-    next.push('\n');
-    std::fs::write(&exclude, next).map_err(|e| format!("write .git/info/exclude: {e}"))
 }
 
 /// Create a worktree on `branch` and return its checkout path. If the branch
@@ -1019,11 +989,10 @@ pub(crate) fn git_worktree_add(
     if toplevel.is_empty() {
         return Err("Not inside a git repository".to_string());
     }
-    ensure_worktrees_excluded(&toplevel)?;
 
-    let dir = std::path::Path::new(&toplevel)
-        .join(".klide")
-        .join("worktrees")
+    // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
+    // it never trips a file watcher or shows up in the workspace tree.
+    let dir = std::path::PathBuf::from(format!("{toplevel}-worktrees"))
         .join(worktree_dir_name(branch));
     let path = dir.to_string_lossy().to_string();
 
@@ -1134,11 +1103,11 @@ worktree /repo
 HEAD abc123
 branch refs/heads/main
 
-worktree /repo/.klide/worktrees/klide-fix
+worktree /repo-worktrees/klide-fix
 HEAD def456
 branch refs/heads/klide/fix
 
-worktree /repo/.klide/worktrees/detached
+worktree /repo-worktrees/detached
 HEAD 999aaa
 detached
 ";
@@ -1147,7 +1116,7 @@ detached
         assert_eq!(list[0].path, "/repo");
         assert_eq!(list[0].branch, "main");
         assert_eq!(list[1].branch, "klide/fix");
-        assert_eq!(list[2].path, "/repo/.klide/worktrees/detached");
+        assert_eq!(list[2].path, "/repo-worktrees/detached");
         assert_eq!(list[2].branch, ""); // detached → no branch
     }
 
