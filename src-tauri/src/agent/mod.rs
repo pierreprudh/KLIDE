@@ -16,7 +16,8 @@ use self::transcripts::{
     write_summary,
 };
 use self::types::{
-    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
+    AgentAttachment, AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode,
+    AgentRunStatus,
     AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
@@ -207,22 +208,41 @@ impl ProviderCaps {
     }
 }
 
+/// Fold an attachment block into a message's text — the "[Files attached for
+/// context]" suffix shared by the live initial turn and both replay shapes.
+/// No-op when there are no attachments.
+fn append_attachments(content: &mut String, attachments: &[AgentAttachment]) {
+    if attachments.is_empty() {
+        return;
+    }
+    let attached = attachments
+        .iter()
+        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if attached.is_empty() {
+        return;
+    }
+    content.push_str("\n\n[Files attached for context]\n");
+    content.push_str(&attached);
+}
+
+/// The system message that stands in for everything before a compaction
+/// marker — identical in both replay shapes.
+fn compaction_system_message(summary: &str) -> serde_json::Value {
+    serde_json::json!({
+        "role": "system",
+        "content": format!("[Earlier conversation compacted to save context]\n{summary}")
+    })
+}
+
 fn provider_messages(
     request: &StartRunRequest,
     system: String,
     run_id: &str,
 ) -> Vec<serde_json::Value> {
     let mut user_text = request.initial_text.clone();
-    if !request.attachments.is_empty() {
-        let attachments = request
-            .attachments
-            .iter()
-            .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        user_text.push_str("\n\n[Files attached for context]\n");
-        user_text.push_str(&attachments);
-    }
+    append_attachments(&mut user_text, &request.attachments);
     let mut messages = vec![serde_json::json!({ "role": "system", "content": system })];
     // Inject initial todo list as context for tool-capable/project turns.
     // Local chat should stay tiny; sending project metadata to MLX/Ollama for
@@ -338,17 +358,7 @@ fn reconstruct_prior_messages(
                 text, attachments, ..
             } => {
                 let mut content = text.clone();
-                if !attachments.is_empty() {
-                    let attached = attachments
-                        .iter()
-                        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    if !attached.is_empty() {
-                        content.push_str("\n\n[Files attached for context]\n");
-                        content.push_str(&attached);
-                    }
-                }
+                append_attachments(&mut content, attachments);
                 out.push(serde_json::json!({ "role": "user", "content": content }));
                 // A new user turn invalidates any straggler tool
                 // results from the previous turn — the model shouldn't
@@ -380,12 +390,7 @@ fn reconstruct_prior_messages(
                 // exchanges in full — at a fraction of the tokens.
                 out.clear();
                 pending_tool_results.clear();
-                out.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!(
-                        "[Earlier conversation compacted to save context]\n{summary}"
-                    )
-                }));
+                out.push(compaction_system_message(summary));
             }
             _ => {}
         }
@@ -436,17 +441,7 @@ fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_jso
                 text, attachments, ..
             } => {
                 let mut content = text.clone();
-                if !attachments.is_empty() {
-                    let attached = attachments
-                        .iter()
-                        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    if !attached.is_empty() {
-                        content.push_str("\n\n[Files attached for context]\n");
-                        content.push_str(&attached);
-                    }
-                }
+                append_attachments(&mut content, attachments);
                 out.push(serde_json::json!({ "role": "user", "content": content }));
             }
             AgentEvent::AssistantMessage { content, .. } => {
@@ -500,12 +495,7 @@ fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_jso
             AgentEvent::ContextCompacted { summary, .. } => {
                 out.clear();
                 call_names.clear();
-                out.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!(
-                        "[Earlier conversation compacted to save context]\n{summary}"
-                    )
-                }));
+                out.push(compaction_system_message(summary));
             }
             _ => {}
         }
