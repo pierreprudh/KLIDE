@@ -1309,6 +1309,7 @@ function App() {
                   setMemoryRefreshKey((k) => k + 1);
                   setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
                 }}
+                onOpenMemory={() => setMemoryVisible(true)}
                 onSkillGenerated={(skill) => {
                   void reloadFilesystemSkills();
                   setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
@@ -1585,6 +1586,7 @@ function App() {
                             `Memory written → ${entry.title} (${entry.relPath})`
                           );
                         }}
+                        onOpenMemory={() => setMemoryVisible(true)}
                         onSkillGenerated={(skill) => {
                           void reloadFilesystemSkills();
                           setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);

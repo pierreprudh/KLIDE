@@ -116,6 +116,7 @@ type Props = {
 
   // Header actions (memory + skill) from AI panel
   onMemoryWritten: (entry: { title: string; relPath: string }) => void;
+  onOpenMemory?: () => void;
   onSkillGenerated: (skill: { name: string; relPath: string }) => void;
 
   harnessSettings: HarnessSettings;
@@ -183,6 +184,7 @@ export function AnchoredWorkbench(props: Props) {
     previewPath,
     onClosePreview,
     onMemoryWritten,
+    onOpenMemory,
     onSkillGenerated,
     harnessSettings,
   } = props;
@@ -352,6 +354,7 @@ export function AnchoredWorkbench(props: Props) {
         resumeConversation={resumeTarget?.panelId === safeId ? resumeTarget.convo : null}
         onResumeConsumed={onResumeConsumed}
         onMemoryWritten={onMemoryWritten}
+        onOpenMemory={onOpenMemory}
         onSkillGenerated={onSkillGenerated}
       />
     );

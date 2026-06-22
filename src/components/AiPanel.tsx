@@ -208,6 +208,9 @@ type Props = {
    *  "Summarize" header action). The host uses it to bump the sidebar's
    *  refresh key + show a notice. */
   onMemoryWritten?: (entry: { relPath: string; title: string }) => void;
+  /** Open the Memory modal (to its drafts) — used by the "review draft"
+   *  pencil under the last reply once an auto-draft is ready. */
+  onOpenMemory?: () => void;
   /** Called when a skill is generated from this panel (via the
    *  "Save as skill" header action). The host uses it to reload the
    *  filesystem-skill list. */
@@ -358,6 +361,7 @@ export function AiPanel({
   initialTask,
   onInitialConsumed,
   onMemoryWritten,
+  onOpenMemory,
   onSkillGenerated,
 }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -391,6 +395,9 @@ export function AiPanel({
   // Subtle inline "Auto-saved to memory" line under the composer. Surfaces for
   // ~4s after a run completes, then fades. Cleared on the next send or abort.
   const [autoMemoryNotice, setAutoMemoryNotice] = useState<string | null>(null);
+  // Index of the assistant message whose Copy button just fired, for a brief
+  // "Copied" confirmation. Reset on the next copy or render of a new message.
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const autoMemoryTimerRef = useRef<number | null>(null);
 
   const lastPublishRef = useRef({ count: -1, streaming: false });
@@ -1346,14 +1353,10 @@ This user request requires workspace inspection. Before answering, you MUST call
         status: "done",
       });
       addMemoryDraft(note, workspaceRoot);
-      setAutoMemoryNotice(`✎ Memory draft ready to review: ${note.title}`);
-      if (autoMemoryTimerRef.current !== null) {
-        clearTimeout(autoMemoryTimerRef.current);
-      }
-      autoMemoryTimerRef.current = window.setTimeout(() => {
-        setAutoMemoryNotice(null);
-        autoMemoryTimerRef.current = null;
-      }, 4000);
+      // Signal a draft is ready; the "review draft" pencil under the last
+      // reply surfaces it (no fading pill, no timer). Cleared on the next
+      // turn / cancel / history load via the existing reset paths.
+      setAutoMemoryNotice(note.title);
     } catch (err) {
       console.error("Auto-summarize failed:", err);
     } finally {
@@ -2350,7 +2353,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
-          style={{ flex: 1, overflow: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : "10px 12px 12px", fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minHeight: 0, overscrollBehavior: "contain" }}
+          style={{ flex: 1, overflowX: "hidden", overflowY: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : "10px 12px 12px", fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain" }}
         >
         {providerDelegatesWork ? (
           <DelegateTerminalSurface
@@ -2440,6 +2443,39 @@ This user request requires workspace inspection. Before answering, you MUST call
               )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
+                {i === msgs.length - 1 && !isStreamingActive && !isAssistantPlaceholder && m.content?.trim() && (
+                  <div className="ai-msg-actions" style={{ display: "flex", alignItems: "center", gap: 2, marginTop: 6, height: 22 }}>
+                    <button
+                      type="button"
+                      title="Copy message"
+                      aria-label="Copy message"
+                      onClick={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 22, padding: "0 7px", borderRadius: "var(--radius-sm)", border: "none", background: "transparent", color: "var(--fg-subtle)", fontSize: 11, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}
+                    >
+                      {copiedIdx === i ? (
+                        <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>Copied</>
+                      ) : (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" /></svg>
+                      )}
+                    </button>
+                    {autoMemoryNotice && onOpenMemory && (
+                      <button
+                        type="button"
+                        title={`Review memory draft: ${autoMemoryNotice}`}
+                        aria-label="Review memory draft"
+                        onClick={() => onOpenMemory()}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 22, padding: "0 7px", borderRadius: "var(--radius-sm)", border: "none", background: "transparent", color: "var(--fg-subtle)", fontSize: 11, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                        Review draft
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -2686,18 +2722,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             </button>
           </div>
         )}
-        {(queuedTurns.length > 0 || autoMemoryNotice) && (
+        {queuedTurns.length > 0 && (
           <div style={{ minHeight: 18, display: "flex", alignItems: "center", gap: 6, color: "var(--fg-subtle)", fontSize: 11, padding: "0 2px 6px", flexWrap: "wrap" }}>
-            {queuedTurns.length > 0 && (
-              <span title={queuedTurns.map((t) => t.text).join("\n\n")} style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)" }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queuedTurns.length} queued</span>
-              </span>
-            )}
-            {autoMemoryNotice && (
-              <span style={{ display: "inline-flex", alignItems: "center", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))", background: "color-mix(in srgb, var(--accent-soft) 60%, transparent)", color: "var(--fg-strong)" }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{autoMemoryNotice}</span>
-              </span>
-            )}
+            <span title={queuedTurns.map((t) => t.text).join("\n\n")} style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queuedTurns.length} queued</span>
+            </span>
           </div>
         )}
         {modeFlash && (
