@@ -321,39 +321,6 @@ pub(crate) fn create_pr(
     }
 }
 
-#[tauri::command]
-pub(crate) fn create_worktree(workspace_root: String, name: String) -> Result<String, String> {
-    let safe = name
-        .to_lowercase()
-        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-        .trim_matches('-')
-        .to_string();
-    let branch = format!("feature/{safe}");
-    let worktree_path = format!("{}-{}", workspace_root.trim_end_matches('/'), safe);
-
-    run_git(&workspace_root, &["checkout", "-b", &branch])?;
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &workspace_root,
-            "worktree",
-            "add",
-            worktree_path.as_str(),
-            &branch,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to create worktree: {e}"))?;
-
-    if !output.status.success() {
-        let _ = run_git(&workspace_root, &["checkout", "-"]);
-        let _ = run_git(&workspace_root, &["branch", "-D", &branch]);
-        return Err(format!(
-            "Worktree creation failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(worktree_path)
-}
 
 #[tauri::command]
 pub(crate) fn git_diff(

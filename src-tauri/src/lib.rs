@@ -1102,7 +1102,6 @@ pub fn run() {
             memory_list,
             memory_read,
             git::create_pr,
-            git::create_worktree,
             git::git_log,
             git::git_checkout_branch,
             git::git_fetch,

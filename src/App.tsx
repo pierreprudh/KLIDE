@@ -668,16 +668,42 @@ function App() {
     workspaceRoot: string | null;
     resumeSessionId?: string;
     initialTask?: string;
+    cwd?: string;
   }) {
     setView("workbench");
     if (!aiVisible) togglePanel("ai");
-    const id = appendAiPanel({ provider: opts.provider });
+    const id = appendAiPanel({ provider: opts.provider, cwd: opts.cwd });
     setPendingAiPanel({
       panelId: id,
       provider: opts.provider,
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
     });
+  }
+
+  // Fleet: create a fresh git worktree (isolated branch) and open an AI panel
+  // pinned to it, so the agent works without touching the main checkout. The
+  // run shows up in Mission Control labelled `· in <name>` via the existing
+  // worktree_label read side. Branch is auto-named to avoid a webview
+  // prompt(); rename later from the branch UI.
+  async function newWorktreeRun(branch?: string) {
+    if (!workspaceRoot) {
+      setFileNotice("Open a workspace folder first.");
+      return;
+    }
+    const name = branch?.trim() || `klide/wt-${Date.now().toString(36)}`;
+    try {
+      const wt = await invoke<{ path: string; branch: string }>("git_worktree_add", {
+        workspaceRoot,
+        branch: name,
+      });
+      setView("workbench");
+      if (!aiVisible) togglePanel("ai");
+      appendAiPanel({ cwd: wt.path });
+      setFileNotice(`Worktree ready on ${wt.branch} — this panel runs there.`);
+    } catch (err) {
+      setFileNotice(`Worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // "Review Diff" from Mission Control — for Klide runs the CheckpointPanel
@@ -1050,7 +1076,7 @@ function App() {
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { setView("workbench"); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
-    { id: "worktree", label: "Git: New Worktree…", action: () => { setPaletteOpen(false); const name = prompt("Worktree name:"); if (name && workspaceRoot) { void (async () => { try { const path = await invoke<string>("create_worktree", { workspaceRoot, name }); setFileNotice(`Worktree: ${path}`); } catch(e) { setFileNotice(`Failed: ${e}`); } })(); } } },
+    { id: "worktree", label: "Agent: New Run in Worktree", action: () => { setPaletteOpen(false); void newWorktreeRun(); } },
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
   ];
@@ -1464,11 +1490,15 @@ function App() {
                             ? () => setPendingAiPanel(null)
                             : undefined
                         }
-                        workspaceRoot={workspaceRoot}
+                        workspaceRoot={panel.cwd ?? workspaceRoot}
                         onFileWritten={onAgentWrote}
-                        onWorkspaceChanged={() =>
-                          workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-                        }
+                        onWorkspaceChanged={() => {
+                          // A worktree-pinned panel changes its own branch, not
+                          // the main checkout, so only refresh the sidebar git
+                          // status when the panel runs in the global workspace.
+                          const root = panel.cwd ?? workspaceRoot;
+                          if (!panel.cwd && root) refreshGitStatus(root);
+                        }}
                         model={panel.model ?? aiModel}
                         onModelChange={(model) => updateAiPanelModel(panel.id, model)}
                         onProviderChange={(provider) => setAiPanelProvider(panel.id, provider)}

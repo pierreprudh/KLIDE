@@ -22,6 +22,12 @@ export type AiPanelInstance = {
   rect: PanelRect;
   provider?: ProviderId;
   model?: string;
+  // Per-panel workspace override — the path of a git worktree this panel's
+  // runs are pinned to, so a delegate/Klide run works on an isolated branch
+  // instead of the main checkout. Session-only (deliberately not persisted:
+  // a reload shouldn't resurrect a panel pointing at a since-removed
+  // worktree). When unset, the panel uses the app's global workspaceRoot.
+  cwd?: string;
 };
 
 function newAiPanelId(): string {
@@ -339,7 +345,7 @@ export function usePanelLayout(opts: {
   // Append a fresh AI panel, offset from the last so the user can see both,
   // clamped inside the workbench. Returns the new panel's id. Used by both
   // "duplicate panel" and the Mission Control "open in {CLI}" handoff.
-  function appendAiPanel(seed?: { provider?: ProviderId; model?: string }): string {
+  function appendAiPanel(seed?: { provider?: ProviderId; model?: string; cwd?: string }): string {
     const id = newAiPanelId();
     setAiPanels((prevPanels) => {
       const last = prevPanels[prevPanels.length - 1]?.rect;
@@ -359,7 +365,7 @@ export function usePanelLayout(opts: {
       );
       const nextPanels = [
         ...prevPanels,
-        { id, rect, provider: seed?.provider, model: seed?.model },
+        { id, rect, provider: seed?.provider, model: seed?.model, cwd: seed?.cwd },
       ];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,
