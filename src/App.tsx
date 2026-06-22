@@ -1491,6 +1491,7 @@ function App() {
                             : undefined
                         }
                         workspaceRoot={panel.cwd ?? workspaceRoot}
+                        worktreeName={panel.cwd ? panel.cwd.split("/").filter(Boolean).pop() : undefined}
                         onFileWritten={onAgentWrote}
                         onWorkspaceChanged={() => {
                           // A worktree-pinned panel changes its own branch, not

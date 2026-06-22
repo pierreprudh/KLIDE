@@ -101,6 +101,10 @@ type ReflectionOption = {
 
 type Props = {
   workspaceRoot: string | null;
+  /** Set when this panel is pinned to a git worktree (its runs work an
+   *  isolated branch, not the main checkout). Shown under the composer so the
+   *  user can tell which panel writes where. Undefined → main workspace. */
+  worktreeName?: string;
   onFileWritten?: (path: string, newContent: string) => void;
   onWorkspaceChanged?: () => void;
   visible: boolean;
@@ -270,6 +274,7 @@ function storedModelForProvider(id: ProviderId): string {
 
 export function AiPanel({
   workspaceRoot,
+  worktreeName,
   onFileWritten,
   onWorkspaceChanged,
   visible,
@@ -2816,6 +2821,17 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           </div>
           </div>
         </div>
+        {worktreeName && (
+          <div
+            title={`This panel runs in the git worktree "${worktreeName}" — its edits and commands stay on that branch, not the main checkout.`}
+            style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, padding: "0 4px", fontSize: 10.5, color: "var(--fg-subtle)", minWidth: 0 }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M6 9v6" /><path d="M18 6a9 9 0 0 1-9 9" /><circle cx="18" cy="6" r="3" /></svg>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              worktree <strong style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{worktreeName}</strong>
+            </span>
+          </div>
+        )}
       </div>
       )}
     </aside>
