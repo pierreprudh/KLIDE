@@ -26,6 +26,7 @@ import { fetchRunMessages, type RunMessage as MissionRunMessage } from "./runs";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { MemoryModal } from "./components/MemoryModal";
+import { WorktreesModal } from "./components/WorktreesModal";
 import { FileViewerPanel } from "./components/FileViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -130,6 +131,7 @@ function App() {
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
   const [memoryVisible, setMemoryVisible] = useState(false);
+  const [worktreesVisible, setWorktreesVisible] = useState(false);
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
@@ -681,6 +683,14 @@ function App() {
     });
   }
 
+  // Open an existing worktree (from the Worktrees modal) in a fresh AI panel
+  // pinned to its path — same pin mechanism as newWorktreeRun, no new branch.
+  function openExistingWorktree(path: string) {
+    setView("workbench");
+    if (!aiVisible) togglePanel("ai");
+    appendAiPanel({ cwd: path });
+  }
+
   // Fleet: create a fresh git worktree (isolated branch) and open an AI panel
   // pinned to it, so the agent works without touching the main checkout. The
   // run shows up in Mission Control labelled `· in <name>` via the existing
@@ -1078,6 +1088,7 @@ function App() {
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
     { id: "worktree", label: "Agent: New Run in Worktree", action: () => { setPaletteOpen(false); void newWorktreeRun(); } },
+    { id: "worktrees-view", label: "View: Worktrees", action: () => { setPaletteOpen(false); setWorktreesVisible(true); } },
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
   ];
@@ -1581,6 +1592,13 @@ function App() {
           }
         }}
         onClose={() => setMemoryVisible(false)}
+      />
+      <WorktreesModal
+        open={worktreesVisible}
+        workspaceRoot={workspaceRoot}
+        onOpenWorktree={openExistingWorktree}
+        onNotice={setFileNotice}
+        onClose={() => setWorktreesVisible(false)}
       />
       <ProfileModal
         open={profileVisible}
