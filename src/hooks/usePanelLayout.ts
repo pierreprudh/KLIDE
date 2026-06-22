@@ -138,6 +138,12 @@ export function usePanelLayout(opts: {
         rect: entry.rect,
         provider: storedAiProvider(entry.provider) ?? prev?.provider,
         model: entry.model ?? prev?.model,
+        // `cwd` (worktree pin) lives only in memory — StoredAiPanel never
+        // carries it — so a resync (window-resize re-clamp, hydrate) must
+        // carry it forward from the previous in-memory panel, or the panel
+        // would silently revert to the global workspace mid-session and an
+        // agent could start writing to the main checkout.
+        cwd: prev?.cwd,
       };
     });
   }

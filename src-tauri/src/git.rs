@@ -1028,10 +1028,16 @@ pub(crate) fn git_worktree_add(
     let path = dir.to_string_lossy().to_string();
 
     // Already checked out here → reuse, so the action is safe to re-trigger.
+    // Report the branch actually on disk, not the requested name: two distinct
+    // branch names can sanitise to the same dir, so echoing the request could
+    // mislabel the existing checkout.
     if dir.join(".git").exists() {
+        let actual = git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| branch.to_string());
         return Ok(WorktreeInfo {
             path,
-            branch: branch.to_string(),
+            branch: if actual == "HEAD" { String::new() } else { actual },
         });
     }
     if let Some(parent) = dir.parent() {
