@@ -1118,6 +1118,7 @@ pub fn run() {
             git::git_pr_merged,
             git::git_worktree_add,
             git::git_worktree_list,
+            git::git_worktree_merge,
             git::git_worktree_remove
         ])
         .run(tauri::generate_context!())

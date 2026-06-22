@@ -1086,6 +1086,52 @@ pub(crate) fn git_worktree_list(workspace_root: String) -> Result<Vec<WorktreeIn
     Ok(parse_worktree_list(&out))
 }
 
+/// Merge a worktree's `branch` into the branch currently checked out in the
+/// main `workspace_root` — the "pull the fleet's work back" action. Refuses if
+/// the target has uncommitted changes (a merge would entangle them). On
+/// conflict it aborts the merge, leaving the checkout exactly as it was, and
+/// returns the conflicted files so resolving stays an explicit next step
+/// rather than a half-finished merge sitting in the tree.
+#[tauri::command]
+pub(crate) fn git_worktree_merge(
+    workspace_root: String,
+    branch: String,
+) -> Result<String, String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("Branch to merge is required".to_string());
+    }
+    let dirty = git_output(&workspace_root, &["status", "--porcelain"])?;
+    if !dirty.trim().is_empty() {
+        return Err(
+            "Main checkout has uncommitted changes — commit or stash them before merging."
+                .to_string(),
+        );
+    }
+    let target = git_output(&workspace_root, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    match run_git(&workspace_root, &["merge", "--no-ff", branch]) {
+        Ok(()) => Ok(format!("Merged {branch} into {target}.")),
+        Err(merge_err) => {
+            let conflicts =
+                git_output(&workspace_root, &["diff", "--name-only", "--diff-filter=U"])
+                    .unwrap_or_default();
+            // Abort so the working tree is left clean, never half-merged.
+            let _ = run_git(&workspace_root, &["merge", "--abort"]);
+            let list: Vec<&str> = conflicts.lines().filter(|l| !l.trim().is_empty()).collect();
+            if list.is_empty() {
+                Err(format!("Merge failed: {merge_err}"))
+            } else {
+                Err(format!(
+                    "Merge conflicts in {} — aborted, nothing changed. Resolve in the worktree, then retry.",
+                    list.join(", ")
+                ))
+            }
+        }
+    }
+}
+
 /// Remove a worktree checkout. Fails (surfacing git's message) if it has
 /// uncommitted changes, unless `force`.
 #[tauri::command]
