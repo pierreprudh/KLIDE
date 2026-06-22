@@ -693,14 +693,15 @@ function App() {
     }
     const name = branch?.trim() || `klide/wt-${Date.now().toString(36)}`;
     try {
-      const wt = await invoke<{ path: string; branch: string }>("git_worktree_add", {
-        workspaceRoot,
-        branch: name,
-      });
+      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+        "git_worktree_add",
+        { workspaceRoot, branch: name, copyFiles: null }
+      );
       setView("workbench");
       if (!aiVisible) togglePanel("ai");
       appendAiPanel({ cwd: wt.path });
-      setFileNotice(`Worktree ready on ${wt.branch} — this panel runs there.`);
+      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
+      setFileNotice(`Worktree ready on ${wt.branch} — this panel runs there${copied}.`);
     } catch (err) {
       setFileNotice(`Worktree failed: ${err instanceof Error ? err.message : String(err)}`);
     }

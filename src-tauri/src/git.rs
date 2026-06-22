@@ -945,6 +945,45 @@ pub(crate) struct WorktreeInfo {
     pub path: String,
     /// Branch checked out there (empty for a detached HEAD).
     pub branch: String,
+    /// Untracked config files copied in from the main checkout (e.g. `.env`),
+    /// so a fresh worktree can actually build. Empty when nothing was copied.
+    #[serde(default)]
+    pub bootstrapped: Vec<String>,
+}
+
+/// Copy small untracked config files (e.g. `.env`) from the main checkout into
+/// a fresh worktree. A worktree has every TRACKED file but none of the
+/// gitignored secrets/config a build needs — the #1 reason a fresh worktree
+/// won't run. Top-level files only (no `/` or `..`, so this can't be coaxed
+/// into writing outside the worktree); skips any already present in the
+/// worktree or missing from the source. Returns the names actually copied.
+fn bootstrap_worktree_files(
+    source_root: &str,
+    worktree: &std::path::Path,
+    files: &[String],
+) -> Vec<String> {
+    let mut copied = Vec::new();
+    for name in files {
+        let name = name.trim();
+        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+            continue;
+        }
+        let src = std::path::Path::new(source_root).join(name);
+        let dst = worktree.join(name);
+        if src.is_file() && !dst.exists() && std::fs::copy(&src, &dst).is_ok() {
+            copied.push(name.to_string());
+        }
+    }
+    copied
+}
+
+/// Default config files Klide copies into a new worktree when the caller
+/// doesn't specify a list. The common local-secret/config names.
+fn default_worktree_copy_files() -> Vec<String> {
+    [".env", ".env.local", ".env.development", ".env.development.local"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Turn a branch name into one safe directory segment for the worktree dir.
@@ -978,6 +1017,7 @@ fn worktree_dir_name(branch: &str) -> String {
 pub(crate) fn git_worktree_add(
     workspace_root: String,
     branch: String,
+    copy_files: Option<Vec<String>>,
 ) -> Result<WorktreeInfo, String> {
     let branch = branch.trim();
     if branch.is_empty() {
@@ -989,6 +1029,7 @@ pub(crate) fn git_worktree_add(
     if toplevel.is_empty() {
         return Err("Not inside a git repository".to_string());
     }
+    let copy_files = copy_files.unwrap_or_else(default_worktree_copy_files);
 
     // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
     // it never trips a file watcher or shows up in the workspace tree.
@@ -999,14 +1040,17 @@ pub(crate) fn git_worktree_add(
     // Already checked out here → reuse, so the action is safe to re-trigger.
     // Report the branch actually on disk, not the requested name: two distinct
     // branch names can sanitise to the same dir, so echoing the request could
-    // mislabel the existing checkout.
+    // mislabel the existing checkout. Still top up any config files missing
+    // from the reused checkout.
     if dir.join(".git").exists() {
         let actual = git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| branch.to_string());
+        let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
         return Ok(WorktreeInfo {
             path,
             branch: if actual == "HEAD" { String::new() } else { actual },
+            bootstrapped,
         });
     }
     if let Some(parent) = dir.parent() {
@@ -1026,9 +1070,11 @@ pub(crate) fn git_worktree_add(
     };
     run_git(&toplevel, &args)?;
 
+    let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
     Ok(WorktreeInfo {
         path,
         branch: branch.to_string(),
+        bootstrapped,
     })
 }
 
@@ -1068,6 +1114,7 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
             out.push(WorktreeInfo {
                 path: p,
                 branch: std::mem::take(branch),
+                bootstrapped: Vec::new(),
             });
         }
     };
@@ -1094,6 +1141,37 @@ mod tests {
         assert_eq!(worktree_dir_name("///"), "worktree");
         assert_eq!(worktree_dir_name("a@@@b"), "a-b");
         assert_eq!(worktree_dir_name("-trim-"), "trim");
+    }
+
+    #[test]
+    fn bootstrap_copies_only_missing_top_level_files() {
+        let base = std::env::temp_dir().join(format!("klide-wt-bootstrap-{}", std::process::id()));
+        let src = base.join("main");
+        let wt = base.join("wt");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(src.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(src.join(".env.local"), "L=2").unwrap();
+        // Already present in the worktree → must not be overwritten.
+        std::fs::write(wt.join(".env.local"), "KEEP").unwrap();
+
+        let copied = bootstrap_worktree_files(
+            src.to_str().unwrap(),
+            &wt,
+            &[
+                ".env".into(),
+                ".env.local".into(),     // exists in wt → skipped
+                ".env.missing".into(),   // not in src → skipped
+                "../escape".into(),      // traversal → rejected
+                "nested/x".into(),       // not top-level → rejected
+            ],
+        );
+
+        assert_eq!(copied, vec![".env".to_string()]);
+        assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=1");
+        assert_eq!(std::fs::read_to_string(wt.join(".env.local")).unwrap(), "KEEP");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

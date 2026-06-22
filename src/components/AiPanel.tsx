@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { DiffModal } from "./DiffModal";
+import { InlineDiffCard } from "./InlineDiffCard";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   estimateProjectContextTokens,
@@ -2312,6 +2312,19 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
 
       {!providerDelegatesWork && (
       <div style={{ padding: "0 10px 10px" }}>
+        {pendingDiff && (
+          <InlineDiffCard
+            edit={{
+              path: pendingDiff.path,
+              oldContent: pendingDiff.oldContent,
+              newContent: pendingDiff.newContent,
+              isCreate: pendingDiff.isCreate,
+              reason: pendingDiff.reason,
+            }}
+            onApply={handleDiffApply}
+            onReject={handleDiffReject}
+          />
+        )}
         {pendingPermission && (
           <div
             className="ai-qa-card"
@@ -2835,19 +2848,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       </div>
       )}
     </aside>
-    {pendingDiff && (
-      <DiffModal
-        edit={{
-          path: pendingDiff.path,
-          oldContent: pendingDiff.oldContent,
-          newContent: pendingDiff.newContent,
-          isCreate: pendingDiff.isCreate,
-          reason: pendingDiff.reason,
-        }}
-        onApply={handleDiffApply}
-        onReject={handleDiffReject}
-      />
-    )}
     </>
   );
 }
