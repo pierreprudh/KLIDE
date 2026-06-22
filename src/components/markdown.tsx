@@ -72,6 +72,8 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-md)",
         overflow: "hidden",
+        maxWidth: "100%",
+        minWidth: 0,
         background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))",
       }}
     >

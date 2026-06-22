@@ -824,7 +824,37 @@ pub fn recover_text_tool_calls(content: &str) -> (Vec<NormalizedToolCall>, Strin
         rest = &after[e + END.len()..];
     }
     cleaned.push_str(rest);
+    if calls.is_empty() {
+        return recover_applied_tool_call_text(content);
+    }
     (calls, cleaned.trim().to_string())
+}
+
+fn recover_applied_tool_call_text(content: &str) -> (Vec<NormalizedToolCall>, String) {
+    let mut cleaned = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let Some(after) = trimmed.strip_prefix("Applied:") else {
+            cleaned.push(line);
+            continue;
+        };
+        let parsed = parse_pythonic_calls(after.trim());
+        if parsed.is_empty() {
+            cleaned.push(line);
+            continue;
+        }
+        let calls = parsed
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (name, input))| NormalizedToolCall {
+                id: format!("tool_{idx}"),
+                name,
+                input,
+            })
+            .collect();
+        return (calls, cleaned.join("\n").trim().to_string());
+    }
+    (Vec::new(), content.to_string())
 }
 
 /// Parse the LFM2 "pythonic" tool-call payload found between the special
@@ -2379,6 +2409,16 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read_file");
         assert_eq!(calls[0].input, serde_json::json!({ "path": "a.rs" }));
+    }
+
+    #[test]
+    fn recovers_applied_tool_call_text_and_drops_fake_result() {
+        let content = "Let me check that.\nApplied: list_dir(path=\"public\")\n\nThe files are:\nfavicon.ico\nList_dir tool result: made up";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "list_dir");
+        assert_eq!(calls[0].input, serde_json::json!({ "path": "public" }));
+        assert_eq!(cleaned, "Let me check that.");
     }
 
     #[test]

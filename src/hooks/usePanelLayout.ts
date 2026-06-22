@@ -83,6 +83,9 @@ export function usePanelLayout(opts: {
   // Bring-to-front z-index. Bumped when the user clicks a panel.
   const [zCounter, setZCounter] = useState(10);
   const [focusedPanel, setFocusedPanel] = useState<string | null>(null);
+  // Per-panel stacking order. Each panel keeps the z it last earned on focus,
+  // so bringing one panel forward never reshuffles the others.
+  const [zMap, setZMap] = useState<Record<string, number>>({});
 
   // Measure the workbench container so we can build a default layout on
   // first paint, and re-clamp every panel rect when the window resizes.
@@ -345,7 +348,14 @@ export function usePanelLayout(opts: {
 
   function focusPanel(panelId: string) {
     setFocusedPanel(panelId);
-    setZCounter((n) => n + 1);
+    setZCounter((n) => {
+      const next = n + 1;
+      // Only the focused panel gets a fresh top z; the rest keep theirs. The
+      // +1000 base keeps any focused panel above the array-index fallback used
+      // for panels that haven't been focused yet.
+      setZMap((m) => ({ ...m, [panelId]: 1000 + next }));
+      return next;
+    });
   }
 
   // Append a fresh AI panel, offset from the last so the user can see both,
@@ -379,6 +389,9 @@ export function usePanelLayout(opts: {
       }));
       return nextPanels;
     });
+    // A freshly opened panel comes up on top and becomes focused.
+    setZCounter((n) => { const next = n + 1; setZMap((m) => ({ ...m, [id]: 1000 + next })); return next; });
+    setFocusedPanel(id);
     return id;
   }
 
@@ -418,6 +431,7 @@ export function usePanelLayout(opts: {
       });
       return next;
     });
+    setZMap((m) => { if (!(id in m)) return m; const copy = { ...m }; delete copy[id]; return copy; });
   }
 
   return {
@@ -427,6 +441,7 @@ export function usePanelLayout(opts: {
     panelLayout,
     aiPanels,
     zCounter,
+    zMap,
     focusedPanel,
     updatePanelRect,
     updateAiRect,

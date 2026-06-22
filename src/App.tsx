@@ -221,6 +221,7 @@ function App() {
     panelLayout,
     aiPanels,
     zCounter,
+    zMap,
     focusedPanel,
     updatePanelRect,
     updateAiRect,
@@ -1384,7 +1385,7 @@ function App() {
                     rect={explorerRect}
                     workbenchW={workbenchSize.w}
                     workbenchH={workbenchSize.h}
-                    zIndex={focusedPanel === "explorer" ? 10 + zCounter : 10}
+                    zIndex={zMap["explorer"] ?? 10}
                     onFocus={() => focusPanel("explorer")}
                     onResize={(next) => updatePanelRect("explorer", next)}
                     onMove={(next) => updatePanelRect("explorer", next)}
@@ -1497,7 +1498,7 @@ function App() {
                     rect={terminalRect}
                     workbenchW={workbenchSize.w}
                     workbenchH={workbenchSize.h}
-                    zIndex={focusedPanel === "terminal" ? 10 + zCounter : 10}
+                    zIndex={zMap["terminal"] ?? 10}
                     onFocus={() => focusPanel("terminal")}
                     onResize={(next) => updatePanelRect("terminal", next)}
                     onMove={(next) => updatePanelRect("terminal", next)}
@@ -1520,7 +1521,7 @@ function App() {
                       rect={panel.rect}
                       workbenchW={workbenchSize.w}
                       workbenchH={workbenchSize.h}
-                      zIndex={focusedPanel === panel.id ? 10 + zCounter : 10 + idx}
+                      zIndex={zMap[panel.id] ?? (10 + idx)}
                       onFocus={() => focusPanel(panel.id)}
                       onResize={(next) => updateAiRect(panel.id, next)}
                       onMove={(next) => updateAiRect(panel.id, next)}

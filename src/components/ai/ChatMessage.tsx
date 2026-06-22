@@ -229,6 +229,8 @@ function ToolCallRow({ name, args, repeated = false }: { name: string; args: unk
             overflowX: "auto",
             whiteSpace: "pre",
             lineHeight: 1.5,
+            maxWidth: "calc(100% - 20px)",
+            boxSizing: "border-box",
           }}
         >
           {argsText}
@@ -236,6 +238,21 @@ function ToolCallRow({ name, args, repeated = false }: { name: string; args: unk
       )}
     </details>
   );
+}
+
+function stripToolNarration(content: string, hasToolCalls: boolean): string {
+  if (!hasToolCalls) return content;
+  return content
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (/^Applied:\s*[A-Za-z_]\w*\s*\(/.test(trimmed)) return false;
+      if (/^[A-Za-z_]\w*\s+tool result\s*:/i.test(trimmed)) return false;
+      return true;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 // First line of a tool result, trimmed for the collapsed summary row.
@@ -600,8 +617,9 @@ export function renderMessageBody(m: Msg, active = false): ReactElement {
     //      answer.
     const { thinking: inlineThinking, content: cleanedContent } =
       splitThinking(m.content);
-    const { thinking: planThinking, content: visibleContent } =
+    const { thinking: planThinking, content } =
       stripPlanJson(cleanedContent);
+    const visibleContent = stripToolNarration(content, !!m.toolCalls?.length);
     // Preserve any structured thinking block the adapter already
     // captured (Anthropic / Ollama) and append what we lifted from
     // the text, so nothing is lost.
