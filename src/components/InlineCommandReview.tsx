@@ -4,6 +4,11 @@ type Props = {
   command: string;
   onReject: () => void;
   onApproveOnce: () => void;
+  /** Approve this exact command for the rest of the run (allowlist, session). */
+  onApproveForRun?: () => void;
+  /** Approve this exact command for future runs in this workspace (project
+   *  allowlist, persisted). */
+  onApproveForProject?: () => void;
 };
 
 /** A bare icon action — no container, just the glyph, coloring on hover. Keeps
@@ -48,9 +53,16 @@ function BareAction({
 }
 
 /** Shell-command approval — minimal: the command in mono with a `$` prompt and
- *  three bare icon actions (cancel ✗, approve-for-run 📌, approve-once ✓). No
- *  heavy framing, no icon containers. Lives inline under the requesting turn. */
-export function InlineCommandReview({ command, onReject, onApproveOnce }: Props) {
+ *  bare icon actions (cancel ✗, optional approve-for-run 📌, optional
+ *  approve-for-project 🗂, approve-once ✓). No heavy framing, no icon
+ *  containers. Lives inline under the requesting turn. */
+export function InlineCommandReview({
+  command,
+  onReject,
+  onApproveOnce,
+  onApproveForRun,
+  onApproveForProject,
+}: Props) {
   return (
     <div
       className="ai-qa-card"
@@ -91,6 +103,21 @@ export function InlineCommandReview({ command, onReject, onApproveOnce }: Props)
             <path d="M18 6 6 18M6 6l12 12" />
           </svg>
         </BareAction>
+        {onApproveForRun && (
+          <BareAction label="Approve for this run" tone="neutral" onClick={onApproveForRun}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="17" x2="12" y2="22" />
+              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+            </svg>
+          </BareAction>
+        )}
+        {onApproveForProject && (
+          <BareAction label="Approve for this project" tone="neutral" onClick={onApproveForProject}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+            </svg>
+          </BareAction>
+        )}
         <BareAction label="Approve" tone="accent" onClick={onApproveOnce}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 6 9 17l-5-5" />

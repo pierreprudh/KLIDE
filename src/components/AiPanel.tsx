@@ -80,6 +80,7 @@ type AiHarnessSettings = {
   maxParallelTools?: number;
   maxTurns?: number;
   commandTimeoutSecs?: number;
+  testAfterEditCommand?: string;
   serverConcurrency?: number;
   autoMemoryOnRunDone?: boolean;
 };
@@ -101,6 +102,10 @@ type ReflectionOption = {
 
 type Props = {
   workspaceRoot: string | null;
+  /** Set when this panel is pinned to a git worktree (its runs work an
+   *  isolated branch, not the main checkout). Shown under the composer so the
+   *  user can tell which panel writes where. Undefined → main workspace. */
+  worktreeName?: string;
   onFileWritten?: (path: string, newContent: string) => void;
   onWorkspaceChanged?: () => void;
   visible: boolean;
@@ -273,6 +278,7 @@ function storedModelForProvider(id: ProviderId): string {
 
 export function AiPanel({
   workspaceRoot,
+  worktreeName,
   onFileWritten,
   onWorkspaceChanged,
   visible,
@@ -1823,6 +1829,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const maxParallelTools = harnessSettings?.maxParallelTools;
       const maxTurns = harnessSettings?.maxTurns;
       const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
+      const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
       // Mark this conversation in-flight so a mid-run view switch re-attaches
       // to it rather than starting fresh on remount.
       if (panelId) savePanelSession(panelId, currentId, true);
@@ -1840,6 +1847,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
         commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
         requireDiffReview,
+        testAfterEditCommand: testAfterEditCommand || undefined,
       }, handleEvent);
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
@@ -1996,7 +2004,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     });
   }
 
-  function approveCommand(scope: "once" | "run" = "once") {
+  function approveCommand(scope: "once" | "run" | "project" = "once") {
     if (!pendingPermission) return;
     const snapshot = pendingPermission;
     setPendingPermission(null);
@@ -2415,6 +2423,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             command={pendingPermission.command}
             onReject={rejectCommand}
             onApproveOnce={() => approveCommand("once")}
+            onApproveForRun={() => approveCommand("run")}
+            onApproveForProject={() => approveCommand("project")}
           />
         )}
         {pendingQuestion && (
@@ -2829,6 +2839,17 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           </div>
           </div>
         </div>
+        {worktreeName && (
+          <div
+            title={`This panel runs in the git worktree "${worktreeName}" — its edits and commands stay on that branch, not the main checkout.`}
+            style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, padding: "0 4px", fontSize: 10.5, color: "var(--fg-subtle)", minWidth: 0 }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M6 9v6" /><path d="M18 6a9 9 0 0 1-9 9" /><circle cx="18" cy="6" r="3" /></svg>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              worktree <strong style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{worktreeName}</strong>
+            </span>
+          </div>
+        )}
       </div>
       )}
     </aside>

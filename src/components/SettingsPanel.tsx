@@ -98,8 +98,8 @@ type Props = {
   onRequireDiffReviewChange: (enabled: boolean) => void;
   stopAfterRejection: boolean;
   onStopAfterRejectionChange: (enabled: boolean) => void;
-  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
-  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
+  harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; testAfterEditCommand?: string; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
+  onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; testAfterEditCommand?: string; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
@@ -2809,6 +2809,31 @@ export function SettingsPanel({
                         onChange={(v) =>
                           onHarnessSettingsChange?.({ ...harnessSettings, commandTimeoutSecs: v === undefined ? undefined : Number(v) })
                         }
+                      />
+                    }
+                  />
+                  <Row
+                    title="Test after edit"
+                    description="Optional command Klide runs after an accepted file edit or create. Leave empty to rely on the built-in Rust/JSON syntax check only."
+                    control={
+                      <input
+                        aria-label="Test after edit command"
+                        value={harnessSettings?.testAfterEditCommand ?? ""}
+                        placeholder="e.g. npm test"
+                        onChange={(e) =>
+                          onHarnessSettingsChange?.({
+                            ...harnessSettings,
+                            testAfterEditCommand: e.target.value || undefined,
+                          })
+                        }
+                        className="klide-field"
+                        style={{
+                          minWidth: 260,
+                          height: 34,
+                          padding: "0 12px",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 12,
+                        }}
                       />
                     }
                   />

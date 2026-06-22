@@ -22,6 +22,12 @@ export type AiPanelInstance = {
   rect: PanelRect;
   provider?: ProviderId;
   model?: string;
+  // Per-panel workspace override — the path of a git worktree this panel's
+  // runs are pinned to, so a delegate/Klide run works on an isolated branch
+  // instead of the main checkout. Session-only (deliberately not persisted:
+  // a reload shouldn't resurrect a panel pointing at a since-removed
+  // worktree). When unset, the panel uses the app's global workspaceRoot.
+  cwd?: string;
 };
 
 function newAiPanelId(): string {
@@ -132,6 +138,12 @@ export function usePanelLayout(opts: {
         rect: entry.rect,
         provider: storedAiProvider(entry.provider) ?? prev?.provider,
         model: entry.model ?? prev?.model,
+        // `cwd` (worktree pin) lives only in memory — StoredAiPanel never
+        // carries it — so a resync (window-resize re-clamp, hydrate) must
+        // carry it forward from the previous in-memory panel, or the panel
+        // would silently revert to the global workspace mid-session and an
+        // agent could start writing to the main checkout.
+        cwd: prev?.cwd,
       };
     });
   }
@@ -339,7 +351,7 @@ export function usePanelLayout(opts: {
   // Append a fresh AI panel, offset from the last so the user can see both,
   // clamped inside the workbench. Returns the new panel's id. Used by both
   // "duplicate panel" and the Mission Control "open in {CLI}" handoff.
-  function appendAiPanel(seed?: { provider?: ProviderId; model?: string }): string {
+  function appendAiPanel(seed?: { provider?: ProviderId; model?: string; cwd?: string }): string {
     const id = newAiPanelId();
     setAiPanels((prevPanels) => {
       const last = prevPanels[prevPanels.length - 1]?.rect;
@@ -359,7 +371,7 @@ export function usePanelLayout(opts: {
       );
       const nextPanels = [
         ...prevPanels,
-        { id, rect, provider: seed?.provider, model: seed?.model },
+        { id, rect, provider: seed?.provider, model: seed?.model, cwd: seed?.cwd },
       ];
       setPanelLayout((prevLayout) => ({
         ...prevLayout,

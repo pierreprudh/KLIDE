@@ -1,3 +1,4 @@
+mod command_allowlist;
 #[cfg(test)]
 mod eval;
 pub mod todo;
@@ -8,7 +9,8 @@ pub mod types;
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, dynamic_tool_command,
     execute_read_only_tool, execute_write_tool_preview, find_tool_kind_for_workspace,
-    parse_tool_calls, recover_text_tool_calls, run_command_capture_in, schemas_for_mode,
+    parse_tool_calls, recover_text_tool_calls, run_command_capture, run_command_capture_in,
+    schemas_for_mode,
     tool_allowed_in_mode, tool_kind_label, tool_summary_for_workspace, NormalizedToolCall,
     ToolKind,
 };
@@ -17,14 +19,17 @@ use self::transcripts::{
     write_summary,
 };
 use self::types::{
-    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
+    AgentAttachment, AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode,
+    AgentRunStatus,
     AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
 use crate::{ai_chat, AiChatResponse, AiUsage, StreamChunk};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tauri::Manager;
@@ -72,6 +77,50 @@ impl Default for AgentSupervisorState {
         Self {
             runs: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+struct ProviderTurnRequest {
+    provider: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Option<Vec<serde_json::Value>>,
+    workspace_root: Option<String>,
+    num_ctx: Option<usize>,
+    num_predict: Option<usize>,
+    reflection_level: Option<String>,
+    stream: Channel<StreamChunk>,
+}
+
+trait AgentProviderCaller: Clone + Send + Sync + 'static {
+    fn call<'a>(
+        &'a self,
+        request: ProviderTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>>;
+}
+
+#[derive(Clone, Copy)]
+struct RealProviderCaller;
+
+impl AgentProviderCaller for RealProviderCaller {
+    fn call<'a>(
+        &'a self,
+        request: ProviderTurnRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+        Box::pin(async move {
+            ai_chat(
+                request.provider,
+                request.model,
+                request.messages,
+                request.tools,
+                request.workspace_root,
+                request.num_ctx,
+                request.num_predict,
+                request.reflection_level,
+                request.stream,
+            )
+            .await
+        })
     }
 }
 
@@ -169,6 +218,34 @@ impl ProviderCaps {
             minimal_chat_context: matches!(provider, "mlx" | "ollama"),
         }
     }
+}
+
+/// Fold an attachment block into a message's text — the "[Files attached for
+/// context]" suffix shared by the live initial turn and both replay shapes.
+/// No-op when there are no attachments.
+fn append_attachments(content: &mut String, attachments: &[AgentAttachment]) {
+    if attachments.is_empty() {
+        return;
+    }
+    let attached = attachments
+        .iter()
+        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if attached.is_empty() {
+        return;
+    }
+    content.push_str("\n\n[Files attached for context]\n");
+    content.push_str(&attached);
+}
+
+/// The system message that stands in for everything before a compaction
+/// marker — identical in both replay shapes.
+fn compaction_system_message(summary: &str) -> serde_json::Value {
+    serde_json::json!({
+        "role": "system",
+        "content": format!("[Earlier conversation compacted to save context]\n{summary}")
+    })
 }
 
 fn provider_messages(
@@ -302,17 +379,7 @@ fn reconstruct_prior_messages(
                 text, attachments, ..
             } => {
                 let mut content = text.clone();
-                if !attachments.is_empty() {
-                    let attached = attachments
-                        .iter()
-                        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    if !attached.is_empty() {
-                        content.push_str("\n\n[Files attached for context]\n");
-                        content.push_str(&attached);
-                    }
-                }
+                append_attachments(&mut content, attachments);
                 out.push(serde_json::json!({ "role": "user", "content": content }));
                 // A new user turn invalidates any straggler tool
                 // results from the previous turn — the model shouldn't
@@ -344,12 +411,7 @@ fn reconstruct_prior_messages(
                 // exchanges in full — at a fraction of the tokens.
                 out.clear();
                 pending_tool_results.clear();
-                out.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!(
-                        "[Earlier conversation compacted to save context]\n{summary}"
-                    )
-                }));
+                out.push(compaction_system_message(summary));
             }
             _ => {}
         }
@@ -400,17 +462,7 @@ fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_jso
                 text, attachments, ..
             } => {
                 let mut content = text.clone();
-                if !attachments.is_empty() {
-                    let attached = attachments
-                        .iter()
-                        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    if !attached.is_empty() {
-                        content.push_str("\n\n[Files attached for context]\n");
-                        content.push_str(&attached);
-                    }
-                }
+                append_attachments(&mut content, attachments);
                 out.push(serde_json::json!({ "role": "user", "content": content }));
             }
             AgentEvent::AssistantMessage { content, .. } => {
@@ -464,12 +516,7 @@ fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_jso
             AgentEvent::ContextCompacted { summary, .. } => {
                 out.clear();
                 call_names.clear();
-                out.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!(
-                        "[Earlier conversation compacted to save context]\n{summary}"
-                    )
-                }));
+                out.push(compaction_system_message(summary));
             }
             _ => {}
         }
@@ -516,6 +563,35 @@ fn tool_not_allowed_result(mode: &AgentMode, name: &str, kind: ToolKind) -> Tool
             mode
         ),
         metadata: None,
+    }
+}
+
+async fn run_test_after_edit(
+    root: &str,
+    command: Option<&str>,
+    timeout_secs: u64,
+    result: &mut ToolResult,
+) {
+    let Some(command) = command.map(str::trim).filter(|c| !c.is_empty()) else {
+        return;
+    };
+    let check = run_command_capture(root, command, timeout_secs).await;
+    let status = if check.ok { "passed" } else { "failed" };
+    result.content.push_str(&format!(
+        "\nPost-edit check `{command}` {status}.\n{}",
+        check.content
+    ));
+    result.metadata = Some(serde_json::json!({
+        "testAfterEdit": {
+            "command": command,
+            "ok": check.ok,
+        }
+    }));
+    if !check.ok {
+        result.ok = false;
+        result
+            .content
+            .push_str("\nThe edit was applied; inspect the failing check and fix forward.");
     }
 }
 
@@ -643,9 +719,17 @@ where
 pub async fn agent_start_run(
     app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
-    request: StartRunRequest,
+    mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
+    if let Some(root) = request.workspace_root.as_deref() {
+        for command in command_allowlist::list(root)? {
+            if !request.command_allowlist.iter().any(|c| c == &command) {
+                request.command_allowlist.push(command);
+            }
+        }
+    }
+
     let runs_dir = app_runs_dir(&app)?;
     // Reuse the client's conversation id when supplied so the transcript on
     // disk shares the AI panel's id (deduped against the in-memory convo in
@@ -687,6 +771,7 @@ pub async fn agent_start_run(
             request,
             on_event,
             cancel,
+            RealProviderCaller,
         )
         .await
         {
@@ -935,6 +1020,7 @@ async fn run_agent_loop(
     request: StartRunRequest,
     on_event: Channel<AgentEvent>,
     cancel: CancellationToken,
+    provider_caller: impl AgentProviderCaller,
 ) -> Result<(), String> {
     let cwd = request.workspace_root.clone();
     // A reused id means this is a follow-up turn in an existing conversation
@@ -1119,17 +1205,17 @@ async fn run_agent_loop(
                 finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
                 return Ok(());
             }
-            result = ai_chat(
-                request.provider.clone(),
-                request.model.clone(),
-                messages.clone(),
-                tools.clone(),
-                request.workspace_root.clone(),
-                request.num_ctx,
-                request.num_predict,
-                request.reflection_level.clone(),
+            result = provider_caller.call(ProviderTurnRequest {
+                provider: request.provider.clone(),
+                model: request.model.clone(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+                workspace_root: request.workspace_root.clone(),
+                num_ctx: request.num_ctx,
+                num_predict: request.num_predict,
+                reflection_level: request.reflection_level.clone(),
                 stream,
-            ) => result,
+            }) => result,
         };
         let response = match provider_result {
             Ok(response) => response,
@@ -1256,7 +1342,7 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
 
-            let tool_result: ToolResult;
+            let mut tool_result: ToolResult;
 
             if let Some(kind) = kind {
                 if !tool_allowed_in_mode(&request.mode, kind) {
@@ -1465,6 +1551,7 @@ Do not run it again — take a different approach or ask the user what they'd pr
                                     "options": [
                                         { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
                                         { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
+                                        { "optionId": "allow_project", "label": "Approve for this project", "behavior": "allow", "scope": "project" },
                                         { "optionId": "deny", "label": "Reject", "behavior": "deny" }
                                     ]
                                 });
@@ -1532,6 +1619,15 @@ Do not run it again — take a different approach or ask the user what they'd pr
                                             .lock()
                                             .unwrap()
                                             .insert(approval_key.clone());
+                                    }
+                                }
+                                // Project scope also persists to the on-disk project
+                                // allowlist so future runs skip the prompt entirely.
+                                if allowed && scope == "project" {
+                                    if let Err(err) = command_allowlist::add(root_value, &command) {
+                                        eprintln!(
+                                            "failed to persist project command allowlist: {err}"
+                                        );
                                     }
                                 }
 
@@ -1701,6 +1797,15 @@ Do not propose it again — take a different approach or ask the user what they'
                                 let _ = std::fs::write(&checkpoint_file, json);
                             }
                             tool_result = result;
+                            let timeout_secs =
+                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                            run_test_after_edit(
+                                root,
+                                request.test_after_edit_command.as_deref(),
+                                timeout_secs,
+                                &mut tool_result,
+                            )
+                            .await;
                             emit(AgentEvent::FileChanged {
                                 run_id: id.clone(),
                                 path: proposal.path.clone(),
@@ -2759,6 +2864,138 @@ mod turn_decision_tests {
         assert_eq!(compacted, 5);
     }
 }
+
+#[cfg(test)]
+mod test_after_edit_tests {
+    use super::*;
+
+    fn temp_workspace(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-test-after-edit-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().to_string()
+    }
+
+    fn applied_result() -> ToolResult {
+        ToolResult {
+            ok: true,
+            content: "Applied: edited a.txt.".to_string(),
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_after_edit_pass_keeps_result_ok() {
+        let root = temp_workspace("pass");
+        let mut result = applied_result();
+        run_test_after_edit(&root, Some("echo checked"), 30, &mut result).await;
+        assert!(result.ok);
+        assert!(result
+            .content
+            .contains("Post-edit check `echo checked` passed"));
+        assert!(result.content.contains("checked"));
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("testAfterEdit"))
+                .and_then(|m| m.get("ok"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_after_edit_failure_marks_result_not_ok() {
+        let root = temp_workspace("fail");
+        let mut result = applied_result();
+        run_test_after_edit(&root, Some("exit 7"), 30, &mut result).await;
+        assert!(!result.ok);
+        assert!(result.content.contains("Post-edit check `exit 7` failed"));
+        assert!(result.content.contains("exit 7"));
+        assert!(result.content.contains("fix forward"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn empty_test_after_edit_command_is_noop() {
+        let root = temp_workspace("empty");
+        let mut result = applied_result();
+        run_test_after_edit(&root, Some("   "), 30, &mut result).await;
+        assert_eq!(result.content, "Applied: edited a.txt.");
+        assert!(result.metadata.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod provider_caller_tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct MockProviderCaller {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String, usize, bool)>>>,
+    }
+
+    impl AgentProviderCaller for MockProviderCaller {
+        fn call<'a>(
+            &'a self,
+            request: ProviderTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+            let seen = self.seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push((
+                    request.provider,
+                    request.model,
+                    request.messages.len(),
+                    request.tools.is_some(),
+                ));
+                Ok(AiChatResponse {
+                    content: "synthetic provider response".to_string(),
+                    thinking: None,
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    stop_reason: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_caller_can_be_mocked_without_ai_chat() {
+        let caller = MockProviderCaller::default();
+        let response = caller
+            .call(ProviderTurnRequest {
+                provider: "mock-provider".to_string(),
+                model: "mock-model".to_string(),
+                messages: vec![serde_json::json!({ "role": "user", "content": "hello" })],
+                tools: Some(Vec::new()),
+                workspace_root: Some("/tmp".to_string()),
+                num_ctx: Some(1024),
+                num_predict: Some(128),
+                reflection_level: Some("low".to_string()),
+                stream: Channel::<StreamChunk>::new(|_| Ok(())),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.content, "synthetic provider response");
+        assert_eq!(
+            caller.seen.lock().unwrap().as_slice(),
+            &[(
+                "mock-provider".to_string(),
+                "mock-model".to_string(),
+                1,
+                true
+            )]
+        );
+    }
+}
+
 
 #[cfg(test)]
 mod checkpoint_tests {

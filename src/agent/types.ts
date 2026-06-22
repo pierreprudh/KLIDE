@@ -272,6 +272,8 @@ export type StartAgentRunInput = {
   /** Whether file edits pause for diff review. Omit/true = review every edit;
    *  false = auto-accept (edits apply without a prompt; still checkpointed). */
   requireDiffReview?: boolean;
+  /** Optional command to run after an accepted edit/create. */
+  testAfterEditCommand?: string;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
 };

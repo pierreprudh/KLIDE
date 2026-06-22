@@ -26,6 +26,7 @@ import { fetchRunMessages, type RunMessage as MissionRunMessage } from "./runs";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { MemoryModal } from "./components/MemoryModal";
+import { WorktreesModal } from "./components/WorktreesModal";
 import { FileViewerPanel } from "./components/FileViewerPanel";
 import { DiffViewerPanel } from "./components/DiffViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
@@ -74,6 +75,8 @@ export type HarnessSettings = {
   /** Seconds a run_command may run before it's killed. Absent → 180. Raise it
    *  for slow builds; a hang guard, not a task limit. */
   commandTimeoutSecs?: number;
+  /** Optional command to run after accepted edits/creates. Empty/absent means off. */
+  testAfterEditCommand?: string;
   /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent
    *  request slots). Absent → Ollama's own default. */
   serverConcurrency?: number;
@@ -129,6 +132,7 @@ function App() {
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
   const [memoryVisible, setMemoryVisible] = useState(false);
+  const [worktreesVisible, setWorktreesVisible] = useState(false);
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
@@ -670,16 +674,51 @@ function App() {
     workspaceRoot: string | null;
     resumeSessionId?: string;
     initialTask?: string;
+    cwd?: string;
   }) {
     setView("workbench");
     if (!aiVisible) togglePanel("ai");
-    const id = appendAiPanel({ provider: opts.provider });
+    const id = appendAiPanel({ provider: opts.provider, cwd: opts.cwd });
     setPendingAiPanel({
       panelId: id,
       provider: opts.provider,
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
     });
+  }
+
+  // Open an existing worktree (from the Worktrees modal) in a fresh AI panel
+  // pinned to its path — same pin mechanism as newWorktreeRun, no new branch.
+  function openExistingWorktree(path: string) {
+    setView("workbench");
+    if (!aiVisible) togglePanel("ai");
+    appendAiPanel({ cwd: path });
+  }
+
+  // Fleet: create a fresh git worktree (isolated branch) and open an AI panel
+  // pinned to it, so the agent works without touching the main checkout. The
+  // run shows up in Mission Control labelled `· in <name>` via the existing
+  // worktree_label read side. Branch is auto-named to avoid a webview
+  // prompt(); rename later from the branch UI.
+  async function newWorktreeRun(branch?: string) {
+    if (!workspaceRoot) {
+      setFileNotice("Open a workspace folder first.");
+      return;
+    }
+    const name = branch?.trim() || `klide/wt-${Date.now().toString(36)}`;
+    try {
+      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+        "git_worktree_add",
+        { workspaceRoot, branch: name, copyFiles: null }
+      );
+      setView("workbench");
+      if (!aiVisible) togglePanel("ai");
+      appendAiPanel({ cwd: wt.path });
+      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
+      setFileNotice(`Worktree ready on ${wt.branch} — this panel runs there${copied}.`);
+    } catch (err) {
+      setFileNotice(`Worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // "Review Diff" from Mission Control — for Klide runs the CheckpointPanel
@@ -1052,7 +1091,8 @@ function App() {
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { setView("workbench"); setPaletteOpen(false); } },
     { id: "git-review", label: "View: Git Review", shortcut: "⌘⇧G", action: () => { setView((v) => v === "git-review" ? "workbench" : "git-review"); setPaletteOpen(false); } },
     { id: "create-pr", label: "Git: Create Pull Request…", action: () => { setPaletteOpen(false); void (async () => { try { const pr = await invoke<string>("create_pr", { workspaceRoot, title: "Klide changes", body: null }); setFileNotice(`PR: ${pr}`); } catch(e) { setFileNotice(`PR failed: ${e}`); } })(); } },
-    { id: "worktree", label: "Git: New Worktree…", action: () => { setPaletteOpen(false); const name = prompt("Worktree name:"); if (name && workspaceRoot) { void (async () => { try { const path = await invoke<string>("create_worktree", { workspaceRoot, name }); setFileNotice(`Worktree: ${path}`); } catch(e) { setFileNotice(`Failed: ${e}`); } })(); } } },
+    { id: "worktree", label: "Agent: New Run in Worktree", action: () => { setPaletteOpen(false); void newWorktreeRun(); } },
+    { id: "worktrees-view", label: "View: Worktrees", action: () => { setPaletteOpen(false); setWorktreesVisible(true); } },
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
   ];
@@ -1498,11 +1538,16 @@ function App() {
                             ? () => setPendingAiPanel(null)
                             : undefined
                         }
-                        workspaceRoot={workspaceRoot}
+                        workspaceRoot={panel.cwd ?? workspaceRoot}
+                        worktreeName={panel.cwd ? panel.cwd.split("/").filter(Boolean).pop() : undefined}
                         onFileWritten={onAgentWrote}
-                        onWorkspaceChanged={() =>
-                          workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-                        }
+                        onWorkspaceChanged={() => {
+                          // A worktree-pinned panel changes its own branch, not
+                          // the main checkout, so only refresh the sidebar git
+                          // status when the panel runs in the global workspace.
+                          const root = panel.cwd ?? workspaceRoot;
+                          if (!panel.cwd && root) refreshGitStatus(root);
+                        }}
                         model={panel.model ?? aiModel}
                         onModelChange={(model) => updateAiPanelModel(panel.id, model)}
                         onProviderChange={(provider) => setAiPanelProvider(panel.id, provider)}
@@ -1585,6 +1630,13 @@ function App() {
           }
         }}
         onClose={() => setMemoryVisible(false)}
+      />
+      <WorktreesModal
+        open={worktreesVisible}
+        workspaceRoot={workspaceRoot}
+        onOpenWorktree={openExistingWorktree}
+        onNotice={setFileNotice}
+        onClose={() => setWorktreesVisible(false)}
       />
       <ProfileModal
         open={profileVisible}

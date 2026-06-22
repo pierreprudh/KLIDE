@@ -1102,7 +1102,6 @@ pub fn run() {
             memory_list,
             memory_read,
             git::create_pr,
-            git::create_worktree,
             git::git_log,
             git::git_checkout_branch,
             git::git_fetch,
@@ -1116,7 +1115,11 @@ pub fn run() {
             git::git_pr_checkout,
             git::git_pr_merge,
             git::git_pr_open,
-            git::git_pr_merged
+            git::git_pr_merged,
+            git::git_worktree_add,
+            git::git_worktree_list,
+            git::git_worktree_merge,
+            git::git_worktree_remove
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -149,14 +149,19 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - [x] Delegate observability — Claude sub-agent visibility (counts `Agent`/`Task` calls, excludes sidechain turns) and symmetric routine badging.
 - [x] Reviewable memory — completed runs draft a note you accept, edit, or skip in the Memory modal before it becomes durable.
 - [x] Settings open instantly — sections mount on first visit, so per-provider status calls don't block the surface.
-- [x] Parked (intentionally): multi-account setup, natural-language scheduling, proactive suggestions — until the loop feels excellent.
+- [x] Delegate account switching — save and switch Codex / Claude Code / OpenCode CLI logins from Settings without minting tokens.
+- [x] Parked (intentionally): natural-language scheduling and proactive suggestions — until the review/evidence loop has more daily mileage.
 
 **Agent harness capability** &nbsp;✅ _shipped_
 
 - [x] `run_command` — approval-gated shell execution so the agent can run tests/build/lint and verify its own work
 - [x] Configurable turn cap (default 50) + command timeout (default 180s) + per-run command allowlist
 - [x] Eval foundation — golden tool-layer scenarios run as `cargo test`; documented tool schema + lineage in `KLIDE_HARNESS_SCHEMA.md`
-- [ ] Next: model-in-loop eval (decouple the run loop from `tauri::AppHandle` + mockable provider), project-persistent command allowlist, test-after-edit
+- [x] Scripted model-loop eval — fake provider turns choose tools, real tools execute, and tool results replay into the next provider message
+- [x] Project-persistent command allowlist — "Approve for project" stores exact `run_command` approvals in `.klide/command-allowlist.json`
+- [x] Test-after-edit — optional Settings → Harness command runs after accepted edits, alongside built-in Rust/JSON syntax checks
+- [x] Provider seam extracted into `run_agent_loop` — production calls `ai_chat` through `RealProviderCaller`; tests can inject a mock provider caller
+- [ ] Next: split the remaining loop shell from pure run decisions, so full model-loop tests can run without `tauri::AppHandle`
 
 ## Build & run
 

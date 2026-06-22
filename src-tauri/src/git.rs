@@ -321,39 +321,6 @@ pub(crate) fn create_pr(
     }
 }
 
-#[tauri::command]
-pub(crate) fn create_worktree(workspace_root: String, name: String) -> Result<String, String> {
-    let safe = name
-        .to_lowercase()
-        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-        .trim_matches('-')
-        .to_string();
-    let branch = format!("feature/{safe}");
-    let worktree_path = format!("{}-{}", workspace_root.trim_end_matches('/'), safe);
-
-    run_git(&workspace_root, &["checkout", "-b", &branch])?;
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &workspace_root,
-            "worktree",
-            "add",
-            worktree_path.as_str(),
-            &branch,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to create worktree: {e}"))?;
-
-    if !output.status.success() {
-        let _ = run_git(&workspace_root, &["checkout", "-"]);
-        let _ = run_git(&workspace_root, &["branch", "-D", &branch]);
-        return Err(format!(
-            "Worktree creation failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(worktree_path)
-}
 
 #[tauri::command]
 pub(crate) fn git_diff(
@@ -957,9 +924,325 @@ pub(crate) fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool,
     Ok(raw.trim().eq_ignore_ascii_case("true"))
 }
 
+// ── Worktrees (the "fleet" primitive) ───────────────────────────────────
+//
+// A worktree is just a second checkout of the repo on its own branch, in its
+// own directory — so a delegate/Klide run launched with that directory as its
+// cwd works on an isolated branch without touching the main checkout. Klide
+// places them in a SIBLING dir, `<repo>-worktrees/<name>`, deliberately
+// OUTSIDE the checkout: a worktree inside the repo dumps a full duplicate
+// tree into whatever is watching the workspace (Klide's own file explorer, a
+// `vite`/`cargo` dev watcher when Klide edits itself), which trips reloads and
+// pollutes search. Outside, none of that fires and no `.gitignore` dance is
+// needed. The read side already exists: `delegate::runs::worktree_label`
+// labels a run by the worktree it ran in (it reads the `.git` pointer, so the
+// location doesn't matter).
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorktreeInfo {
+    /// Absolute path to the worktree checkout — pass this as a run's cwd.
+    pub path: String,
+    /// Branch checked out there (empty for a detached HEAD).
+    pub branch: String,
+    /// Untracked config files copied in from the main checkout (e.g. `.env`),
+    /// so a fresh worktree can actually build. Empty when nothing was copied.
+    #[serde(default)]
+    pub bootstrapped: Vec<String>,
+}
+
+/// Copy small untracked config files (e.g. `.env`) from the main checkout into
+/// a fresh worktree. A worktree has every TRACKED file but none of the
+/// gitignored secrets/config a build needs — the #1 reason a fresh worktree
+/// won't run. Top-level files only (no `/` or `..`, so this can't be coaxed
+/// into writing outside the worktree); skips any already present in the
+/// worktree or missing from the source. Returns the names actually copied.
+fn bootstrap_worktree_files(
+    source_root: &str,
+    worktree: &std::path::Path,
+    files: &[String],
+) -> Vec<String> {
+    let mut copied = Vec::new();
+    for name in files {
+        let name = name.trim();
+        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+            continue;
+        }
+        let src = std::path::Path::new(source_root).join(name);
+        let dst = worktree.join(name);
+        if src.is_file() && !dst.exists() && std::fs::copy(&src, &dst).is_ok() {
+            copied.push(name.to_string());
+        }
+    }
+    copied
+}
+
+/// Default config files Klide copies into a new worktree when the caller
+/// doesn't specify a list. The common local-secret/config names.
+fn default_worktree_copy_files() -> Vec<String> {
+    [".env", ".env.local", ".env.development", ".env.development.local"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Turn a branch name into one safe directory segment for the worktree dir.
+/// Keeps `[A-Za-z0-9._-]`; every other run of characters (including `/`)
+/// collapses to a single `-`. Never empty.
+fn worktree_dir_name(branch: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in branch.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "worktree".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Create a worktree on `branch` and return its checkout path. If the branch
+/// already exists it is checked out; otherwise it's created off the current
+/// HEAD. Idempotent on the directory: an existing checkout at the target path
+/// is returned as-is rather than re-added.
+#[tauri::command]
+pub(crate) fn git_worktree_add(
+    workspace_root: String,
+    branch: String,
+    copy_files: Option<Vec<String>>,
+) -> Result<WorktreeInfo, String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("Worktree branch name is required".to_string());
+    }
+    let toplevel = git_output(&workspace_root, &["rev-parse", "--show-toplevel"])?
+        .trim()
+        .to_string();
+    if toplevel.is_empty() {
+        return Err("Not inside a git repository".to_string());
+    }
+    let copy_files = copy_files.unwrap_or_else(default_worktree_copy_files);
+
+    // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
+    // it never trips a file watcher or shows up in the workspace tree.
+    let dir = std::path::PathBuf::from(format!("{toplevel}-worktrees"))
+        .join(worktree_dir_name(branch));
+    let path = dir.to_string_lossy().to_string();
+
+    // Already checked out here → reuse, so the action is safe to re-trigger.
+    // Report the branch actually on disk, not the requested name: two distinct
+    // branch names can sanitise to the same dir, so echoing the request could
+    // mislabel the existing checkout. Still top up any config files missing
+    // from the reused checkout.
+    if dir.join(".git").exists() {
+        let actual = git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| branch.to_string());
+        let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
+        return Ok(WorktreeInfo {
+            path,
+            branch: if actual == "HEAD" { String::new() } else { actual },
+            bootstrapped,
+        });
+    }
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create worktrees dir: {e}"))?;
+    }
+
+    // Does the branch already exist? Decides -b (create) vs plain (check out).
+    let branch_exists = run_git(
+        &toplevel,
+        &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")],
+    )
+    .is_ok();
+    let args: Vec<&str> = if branch_exists {
+        vec!["worktree", "add", &path, branch]
+    } else {
+        vec!["worktree", "add", "-b", branch, &path]
+    };
+    run_git(&toplevel, &args)?;
+
+    let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
+    Ok(WorktreeInfo {
+        path,
+        branch: branch.to_string(),
+        bootstrapped,
+    })
+}
+
+/// List the repo's worktrees (parsed from `git worktree list --porcelain`),
+/// main checkout included.
+#[tauri::command]
+pub(crate) fn git_worktree_list(workspace_root: String) -> Result<Vec<WorktreeInfo>, String> {
+    let out = git_output(&workspace_root, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktree_list(&out))
+}
+
+/// Merge a worktree's `branch` into the branch currently checked out in the
+/// main `workspace_root` — the "pull the fleet's work back" action. Refuses if
+/// the target has uncommitted changes (a merge would entangle them). On
+/// conflict it aborts the merge, leaving the checkout exactly as it was, and
+/// returns the conflicted files so resolving stays an explicit next step
+/// rather than a half-finished merge sitting in the tree.
+#[tauri::command]
+pub(crate) fn git_worktree_merge(
+    workspace_root: String,
+    branch: String,
+) -> Result<String, String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("Branch to merge is required".to_string());
+    }
+    let dirty = git_output(&workspace_root, &["status", "--porcelain"])?;
+    if !dirty.trim().is_empty() {
+        return Err(
+            "Main checkout has uncommitted changes — commit or stash them before merging."
+                .to_string(),
+        );
+    }
+    let target = git_output(&workspace_root, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    match run_git(&workspace_root, &["merge", "--no-ff", branch]) {
+        Ok(()) => Ok(format!("Merged {branch} into {target}.")),
+        Err(merge_err) => {
+            let conflicts =
+                git_output(&workspace_root, &["diff", "--name-only", "--diff-filter=U"])
+                    .unwrap_or_default();
+            // Abort so the working tree is left clean, never half-merged.
+            let _ = run_git(&workspace_root, &["merge", "--abort"]);
+            let list: Vec<&str> = conflicts.lines().filter(|l| !l.trim().is_empty()).collect();
+            if list.is_empty() {
+                Err(format!("Merge failed: {merge_err}"))
+            } else {
+                Err(format!(
+                    "Merge conflicts in {} — aborted, nothing changed. Resolve in the worktree, then retry.",
+                    list.join(", ")
+                ))
+            }
+        }
+    }
+}
+
+/// Remove a worktree checkout. Fails (surfacing git's message) if it has
+/// uncommitted changes, unless `force`.
+#[tauri::command]
+pub(crate) fn git_worktree_remove(
+    workspace_root: String,
+    path: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let mut args = vec!["worktree", "remove"];
+    if force.unwrap_or(false) {
+        args.push("--force");
+    }
+    args.push(&path);
+    run_git(&workspace_root, &args)
+}
+
+/// Parse `git worktree list --porcelain`: records separated by blank lines,
+/// each with `worktree <path>` and either `branch refs/heads/<name>` or
+/// `detached`.
+fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
+    let mut out = Vec::new();
+    let mut path: Option<String> = None;
+    let mut branch = String::new();
+    let mut flush = |path: &mut Option<String>, branch: &mut String| {
+        if let Some(p) = path.take() {
+            out.push(WorktreeInfo {
+                path: p,
+                branch: std::mem::take(branch),
+                bootstrapped: Vec::new(),
+            });
+        }
+    };
+    for line in porcelain.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            flush(&mut path, &mut branch);
+            path = Some(p.trim().to_string());
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            branch = b.trim().strip_prefix("refs/heads/").unwrap_or(b.trim()).to_string();
+        }
+    }
+    flush(&mut path, &mut branch);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_dir_name_sanitizes_and_collapses() {
+        assert_eq!(worktree_dir_name("klide/fix-bug"), "klide-fix-bug");
+        assert_eq!(worktree_dir_name("feature/AB_12.3"), "feature-AB_12.3");
+        assert_eq!(worktree_dir_name("///"), "worktree");
+        assert_eq!(worktree_dir_name("a@@@b"), "a-b");
+        assert_eq!(worktree_dir_name("-trim-"), "trim");
+    }
+
+    #[test]
+    fn bootstrap_copies_only_missing_top_level_files() {
+        let base = std::env::temp_dir().join(format!("klide-wt-bootstrap-{}", std::process::id()));
+        let src = base.join("main");
+        let wt = base.join("wt");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(src.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(src.join(".env.local"), "L=2").unwrap();
+        // Already present in the worktree → must not be overwritten.
+        std::fs::write(wt.join(".env.local"), "KEEP").unwrap();
+
+        let copied = bootstrap_worktree_files(
+            src.to_str().unwrap(),
+            &wt,
+            &[
+                ".env".into(),
+                ".env.local".into(),     // exists in wt → skipped
+                ".env.missing".into(),   // not in src → skipped
+                "../escape".into(),      // traversal → rejected
+                "nested/x".into(),       // not top-level → rejected
+            ],
+        );
+
+        assert_eq!(copied, vec![".env".to_string()]);
+        assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=1");
+        assert_eq!(std::fs::read_to_string(wt.join(".env.local")).unwrap(), "KEEP");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parse_worktree_list_reads_path_and_branch() {
+        let porcelain = "\
+worktree /repo
+HEAD abc123
+branch refs/heads/main
+
+worktree /repo-worktrees/klide-fix
+HEAD def456
+branch refs/heads/klide/fix
+
+worktree /repo-worktrees/detached
+HEAD 999aaa
+detached
+";
+        let list = parse_worktree_list(porcelain);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].path, "/repo");
+        assert_eq!(list[0].branch, "main");
+        assert_eq!(list[1].branch, "klide/fix");
+        assert_eq!(list[2].path, "/repo-worktrees/detached");
+        assert_eq!(list[2].branch, ""); // detached → no branch
+    }
 
     #[test]
     fn count_diff_lines_ignores_file_headers() {

@@ -27,6 +27,7 @@ type StartRunRequest = {
   maxTurns?: number;
   commandTimeoutSecs?: number;
   requireDiffReview?: boolean;
+  testAfterEditCommand?: string;
   parentId?: string;
 };
 
@@ -75,6 +76,7 @@ export async function startAgentRun(
       maxTurns: input.maxTurns,
       commandTimeoutSecs: input.commandTimeoutSecs,
       requireDiffReview: input.requireDiffReview,
+      testAfterEditCommand: input.testAfterEditCommand,
       parentId: input.parentId,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
