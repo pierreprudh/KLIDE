@@ -1,9 +1,9 @@
 use super::runs::{
     cap_messages, clean_title, mtime_ms, project_name, recency_status, tool_file_path,
 };
-use std::collections::HashSet;
 use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Codex — OpenAI's CLI. Its TUI accepts the task as the first positional
 /// arg; resuming is a subcommand (`codex resume <id>`), not a flag. Sessions
@@ -223,11 +223,8 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
     let updated_ms = mtime_ms(path);
     // Cost is computed from the same model + token totals we just summed; the
     // model is moved into AgentRun below, so capture the cost before then.
-    let cost_usd = crate::pricing::cost_for_run(
-        model.as_deref().unwrap_or(""),
-        input_tokens,
-        output_tokens,
-    );
+    let cost_usd =
+        crate::pricing::cost_for_run(model.as_deref().unwrap_or(""), input_tokens, output_tokens);
     Some(AgentRun {
         status: recency_status(updated_ms),
         title: index
@@ -241,7 +238,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         model,
         cwd,
         git_branch: branch,
-        worktree: None, // filled centrally in list_agent_runs from cwd
+        worktree: None,         // filled centrally in list_agent_runs from cwd
         created_ms: updated_ms, // fallback to mtime
         updated_ms,
         message_count: count,
@@ -384,7 +381,10 @@ mod tests {
         let fc4 = r#"{"type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"ls\"}","call_id":"c4"}}"#;
         std::fs::write(&p, format!("{meta}\n{fc1}\n{fc2}\n{fc3}\n{fc4}\n")).unwrap();
         let run = parse_run(&p, &HashMap::new()).unwrap();
-        assert_eq!(run.files_touched, 2, "re-read should dedupe, shell_command shouldn't count");
+        assert_eq!(
+            run.files_touched, 2,
+            "re-read should dedupe, shell_command shouldn't count"
+        );
     }
 
     #[test]

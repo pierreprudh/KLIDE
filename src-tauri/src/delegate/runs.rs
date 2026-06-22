@@ -277,16 +277,37 @@ mod tests {
     #[test]
     fn tool_file_path_rejects_unknown_tools_and_bad_values() {
         // Bash, shell_command, apply_patch — too ambiguous to count.
-        assert_eq!(tool_file_path("bash", &serde_json::json!({ "file_path": "/a" })), None);
-        assert_eq!(tool_file_path("shell_command", &serde_json::json!({ "file_path": "/a" })), None);
-        assert_eq!(tool_file_path("apply_patch", &serde_json::json!({ "file_path": "/a" })), None);
+        assert_eq!(
+            tool_file_path("bash", &serde_json::json!({ "file_path": "/a" })),
+            None
+        );
+        assert_eq!(
+            tool_file_path("shell_command", &serde_json::json!({ "file_path": "/a" })),
+            None
+        );
+        assert_eq!(
+            tool_file_path("apply_patch", &serde_json::json!({ "file_path": "/a" })),
+            None
+        );
         // No path key.
-        assert_eq!(tool_file_path("read", &serde_json::json!({ "limit": 10 })), None);
+        assert_eq!(
+            tool_file_path("read", &serde_json::json!({ "limit": 10 })),
+            None
+        );
         // Empty / whitespace path.
-        assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "" })), None);
-        assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "   " })), None);
+        assert_eq!(
+            tool_file_path("read", &serde_json::json!({ "file_path": "" })),
+            None
+        );
+        assert_eq!(
+            tool_file_path("read", &serde_json::json!({ "file_path": "   " })),
+            None
+        );
         // Bare word without a separator (looks like a glob, not a file).
-        assert_eq!(tool_file_path("read", &serde_json::json!({ "file_path": "foo" })), None);
+        assert_eq!(
+            tool_file_path("read", &serde_json::json!({ "file_path": "foo" })),
+            None
+        );
     }
 
     #[test]

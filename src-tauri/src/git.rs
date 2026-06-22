@@ -321,7 +321,6 @@ pub(crate) fn create_pr(
     }
 }
 
-
 #[tauri::command]
 pub(crate) fn git_diff(
     workspace_root: String,
@@ -980,10 +979,15 @@ fn bootstrap_worktree_files(
 /// Default config files Klide copies into a new worktree when the caller
 /// doesn't specify a list. The common local-secret/config names.
 fn default_worktree_copy_files() -> Vec<String> {
-    [".env", ".env.local", ".env.development", ".env.development.local"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.development.local",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// Turn a branch name into one safe directory segment for the worktree dir.
@@ -1033,8 +1037,8 @@ pub(crate) fn git_worktree_add(
 
     // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
     // it never trips a file watcher or shows up in the workspace tree.
-    let dir = std::path::PathBuf::from(format!("{toplevel}-worktrees"))
-        .join(worktree_dir_name(branch));
+    let dir =
+        std::path::PathBuf::from(format!("{toplevel}-worktrees")).join(worktree_dir_name(branch));
     let path = dir.to_string_lossy().to_string();
 
     // Already checked out here → reuse, so the action is safe to re-trigger.
@@ -1049,7 +1053,11 @@ pub(crate) fn git_worktree_add(
         let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
         return Ok(WorktreeInfo {
             path,
-            branch: if actual == "HEAD" { String::new() } else { actual },
+            branch: if actual == "HEAD" {
+                String::new()
+            } else {
+                actual
+            },
             bootstrapped,
         });
     }
@@ -1060,7 +1068,12 @@ pub(crate) fn git_worktree_add(
     // Does the branch already exist? Decides -b (create) vs plain (check out).
     let branch_exists = run_git(
         &toplevel,
-        &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")],
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
     )
     .is_ok();
     let args: Vec<&str> = if branch_exists {
@@ -1093,10 +1106,7 @@ pub(crate) fn git_worktree_list(workspace_root: String) -> Result<Vec<WorktreeIn
 /// returns the conflicted files so resolving stays an explicit next step
 /// rather than a half-finished merge sitting in the tree.
 #[tauri::command]
-pub(crate) fn git_worktree_merge(
-    workspace_root: String,
-    branch: String,
-) -> Result<String, String> {
+pub(crate) fn git_worktree_merge(workspace_root: String, branch: String) -> Result<String, String> {
     let branch = branch.trim();
     if branch.is_empty() {
         return Err("Branch to merge is required".to_string());
@@ -1169,7 +1179,11 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
             flush(&mut path, &mut branch);
             path = Some(p.trim().to_string());
         } else if let Some(b) = line.strip_prefix("branch ") {
-            branch = b.trim().strip_prefix("refs/heads/").unwrap_or(b.trim()).to_string();
+            branch = b
+                .trim()
+                .strip_prefix("refs/heads/")
+                .unwrap_or(b.trim())
+                .to_string();
         }
     }
     flush(&mut path, &mut branch);
@@ -1207,16 +1221,22 @@ mod tests {
             &wt,
             &[
                 ".env".into(),
-                ".env.local".into(),     // exists in wt → skipped
-                ".env.missing".into(),   // not in src → skipped
-                "../escape".into(),      // traversal → rejected
-                "nested/x".into(),       // not top-level → rejected
+                ".env.local".into(),   // exists in wt → skipped
+                ".env.missing".into(), // not in src → skipped
+                "../escape".into(),    // traversal → rejected
+                "nested/x".into(),     // not top-level → rejected
             ],
         );
 
         assert_eq!(copied, vec![".env".to_string()]);
-        assert_eq!(std::fs::read_to_string(wt.join(".env")).unwrap(), "SECRET=1");
-        assert_eq!(std::fs::read_to_string(wt.join(".env.local")).unwrap(), "KEEP");
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".env")).unwrap(),
+            "SECRET=1"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".env.local")).unwrap(),
+            "KEEP"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -2,8 +2,8 @@ use super::runs::{
     cap_messages, clean_title, extract_user_text, mtime_ms, project_name, recency_status,
     tool_file_path, AgentRun, RunMessage,
 };
-use std::collections::HashSet;
 use super::{shell_quote, Delegate, RunCandidate, RunParser};
+use std::collections::HashSet;
 
 /// Claude Code — Anthropic's CLI. Its TUI accepts the task as the first
 /// positional arg directly, so no subcommand is needed. Sessions land in
@@ -187,10 +187,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                 {
                     for part in arr {
                         if part.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                            let name = part
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("");
+                            let name = part.get("name").and_then(|n| n.as_str()).unwrap_or("");
                             let input = part.get("input").unwrap_or(&serde_json::Value::Null);
                             if let Some(path) = tool_file_path(name, input) {
                                 files.insert(path);
@@ -213,11 +210,8 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     if created_ms == 0 {
         created_ms = updated_ms;
     }
-    let cost_usd = crate::pricing::cost_for_run(
-        model.as_deref().unwrap_or(""),
-        input_tokens,
-        output_tokens,
-    );
+    let cost_usd =
+        crate::pricing::cost_for_run(model.as_deref().unwrap_or(""), input_tokens, output_tokens);
     Some(AgentRun {
         status: recency_status(updated_ms),
         project: cwd.as_deref().and_then(project_name),
@@ -367,7 +361,10 @@ mod tests {
         )
         .unwrap();
         let run = parse_run(&p).unwrap();
-        assert_eq!(run.files_touched, 2, "Bash should not be counted, dedupe should drop the re-edit");
+        assert_eq!(
+            run.files_touched, 2,
+            "Bash should not be counted, dedupe should drop the re-edit"
+        );
     }
 
     #[test]
@@ -388,7 +385,10 @@ mod tests {
         )
         .unwrap();
         let run = parse_run(&p).unwrap();
-        assert_eq!(run.subagent_count, 2, "two main-transcript Agent/Task calls");
+        assert_eq!(
+            run.subagent_count, 2,
+            "two main-transcript Agent/Task calls"
+        );
         assert_eq!(run.message_count, 2, "sidechain assistant turn is excluded");
     }
 

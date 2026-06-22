@@ -108,7 +108,9 @@ pub fn upsert(mut provider: CustomProvider) -> Result<(), String> {
         .filter(|r| !r.is_empty());
 
     if !provider.id.starts_with(CUSTOM_ID_PREFIX) {
-        return Err(format!("Custom provider id must start with \"{CUSTOM_ID_PREFIX}\""));
+        return Err(format!(
+            "Custom provider id must start with \"{CUSTOM_ID_PREFIX}\""
+        ));
     }
     if provider.label.is_empty() {
         return Err("Label is required".to_string());

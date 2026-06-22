@@ -579,11 +579,15 @@ async fn probe_ollama_thinking_support(model: &str) -> bool {
             "stream": false,
         }))
         .timeout(Duration::from_secs(15));
-    let Ok(res) = req.send().await else { return false; };
+    let Ok(res) = req.send().await else {
+        return false;
+    };
     if !res.status().is_success() {
         return false;
     }
-    let Ok(body) = res.text().await else { return false; };
+    let Ok(body) = res.text().await else {
+        return false;
+    };
     ollama_probe_response_has_thinking(&body)
 }
 
@@ -631,7 +635,10 @@ mod tests {
         assert_eq!(fallback_context_window("x", "gpt-5-mini"), 272_000);
         assert_eq!(fallback_context_window("x", "gpt-4.1"), 1_000_000);
         assert_eq!(fallback_context_window("x", "gemini-2.5-pro"), 1_000_000);
-        assert_eq!(fallback_context_window("x", "mistral-large-latest"), 128_000);
+        assert_eq!(
+            fallback_context_window("x", "mistral-large-latest"),
+            128_000
+        );
         assert_eq!(fallback_context_window("x", "grok-3"), 256_000);
         assert_eq!(fallback_context_window("mlx", "anything"), 128_000);
         assert_eq!(fallback_context_window("x", "gemma-2-9b"), 128_000);
@@ -717,23 +724,37 @@ mod tests {
     #[tokio::test]
     async fn hosted_reasoning_providers_advertise_reflection_support() {
         let cache = ReflectionProbeCache::default();
-        assert!(resolve_reflection_support(&cache, "openai", "gpt-5").await.unwrap());
-        assert!(resolve_reflection_support(&cache, "openai", "o4-mini").await.unwrap());
-        assert!(resolve_reflection_support(&cache, "anthropic", "claude-sonnet-4-6")
+        assert!(resolve_reflection_support(&cache, "openai", "gpt-5")
             .await
             .unwrap());
-        assert!(resolve_reflection_support(&cache, "openrouter", "openai/gpt-5")
+        assert!(resolve_reflection_support(&cache, "openai", "o4-mini")
             .await
             .unwrap());
-        assert!(!resolve_reflection_support(&cache, "openai", "gpt-4.1-mini")
-            .await
-            .unwrap());
-        assert!(!resolve_reflection_support(&cache, "openrouter", "openai/gpt-4.1-mini")
-            .await
-            .unwrap());
-        assert!(!resolve_reflection_support(&cache, "mistral", "mistral-large")
-            .await
-            .unwrap());
+        assert!(
+            resolve_reflection_support(&cache, "anthropic", "claude-sonnet-4-6")
+                .await
+                .unwrap()
+        );
+        assert!(
+            resolve_reflection_support(&cache, "openrouter", "openai/gpt-5")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !resolve_reflection_support(&cache, "openai", "gpt-4.1-mini")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !resolve_reflection_support(&cache, "openrouter", "openai/gpt-4.1-mini")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !resolve_reflection_support(&cache, "mistral", "mistral-large")
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

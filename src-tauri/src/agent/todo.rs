@@ -42,7 +42,13 @@ fn default_next_event_id() -> u64 {
 fn safe_scope(scope: &str) -> String {
     scope
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -139,7 +145,15 @@ pub fn add_todo(root: &str, scope: &str, text: String) -> Result<String, String>
         created_at: at,
         updated_at: at,
     });
-    push_event(&mut store, "add", Some(id.clone()), Some(text), None, Some(false), at);
+    push_event(
+        &mut store,
+        "add",
+        Some(id.clone()),
+        Some(text),
+        None,
+        Some(false),
+        at,
+    );
     save(root, scope, &store)?;
     Ok(format!("Added todo {id}."))
 }
@@ -222,7 +236,15 @@ pub fn clear_all(root: &str, scope: &str) -> Result<String, String> {
     let removed = removed_items.len();
     let at = now_ms();
     for item in removed_items {
-        push_event(&mut store, "remove", Some(item.id), Some(item.text), None, Some(item.done), at);
+        push_event(
+            &mut store,
+            "remove",
+            Some(item.id),
+            Some(item.text),
+            None,
+            Some(item.done),
+            at,
+        );
     }
     save(root, scope, &store)?;
     Ok(format!("Cleared {removed} todo(s)."))

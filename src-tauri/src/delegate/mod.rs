@@ -22,8 +22,8 @@ pub use claude_code::ClaudeCode;
 pub use codex::Codex;
 pub use omp::Omp;
 pub use opencode::OpenCode;
-pub use runs::{AgentRun, RunCandidate, RunMessage};
 pub(crate) use runs::worktree_label;
+pub use runs::{AgentRun, RunCandidate, RunMessage};
 
 pub trait Delegate: Sync {
     /// Klide's provider id for this delegate, e.g. "claude-code". This is the

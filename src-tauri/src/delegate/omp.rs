@@ -246,7 +246,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         model,
         cwd,
         git_branch: None, // omp's session record doesn't store the git branch
-        worktree: None,    // filled centrally in list_agent_runs from cwd
+        worktree: None,   // filled centrally in list_agent_runs from cwd
         created_ms,
         updated_ms,
         message_count: count,

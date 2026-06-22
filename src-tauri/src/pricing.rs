@@ -186,7 +186,11 @@ mod tests {
     #[test]
     fn passthrough_providers_have_no_known_price() {
         // OpenRouter / opencode-go don't expose the underlying model price.
-        for m in ["openrouter/auto", "openrouter/anthropic/claude-3.5-sonnet", "opencode-go/minimax-m3"] {
+        for m in [
+            "openrouter/auto",
+            "openrouter/anthropic/claude-3.5-sonnet",
+            "opencode-go/minimax-m3",
+        ] {
             assert_eq!(pricing_for_model(m), None, "{m} passthrough should be None");
         }
     }
@@ -195,15 +199,24 @@ mod tests {
     fn hosted_anthropic_matches_published_prices() {
         assert_eq!(
             pricing_for_model("claude-opus-4-8"),
-            Some(ModelPricing { input_per_million: 15.0, output_per_million: 75.0 })
+            Some(ModelPricing {
+                input_per_million: 15.0,
+                output_per_million: 75.0
+            })
         );
         assert_eq!(
             pricing_for_model("claude-sonnet-4-6"),
-            Some(ModelPricing { input_per_million: 3.0, output_per_million: 15.0 })
+            Some(ModelPricing {
+                input_per_million: 3.0,
+                output_per_million: 15.0
+            })
         );
         assert_eq!(
             pricing_for_model("claude-haiku-4-5"),
-            Some(ModelPricing { input_per_million: 0.80, output_per_million: 4.0 })
+            Some(ModelPricing {
+                input_per_million: 0.80,
+                output_per_million: 4.0
+            })
         );
     }
 
@@ -211,11 +224,17 @@ mod tests {
     fn hosted_openai_matches_published_prices() {
         assert_eq!(
             pricing_for_model("gpt-5"),
-            Some(ModelPricing { input_per_million: 2.5, output_per_million: 10.0 })
+            Some(ModelPricing {
+                input_per_million: 2.5,
+                output_per_million: 10.0
+            })
         );
         assert_eq!(
             pricing_for_model("gpt-4.1"),
-            Some(ModelPricing { input_per_million: 2.5, output_per_million: 10.0 })
+            Some(ModelPricing {
+                input_per_million: 2.5,
+                output_per_million: 10.0
+            })
         );
     }
 

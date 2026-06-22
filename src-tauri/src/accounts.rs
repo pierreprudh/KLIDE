@@ -299,7 +299,8 @@ fn read_index(provider: &str) -> Vec<Account> {
 }
 
 fn write_index(provider: &str, accounts: &[Account]) -> Result<(), String> {
-    let path = index_path(provider).ok_or_else(|| "Could not resolve home directory".to_string())?;
+    let path =
+        index_path(provider).ok_or_else(|| "Could not resolve home directory".to_string())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {parent:?}: {e}"))?;
     }
@@ -422,7 +423,10 @@ pub fn save_current(provider: &str, name: &str) -> Result<Account, String> {
         let (kref, file) = capture_claude(&dir, name)?;
         (vec![file], Some(kref))
     } else {
-        (capture_files(provider, &dir, name, existing.as_ref())?, None)
+        (
+            capture_files(provider, &dir, name, existing.as_ref())?,
+            None,
+        )
     };
 
     let account = Account {
@@ -496,8 +500,8 @@ fn capture_claude(dir: &std::path::Path, name: &str) -> Result<(String, String),
         claude_config_path().ok_or_else(|| "Could not resolve home directory".to_string())?,
     )
     .map_err(|e| format!("Could not read ~/.claude.json: {e}"))?;
-    let config: serde_json::Value =
-        serde_json::from_slice(&config_bytes).map_err(|e| format!("~/.claude.json isn't valid JSON: {e}"))?;
+    let config: serde_json::Value = serde_json::from_slice(&config_bytes)
+        .map_err(|e| format!("~/.claude.json isn't valid JSON: {e}"))?;
     let snapshot = serde_json::json!({
         "oauthAccount": config.get("oauthAccount").cloned().unwrap_or(serde_json::Value::Null),
         "userID": config.get("userID").cloned().unwrap_or(serde_json::Value::Null),
@@ -517,8 +521,7 @@ fn capture_claude(dir: &std::path::Path, name: &str) -> Result<(String, String),
 fn atomic_write_private(dest: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     let tmp = dest.with_extension("klide-tmp");
     write_private(&tmp, bytes)?;
-    std::fs::rename(&tmp, dest)
-        .map_err(|e| format!("Could not move {tmp:?} into place: {e}"))
+    std::fs::rename(&tmp, dest).map_err(|e| format!("Could not move {tmp:?} into place: {e}"))
 }
 
 /// Switch `provider` to the saved account `name`. Refuses if a live run would
@@ -530,7 +533,12 @@ pub fn activate(provider: &str, name: &str) -> Result<(), String> {
     let account = read_index(provider)
         .into_iter()
         .find(|a| a.name == name)
-        .ok_or_else(|| format!("No saved \"{name}\" account for {}.", provider_label(provider)))?;
+        .ok_or_else(|| {
+            format!(
+                "No saved \"{name}\" account for {}.",
+                provider_label(provider)
+            )
+        })?;
     match provider {
         CODEX | OPENCODE => restore_files(provider, &account),
         CLAUDE => restore_claude(&account),
@@ -574,7 +582,9 @@ fn restore_claude(account: &Account) -> Result<(), String> {
         .ok_or_else(|| "This Claude snapshot has no stored credentials.".to_string())?;
     let tokens = keyring::Entry::new(KLIDE_CLAUDE_SERVICE, kref)
         .and_then(|e| e.get_password())
-        .map_err(|e| format!("Couldn't read the saved Claude credentials from Klide's keychain: {e}"))?;
+        .map_err(|e| {
+            format!("Couldn't read the saved Claude credentials from Klide's keychain: {e}")
+        })?;
 
     let dir = store_dir(CLAUDE).ok_or_else(|| "Could not resolve home directory".to_string())?;
     let file = account
@@ -582,26 +592,32 @@ fn restore_claude(account: &Account) -> Result<(), String> {
         .first()
         .ok_or_else(|| "This Claude snapshot is missing its account file.".to_string())?;
     let snap: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(dir.join(file)).map_err(|e| format!("Could not read account snapshot: {e}"))?,
+        &std::fs::read(dir.join(file))
+            .map_err(|e| format!("Could not read account snapshot: {e}"))?,
     )
     .map_err(|e| format!("Account snapshot isn't valid JSON: {e}"))?;
 
-    let cfg_path = claude_config_path().ok_or_else(|| "Could not resolve home directory".to_string())?;
+    let cfg_path =
+        claude_config_path().ok_or_else(|| "Could not resolve home directory".to_string())?;
     let cfg_bytes =
         std::fs::read(&cfg_path).map_err(|e| format!("Could not read ~/.claude.json: {e}"))?;
     // One-deep backup so a botched splice is recoverable.
     let backup = std::path::PathBuf::from(format!("{}.klide-bak", cfg_path.display()));
     let _ = std::fs::write(&backup, &cfg_bytes);
-    let mut cfg: serde_json::Value =
-        serde_json::from_slice(&cfg_bytes).map_err(|e| format!("~/.claude.json isn't valid JSON: {e}"))?;
+    let mut cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes)
+        .map_err(|e| format!("~/.claude.json isn't valid JSON: {e}"))?;
     if let Some(obj) = cfg.as_object_mut() {
         obj.insert(
             "oauthAccount".into(),
-            snap.get("oauthAccount").cloned().unwrap_or(serde_json::Value::Null),
+            snap.get("oauthAccount")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         );
         obj.insert(
             "userID".into(),
-            snap.get("userID").cloned().unwrap_or(serde_json::Value::Null),
+            snap.get("userID")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         );
     } else {
         return Err("~/.claude.json isn't a JSON object — not switching.".to_string());
@@ -633,7 +649,10 @@ fn not_logged_in_msg(provider: &str) -> String {
         OPENCODE => "opencode auth login",
         _ => "the CLI's login",
     };
-    format!("{} isn't logged in. Run `{cmd}` first.", provider_label(provider))
+    format!(
+        "{} isn't logged in. Run `{cmd}` first.",
+        provider_label(provider)
+    )
 }
 
 #[cfg(test)]
@@ -663,7 +682,9 @@ mod tests {
 
     #[test]
     fn codex_apikey_fingerprinted_not_exposed() {
-        let id = codex_identity(&serde_json::json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "sk-secret" }));
+        let id = codex_identity(
+            &serde_json::json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "sk-secret" }),
+        );
         let fp = id.key_fingerprint.as_deref().unwrap();
         assert_eq!(fp.len(), 12);
         assert!(!fp.contains("secret"));
@@ -699,7 +720,10 @@ mod tests {
 
     #[test]
     fn unrecognised_shapes_are_not_saveable() {
-        assert!(!codex_identity(&serde_json::json!({ "auth_mode": "chatgpt", "tokens": {} })).is_recognised());
+        assert!(
+            !codex_identity(&serde_json::json!({ "auth_mode": "chatgpt", "tokens": {} }))
+                .is_recognised()
+        );
         assert!(!claude_identity(&serde_json::json!({})).is_recognised());
         assert!(!opencode_identity(&serde_json::json!({})).is_recognised());
     }

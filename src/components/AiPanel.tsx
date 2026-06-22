@@ -24,7 +24,6 @@ import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
 import {
   DEFAULT_MODELS,
-  MODE_OPTIONS,
   isDelegateProvider,
   normalizeAgentMode,
   providerGroupsWithCustom,
@@ -45,7 +44,7 @@ import type {
 } from "../agent/types";
 import { enabledSkillsPrompt, type Skill } from "../skills";
 
-import { ProviderLogo, AssistantPlaceholderLoader } from "./ai/icons";
+import { ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { renderMessageBody, CompactionRow } from "./ai/ChatMessage";
 import { ConversationHistory } from "./ai/ConversationHistory";
@@ -68,6 +67,58 @@ import {
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
+
+function LocalServerStartingRow({ providerLabel, centered = false }: { providerLabel: string; centered?: boolean }) {
+  const hairline = (
+    <span
+      aria-hidden="true"
+      style={{
+        height: 1,
+        flex: "1 1 44px",
+        minWidth: centered ? 42 : 28,
+        maxWidth: centered ? 96 : 72,
+        background: "color-mix(in srgb, var(--border) 82%, transparent)",
+      }}
+    />
+  );
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        width: "100%",
+        maxWidth: centered ? "min(520px, 86%)" : "min(520px, 100%)",
+        color: "var(--fg-subtle)",
+      }}
+    >
+      {hairline}
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, flexShrink: 0 }}>
+        <DotGridLoader size={11} label={`Starting ${providerLabel}`} />
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>
+          Starting {providerLabel}
+        </span>
+      </span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        local server…
+      </span>
+      {hairline}
+    </div>
+  );
+}
+
+function asksForWorkspaceInspection(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const mentionsWorkspace =
+    /\b(current|this|project|workspace|repo|repository|root)\b/.test(normalized) ||
+    /\b(folder|folders|directory|directories|dir|files|tree)\b/.test(normalized) ||
+    /(^|\s)\.(\s|$)/.test(normalized);
+  const asksToInspect =
+    /\b(what|which|show|list|ls|read|open|inspect|look|scan|contents?)\b/.test(normalized) ||
+    /\b(folder|folders|directory|directories|files)\b/.test(normalized);
+  return mentionsWorkspace && asksToInspect;
+}
 
 type AiHarnessSettings = {
   chatPrompt?: string;
@@ -428,9 +479,10 @@ export function AiPanel({
     const trigger = modeTriggerRef.current;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
+    const width = 204;
     setModeMenuPos({
       bottom: Math.round(window.innerHeight - rect.top + 8),
-      left: Math.round(rect.left),
+      left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
     });
     setModeOpen(true);
   }
@@ -601,10 +653,36 @@ export function AiPanel({
   const [slashIdx, setSlashIdx] = useState(0);
   const [nextSendMode, setNextSendMode] = useState<AgentMode | null>(null);
 
+  // Transient "mode line" — the review/auto/plan state is normally invisible.
+  // A slash command (or /mode peek) flashes it above the composer for ~2.4s,
+  // then it fades. No persistent chrome at rest.
+  type ModeTone = "accent" | "warning" | "muted";
+  const [modeFlash, setModeFlash] = useState<{ text: string; tone: ModeTone } | null>(null);
+  const modeFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function flashMode(text: string, tone: ModeTone = "muted") {
+    setModeFlash({ text, tone });
+    if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current);
+    modeFlashTimer.current = setTimeout(() => setModeFlash(null), 2400);
+  }
+  useEffect(() => () => { if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current); }, []);
+  // Snapshot the current mode for the /mode peek. Reads state at call time.
+  function currentModeFlash(): { text: string; tone: ModeTone } {
+    if (effectiveMode === "chat") return { text: "chat mode · no tools", tone: "muted" };
+    if (effectiveMode === "plan") return { text: "plan mode · read-only", tone: "warning" };
+    return requireDiffReview
+      ? { text: "reviewing every edit", tone: "muted" }
+      : { text: "auto-accept edits on", tone: "accent" };
+  }
+  // /auto-mode and /review-mode imply Goal mode (edits only happen there).
+  const goalOrPlan = () => (modelSupportsTools || providerDelegatesWork ? "goal" : "plan") as AgentMode;
+
   const SLASH_COMMANDS: { name: string; desc: string; run: () => void }[] = [
     { name: "chat", desc: "Switch to Chat mode (no tools)", run: () => { selectMode("chat"); setInput(""); } },
     { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)", run: () => { selectMode("plan"); setInput(""); } },
     { name: "goal", desc: "Switch to Goal mode (can propose edits)", run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
+    { name: "mode", desc: "Show the current mode", run: () => { setInput(""); setSlash(null); const f = currentModeFlash(); flashMode(f.text, f.tone); } },
+    { name: "auto-mode", desc: "Auto-accept edits — apply without a prompt", run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); flashMode("auto-accept edits on", "accent"); } },
+    { name: "review-mode", desc: "Review every edit before it applies (default)", run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); flashMode("reviewing every edit", "muted"); } },
     { name: "clear", desc: "Start a new conversation", run: () => newConversation() },
     { name: "compact", desc: "Summarize older turns to free up context", run: () => {
       setInput(""); setSlash(null);
@@ -716,6 +794,35 @@ export function AiPanel({
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(newBefore.length, newBefore.length); });
   }
 
+  // "Add file" in the + menu just primes an @-mention: append " @" and let the
+  // existing mention detection (handleComposerChange) open the file picker.
+  function addFileMention() {
+    closeModeMenu();
+    const next = input.length === 0 ? "@" : input.endsWith(" ") ? input + "@" : input + " @";
+    handleComposerChange(next, next.length);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(next.length, next.length); } });
+  }
+  function openCommandsMenu() {
+    closeModeMenu();
+    handleComposerChange("/", 1);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(1, 1); } });
+  }
+  // The autonomy ladder shown in the + menu, lowest → highest. The last two
+  // are both Goal mode; they differ only in requireDiffReview (review vs auto).
+  const MODE_RUNGS: { mode: AgentMode; review: boolean | null; label: string; desc: string }[] = [
+    { mode: "chat", review: null, label: "Chat", desc: "no tools" },
+    { mode: "plan", review: null, label: "Plan", desc: "read-only, proposes" },
+    { mode: "goal", review: true, label: "Goal · review", desc: "approve each edit" },
+    { mode: "goal", review: false, label: "Goal · auto-accept", desc: "applies on its own" },
+  ];
+  function selectRung(mode: AgentMode, review: boolean | null) {
+    selectMode(mode); // persists mode + closes the menu
+    if (mode === "goal" && review !== null) onRequireDiffReviewChange?.(review);
+    if (mode === "chat") flashMode("chat mode · no tools");
+    else if (mode === "plan") flashMode("plan mode · read-only", "warning");
+    else flashMode(review ? "reviewing every edit" : "auto-accept edits on", review ? "muted" : "accent");
+  }
+
   async function collectAttachments(text: string): Promise<Attachment[]> {
     if (!workspaceRoot) return [];
     const known = new Set(fileList);
@@ -736,6 +843,9 @@ export function AiPanel({
   const lensProjectContext = providerDelegatesWork ? [] : lensItemsForPrompt(projectContext, input, contextMode);
   const activeMode = nextSendMode ?? agentMode;
   const effectiveMode = !modelSupportsTools && !providerDelegatesWork && activeMode === "goal" ? "chat" : activeMode;
+  // + menu: Goal rungs disabled when the model has no tools; which rung is lit.
+  const goalDisabled = !modelSupportsTools && !providerDelegatesWork;
+  const currentRungIdx = effectiveMode === "chat" ? 0 : effectiveMode === "plan" ? 1 : requireDiffReview ? 2 : 3;
   // Effective window: a per-model override (Settings → Harness, Ollama only)
   // genuinely caps the runtime window, so the gauge must measure against it —
   // otherwise a dialed-down model reads near-empty when it's actually full.
@@ -786,24 +896,35 @@ export function AiPanel({
   const toolsAvailableForDraft =
     !providerDelegatesWork && modelSupportsTools && effectiveMode !== "chat";
   const systemPromptForDraft = useMemo(() => {
+    let prompt: string;
     if (effectiveMode === "chat" && (provider === "mlx" || provider === "ollama")) {
-      return `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
+      prompt = `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
+
+If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
 
 Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`;
+    } else {
+      prompt = buildSystemPrompt(
+        workspaceRoot,
+        stopAfterRejection,
+        skills,
+        effectiveMode,
+        toolsAvailableForDraft,
+        projectRules,
+        harnessSettings,
+        model
+      );
     }
-    return buildSystemPrompt(
-      workspaceRoot,
-      stopAfterRejection,
-      skills,
-      effectiveMode,
-      toolsAvailableForDraft,
-      projectRules,
-      harnessSettings,
-      model
-    );
+    if (effectiveMode !== "chat" && toolsAvailableForDraft && asksForWorkspaceInspection(input)) {
+      prompt += `
+
+This user request requires workspace inspection. Before answering, you MUST call list_dir with path "." (or the requested relative directory) and wait for its tool result. Do not answer from memory, do not infer from prior conversation, and do not say you used list_dir unless an actual list_dir tool result appears in this turn. For folder questions, answer only from the tool result's Folders section.`;
+    }
+    return prompt;
   }, [
     effectiveMode,
     harnessSettings,
+    input,
     model,
     projectRules,
     provider,
@@ -1804,11 +1925,18 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
       const toolsAvailable = turn.modelSupportsTools;
       const overrides = harnessSettings?.toolOverrides;
       const disabledTools = overrides ? Object.keys(overrides).filter((k) => overrides[k] === false) : undefined;
-      const systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
+      let systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
         ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
+
+If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
 
 Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
         : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
+      if (turn.mode !== "chat" && toolsAvailable && asksForWorkspaceInspection(turn.text)) {
+        systemPrompt += `
+
+This user request requires workspace inspection. Before answering, you MUST call list_dir with path "." (or the requested relative directory) and wait for its tool result. Do not answer from memory, do not infer from prior conversation, and do not say you used list_dir unless an actual list_dir tool result appears in this turn. For folder questions, answer only from the tool result's Folders section.`;
+      }
       // Context window: num_ctx only matters for Ollama (other adapters
       // ignore it). Prefer an explicit per-model override from settings,
       // else the model's detected trained window (contextLimit), so each
@@ -1959,7 +2087,12 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
     }
     if (!(await ensureLocalServerReady())) return;
     const requestedMode = opts?.mode ?? nextSendMode ?? agentModeRef.current;
-    const mode: AgentMode = !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
+    const availableMode: AgentMode =
+      !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
+    const mode: AgentMode =
+      availableMode === "chat" && modelSupportsTools && asksForWorkspaceInspection(text)
+        ? "plan"
+        : availableMode;
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
     const attachments = await collectAttachments(text);
     const activeProjectContext = lensItemsForPrompt(projectContext, text, contextMode);
@@ -2082,9 +2215,9 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           )}
         </div>
-        {isLocalProvider && (serverError || serverStarting || !serverRunning) && (
+        {isLocalProvider && (serverError || (!serverStarting && !serverRunning)) && (
           <div
-            title={serverError ?? (serverStarting ? `Starting ${providerName(provider)}` : `${providerName(provider)} stopped`)}
+            title={serverError ?? `${providerName(provider)} stopped`}
             style={{
               justifySelf: "center",
               display: "flex",
@@ -2101,10 +2234,10 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                 height: 5,
                 borderRadius: "50%",
                 background: serverError ? "var(--danger)" : "var(--fg-dim)",
-                opacity: serverStarting ? 0.45 : 0.7,
+                opacity: 0.7,
               }}
             />
-            {serverError ?? (serverStarting ? "Starting" : "Stopped")}
+            {serverError ?? "Stopped"}
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 2, textTransform: "none", letterSpacing: 0 }}>
@@ -2231,7 +2364,7 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
           />
         ) : (
           <>
-        {msgs.length === 0 && (
+        {msgs.length === 0 && !serverStarting && (
           <div style={{ width: "min(260px, 80%)", textAlign: "center", color: "var(--fg-subtle)", lineHeight: 1.55, transform: "translateY(-10px)" }}>
             <div style={{ width: 38, height: 38, margin: "0 auto 14px", borderRadius: "var(--radius-lg)", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)", border: "1px solid var(--panel-border)", boxShadow: "inset 0 1px 0 var(--panel-highlight)" }}>
               <span style={{ fontFamily: "var(--font-ui)", fontSize: 19, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
@@ -2311,6 +2444,20 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             </div>
           );
         })}
+        {serverStarting && (
+          <div
+            className="ai-msg-in"
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              margin: msgs.length === 0 ? 0 : "12px 0",
+              width: "100%",
+              textAlign: msgs.length === 0 ? "center" : undefined,
+            }}
+          >
+            <LocalServerStartingRow providerLabel={providerName(provider)} centered={msgs.length === 0} />
+          </div>
+        )}
         {(compacting || compactError) && (
           <div className="ai-msg-in" style={{ margin: compactSource === "manual" ? "6px 0" : "6px 0 8px 32px" }}>
             <CompactionRow status="running" error={compactError} source={compactSource} />
@@ -2553,6 +2700,12 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             )}
           </div>
         )}
+        {modeFlash && (
+          <div aria-live="polite" className="popover-enter" style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 2px 6px", fontFamily: "var(--font-mono)", fontSize: 11.5, color: modeFlash.tone === "accent" ? "var(--accent)" : modeFlash.tone === "warning" ? "var(--warning)" : "var(--fg-subtle)" }}>
+            <span style={{ letterSpacing: "-1px" }} aria-hidden>{modeFlash.tone === "warning" ? "◌" : "⏵⏵"}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{modeFlash.text}</span>
+          </div>
+        )}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
@@ -2611,8 +2764,8 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
             rows={1}
             style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block" }}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", flexWrap: "nowrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: width < 360 ? 4 : 6, minWidth: 0, flex: "1 1 auto", flexWrap: "nowrap", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: width < 360 ? 4 : 6, minWidth: 0, flex: "0 0 auto", flexWrap: "nowrap", overflow: "hidden" }}>
               {providerDelegatesWork ? (
                 <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "color-mix(in srgb, var(--panel) 88%, transparent)", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 560, flexShrink: 0 }}>
                   <ProviderLogo id={provider} size={13} /><span>{providerName(provider)}</span>
@@ -2620,53 +2773,60 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
               ) : (
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <button ref={modeTriggerRef} type="button" onClick={() => { if (!streaming) { if (modeOpen) closeModeMenu(); else openModeMenu(); } }} disabled={streaming}
-                    title={`${MODE_OPTIONS.find((o) => o.id === effectiveMode)?.title ?? ""} Click to choose Chat, Plan, or Goal. Press Tab to cycle.`}
-                    aria-haspopup="menu" aria-expanded={modeOpen} aria-label={`AI mode: ${MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}`}
-                    style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 0, height: 24, width: width < 360 ? 58 : 64, padding: width < 360 ? "0 17px 0 7px" : "0 19px 0 9px", borderRadius: 999, border: "1px solid var(--border-strong)", background: modeOpen ? "var(--bg-hover)" : "color-mix(in srgb, var(--panel) 88%, transparent)", boxShadow: modeOpen ? "0 6px 18px rgba(38, 38, 32, 0.10)" : "inset 0 1px 0 rgba(255,255,255,0.05)", color: modeOpen ? "var(--fg-strong)" : "var(--fg-subtle)", fontSize: 11, fontWeight: 560, letterSpacing: 0, cursor: streaming ? "default" : "pointer", transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)" }}
+                    title="Add context · choose mode"
+                    aria-haspopup="menu" aria-expanded={modeOpen} aria-label="Add context and choose mode"
+                    style={{ display: "grid", placeItems: "center", height: 26, width: 26, flexShrink: 0, padding: 0, border: "none", background: "transparent", color: modeOpen ? "var(--fg-strong)" : "var(--fg-subtle)", cursor: streaming ? "default" : "pointer", transform: modeOpen ? "rotate(45deg)" : "none", transition: "color var(--motion-fast) var(--ease-out), transform var(--motion-med) var(--ease-out)" }}
                     onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
                     onMouseLeave={(e) => { if (!modeOpen) e.currentTarget.style.color = "var(--fg-subtle)"; }}>
-                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>{MODE_OPTIONS.find((o) => o.id === effectiveMode)?.label ?? "Chat"}</span>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: "absolute", right: width < 360 ? 5 : 7, opacity: 0.65, transform: modeOpen ? "rotate(180deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}><path d="M6 9l6 6 6-6" /></svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
                   </button>
                   {modeOpen && modeMenuPos && createPortal(
-                    <div ref={modeMenuRef} role="menu" aria-label="AI mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 132, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 34px rgba(38, 38, 32, 0.16)", zIndex: 200 }}>
-                      {MODE_OPTIONS.map((option) => {
-                        const disabled = option.id === "goal" && !modelSupportsTools && !providerDelegatesWork;
-                        const active = option.id === effectiveMode;
+                    <div ref={modeMenuRef} role="menu" aria-label="Add context and mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 204, padding: 5, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-elevated)", boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)", zIndex: 200 }}>
+                      <button type="button" role="menuitem" onClick={addFileMention} title="Add a file to the conversation context"
+                        style={{ width: "100%", display: "flex", alignItems: "center", height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", color: "var(--fg)", font: "inherit", fontSize: 13, cursor: "pointer" }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                        <span style={{ flex: 1, textAlign: "left" }}>Add file</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>@</span>
+                      </button>
+                      <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
+                      {MODE_RUNGS.map((rung, i) => {
+                        const disabled = rung.mode === "goal" && goalDisabled;
+                        const active = i === currentRungIdx;
                         return (
-                          <button key={option.id} type="button" role="menuitemradio" aria-checked={active} disabled={disabled}
-                            onClick={() => { if (!disabled) selectMode(option.id); }}
-                            title={disabled ? `${model} cannot use edit tools.` : option.title}
-                            style={{ width: "100%", height: 28, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "0 8px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--bg-hover)" : "transparent", color: disabled ? "var(--fg-dim)" : active ? "var(--fg-strong)" : "var(--fg-subtle)", font: "inherit", fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
-                            <span>{option.label}</span>
-                            {active && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>}
+                          <button key={rung.label} type="button" role="menuitemradio" aria-checked={active} disabled={disabled}
+                            onClick={() => { if (!disabled) selectRung(rung.mode, rung.review); }}
+                            title={disabled ? `${model} cannot use edit tools.` : rung.desc}
+                            style={{ width: "100%", display: "flex", alignItems: "center", height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", font: "inherit", fontSize: 13, cursor: disabled ? "default" : "pointer" }}
+                            onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                            <span style={{ flex: 1, textAlign: "left", color: disabled ? "var(--fg-dim)" : active ? "var(--fg-strong)" : "var(--fg-subtle)", fontWeight: active ? 500 : 400, whiteSpace: "nowrap" }}>{rung.label}</span>
+                            {active && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><path d="M20 6 9 17l-5-5" /></svg>}
                           </button>
                         );
                       })}
+                      <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
+                      <button type="button" role="menuitem" onClick={openCommandsMenu} title="Browse slash commands"
+                        style={{ width: "100%", display: "flex", alignItems: "center", height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", color: "var(--fg)", font: "inherit", fontSize: 13, cursor: "pointer" }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                        <span style={{ flex: 1, textAlign: "left" }}>Commands</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>/</span>
+                      </button>
                     </div>,
                     document.body
                   )}
                 </div>
               )}
-              {effectiveMode === "goal" && onRequireDiffReviewChange && (
-                <button
-                  type="button"
-                  disabled={streaming}
-                  onClick={() => { if (!streaming) onRequireDiffReviewChange(!requireDiffReview); }}
-                  aria-pressed={!requireDiffReview}
-                  aria-label={requireDiffReview ? "Edit review on" : "Edit review: auto-accept"}
-                  title={requireDiffReview
-                    ? "Reviewing every edit. Click to auto-accept (edits apply without a prompt; still checkpointed)."
-                    : "Auto-accepting edits — they apply without a prompt (still checkpointed). Click to review each edit."}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 24, width: 22, flexShrink: 0, padding: 0, border: "none", background: "transparent", color: requireDiffReview ? "var(--fg-dim)" : "var(--accent)", cursor: streaming ? "default" : "pointer", transition: "color var(--motion-fast) var(--ease-out)" }}
-                  onMouseEnter={(e) => { if (!streaming && requireDiffReview) e.currentTarget.style.color = "var(--fg-subtle)"; }}
-                  onMouseLeave={(e) => { if (requireDiffReview) e.currentTarget.style.color = "var(--fg-dim)"; }}>
-                  {requireDiffReview ? (
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                  ) : (
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
-                  )}
-                </button>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: width < 360 ? 1 : 2, flex: "1 1 auto", minWidth: 0 }}>
+              {conversationCostUsd > 0 && width >= 380 && (
+                <span
+                  title={`This conversation has cost about $${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 4 : 2)} (${modelLabel(model)} list price)`}
+                  style={{ height: 20, display: "inline-flex", alignItems: "center", padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
+                >
+                  {conversationCostUsd < 0.01 ? "<$0.01" : `$${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 3 : 2)}`}
+                </span>
               )}
               <ModelPicker
                 provider={provider}
@@ -2675,21 +2835,21 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                 disabled={streaming}
                 onChange={onModelChange}
               />
-              {modelSupportsReflection && (
+              {(
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <button
                     ref={reflectionTriggerRef}
                     type="button"
-                    disabled={streaming}
+                    disabled={streaming || !modelSupportsReflection}
                     onClick={() => {
-                      if (streaming) return;
+                      if (streaming || !modelSupportsReflection) return;
                       if (reflectionOpen) closeReflectionMenu();
                       else openReflectionMenu();
                     }}
                     aria-haspopup="menu"
                     aria-expanded={reflectionOpen}
                     aria-label={`Reflection: ${activeReflection.label}`}
-                    title="Choose reflection level for this model"
+                    title={modelSupportsReflection ? "Choose reflection level for this model" : "This model doesn't support reasoning effort"}
                     style={{
 	                      display: "flex",
 	                      alignItems: "center",
@@ -2701,17 +2861,17 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
 	                      border: "1px solid transparent",
 	                      background: reflectionOpen ? "var(--bg-hover)" : "transparent",
 	                      boxShadow: "none",
-                      color: reflectionOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
+                      color: !modelSupportsReflection ? "var(--fg-dim)" : reflectionOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
                       fontSize: 11,
                       fontWeight: 560,
                       letterSpacing: 0,
-                      cursor: streaming ? "default" : "pointer",
+                      cursor: streaming || !modelSupportsReflection ? "default" : "pointer",
 	                      transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
                     }}
-                    onMouseEnter={(e) => { if (!streaming) e.currentTarget.style.color = "var(--fg-strong)"; }}
-                    onMouseLeave={(e) => { if (!reflectionOpen) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                    onMouseEnter={(e) => { if (!streaming && modelSupportsReflection) e.currentTarget.style.color = "var(--fg-strong)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = !modelSupportsReflection ? "var(--fg-dim)" : reflectionOpen ? "var(--fg-strong)" : "var(--fg-subtle)"; }}
                   >
-	                    <ReflectionBars level={activeReflection.level} />
+	                    <span style={{ opacity: modelSupportsReflection ? 1 : 0.4, display: "inline-flex" }}><ReflectionBars level={activeReflection.level} /></span>
 	                  </button>
                   {reflectionOpen && reflectionMenuPos && createPortal(
 	                    <div ref={reflectionMenuRef} role="menu" aria-label="Reflection level" className="popover-enter" style={{ position: "fixed", left: reflectionMenuPos.left, bottom: reflectionMenuPos.bottom, width: 166, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 10px 26px rgba(38, 38, 32, 0.14)", zIndex: 205 }}>
@@ -2743,16 +2903,6 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                     document.body
                   )}
                 </div>
-              )}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "initial", gap: width < 360 ? 3 : 4, flex: "0 0 auto", minWidth: 0 }}>
-              {conversationCostUsd > 0 && width >= 380 && (
-                <span
-                  title={`This conversation has cost about $${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 4 : 2)} (${modelLabel(model)} list price)`}
-                  style={{ height: 20, display: "inline-flex", alignItems: "center", padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
-                >
-                  {conversationCostUsd < 0.01 ? "<$0.01" : `$${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 3 : 2)}`}
-                </span>
               )}
               <button ref={contextTriggerRef} type="button" aria-label={`Context window usage ${Math.round(contextRatio * 100)} percent`}
                 style={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: contextHover ? "var(--bg-hover)" : "transparent", color: contextTone, cursor: "default", position: "relative", zIndex: 2, transition: "background var(--motion-fast) var(--ease-out), color var(--motion-med) var(--ease-out)" }}
@@ -2820,21 +2970,21 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
                   document.body
                 )}
               </button>
-              {streaming ? (
-                <button onClick={stopCurrentStream} aria-label="Stop generation" title="Stop (Esc)"
-                  style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
-                </button>
-              ) : (
-                <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
-                  style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "#fff" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
-                  onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
-                  onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
-                </button>
-              )}
+            {streaming ? (
+              <button onClick={stopCurrentStream} aria-label="Stop generation" title="Stop (Esc)"
+                style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+              </button>
+            ) : (
+              <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
+                style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "#fff" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
+                onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
+                onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
+              </button>
+            )}
             </div>
           </div>
           </div>

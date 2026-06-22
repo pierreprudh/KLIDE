@@ -333,8 +333,8 @@ fn working_num_ctx(
         .map(|t| t.iter().map(|s| s.to_string().len()).sum())
         .unwrap_or(0);
     let needed = (msg_chars + tool_chars) / 4 + 4096; // + response headroom
-    // At least the comfortable default; grow to fit a large conversation;
-    // never exceed the model's real window.
+                                                      // At least the comfortable default; grow to fit a large conversation;
+                                                      // never exceed the model's real window.
     needed.max(WORKING_DEFAULT).min(ceiling).max(1024)
 }
 
@@ -413,6 +413,35 @@ struct OpenAiToolAcc {
     id: String,
     name: String,
     args: String,
+}
+
+fn accumulate_openai_tool_calls(calls: &[serde_json::Value], tools: &mut Vec<OpenAiToolAcc>) {
+    for (fallback_index, call) in calls.iter().enumerate() {
+        let index = call
+            .get("index")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(fallback_index);
+        while tools.len() <= index {
+            tools.push(OpenAiToolAcc::default());
+        }
+        let acc = &mut tools[index];
+        if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
+            acc.id = id.to_string();
+        }
+        if let Some(function) = call.get("function") {
+            if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
+                acc.name.push_str(name);
+            }
+            if let Some(args) = function.get("arguments") {
+                if let Some(args) = args.as_str() {
+                    acc.args.push_str(args);
+                } else {
+                    acc.args.push_str(&args.to_string());
+                }
+            }
+        }
+    }
 }
 
 struct OpenAiAdapter {
@@ -505,12 +534,14 @@ impl StreamingProvider for OpenAiAdapter {
                 };
             }
         }
-        let Some(delta) = value
+        let Some(choice) = value
             .get("choices")
             .and_then(|c| c.as_array())
             .and_then(|c| c.first())
-            .and_then(|c| c.get("delta"))
         else {
+            return Ok(());
+        };
+        let Some(delta) = choice.get("delta").or_else(|| choice.get("message")) else {
             return Ok(());
         };
         if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
@@ -540,24 +571,7 @@ impl StreamingProvider for OpenAiAdapter {
             }
         }
         if let Some(calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-            for call in calls {
-                let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                while tools.len() <= index {
-                    tools.push(OpenAiToolAcc::default());
-                }
-                let acc = &mut tools[index];
-                if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-                    acc.id = id.to_string();
-                }
-                if let Some(function) = call.get("function") {
-                    if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                        acc.name.push_str(name);
-                    }
-                    if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) {
-                        acc.args.push_str(args);
-                    }
-                }
-            }
+            accumulate_openai_tool_calls(calls, tools);
         }
         Ok(())
     }
@@ -1094,15 +1108,24 @@ mod tests {
         // Tiny chat → the flat comfortable working default, not a shrunk tier.
         assert_eq!(working_num_ctx(&[msg("hi")], None, 131_072), 32_768);
         // A conversation below the default still gets the full default.
-        assert_eq!(working_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072), 32_768);
+        assert_eq!(
+            working_num_ctx(&[msg(&"x".repeat(40_000))], None, 131_072),
+            32_768
+        );
         // A conversation larger than the default grows past it (≈130k chars ≈
         // 32.5k tokens + headroom).
-        assert_eq!(working_num_ctx(&[msg(&"x".repeat(130_000))], None, 131_072), 36_596);
+        assert_eq!(
+            working_num_ctx(&[msg(&"x".repeat(130_000))], None, 131_072),
+            36_596
+        );
         // The model's real window (or a user override that dials down) is the
         // hard cap — never exceeded, even for a default-sized request.
         assert_eq!(working_num_ctx(&[msg("hi")], None, 8192), 8192);
         // A huge conversation is still capped at the ceiling.
-        assert_eq!(working_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384), 16_384);
+        assert_eq!(
+            working_num_ctx(&[msg(&"x".repeat(500_000))], None, 16_384),
+            16_384
+        );
     }
 
     #[test]
@@ -1130,30 +1153,69 @@ mod tests {
     }
 
     #[test]
-	    fn reflection_levels_map_to_ollama_think_flag() {
-	        assert_eq!(reflection_level_to_ollama_think(None), None);
-	        assert_eq!(reflection_level_to_ollama_think(Some("auto")), None);
-	        assert_eq!(reflection_level_to_ollama_think(Some("minimal")), Some(true));
-	        assert_eq!(reflection_level_to_ollama_think(Some("low")), Some(true));
-	        assert_eq!(reflection_level_to_ollama_think(Some("medium")), Some(true));
-	        assert_eq!(reflection_level_to_ollama_think(Some("high")), Some(true));
-	        assert_eq!(reflection_level_to_ollama_think(Some("xhigh")), Some(true));
-	        assert_eq!(reflection_level_to_ollama_think(Some("surprise")), None);
-	        assert_eq!(reflection_level_to_openai_effort(None), None);
-	        assert_eq!(reflection_level_to_openai_effort(Some("minimal")).as_deref(), Some("minimal"));
-	        assert_eq!(reflection_level_to_openai_effort(Some("low")).as_deref(), Some("low"));
-	        assert_eq!(reflection_level_to_openai_effort(Some("medium")).as_deref(), Some("medium"));
-	        assert_eq!(reflection_level_to_openai_effort(Some("high")).as_deref(), Some("high"));
-	        assert_eq!(reflection_level_to_openai_effort(Some("xhigh")).as_deref(), Some("xhigh"));
-	        assert_eq!(reflection_level_to_anthropic_budget(None), None);
-	        assert_eq!(reflection_level_to_anthropic_budget(Some("minimal")), Some(1024));
-	        assert_eq!(reflection_level_to_anthropic_budget(Some("low")), Some(2048));
-	        assert_eq!(reflection_level_to_anthropic_budget(Some("medium")), Some(4096));
-	        assert_eq!(reflection_level_to_anthropic_budget(Some("high")), Some(8192));
-	        assert_eq!(reflection_level_to_anthropic_budget(Some("xhigh")), Some(16_384));
-	        assert_eq!(reflection_level_to_openai_effort(Some("max")).as_deref(), Some("xhigh"));
-	        assert_eq!(reflection_level_to_anthropic_budget(Some("max")), Some(16_384));
-	    }
+    fn reflection_levels_map_to_ollama_think_flag() {
+        assert_eq!(reflection_level_to_ollama_think(None), None);
+        assert_eq!(reflection_level_to_ollama_think(Some("auto")), None);
+        assert_eq!(
+            reflection_level_to_ollama_think(Some("minimal")),
+            Some(true)
+        );
+        assert_eq!(reflection_level_to_ollama_think(Some("low")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("medium")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("high")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("xhigh")), Some(true));
+        assert_eq!(reflection_level_to_ollama_think(Some("surprise")), None);
+        assert_eq!(reflection_level_to_openai_effort(None), None);
+        assert_eq!(
+            reflection_level_to_openai_effort(Some("minimal")).as_deref(),
+            Some("minimal")
+        );
+        assert_eq!(
+            reflection_level_to_openai_effort(Some("low")).as_deref(),
+            Some("low")
+        );
+        assert_eq!(
+            reflection_level_to_openai_effort(Some("medium")).as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            reflection_level_to_openai_effort(Some("high")).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            reflection_level_to_openai_effort(Some("xhigh")).as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(reflection_level_to_anthropic_budget(None), None);
+        assert_eq!(
+            reflection_level_to_anthropic_budget(Some("minimal")),
+            Some(1024)
+        );
+        assert_eq!(
+            reflection_level_to_anthropic_budget(Some("low")),
+            Some(2048)
+        );
+        assert_eq!(
+            reflection_level_to_anthropic_budget(Some("medium")),
+            Some(4096)
+        );
+        assert_eq!(
+            reflection_level_to_anthropic_budget(Some("high")),
+            Some(8192)
+        );
+        assert_eq!(
+            reflection_level_to_anthropic_budget(Some("xhigh")),
+            Some(16_384)
+        );
+        assert_eq!(
+            reflection_level_to_openai_effort(Some("max")).as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            reflection_level_to_anthropic_budget(Some("max")),
+            Some(16_384)
+        );
+    }
 
     #[test]
     fn tool_call_arguments_are_coerced_to_valid_json_strings() {
@@ -1470,6 +1532,31 @@ mod tests {
         let args: serde_json::Value =
             serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(args["path"], "x.rs");
+    }
+
+    #[test]
+    fn openai_accepts_complete_message_tool_calls_from_local_servers() {
+        // Some OpenAI-compatible local servers send a complete assistant
+        // `message` chunk instead of streaming `delta.tool_calls`. MLX can
+        // use this shape when it has already parsed a full tool call.
+        let lines = [
+            r#"data: {"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_mlx_1","type":"function","function":{"name":"read_file","arguments":{"path":"src/App.tsx"}}},{"type":"function","function":{"name":"list_dir","arguments":{"path":"src"}}}]}}]}"#,
+            r#"data: [DONE]"#,
+        ];
+        let (content, thinking, tools, chunks) = run_openai(&lines);
+        assert!(content.is_empty());
+        assert!(thinking.is_none());
+        assert!(chunks.is_empty());
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["id"], "call_mlx_1");
+        assert_eq!(tools[0]["function"]["name"], "read_file");
+        assert_eq!(tools[1]["function"]["name"], "list_dir");
+        let first_args: serde_json::Value =
+            serde_json::from_str(tools[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        let second_args: serde_json::Value =
+            serde_json::from_str(tools[1]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(first_args["path"], "src/App.tsx");
+        assert_eq!(second_args["path"], "src");
     }
 
     #[test]

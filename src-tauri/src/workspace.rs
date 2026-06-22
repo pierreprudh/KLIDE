@@ -121,7 +121,10 @@ impl Workspace {
         if !target.is_absolute() {
             return Err("Path is outside the open workspace".to_string());
         }
-        if target.components().any(|c| matches!(c, Component::ParentDir)) {
+        if target
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
             return Err("Path is outside the open workspace".to_string());
         }
         if !target.starts_with(&self.root) {
@@ -134,7 +137,9 @@ impl Workspace {
                 None => return Err("Path is outside the open workspace".to_string()),
             }
         }
-        let ancestor = ancestor.canonicalize().map_err(|e| format!("Invalid path: {e}"))?;
+        let ancestor = ancestor
+            .canonicalize()
+            .map_err(|e| format!("Invalid path: {e}"))?;
         if !ancestor.starts_with(&self.root) {
             return Err("Path is outside the open workspace".to_string());
         }

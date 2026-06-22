@@ -1,6 +1,6 @@
 use super::runs::{cap_messages, clean_title, project_name, tool_file_path};
-use std::collections::HashSet;
 use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
+use std::collections::HashSet;
 
 /// OpenCode — the SST CLI. The quirkiest of the three:
 ///

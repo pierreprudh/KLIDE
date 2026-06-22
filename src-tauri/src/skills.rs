@@ -365,12 +365,18 @@ mod tests {
     #[test]
     fn parse_provenance_empty_when_no_metadata() {
         assert_eq!(parse_skill_provenance(FM), (String::new(), String::new()));
-        assert_eq!(parse_skill_provenance("no frontmatter"), (String::new(), String::new()));
+        assert_eq!(
+            parse_skill_provenance("no frontmatter"),
+            (String::new(), String::new())
+        );
     }
 
     #[test]
     fn group_label_workspace_sources_win_over_author() {
-        assert_eq!(skill_group_label("workspace-agents", "vercel", ""), "Workspace");
+        assert_eq!(
+            skill_group_label("workspace-agents", "vercel", ""),
+            "Workspace"
+        );
         assert_eq!(
             skill_group_label("workspace-klide", "anthropic", ""),
             "Workspace (auto-generated)"
@@ -380,8 +386,14 @@ mod tests {
     #[test]
     fn group_label_maps_known_authors() {
         assert_eq!(skill_group_label("home-claude", "vercel", ""), "Vercel");
-        assert_eq!(skill_group_label("home-claude", "anthropics", ""), "Anthropic");
-        assert_eq!(skill_group_label("home-claude", "matt pocock", ""), "Matt Pocock");
+        assert_eq!(
+            skill_group_label("home-claude", "anthropics", ""),
+            "Anthropic"
+        );
+        assert_eq!(
+            skill_group_label("home-claude", "matt pocock", ""),
+            "Matt Pocock"
+        );
         // Unknown author is title-cased for display.
         assert_eq!(skill_group_label("home-claude", "acme", ""), "Acme");
     }
@@ -389,7 +401,11 @@ mod tests {
     #[test]
     fn group_label_falls_back_to_repo_owner_then_personal() {
         assert_eq!(
-            skill_group_label("home-claude", "", "https://github.com/vercel-labs/agent-skills"),
+            skill_group_label(
+                "home-claude",
+                "",
+                "https://github.com/vercel-labs/agent-skills"
+            ),
             "Vercel"
         );
         assert_eq!(

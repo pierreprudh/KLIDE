@@ -606,12 +606,10 @@ mod tests {
         assert_eq!(summary.files_changed, 1);
         assert_eq!(summary.commands_run, 0);
         assert_eq!(summary.diff_reviews, 1);
-        assert!(
-            summary
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("without a recorded validation command"))
-        );
+        assert!(summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("without a recorded validation command")));
     }
 
     #[test]

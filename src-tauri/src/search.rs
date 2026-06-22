@@ -96,7 +96,11 @@ pub fn search_workspace(
                     continue;
                 }
             }
-            if path.metadata().map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true) {
+            if path
+                .metadata()
+                .map(|m| m.len() > MAX_FILE_BYTES)
+                .unwrap_or(true)
+            {
                 continue;
             }
             let content = match std::fs::read_to_string(&path) {

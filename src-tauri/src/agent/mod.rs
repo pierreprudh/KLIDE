@@ -1,26 +1,31 @@
 mod command_allowlist;
 #[cfg(test)]
 mod eval;
+mod run_core;
 pub mod todo;
 pub mod tools;
 pub mod transcripts;
 pub mod types;
 
+#[cfg(test)]
+use self::run_core::KEEP_RECENT_TOOL_RESULTS;
+use self::run_core::{
+    append_attachments, compact_old_tool_results, compaction_system_message, compaction_threshold,
+    estimate_prompt_tokens, provider_messages, refresh_todo_context, ProviderCaps,
+};
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, dynamic_tool_command,
     execute_read_only_tool, execute_write_tool_preview, find_tool_kind_for_workspace,
     parse_tool_calls, recover_text_tool_calls, run_command_capture, run_command_capture_in,
-    schemas_for_mode,
-    tool_allowed_in_mode, tool_kind_label, tool_summary_for_workspace, NormalizedToolCall,
-    ToolKind,
+    schemas_for_mode, tool_allowed_in_mode, tool_kind_label, tool_summary_for_workspace,
+    NormalizedToolCall, ToolKind,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
     write_summary,
 };
 use self::types::{
-    AgentAttachment, AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode,
-    AgentRunStatus,
+    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
     AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
@@ -192,97 +197,6 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
             estimated_tokens: 0,
             omitted: Vec::new(),
         })
-}
-
-/// The handful of provider quirks the run loop's behavior depends on, gathered
-/// in one place so the loop asks about a capability instead of comparing
-/// provider names inline. Keyed on the provider id; add a quirk here rather
-/// than threading another `provider == "..."` branch through the loop.
-struct ProviderCaps {
-    /// Replay continuation history as structured tool messages (assistant
-    /// `tool_calls` + `role:"tool"`). Ollama's native `/api/chat` is the lone
-    /// exception: the structured shape makes those models imitate fake tool
-    /// text, so it gets the text-fold workaround instead. Every OpenAI-wire
-    /// provider (including Ollama over `/v1`) gets the faithful structured replay.
-    structured_replay: bool,
-    /// Keep Chat-mode context minimal — skip injecting the project TODO list.
-    /// Small local backends (MLX, Ollama) made a bare "hello" feel broken when
-    /// handed project metadata, so their chat turns stay tiny.
-    minimal_chat_context: bool,
-}
-
-impl ProviderCaps {
-    fn for_provider(provider: &str) -> Self {
-        Self {
-            structured_replay: provider != "ollama",
-            minimal_chat_context: matches!(provider, "mlx" | "ollama"),
-        }
-    }
-}
-
-/// Fold an attachment block into a message's text — the "[Files attached for
-/// context]" suffix shared by the live initial turn and both replay shapes.
-/// No-op when there are no attachments.
-fn append_attachments(content: &mut String, attachments: &[AgentAttachment]) {
-    if attachments.is_empty() {
-        return;
-    }
-    let attached = attachments
-        .iter()
-        .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if attached.is_empty() {
-        return;
-    }
-    content.push_str("\n\n[Files attached for context]\n");
-    content.push_str(&attached);
-}
-
-/// The system message that stands in for everything before a compaction
-/// marker — identical in both replay shapes.
-fn compaction_system_message(summary: &str) -> serde_json::Value {
-    serde_json::json!({
-        "role": "system",
-        "content": format!("[Earlier conversation compacted to save context]\n{summary}")
-    })
-}
-
-fn provider_messages(
-    request: &StartRunRequest,
-    system: String,
-    run_id: &str,
-) -> Vec<serde_json::Value> {
-    let mut user_text = request.initial_text.clone();
-    if !request.attachments.is_empty() {
-        let attachments = request
-            .attachments
-            .iter()
-            .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        user_text.push_str("\n\n[Files attached for context]\n");
-        user_text.push_str(&attachments);
-    }
-    let mut messages = vec![serde_json::json!({ "role": "system", "content": system })];
-    // Inject initial todo list as context for tool-capable/project turns.
-    // Local chat should stay tiny; sending project metadata to MLX/Ollama for
-    // "hello" made prompt processing feel broken.
-    let should_include_todos = !(ProviderCaps::for_provider(&request.provider)
-        .minimal_chat_context
-        && matches!(request.mode, AgentMode::Chat));
-    if should_include_todos {
-        if let Some(cwd) = &request.workspace_root {
-            if let Some(todo_text) = todo::list_todos_text(cwd, run_id) {
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!("[TODO list]\n{}", todo_text)
-                }));
-            }
-        }
-    }
-    messages.push(serde_json::json!({ "role": "user", "content": user_text }));
-    messages
 }
 
 fn assistant_provider_message(
@@ -782,74 +696,6 @@ pub async fn agent_start_run(
     Ok(StartRunResponse { run_id: id })
 }
 
-/// The most-recent tool results are never compacted — they are the model's
-/// active working set. A task like "read these N files, then summarize each"
-/// needs the reads it just made to stay verbatim through the synthesis turn;
-/// gutting them out from under the model forces a re-read, whose fresh result
-/// the next pass guts again — a compaction death-spiral. Protecting a recency
-/// window stops that loop: recent reads survive, and any re-read lands inside
-/// the protected zone instead of feeding the spiral.
-const KEEP_RECENT_TOOL_RESULTS: usize = 8;
-
-/// Rough prompt-token footprint of the whole message array. Compaction is
-/// triggered off this, not a message count, so a short conversation keeps full
-/// fidelity and we only sacrifice old tool results when the prompt genuinely
-/// approaches the model's context window. The ~4-chars-per-token heuristic is
-/// the same one the frontend token meter uses; serializing each message also
-/// counts `tool_calls` and JSON punctuation, which biases the estimate high —
-/// the safe direction (compact a little early rather than overflow).
-fn estimate_prompt_tokens(messages: &[serde_json::Value]) -> usize {
-    messages.iter().map(|m| m.to_string().len()).sum::<usize>() / 4
-}
-
-/// Prompt-token budget above which older tool results get compacted. Carves
-/// headroom out of the context window for the model's reply (`reply_reserve`,
-/// i.e. `num_predict`) and the tool schemas the loop also ships each turn, so
-/// the prompt never crowds the response out of the window.
-fn compaction_threshold(context_window: usize, reply_reserve: usize) -> usize {
-    let schema_reserve = context_window / 8;
-    context_window
-        .saturating_sub(reply_reserve)
-        .saturating_sub(schema_reserve)
-        .max(1)
-}
-
-/// Auto-compaction, expressed purely. Replaces the body of *older* verbose
-/// `role: "tool"` messages with a short `[compacted: <name>]` placeholder so a
-/// long conversation doesn't blow the model's context window — while leaving
-/// the system prompt (`skip(1)`) and the most recent [`KEEP_RECENT_TOOL_RESULTS`]
-/// results intact. Compacts oldest-first and stops after 5 rewrites per pass;
-/// the loop calls it each turn, so it catches up gradually. No I/O: it just
-/// mutates `messages`, which makes it unit-testable without a supervisor.
-fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
-    // Indices of every long tool result, oldest-first.
-    let long_tool_results: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .skip(1) // never the system prompt
-        .filter(|(_, m)| {
-            m.get("role").and_then(|v| v.as_str()) == Some("tool")
-                && m.get("content")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.len())
-                    .unwrap_or(0)
-                    > 200
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    // Everything but the recency window is eligible; cap rewrites per pass.
-    let eligible = long_tool_results.len().saturating_sub(KEEP_RECENT_TOOL_RESULTS);
-    for &i in long_tool_results.iter().take(eligible).take(5) {
-        let msg = &mut messages[i];
-        let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-        msg["content"] = serde_json::Value::String(format!("[compacted: {name}]"));
-        if let Some(obj) = msg.as_object_mut() {
-            obj.remove("name");
-        }
-    }
-}
-
 /// The pure outcome of interpreting one assistant turn's provider response —
 /// the heart of the run loop with every Tauri / channel / filesystem
 /// dependency stripped out. `decide_turn` decides whether the model produced a
@@ -1143,9 +989,9 @@ async fn run_agent_loop(
     // Compaction is token-budget driven, not message-count driven: resolve the
     // model's context window once (explicit `num_ctx` for local models, else a
     // per-family fallback) and only trim once the prompt actually crowds it.
-    let context_window = request
-        .num_ctx
-        .unwrap_or_else(|| crate::models::fallback_context_window(&request.provider, &request.model));
+    let context_window = request.num_ctx.unwrap_or_else(|| {
+        crate::models::fallback_context_window(&request.provider, &request.model)
+    });
     let compact_threshold =
         compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
 
@@ -1181,21 +1027,7 @@ async fn run_agent_loop(
         // sees the latest task state (tools may have modified it).
         if let Some(cwd) = &request.workspace_root {
             let todo_text = todo::list_todos_text(cwd, &id);
-            for msg in messages.iter_mut() {
-                if msg.get("role").and_then(|v| v.as_str()) == Some("system")
-                    && msg
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .map(|c| c.starts_with("[TODO list]"))
-                        .unwrap_or(false)
-                {
-                    msg["content"] = serde_json::Value::String(match &todo_text {
-                        Some(t) => format!("[TODO list]\n{t}"),
-                        None => "[TODO list]\nNo todos.".to_string(),
-                    });
-                    break;
-                }
-            }
+            refresh_todo_context(&mut messages, todo_text.as_deref());
         }
 
         // Race the provider stream against user cancellation so abort takes
@@ -1759,7 +1591,14 @@ Do not propose it again — take a different approach or ask the user what they'
                     .await?
                     {
                         PauseOutcome::Cancelled => {
-                            finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                            finish_cancelled(
+                                &mut emit,
+                                &app,
+                                &runs_dir,
+                                &id,
+                                &summary,
+                                message_count,
+                            )?;
                             return Ok(());
                         }
                         PauseOutcome::Resolved(decision) => decision,
@@ -2773,7 +2612,8 @@ mod turn_decision_tests {
     fn compaction_rewrites_old_tool_results_and_keeps_the_system_prompt() {
         let long = "x".repeat(250);
         // One result past the recency window, so exactly the oldest is eligible.
-        let mut messages = vec![serde_json::json!({ "role": "system", "content": "x".repeat(300) })];
+        let mut messages =
+            vec![serde_json::json!({ "role": "system", "content": "x".repeat(300) })];
         for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 1) {
             messages.push(tool_msg("read_file", &long));
         }
@@ -2784,7 +2624,10 @@ mod turn_decision_tests {
         assert_eq!(messages[1]["content"], "[compacted: read_file]");
         assert!(messages[1].get("name").is_none());
         // Everything inside the recency window survives verbatim.
-        assert_eq!(messages.last().unwrap()["content"].as_str().unwrap().len(), 250);
+        assert_eq!(
+            messages.last().unwrap()["content"].as_str().unwrap().len(),
+            250
+        );
     }
 
     #[test]
@@ -2800,7 +2643,10 @@ mod turn_decision_tests {
             .iter()
             .filter(|m| m["content"].as_str() == Some("[compacted: read_file]"))
             .count();
-        assert_eq!(compacted, 0, "recent reads must stay verbatim for synthesis");
+        assert_eq!(
+            compacted, 0,
+            "recent reads must stay verbatim for synthesis"
+        );
     }
 
     #[test]
@@ -2995,7 +2841,6 @@ mod provider_caller_tests {
         );
     }
 }
-
 
 #[cfg(test)]
 mod checkpoint_tests {

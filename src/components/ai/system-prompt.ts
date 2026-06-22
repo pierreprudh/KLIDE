@@ -36,6 +36,7 @@ export function buildSystemPrompt(
       ? customPrompts?.chatPrompt
         ?? `
 CHAT MODE is active. You have no tools. Answer conversationally from the context already visible in the chat. If the user asks you to inspect or change files, tell them to switch to Plan or Goal.`
+        + ` Do not answer filesystem, folder, directory, file-list, git, or project-structure questions from memory or prior conversation; say you need Plan/Goal tools for that.`
     : mode === "plan"
       ? customPrompts?.planPrompt
         ?? (toolsAvailable
@@ -60,8 +61,8 @@ Workspace root: ${workspaceRoot}
 Tool usage:
 ${
     toolsAvailable
-      ? "- read_file / list_dir: read-only. Use whenever you need to know contents or structure.\n- write_file / create_file: edit tools. Every edit opens a diff modal for the user to APPLY or REJECT — you never write directly."
-      : "- No tool APIs are available in this turn. Do not claim that you can read or edit files directly."
+      ? "- read_file / list_dir: read-only. Use whenever you need to know contents or structure. If asked what folders/files are in a directory, call list_dir first and answer only from its result.\n- write_file / create_file: edit tools. Every edit opens a diff modal for the user to APPLY or REJECT — you never write directly."
+      : "- No tool APIs are available in this turn. Do not claim that you can read or edit files directly. Do not answer filesystem, folder, directory, file-list, git, or project-structure questions from memory; say tools are unavailable and ask the user to switch to Plan or Goal."
   }${modeBlock}
 
 Paths are relative to the workspace root (e.g. "src/App.tsx" or ".").

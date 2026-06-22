@@ -303,9 +303,20 @@ function App() {
       DEFAULT_AI_MODEL
   );
   const [panelModels, setPanelModels] = useState<Record<string, string[]>>({});
+  // Global default for "require diff review" (auto-accept off). Settings edits
+  // this. Each AI panel keeps its own override below — toggling auto-accept in
+  // one conversation must NOT leak into the others.
   const [requireDiffReview, setRequireDiffReview] = useState(() =>
     readBoolSetting("klide-confirm-agent-edits", true)
   );
+  // Per-panel overrides, keyed by panelId (same pattern as `panelModels`).
+  // A panel with no entry falls back to the global default. In-memory only:
+  // on reload every panel reverts to the safe global default.
+  const [panelReviewOverrides, setPanelReviewOverrides] = useState<Record<string, boolean>>({});
+  const reviewForPanel = (id: string) =>
+    id in panelReviewOverrides ? panelReviewOverrides[id] : requireDiffReview;
+  const setPanelReview = (id: string, value: boolean) =>
+    setPanelReviewOverrides((prev) => ({ ...prev, [id]: value }));
   const [stopAfterRejection, setStopAfterRejection] = useState(() =>
     readBoolSetting("klide.stopAfterRejection", false)
   );
@@ -537,8 +548,8 @@ function App() {
             availableModels={panelModels[aiPanels[0]?.id ?? "ai-main"] ?? [aiPanels[0]?.model ?? aiModel]}
             onAvailableModelsChange={(models) => updatePanelModels(aiPanels[0]?.id ?? "ai-main", models)}
             apiKeyVersion={apiKeyVersion}
-            requireDiffReview={requireDiffReview}
-            onRequireDiffReviewChange={setRequireDiffReview}
+            requireDiffReview={reviewForPanel(aiPanels[0]?.id ?? "ai-main")}
+            onRequireDiffReviewChange={(v) => setPanelReview(aiPanels[0]?.id ?? "ai-main", v)}
             onOpenDiff={setDiffView}
             stopAfterRejection={stopAfterRejection}
             skills={skills}
@@ -1263,8 +1274,8 @@ function App() {
                 }}
                 reloadFilesystemSkills={reloadFilesystemSkills}
                 apiKeyVersion={apiKeyVersion}
-                requireDiffReview={requireDiffReview}
-                onRequireDiffReviewChange={setRequireDiffReview}
+                requireDiffReview={reviewForPanel(aiPanels[0]?.id ?? "ai-main")}
+                onRequireDiffReviewChange={(v) => setPanelReview(aiPanels[0]?.id ?? "ai-main", v)}
                 onOpenDiff={setDiffView}
                 stopAfterRejection={stopAfterRejection}
                 aiModel={aiModel}
@@ -1554,8 +1565,8 @@ function App() {
                         availableModels={panelModels[panel.id] ?? [panel.model ?? aiModel]}
                         onAvailableModelsChange={(models) => updatePanelModels(panel.id, models)}
                         apiKeyVersion={apiKeyVersion}
-                        requireDiffReview={requireDiffReview}
-                        onRequireDiffReviewChange={setRequireDiffReview}
+                        requireDiffReview={reviewForPanel(panel.id)}
+                        onRequireDiffReviewChange={(v) => setPanelReview(panel.id, v)}
                         onOpenDiff={setDiffView}
                         stopAfterRejection={stopAfterRejection}
                         skills={skills}

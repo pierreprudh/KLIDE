@@ -967,11 +967,20 @@ mod tests {
     fn custom_env_var_name_slugifies_the_id() {
         // The env-var name is a user-facing contract — they type it to
         // supply a token without the keychain — so pin the mapping.
-        assert_eq!(custom_env_var_name("custom:ontraak-prod"), "KLIDE_TOKEN_ONTRAAK_PROD");
-        assert_eq!(custom_env_var_name("custom:my.gateway 2"), "KLIDE_TOKEN_MY_GATEWAY_2");
+        assert_eq!(
+            custom_env_var_name("custom:ontraak-prod"),
+            "KLIDE_TOKEN_ONTRAAK_PROD"
+        );
+        assert_eq!(
+            custom_env_var_name("custom:my.gateway 2"),
+            "KLIDE_TOKEN_MY_GATEWAY_2"
+        );
         // No `custom:` prefix is tolerated; trailing separators don't dangle.
         assert_eq!(custom_env_var_name("plain"), "KLIDE_TOKEN_PLAIN");
-        assert_eq!(custom_env_var_name("custom:trailing-"), "KLIDE_TOKEN_TRAILING");
+        assert_eq!(
+            custom_env_var_name("custom:trailing-"),
+            "KLIDE_TOKEN_TRAILING"
+        );
     }
 
     #[test]

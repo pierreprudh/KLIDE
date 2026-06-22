@@ -1209,26 +1209,54 @@ fn list_dir(ws: &Workspace, path: &str) -> ToolResult {
         Ok(e) => e,
         Err(e) => return err(format!("Unable to list directory: {e}")),
     };
-    let mut rows = Vec::new();
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    let mut omitted = 0usize;
     for entry in entries.flatten().take(MAX_LIST_ENTRIES) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if ignored_dir(&name) || name.starts_with('.') {
+            omitted += 1;
+            continue;
+        }
         let file_type = entry.file_type().ok();
         let is_dir = file_type.as_ref().is_some_and(|t| t.is_dir());
-        rows.push(format!(
-            "{}{}",
-            if is_dir { "[dir] " } else { "      " },
-            entry.file_name().to_string_lossy()
+        if is_dir {
+            dirs.push(name);
+        } else {
+            files.push(name);
+        }
+    }
+    dirs.sort();
+    files.sort();
+    let mut out = Vec::new();
+    out.push(format!("Direct entries in {}:", ws.display(&full)));
+    out.push(format!(
+        "Folders:\n{}",
+        if dirs.is_empty() {
+            "(none)".to_string()
+        } else {
+            dirs.join("\n")
+        }
+    ));
+    out.push(format!(
+        "Files:\n{}",
+        if files.is_empty() {
+            "(none)".to_string()
+        } else {
+            files.join("\n")
+        }
+    ));
+    if omitted > 0 {
+        out.push(format!(
+            "Omitted {omitted} hidden/internal entr{}.",
+            if omitted == 1 { "y" } else { "ies" }
         ));
     }
-    rows.sort();
-    ok(format!(
-        "Entries in {}:\n{}",
-        ws.display(&full),
-        if rows.is_empty() {
-            "(empty)".to_string()
-        } else {
-            rows.join("\n")
-        }
-    ))
+    ok(if dirs.is_empty() && files.is_empty() && omitted == 0 {
+        format!("Direct entries in {}:\n(empty)", ws.display(&full))
+    } else {
+        out.join("\n\n")
+    })
 }
 
 fn ignored_dir(name: &str) -> bool {
@@ -2239,6 +2267,36 @@ mod tests {
         let input = serde_json::json!({ "path": "  src/main.rs  ", "blank": "   " });
         assert_eq!(trimmed_arg(&input, "path").as_deref(), Some("src/main.rs"));
         assert_eq!(trimmed_arg(&input, "blank"), None);
+    }
+
+    #[test]
+    fn list_dir_reports_direct_visible_entries_only() {
+        let dir = std::env::temp_dir().join(format!("klide-list-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".cache")).unwrap();
+        std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+        std::fs::write(dir.join("README.md"), "hi").unwrap();
+        std::fs::write(dir.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(dir.join("src").join("nested.rs"), "").unwrap();
+
+        let ws = Workspace::new(dir.to_str().unwrap()).unwrap();
+        let out = list_dir(&ws, ".");
+        assert!(out.ok);
+        assert!(out.content.contains("Direct entries in .:"));
+        assert!(
+            out.content.contains("Folders:\ndocs\nsrc"),
+            "{}",
+            out.content
+        );
+        assert!(out.content.contains("Files:\nREADME.md"), "{}", out.content);
+        assert!(out.content.contains("Omitted 4 hidden/internal entries."));
+        assert!(!out.content.contains(".git"));
+        assert!(!out.content.contains(".cache"));
+        assert!(!out.content.contains("node_modules"));
+        assert!(!out.content.contains("nested.rs"));
     }
 
     // Path-containment tests live with the Workspace module (src/workspace.rs).
