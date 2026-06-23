@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Z } from "../zLayers";
 
 // Worktrees — the fleet's review/merge surface. Lists the repo's git
 // worktrees and lets you open one in a pinned AI panel, merge its branch back
@@ -108,7 +109,7 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 5000,
+        zIndex: Z.modal,
         display: "grid",
         placeItems: "center",
         background: "rgba(0,0,0,0.30)",

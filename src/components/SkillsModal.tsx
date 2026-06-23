@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
+import { Z } from "../zLayers";
 import { invoke } from "@tauri-apps/api/core";
 import {
   type Skill,
@@ -401,7 +402,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
       onClick={onClose}
       className="skills-tab-in"
       style={{
-        position: "fixed", inset: 0, zIndex: 5000,
+        position: "fixed", inset: 0, zIndex: Z.modal,
         display: "grid", placeItems: "center",
         background: "rgba(0,0,0,0.30)",
         backdropFilter: "blur(3px)",

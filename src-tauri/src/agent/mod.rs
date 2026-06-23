@@ -629,6 +629,466 @@ where
     Ok(PauseOutcome::Resolved(reply))
 }
 
+/// Run a closure against one run's handle, holding the supervisor lock only for
+/// the closure body. The one place the "lock the supervisor map, find this run"
+/// ceremony lives — every per-run set the loop touches (approved / rejected
+/// commands and edits) goes through here.
+///
+/// Returns `None` when the supervisor lock is unavailable or the run handle is
+/// already gone. Both are best-effort cases: the sets it guards are
+/// re-ask-avoidance conveniences, so degrading to `None` (and thus re-prompting
+/// the user) is a safer failure mode than erroring the whole run.
+fn with_run_handle<R>(
+    app: &tauri::AppHandle,
+    id: &str,
+    f: impl FnOnce(&AgentRunHandle) -> R,
+) -> Option<R> {
+    let state = app.state::<AgentSupervisorState>();
+    let runs = state.runs.lock().ok()?;
+    runs.get(id).map(f)
+}
+
+/// The slice of run-loop state a per-tool handler needs to execute one tool
+/// call: the app handle (run state + pause channels), the run id, the start
+/// request (workspace root, allowlists, timeouts, review mode), the cancel
+/// token, and the runs dir (write checkpoints). Bundled so each handler takes
+/// one context rather than six positional args. All borrows — cheap to build
+/// once per call.
+struct ToolCtx<'a> {
+    app: &'a tauri::AppHandle,
+    id: &'a str,
+    request: &'a StartRunRequest,
+    cancel: &'a CancellationToken,
+    runs_dir: &'a std::path::Path,
+}
+
+/// What a per-tool handler hands back to the loop. `Produced` carries the
+/// result the loop will emit + append uniformly; `Cancelled` means the user
+/// cancelled during a pause, so the loop settles the run and returns — the
+/// same two-arm shape as `PauseOutcome`, lifted to the whole tool step so the
+/// `finish_cancelled` + early-return stays in the loop, not the handlers.
+enum ToolOutcome {
+    Produced(ToolResult),
+    Cancelled,
+}
+
+/// Pause tool (`userAnswerQuestion`): ask the user a typed question and feed
+/// their verbatim answer back to the model. "(skipped)" is the sentinel the
+/// user can send to decline. Cancelling during the wait bubbles up as
+/// `Cancelled`.
+async fn process_pause_tool<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    emit: &mut E,
+) -> Result<ToolOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let question = call
+        .input
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(empty question)")
+        .to_string();
+    let request_id = format!("q_{}_{}", ctx.id, call.id);
+
+    let answer = match pause_for_user(
+        ctx.app,
+        ctx.id,
+        AgentRunStatus::WaitingForPermission,
+        AgentEvent::UserQuestionRequested {
+            run_id: ctx.id.to_string(),
+            request_id: request_id.clone(),
+            question: question.clone(),
+            ts: now_ms(),
+        },
+        "(skipped)",
+        ctx.cancel,
+        emit,
+        |handle, tx| {
+            *handle.pending_question.lock().unwrap() = Some(tx);
+        },
+    )
+    .await?
+    {
+        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
+        PauseOutcome::Resolved(answer) => answer,
+    };
+
+    emit(AgentEvent::UserQuestionResolved {
+        run_id: ctx.id.to_string(),
+        request_id,
+        answer: answer.clone(),
+        ts: now_ms(),
+    })?;
+
+    Ok(ToolOutcome::Produced(ToolResult {
+        ok: true,
+        content: if answer == "(skipped)" {
+            "[user skipped this question]".to_string()
+        } else {
+            answer
+        },
+        metadata: None,
+    }))
+}
+
+/// Command tool (`run_command` and dynamic command-capability tools): run a
+/// shell command, but only after the user approves it through the permission
+/// gate. Approvals/rejections are remembered per-run (and project-scoped ones
+/// persist to the on-disk allowlist) so an identical command doesn't re-prompt.
+/// Cancelling during the approval wait bubbles up as `Cancelled`.
+async fn process_command_tool<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    emit: &mut E,
+) -> Result<ToolOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let root_value = match ctx.request.workspace_root.as_deref() {
+        Some(root) => root,
+        None => return Ok(ToolOutcome::Produced(no_workspace_result())),
+    };
+
+    let invocation = if call.name == "run_command" {
+        let command = call
+            .input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if command.is_empty() {
+            Err(ToolResult {
+                ok: false,
+                content: "run_command requires a non-empty command.".to_string(),
+                metadata: None,
+            })
+        } else {
+            // Default 180s; configurable for long builds. Clamped so a bad
+            // setting can't disable the runaway guard.
+            let timeout_secs = ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+            Ok((
+                "run_command".to_string(),
+                command.clone(),
+                root_value.to_string(),
+                timeout_secs,
+                format!("$ {command}"),
+                "The agent wants to run a shell command in the workspace.".to_string(),
+            ))
+        }
+    } else {
+        match dynamic_tool_command(&call.name, &call.input, root_value) {
+            Some(Ok(invocation)) => Ok((
+                invocation.tool_name,
+                invocation.command,
+                invocation.cwd,
+                invocation.timeout_secs,
+                invocation.summary,
+                invocation.reason,
+            )),
+            Some(Err(result)) => Err(result),
+            None => Err(ToolResult {
+                ok: false,
+                content: format!("Unknown command-capability tool: {}", call.name),
+                metadata: None,
+            }),
+        }
+    };
+
+    let (permission_tool_name, command, cwd, timeout_secs, permission_summary, reason) =
+        match invocation {
+            Err(result) => return Ok(ToolOutcome::Produced(result)),
+            Ok(inv) => inv,
+        };
+
+    let approval_key = if cwd == root_value {
+        command.clone()
+    } else {
+        format!("{cwd} :: {command}")
+    };
+    // Skip the prompt if this exact command/cwd was already approved for the
+    // run, or is on the project allowlist passed at start.
+    let (run_ok, pre_rejected) = with_run_handle(ctx.app, ctx.id, |h| {
+        (
+            h.approved_commands.lock().unwrap().contains(&approval_key),
+            h.rejected_commands.lock().unwrap().contains(&approval_key),
+        )
+    })
+    .unwrap_or((false, false));
+    let pre_approved = run_ok
+        || ctx
+            .request
+            .command_allowlist
+            .iter()
+            .any(|c| c == &command || c == &approval_key);
+
+    if pre_approved {
+        return Ok(ToolOutcome::Produced(
+            run_command_capture_in(root_value, &cwd, &command, timeout_secs).await,
+        ));
+    }
+    if pre_rejected {
+        // The user already rejected this exact command this run. Don't
+        // re-prompt — tell the model so it changes course.
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: "You already proposed this exact command and the user rejected it. \
+Do not run it again — take a different approach or ask the user what they'd prefer."
+                .to_string(),
+            metadata: None,
+        }));
+    }
+
+    let request_id = format!("perm_{}_{}", ctx.id, call.id);
+    let perm = serde_json::json!({
+        "id": request_id,
+        "runId": ctx.id,
+        "toolCallId": call.id,
+        "toolName": permission_tool_name,
+        "input": { "command": command, "cwd": cwd },
+        "summary": permission_summary,
+        "reason": reason,
+        "options": [
+            { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
+            { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
+            { "optionId": "allow_project", "label": "Approve for this project", "behavior": "allow", "scope": "project" },
+            { "optionId": "deny", "label": "Reject", "behavior": "deny" }
+        ]
+    });
+
+    let decision = match pause_for_user(
+        ctx.app,
+        ctx.id,
+        AgentRunStatus::WaitingForPermission,
+        AgentEvent::PermissionRequested {
+            run_id: ctx.id.to_string(),
+            request: perm,
+            ts: now_ms(),
+        },
+        "{\"behavior\":\"deny\"}",
+        ctx.cancel,
+        emit,
+        |handle, tx| {
+            *handle.pending_permission.lock().unwrap() = Some(tx);
+        },
+    )
+    .await?
+    {
+        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
+        PauseOutcome::Resolved(decision) => decision,
+    };
+
+    let decision_val: serde_json::Value =
+        serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
+    let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
+    let scope = decision_val
+        .get("scope")
+        .and_then(|s| s.as_str())
+        .unwrap_or("once");
+
+    emit(AgentEvent::PermissionResolved {
+        run_id: ctx.id.to_string(),
+        request_id: request_id.clone(),
+        decision: decision_val.clone(),
+        ts: now_ms(),
+    })?;
+
+    // Remember run/project-scoped approvals so an identical command later in
+    // this run runs without re-asking.
+    if allowed && (scope == "run" || scope == "project") {
+        with_run_handle(ctx.app, ctx.id, |h| {
+            h.approved_commands
+                .lock()
+                .unwrap()
+                .insert(approval_key.clone());
+        });
+    }
+    // Project scope also persists to the on-disk project allowlist so future
+    // runs skip the prompt entirely.
+    if allowed && scope == "project" {
+        if let Err(err) = command_allowlist::add(root_value, &command) {
+            eprintln!("failed to persist project command allowlist: {err}");
+        }
+    }
+
+    let result = if allowed {
+        run_command_capture_in(root_value, &cwd, &command, timeout_secs).await
+    } else {
+        // Remember the rejection so re-proposing the same command is
+        // auto-declined instead of re-asked.
+        with_run_handle(ctx.app, ctx.id, |h| {
+            h.rejected_commands
+                .lock()
+                .unwrap()
+                .insert(approval_key.clone());
+        });
+        ToolResult {
+            ok: false,
+            content: "Rejected by user: command not run. Do not propose this exact \
+command again — take a different approach or ask the user what they'd prefer."
+                .to_string(),
+            metadata: None,
+        }
+    };
+    Ok(ToolOutcome::Produced(result))
+}
+
+/// Write tool (`write_file`, `create_file`): preview the edit as a diff, pass it
+/// through the diff-review gate (or auto-apply when review is off), and on
+/// "apply" write the file, save a checkpoint for rollback, and run the
+/// optional test-after-edit command. A byte-identical re-proposal of an
+/// already-rejected change is auto-declined. Cancelling during review bubbles
+/// up as `Cancelled`.
+async fn process_write_tool<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    emit: &mut E,
+) -> Result<ToolOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let root = match ctx.request.workspace_root.as_deref() {
+        Some(root) => root,
+        None => return Ok(ToolOutcome::Produced(no_workspace_result())),
+    };
+
+    let proposal = match execute_write_tool_preview(root, call, ctx.id) {
+        Ok(p) => p,
+        Err(error_result) => return Ok(ToolOutcome::Produced(error_result)),
+    };
+
+    // Identical to a change the user already rejected this run? (Same path +
+    // same resulting content.) Auto-decline without a second diff prompt so one
+    // "Reject" sticks; tell the model to change course rather than re-surfacing
+    // the same diff.
+    let edit_key = format!("{}::{}", proposal.path, proposal.new_hash);
+    let already_rejected =
+        with_run_handle(ctx.app, ctx.id, |h| {
+            h.rejected_edits.lock().unwrap().contains(&edit_key)
+        })
+        .unwrap_or(false);
+    if already_rejected {
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: format!(
+                "You already proposed this exact change to {} and the user rejected it. \
+Do not propose it again — take a different approach or ask the user what they'd prefer.",
+                proposal.path
+            ),
+            metadata: None,
+        }));
+    }
+
+    // Auto-accept mode (require_diff_review == Some(false)): apply without
+    // pausing. Still emit the proposed diff so the edit stays visible in the
+    // conversation, and the checkpoint written below keeps it revertable —
+    // which is what makes auto-accept safe. Otherwise pause for diff review.
+    let decision = if ctx.request.require_diff_review == Some(false) {
+        emit(AgentEvent::DiffProposed {
+            run_id: ctx.id.to_string(),
+            proposal: proposal.clone(),
+            ts: now_ms(),
+        })?;
+        "apply".to_string()
+    } else {
+        match pause_for_user(
+            ctx.app,
+            ctx.id,
+            AgentRunStatus::WaitingForDiff,
+            AgentEvent::DiffProposed {
+                run_id: ctx.id.to_string(),
+                proposal: proposal.clone(),
+                ts: now_ms(),
+            },
+            "reject",
+            ctx.cancel,
+            emit,
+            |handle, tx| {
+                *handle.pending_diff.lock().unwrap() = Some(tx);
+            },
+        )
+        .await?
+        {
+            PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
+            PauseOutcome::Resolved(decision) => decision,
+        }
+    };
+
+    let decision_obj = serde_json::json!({ "behavior": decision });
+    emit(AgentEvent::DiffResolved {
+        run_id: ctx.id.to_string(),
+        proposal_id: proposal.id.clone(),
+        decision: decision_obj.clone(),
+        ts: now_ms(),
+    })?;
+
+    if decision == "apply" {
+        match apply_write(root, &proposal) {
+            Ok(result) => {
+                let mut tool_result = result;
+                // Save checkpoint for rollback. Serialize through
+                // CheckpointEntry so the saved shape always matches what
+                // agent_list_checkpoints deserializes.
+                let checkpoint_dir = ctx.runs_dir.join(ctx.id).join("checkpoints");
+                let _ = std::fs::create_dir_all(&checkpoint_dir);
+                let checkpoint_file =
+                    checkpoint_dir.join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
+                let entry = CheckpointEntry {
+                    tool_call_id: proposal.tool_call_id.clone(),
+                    path: proposal.path.clone(),
+                    old_content: proposal.old_content.clone(),
+                    new_content: proposal.new_content.clone(),
+                    is_create: proposal.is_create,
+                    workspace_root: root.to_string(),
+                    ts: now_ms(),
+                };
+                if let Ok(json) = serde_json::to_string(&entry) {
+                    let _ = std::fs::write(&checkpoint_file, json);
+                }
+                let timeout_secs = ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                run_test_after_edit(
+                    root,
+                    ctx.request.test_after_edit_command.as_deref(),
+                    timeout_secs,
+                    &mut tool_result,
+                )
+                .await;
+                emit(AgentEvent::FileChanged {
+                    run_id: ctx.id.to_string(),
+                    path: proposal.path.clone(),
+                    old_hash: proposal.old_hash.clone(),
+                    new_hash: proposal.new_hash.clone(),
+                    ts: now_ms(),
+                })?;
+                Ok(ToolOutcome::Produced(tool_result))
+            }
+            Err(result) => Ok(ToolOutcome::Produced(result)),
+        }
+    } else {
+        // Remember this rejection so a byte-identical re-proposal is
+        // auto-declined above instead of prompting again.
+        with_run_handle(ctx.app, ctx.id, |h| {
+            h.rejected_edits.lock().unwrap().insert(edit_key.clone());
+        });
+        Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: format!(
+                "Rejected by user: {} was not {}. Do not propose this exact change again — \
+take a different approach or ask the user what they'd prefer.",
+                proposal.path,
+                if proposal.is_create {
+                    "created"
+                } else {
+                    "changed"
+                }
+            ),
+            metadata: None,
+        }))
+    }
+}
+
 #[tauri::command]
 pub async fn agent_start_run(
     app: tauri::AppHandle,
@@ -655,11 +1115,32 @@ pub async fn agent_start_run(
         .unwrap_or_else(run_id);
     let cancel = CancellationToken::new();
 
-    state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?
-        .insert(
+    // One live run per conversation id. The handle stays in the map with a
+    // terminal status after a run finishes, so reusing the id for a NEW run is
+    // fine — but starting one while the previous is still active would spawn a
+    // second loop appending to the same transcript (interleaved/duplicated seq
+    // numbers, the "dropped after compacting" corruption). Check + insert under
+    // one lock so the guard is atomic.
+    {
+        let mut runs = state
+            .runs
+            .lock()
+            .map_err(|_| "Agent state is unavailable".to_string())?;
+        if let Some(existing) = runs.get(&id) {
+            if matches!(
+                existing.status,
+                AgentRunStatus::Queued
+                    | AgentRunStatus::Running
+                    | AgentRunStatus::WaitingForPermission
+                    | AgentRunStatus::WaitingForDiff
+                    | AgentRunStatus::Paused
+            ) {
+                return Err(format!(
+                    "A run is already active for this conversation ({id}). Wait for it to finish or stop it first."
+                ));
+            }
+        }
+        runs.insert(
             id.clone(),
             AgentRunHandle {
                 status: AgentRunStatus::Running,
@@ -672,6 +1153,7 @@ pub async fn agent_start_run(
                 rejected_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
             },
         );
+    }
 
     // Detach the loop so this command returns the run id immediately; the UI
     // follows progress through the event channel and can abort via the token.
@@ -1174,7 +1656,7 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
 
-            let mut tool_result: ToolResult;
+            let tool_result: ToolResult;
 
             if let Some(kind) = kind {
                 if !tool_allowed_in_mode(&request.mode, kind) {
@@ -1190,511 +1672,35 @@ async fn run_agent_loop(
                 }
             }
 
-            if matches!(kind, Some(ToolKind::Pause)) {
-                // Pause for a typed Q&A. The question is read from the tool
-                // input; the answer comes back through `agent_resolve_question`,
-                // which sends via the oneshot we stash in `pending_question`.
-                // Skip = a special sentinel the model can use to bail out
-                // gracefully when the user has nothing to say. We keep the
-                // raw answer text in the result so the model sees verbatim
-                // what the user wrote, including blank lines.
-                let question = call
-                    .input
-                    .get("question")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("(empty question)")
-                    .to_string();
-                let request_id = format!("q_{}_{}", id, call.id);
+            let ctx = ToolCtx {
+                app: &app,
+                id: id.as_str(),
+                request: &request,
+                cancel: &cancel,
+                runs_dir: runs_dir.as_path(),
+            };
 
-                let answer = match pause_for_user(
-                    &app,
-                    &id,
-                    AgentRunStatus::WaitingForPermission,
-                    AgentEvent::UserQuestionRequested {
-                        run_id: id.clone(),
-                        request_id: request_id.clone(),
-                        question: question.clone(),
-                        ts: now_ms(),
-                    },
-                    "(skipped)",
-                    &cancel,
-                    &mut emit,
-                    |handle, tx| {
-                        *handle.pending_question.lock().unwrap() = Some(tx);
-                    },
-                )
-                .await?
-                {
-                    PauseOutcome::Cancelled => {
-                        finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
-                        return Ok(());
-                    }
-                    PauseOutcome::Resolved(answer) => answer,
-                };
-
-                emit(AgentEvent::UserQuestionResolved {
-                    run_id: id.clone(),
-                    request_id: request_id.clone(),
-                    answer: answer.clone(),
-                    ts: now_ms(),
-                })?;
-
-                tool_result = ToolResult {
-                    ok: true,
-                    content: if answer == "(skipped)" {
-                        "[user skipped this question]".to_string()
-                    } else {
-                        answer
-                    },
-                    metadata: None,
-                };
-            } else if matches!(kind, Some(ToolKind::Command)) {
-                // Run a shell command — but only after the user approves it,
-                // the same permission gate diff review is for edits. Emit a
-                // permission request, stash a oneshot, wait for the decision.
-                let root = request.workspace_root.clone();
-                if root.is_none() {
-                    tool_result = no_workspace_result();
-                } else {
-                    let root_value = root.as_deref().unwrap_or(".");
-                    let invocation = if call.name == "run_command" {
-                        let command = call
-                            .input
-                            .get("command")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .trim()
-                            .to_string();
-                        if command.is_empty() {
-                            Err(ToolResult {
-                                ok: false,
-                                content: "run_command requires a non-empty command.".to_string(),
-                                metadata: None,
-                            })
-                        } else {
-                            // Default 180s; configurable for long builds. Clamped
-                            // so a bad setting can't disable the runaway guard.
-                            let timeout_secs =
-                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
-                            Ok((
-                                "run_command".to_string(),
-                                command.clone(),
-                                root_value.to_string(),
-                                timeout_secs,
-                                format!("$ {command}"),
-                                "The agent wants to run a shell command in the workspace."
-                                    .to_string(),
-                            ))
-                        }
-                    } else {
-                        match dynamic_tool_command(&call.name, &call.input, root_value) {
-                            Some(Ok(invocation)) => Ok((
-                                invocation.tool_name,
-                                invocation.command,
-                                invocation.cwd,
-                                invocation.timeout_secs,
-                                invocation.summary,
-                                invocation.reason,
-                            )),
-                            Some(Err(result)) => Err(result),
-                            None => Err(ToolResult {
-                                ok: false,
-                                content: format!("Unknown command-capability tool: {}", call.name),
-                                metadata: None,
-                            }),
-                        }
-                    };
-
-                    match invocation {
-                        Err(result) => {
-                            tool_result = result;
-                        }
-                        Ok((
-                            permission_tool_name,
-                            command,
-                            cwd,
-                            timeout_secs,
-                            permission_summary,
-                            reason,
-                        )) => {
-                            let approval_key = if cwd == root_value {
-                                command.clone()
-                            } else {
-                                format!("{cwd} :: {command}")
-                            };
-                            // Skip the prompt if this exact command/cwd was
-                            // already approved for the run, or is on the project
-                            // allowlist passed at start.
-                            let (pre_approved, pre_rejected) = {
-                                let state = app.state::<AgentSupervisorState>();
-                                let runs = state
-                                    .runs
-                                    .lock()
-                                    .map_err(|_| "Agent state unavailable".to_string())?;
-                                let handle = runs.get(&id);
-                                let run_ok = handle
-                                    .map(|h| {
-                                        h.approved_commands.lock().unwrap().contains(&approval_key)
-                                    })
-                                    .unwrap_or(false);
-                                let rejected = handle
-                                    .map(|h| {
-                                        h.rejected_commands.lock().unwrap().contains(&approval_key)
-                                    })
-                                    .unwrap_or(false);
-                                (
-                                    run_ok
-                                        || request
-                                            .command_allowlist
-                                            .iter()
-                                            .any(|c| c == &command || c == &approval_key),
-                                    rejected,
-                                )
-                            };
-
-                            if pre_approved {
-                                tool_result = run_command_capture_in(
-                                    root_value,
-                                    &cwd,
-                                    &command,
-                                    timeout_secs,
-                                )
-                                .await;
-                            } else if pre_rejected {
-                                // The user already rejected this exact command this run.
-                                // Don't re-prompt — tell the model so it changes course.
-                                tool_result = ToolResult {
-                                    ok: false,
-                                    content: "You already proposed this exact command and the user rejected it. \
-Do not run it again — take a different approach or ask the user what they'd prefer."
-                                        .to_string(),
-                                    metadata: None,
-                                };
-                            } else {
-                                let request_id = format!("perm_{}_{}", id, call.id);
-                                let perm = serde_json::json!({
-                                    "id": request_id,
-                                    "runId": id,
-                                    "toolCallId": call.id,
-                                    "toolName": permission_tool_name,
-                                    "input": { "command": command, "cwd": cwd },
-                                    "summary": permission_summary,
-                                    "reason": reason,
-                                    "options": [
-                                        { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
-                                        { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
-                                        { "optionId": "allow_project", "label": "Approve for this project", "behavior": "allow", "scope": "project" },
-                                        { "optionId": "deny", "label": "Reject", "behavior": "deny" }
-                                    ]
-                                });
-
-                                let decision = match pause_for_user(
-                                    &app,
-                                    &id,
-                                    AgentRunStatus::WaitingForPermission,
-                                    AgentEvent::PermissionRequested {
-                                        run_id: id.clone(),
-                                        request: perm,
-                                        ts: now_ms(),
-                                    },
-                                    "{\"behavior\":\"deny\"}",
-                                    &cancel,
-                                    &mut emit,
-                                    |handle, tx| {
-                                        *handle.pending_permission.lock().unwrap() = Some(tx);
-                                    },
-                                )
-                                .await?
-                                {
-                                    PauseOutcome::Cancelled => {
-                                        finish_cancelled(
-                                            &mut emit,
-                                            &app,
-                                            &runs_dir,
-                                            &id,
-                                            &summary,
-                                            message_count,
-                                        )?;
-                                        return Ok(());
-                                    }
-                                    PauseOutcome::Resolved(decision) => decision,
-                                };
-
-                                let decision_val: serde_json::Value =
-                                    serde_json::from_str(&decision)
-                                        .unwrap_or(serde_json::json!({ "behavior": "deny" }));
-                                let allowed = decision_val.get("behavior").and_then(|b| b.as_str())
-                                    == Some("allow");
-                                let scope = decision_val
-                                    .get("scope")
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("once");
-
-                                emit(AgentEvent::PermissionResolved {
-                                    run_id: id.clone(),
-                                    request_id: request_id.clone(),
-                                    decision: decision_val.clone(),
-                                    ts: now_ms(),
-                                })?;
-
-                                // Remember run/project-scoped approvals so an identical
-                                // command later in this run runs without re-asking.
-                                if allowed && (scope == "run" || scope == "project") {
-                                    let state = app.state::<AgentSupervisorState>();
-                                    let runs = state
-                                        .runs
-                                        .lock()
-                                        .map_err(|_| "Agent state unavailable".to_string())?;
-                                    if let Some(handle) = runs.get(&id) {
-                                        handle
-                                            .approved_commands
-                                            .lock()
-                                            .unwrap()
-                                            .insert(approval_key.clone());
-                                    }
-                                }
-                                // Project scope also persists to the on-disk project
-                                // allowlist so future runs skip the prompt entirely.
-                                if allowed && scope == "project" {
-                                    if let Err(err) = command_allowlist::add(root_value, &command) {
-                                        eprintln!(
-                                            "failed to persist project command allowlist: {err}"
-                                        );
-                                    }
-                                }
-
-                                tool_result = if allowed {
-                                    run_command_capture_in(root_value, &cwd, &command, timeout_secs)
-                                        .await
-                                } else {
-                                    // Remember the rejection so re-proposing the same
-                                    // command is auto-declined instead of re-asked.
-                                    let state = app.state::<AgentSupervisorState>();
-                                    if let Ok(runs) = state.runs.lock() {
-                                        if let Some(handle) = runs.get(&id) {
-                                            handle
-                                                .rejected_commands
-                                                .lock()
-                                                .unwrap()
-                                                .insert(approval_key.clone());
-                                        }
-                                    }
-                                    ToolResult {
-                                        ok: false,
-                                        content: "Rejected by user: command not run. Do not propose this exact \
-command again — take a different approach or ask the user what they'd prefer."
-                                            .to_string(),
-                                        metadata: None,
-                                    }
-                                };
-                            }
-                        }
-                    }
-                }
-            } else if matches!(kind, Some(ToolKind::Write)) {
-                let root = match request.workspace_root.as_deref() {
-                    Some(root) => root,
-                    None => {
-                        tool_result = no_workspace_result();
-                        emit(AgentEvent::ToolCallFinished {
-                            run_id: id.clone(),
-                            tool_call_id: call.id.clone(),
-                            result: tool_result.clone(),
-                            ts: now_ms(),
-                        })?;
-                        messages.push(tool_provider_message(&call, &tool_result));
-                        continue;
-                    }
-                };
-
-                let proposal = match execute_write_tool_preview(root, &call, &id) {
-                    Ok(p) => p,
-                    Err(error_result) => {
-                        tool_result = error_result;
-                        emit(AgentEvent::ToolCallFinished {
-                            run_id: id.clone(),
-                            tool_call_id: call.id.clone(),
-                            result: tool_result.clone(),
-                            ts: now_ms(),
-                        })?;
-                        messages.push(tool_provider_message(&call, &tool_result));
-                        continue;
-                    }
-                };
-
-                // Identical to a change the user already rejected this run?
-                // (Same path + same resulting content.) Auto-decline without a
-                // second diff prompt so one "Reject" sticks; tell the model to
-                // change course rather than re-surfacing the same diff.
-                let edit_key = format!("{}::{}", proposal.path, proposal.new_hash);
-                let already_rejected = {
-                    let state = app.state::<AgentSupervisorState>();
-                    state
-                        .runs
-                        .lock()
-                        .ok()
-                        .and_then(|runs| {
-                            runs.get(&id)
-                                .map(|h| h.rejected_edits.lock().unwrap().contains(&edit_key))
-                        })
-                        .unwrap_or(false)
-                };
-                if already_rejected {
-                    tool_result = ToolResult {
-                        ok: false,
-                        content: format!(
-                            "You already proposed this exact change to {} and the user rejected it. \
-Do not propose it again — take a different approach or ask the user what they'd prefer.",
-                            proposal.path
-                        ),
-                        metadata: None,
-                    };
-                    emit(AgentEvent::ToolCallFinished {
-                        run_id: id.clone(),
-                        tool_call_id: call.id.clone(),
-                        result: tool_result.clone(),
-                        ts: now_ms(),
-                    })?;
-                    messages.push(tool_provider_message(&call, &tool_result));
-                    continue;
-                }
-
-                // Auto-accept mode (require_diff_review == Some(false)): apply
-                // without pausing. Still emit the proposed diff so the edit stays
-                // visible in the conversation, and the checkpoint written below
-                // keeps it revertable — which is what makes auto-accept safe.
-                // Otherwise pause for diff review (the default).
-                let decision = if request.require_diff_review == Some(false) {
-                    emit(AgentEvent::DiffProposed {
-                        run_id: id.clone(),
-                        proposal: proposal.clone(),
-                        ts: now_ms(),
-                    })?;
-                    "apply".to_string()
-                } else {
-                    match pause_for_user(
-                        &app,
-                        &id,
-                        AgentRunStatus::WaitingForDiff,
-                        AgentEvent::DiffProposed {
-                            run_id: id.clone(),
-                            proposal: proposal.clone(),
-                            ts: now_ms(),
-                        },
-                        "reject",
-                        &cancel,
-                        &mut emit,
-                        |handle, tx| {
-                            *handle.pending_diff.lock().unwrap() = Some(tx);
-                        },
-                    )
-                    .await?
-                    {
-                        PauseOutcome::Cancelled => {
-                            finish_cancelled(
-                                &mut emit,
-                                &app,
-                                &runs_dir,
-                                &id,
-                                &summary,
-                                message_count,
-                            )?;
-                            return Ok(());
-                        }
-                        PauseOutcome::Resolved(decision) => decision,
-                    }
-                };
-
-                let decision_obj = serde_json::json!({ "behavior": decision });
-                emit(AgentEvent::DiffResolved {
-                    run_id: id.clone(),
-                    proposal_id: proposal.id.clone(),
-                    decision: decision_obj.clone(),
-                    ts: now_ms(),
-                })?;
-
-                if decision == "apply" {
-                    match apply_write(root, &proposal) {
-                        Ok(result) => {
-                            // Save checkpoint for rollback. Serialize through
-                            // CheckpointEntry so the saved shape always matches
-                            // what agent_list_checkpoints deserializes.
-                            let checkpoint_dir = runs_dir.join(&id).join("checkpoints");
-                            let _ = std::fs::create_dir_all(&checkpoint_dir);
-                            let checkpoint_file = checkpoint_dir
-                                .join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
-                            let entry = CheckpointEntry {
-                                tool_call_id: proposal.tool_call_id.clone(),
-                                path: proposal.path.clone(),
-                                old_content: proposal.old_content.clone(),
-                                new_content: proposal.new_content.clone(),
-                                is_create: proposal.is_create,
-                                workspace_root: root.to_string(),
-                                ts: now_ms(),
-                            };
-                            if let Ok(json) = serde_json::to_string(&entry) {
-                                let _ = std::fs::write(&checkpoint_file, json);
-                            }
-                            tool_result = result;
-                            let timeout_secs =
-                                request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
-                            run_test_after_edit(
-                                root,
-                                request.test_after_edit_command.as_deref(),
-                                timeout_secs,
-                                &mut tool_result,
-                            )
-                            .await;
-                            emit(AgentEvent::FileChanged {
-                                run_id: id.clone(),
-                                path: proposal.path.clone(),
-                                old_hash: proposal.old_hash.clone(),
-                                new_hash: proposal.new_hash.clone(),
-                                ts: now_ms(),
-                            })?;
-                        }
-                        Err(result) => {
-                            tool_result = result;
-                        }
-                    }
-                } else {
-                    // Remember this rejection so a byte-identical re-proposal is
-                    // auto-declined above instead of prompting again.
-                    let state = app.state::<AgentSupervisorState>();
-                    if let Ok(runs) = state.runs.lock() {
-                        if let Some(handle) = runs.get(&id) {
-                            handle
-                                .rejected_edits
-                                .lock()
-                                .unwrap()
-                                .insert(edit_key.clone());
-                        }
-                    }
-                    tool_result = ToolResult {
-                        ok: false,
-                        content: format!(
-                            "Rejected by user: {} was not {}. Do not propose this exact change again — \
-take a different approach or ask the user what they'd prefer.",
-                            proposal.path,
-                            if proposal.is_create {
-                                "created"
-                            } else {
-                                "changed"
-                            }
-                        ),
-                        metadata: None,
-                    };
-                }
-            } else {
-                tool_result = match request.workspace_root.as_deref() {
-                    // Use the concurrently-computed result when present (cap > 1);
-                    // otherwise execute inline (sequential default, or a write
-                    // tool that slipped the filter — it can't, but be safe).
+            let outcome = match kind {
+                Some(ToolKind::Pause) => process_pause_tool(&ctx, &call, &mut emit).await?,
+                Some(ToolKind::Command) => process_command_tool(&ctx, &call, &mut emit).await?,
+                Some(ToolKind::Write) => process_write_tool(&ctx, &call, &mut emit).await?,
+                // Read-only tools: serve the concurrently-computed result when
+                // present (cap > 1); otherwise execute inline (sequential
+                // default, or a write tool that slipped the filter — it can't,
+                // but be safe).
+                _ => ToolOutcome::Produced(match request.workspace_root.as_deref() {
                     Some(root) => precomputed
                         .remove(&call.id)
                         .unwrap_or_else(|| execute_read_only_tool(root, &call, &id)),
                     None => no_workspace_result(),
-                };
+                }),
+            };
+            match outcome {
+                ToolOutcome::Produced(result) => tool_result = result,
+                ToolOutcome::Cancelled => {
+                    finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                    return Ok(());
+                }
             }
 
             emit(AgentEvent::ToolCallFinished {

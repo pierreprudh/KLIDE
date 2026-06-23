@@ -1,5 +1,6 @@
 import { getThemeMeta, type ThemeId } from "../theme";
 import { LayoutBento } from "./LayoutBento";
+import { Tooltip } from "./Tooltip";
 import type { GridLayout } from "../gridLayouts";
 import type { GitStatus } from "../gitTypes";
 
@@ -177,9 +178,9 @@ export function StatusBar({
         </span>
       )}
       <div style={{ flex: 1 }} />
+      <Tooltip label={autoTheme ? "Cycle theme preference (auto theme is on)" : "Cycle theme"}>
       <button
         onClick={onToggleTheme}
-        title={autoTheme ? "Cycle theme preference (auto theme is on)" : "Cycle theme"}
         aria-label="Toggle theme"
         aria-pressed={themeMeta.isDark}
         className="klide-status-chip-btn"
@@ -196,9 +197,10 @@ export function StatusBar({
         />
         {autoTheme ? "Auto" : "Theme"} · {themeMeta.name}
       </button>
+      </Tooltip>
+      <Tooltip label="Toggle terminal (⌃`)">
       <button
         onClick={onToggleTerminal}
-        title="Toggle terminal (⌃`)"
         aria-label="Toggle terminal"
         aria-pressed={terminalVisible}
         className="klide-status-chip-btn"
@@ -207,6 +209,7 @@ export function StatusBar({
         <TerminalIcon />
         Terminal
       </button>
+      </Tooltip>
       <LayoutBento
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
@@ -216,14 +219,15 @@ export function StatusBar({
         onSetAnchored={onSetAnchored}
         onOpenGrid={onOpenGrid}
       />
+      <Tooltip label="Reset panel layout to default">
       <button
         onClick={onResetLayout}
-        title="Reset panel layout to default"
         aria-label="Reset panel layout"
         className="klide-status-chip-btn"
       >
         Reset
       </button>
+      </Tooltip>
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>UTF-8</span>
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>LF</span>
     </footer>

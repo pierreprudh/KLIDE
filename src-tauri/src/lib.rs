@@ -22,14 +22,9 @@ use pty::{
 };
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
 use std::sync::Mutex;
-use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::Emitter;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command as TokioCommand;
-use tokio::time::timeout;
 
 pub(crate) const OLLAMA_URL: &str = "http://localhost:11434";
 const MLX_DEFAULT_MODEL: &str = "mlx-community/Llama-3.1-8B-Instruct-4bit";
@@ -494,7 +489,7 @@ async fn ai_chat(
     if let Some(spec) = entry.subscription {
         let adapter = delegate::lookup(entry.id)
             .ok_or_else(|| format!("\"{}\" has no delegate adapter", entry.id))?;
-        return subscription_cli_chat(
+        return delegate::run_subscription_chat(
             adapter,
             spec.label,
             model,
@@ -605,144 +600,6 @@ fn text_from_message(message: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-fn prompt_from_messages(messages: &[serde_json::Value]) -> String {
-    let mut out = String::from(
-        "You are running as a subscription CLI backend inside Klide.\n\
-         Answer the user's latest request using the conversation below.\n\
-         Follow the active Klide mode described in the system message. In Goal mode,\n\
-         you may edit files directly in the current workspace; Klide will surface the\n\
-         resulting file and git diffs after you finish. In Chat or Plan mode, do not\n\
-         edit files unless the mode instructions explicitly allow it.\n\n",
-    );
-
-    for message in messages {
-        let role = message
-            .get("role")
-            .and_then(|role| role.as_str())
-            .unwrap_or("message");
-        if role == "tool" {
-            continue;
-        }
-        let content = text_from_message(message);
-        if content.trim().is_empty() {
-            continue;
-        }
-        out.push_str(&format!("[{role}]\n{content}\n\n"));
-    }
-    out
-}
-
-async fn run_cli_with_stdin(
-    mut command: TokioCommand,
-    prompt: String,
-    label: &str,
-    on_chunk: &Channel<StreamChunk>,
-) -> Result<String, String> {
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Unable to start {label}: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .await
-            .map_err(|e| format!("Unable to write prompt to {label}: {e}"))?;
-    }
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("Unable to capture {label} stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("Unable to capture {label} stderr"))?;
-
-    let (status, stdout, stderr) = timeout(Duration::from_secs(180), async {
-        let mut stdout_lines = BufReader::new(stdout).lines();
-        let mut stderr_lines = BufReader::new(stderr).lines();
-        let mut stdout_done = false;
-        let mut stderr_done = false;
-        let mut stdout_text = String::new();
-        let mut stderr_text = String::new();
-
-        while !stdout_done || !stderr_done {
-            tokio::select! {
-                line = stdout_lines.next_line(), if !stdout_done => {
-                    match line.map_err(|e| format!("Unable to read {label} stdout: {e}"))? {
-                        Some(line) => {
-                            stdout_text.push_str(&line);
-                            stdout_text.push('\n');
-                            let _ = on_chunk.send(StreamChunk {
-                                content: format!("{line}\n"),
-                                thinking: String::new(),
-                            });
-                        }
-                        None => stdout_done = true,
-                    }
-                }
-                line = stderr_lines.next_line(), if !stderr_done => {
-                    match line.map_err(|e| format!("Unable to read {label} stderr: {e}"))? {
-                        Some(line) => {
-                            stderr_text.push_str(&line);
-                            stderr_text.push('\n');
-                            let _ = on_chunk.send(StreamChunk {
-                                content: format!("stderr: {line}\n"),
-                                thinking: String::new(),
-                            });
-                        }
-                        None => stderr_done = true,
-                    }
-                }
-            }
-        }
-
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| format!("Unable to read {label} exit status: {e}"))?;
-        Ok::<_, String>((
-            status,
-            stdout_text.trim().to_string(),
-            stderr_text.trim().to_string(),
-        ))
-    })
-    .await
-    .map_err(|_| format!("{label} timed out after 180 seconds"))??;
-
-    if status.success() {
-        Ok(if stdout.is_empty() { stderr } else { stdout })
-    } else if stderr.is_empty() {
-        Err(format!("{label} exited with {status}"))
-    } else {
-        Err(format!("{label} exited with {status}: {stderr}"))
-    }
-}
-
-async fn subscription_cli_chat(
-    adapter: &dyn delegate::Delegate,
-    label: &str,
-    model: String,
-    messages: Vec<serde_json::Value>,
-    workspace_root: Option<String>,
-    on_chunk: &Channel<StreamChunk>,
-) -> Result<AiChatResponse, String> {
-    let prompt = prompt_from_messages(&messages);
-    let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
-    let command = adapter.chat_invocation(&cwd, &model)?;
-    let content = run_cli_with_stdin(command, prompt, label, on_chunk).await?;
-    Ok(AiChatResponse {
-        content,
-        thinking: None,
-        tool_calls: Vec::new(),
-        usage: None,
-        stop_reason: None,
-    })
-}
-
 #[tauri::command]
 fn list_dir(workspace_root: String, path: String) -> Result<Vec<FsEntry>, String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
@@ -774,22 +631,13 @@ fn read_text_file(workspace_root: String, path: String) -> Result<String, String
 #[tauri::command]
 fn path_exists(workspace_root: String, path: String) -> Result<bool, String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
-    if std::path::Path::new(&path).exists() {
-        ws.resolve_abs_read(&path)?;
-        return Ok(true);
-    }
-    let target = ws.resolve_abs_new(&path)?;
-    Ok(target.exists())
+    Ok(ws.resolve_abs_readwrite(&path)?.exists())
 }
 
 #[tauri::command]
 fn write_text_file(workspace_root: String, path: String, content: String) -> Result<(), String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
-    let target = if std::path::Path::new(&path).exists() {
-        ws.resolve_abs_read(&path)?
-    } else {
-        ws.resolve_abs_new(&path)?
-    };
+    let target = ws.resolve_abs_readwrite(&path)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Unable to create folder: {e}"))?;
     }
@@ -926,8 +774,34 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+            use tauri::Manager;
 
             let handle = app.handle();
+
+            // Open at a comfortable fraction of the display the window lands on,
+            // centered — like a native macOS app, rather than a fixed pixel size
+            // that's cramped on a large screen and oversized on a laptop. The
+            // window starts hidden (tauri.conf.json `visible: false`) so the user
+            // never sees it snap from the config size to this one. Panels then
+            // lay out against the real size (the workbench ResizeObserver clamps
+            // every rect to it — see usePanelLayout).
+            if let Some(window) = app.get_webview_window("main") {
+                let monitor = window
+                    .current_monitor()
+                    .ok()
+                    .flatten()
+                    .or_else(|| window.primary_monitor().ok().flatten());
+                if let Some(monitor) = monitor {
+                    let screen = monitor.size().to_logical::<f64>(monitor.scale_factor());
+                    // ~80% wide / ~85% tall leaves room for the menu bar + Dock,
+                    // clamped so it never goes below the min size or absurdly big.
+                    let w = (screen.width * 0.80).clamp(960.0, 1600.0);
+                    let h = (screen.height * 0.85).clamp(640.0, 1040.0);
+                    let _ = window.set_size(tauri::LogicalSize::new(w, h));
+                }
+                let _ = window.center();
+                let _ = window.show();
+            }
 
             let open_folder = MenuItemBuilder::with_id("open-folder", "Open Folder…")
                 .accelerator("CmdOrCtrl+O")
@@ -1065,6 +939,7 @@ pub fn run() {
             models::ai_context_window,
             models::ai_model_supports_tools,
             models::ai_model_supports_reflection,
+            models::ai_count_tokens,
             ai_list_tools,
             search_in_files,
             ai_provider_key_status,

@@ -935,6 +935,42 @@ select.klide-field {
   color: var(--fg-strong);
 }
 
+/* Custom tooltip (src/components/Tooltip.tsx) — replaces native title= popups.
+   Calm aesthetic: elevated surface, hairline border, soft shadow, no arrow.
+   Portaled to <body> at position:fixed, so it's never clipped; opacity starts
+   at 0 until JS measures + places it. */
+.klide-tooltip {
+  /* z-index is set inline from Z.tooltip (src/zLayers.ts) so it stays above
+     popovers/modals/menus — a CSS literal here would drift out of sync. */
+  position: fixed;
+  pointer-events: none;
+  max-width: 280px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  line-height: 1.4;
+  letter-spacing: 0.005em;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  animation: klide-tooltip-in 90ms var(--ease-out);
+}
+@keyframes klide-tooltip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-tooltip {
+    animation: none;
+  }
+}
+
 .chrome-enter {
   animation: chrome-enter var(--motion-slow) var(--ease-soft);
 }
@@ -980,6 +1016,18 @@ select.klide-field {
     opacity: 1;
     transform: none;
   }
+}
+
+/* Per-message action row: hidden by default, fades in on bubble hover.
+   `pointer-events:none` while hidden so the row doesn't intercept clicks
+   when invisible. The animation on the message row itself animates opacity
+   via `ai-msg-in`; to avoid a flash where the actions row briefly shows
+   during that entrance, we keep them pinned to opacity 0 regardless. */
+/* Per-message action row — always visible. The icons sit quietly at rest
+   (subtle color) and brighten individually on hover; see MessageActions.tsx. */
+.ai-msg-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .ai-caret {

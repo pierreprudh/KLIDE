@@ -30,6 +30,36 @@ Mode filtering happens twice:
 The second check is load-bearing. A Provider may hallucinate, replay, or return a
 Tool call that was not advertised. The Harness still denies disallowed Tools.
 
+## Goal Mode vs Goal Loops
+
+`goal` mode is a capability tier: the model may use the full Tool surface, while
+writes, commands, and pause points stay gated by the Harness.
+
+A Goal Loop is a supervisor contract above one or more Runs. It should not
+execute tools itself. It defines:
+
+- the goal and definition of done
+- context sources the worker may rely on
+- gates that must pass before completion, such as plan review, delivery review,
+  diff scope, command validation, budget, semantic review, and human approval
+- iteration, revision, stall, time, and spend limits
+- a recorded result with the final stop reason
+
+Klide's first pure Goal Loop implementation lives in
+`src/agent/goalLoop.ts`. It is deliberately separate from the Rust Harness loop:
+the Harness keeps owning provider turns, Tool dispatch, Diff review, permission,
+Transcript writes, and cancellation. Goal Loop state can be projected from
+Mission, Validation contract, Budget ledger, and Transcript evidence.
+
+In practical terms:
+
+1. The design step creates a `GoalLoopSpec`.
+2. A Run does the actual work through the existing Harness.
+3. Validation evidence becomes gate attempts.
+4. Failed gates route to a bounded revision, not an unbounded retry.
+5. Completion means all required gates are clean, not merely that the Provider
+   emitted a final assistant message.
+
 ## Tool Capabilities
 
 Every Tool has one capability:

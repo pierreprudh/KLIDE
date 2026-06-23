@@ -7,12 +7,14 @@ import {
   saveLayout as savePanelLayout,
   clearLayout as clearPanelLayout,
   clampRect,
+  scaleLayout,
   PANEL_CONSTRAINTS,
   type Layout as PanelLayout,
   type PanelRect,
   type PanelId as PanelLayoutId,
   type StoredAiPanel,
 } from "../panelLayout";
+import { Z } from "../zLayers";
 
 // One AI panel in the workbench: its id, its rect, and which provider/model
 // it was opened with. The rect is the source of truth that gets persisted
@@ -192,8 +194,12 @@ export function usePanelLayout(opts: {
     }
     const saved = loadPanelLayout(workspaceRoot);
     if (saved) {
-      setPanelLayout(saved);
-      syncAiPanelsFromRects(saved.ai);
+      // Re-open proportional to the current window: if the saved layout was
+      // captured at a different size (bigger display, different monitor),
+      // scale its rects to fit. No-op when the size matches or is unrecorded.
+      const fitted = scaleLayout(saved, workbenchSize.w, workbenchSize.h);
+      setPanelLayout(fitted);
+      syncAiPanelsFromRects(fitted.ai);
       setLayoutHydratedRoot(workspaceRoot);
       return;
     }
@@ -228,6 +234,8 @@ export function usePanelLayout(opts: {
           w: workbenchSize.w - readNumberSetting("klide-ai-width", 380, 300, 620) - 6,
           h: readNumberSetting("klide-terminal-height", 240, 140, 460),
         },
+        workbenchW: workbenchSize.w,
+        workbenchH: workbenchSize.h,
       };
       setPanelLayout(migrated);
       syncAiPanelsFromRects(migrated.ai);
@@ -244,46 +252,89 @@ export function usePanelLayout(opts: {
   }, [workspaceRoot, workbenchSize.w, workbenchSize.h, layoutMigrated, layoutHydratedRoot]);
 
   // Persist layout on change (debounced via the React batched updates).
+  // Stamp the current workbench size so a later re-open at a different size
+  // can scale the layout proportionally (see `scaleLayout` on hydrate).
   useEffect(() => {
     if (!workspaceRoot) return;
     if (Object.keys(panelLayout).length === 0) return;
-    savePanelLayout(workspaceRoot, panelLayout);
-  }, [panelLayout, workspaceRoot]);
+    const stamped =
+      workbenchSize.w > 0 && workbenchSize.h > 0
+        ? { ...panelLayout, workbenchW: workbenchSize.w, workbenchH: workbenchSize.h }
+        : panelLayout;
+    savePanelLayout(workspaceRoot, stamped);
+  }, [panelLayout, workspaceRoot, workbenchSize.w, workbenchSize.h]);
 
-  // Re-clamp every panel rect to the current workbench dimensions. Without
-  // this, a saved layout (or a manual drag) keeps its old coords when the
-  // window shrinks, so panels overflow the workbench or get pushed off-screen
-  // ("we lose the responsive panel" / "panels are bigger than the window").
+  // Keep panels proportional to the workbench as it resizes — like a native
+  // macOS app, where growing the window grows the panels with it instead of
+  // dumping all the new space into the editor. When the workbench size changes
+  // we scale every rect by the size ratio (x & w by the width ratio, y & h by
+  // the height ratio); because docked panels are positioned from the far edge
+  // (AI at `w - width`, terminal at `h - height`), scaling all four keeps them
+  // anchored to that edge *and* preserves their share of the window. The result
+  // is then clamped so a panel never drops below its min size or overflows.
+  //
+  // When the effect fires for any other reason (hydrate, a manual drag), the
+  // size is unchanged so we skip the rescale and only clamp — the safety net
+  // that stops a stale saved layout from overflowing ("panels bigger than the
+  // window").
+  const prevWorkbench = useRef({ w: 0, h: 0 });
   useEffect(() => {
     if (workbenchSize.w === 0 || workbenchSize.h === 0) return;
     if (Object.keys(panelLayout).length === 0) return;
+
+    const prev = prevWorkbench.current;
+    const resized =
+      prev.w > 0 && prev.h > 0 && (prev.w !== workbenchSize.w || prev.h !== workbenchSize.h);
+    const sx = resized ? workbenchSize.w / prev.w : 1;
+    const sy = resized ? workbenchSize.h / prev.h : 1;
+    prevWorkbench.current = { w: workbenchSize.w, h: workbenchSize.h };
+
+    // Scale (when resized) then clamp a single rect to the current workbench.
+    // If a panel was docked to the right/bottom edge, keep it flush there even
+    // when a max-size cap stops it from scaling the whole way — otherwise a
+    // capped sidebar drifts inward and leaves a gap on a very wide window.
+    const fit = (rect: PanelRect, c: (typeof PANEL_CONSTRAINTS)[keyof typeof PANEL_CONSTRAINTS]) => {
+      if (!resized) return clampRect(rect, workbenchSize.w, workbenchSize.h, c);
+      const rightDocked = rect.x + rect.w >= prev.w - 2;
+      const bottomDocked = rect.y + rect.h >= prev.h - 2;
+      const scaled = {
+        x: Math.round(rect.x * sx),
+        y: Math.round(rect.y * sy),
+        w: Math.round(rect.w * sx),
+        h: Math.round(rect.h * sy),
+      };
+      let out = clampRect(scaled, workbenchSize.w, workbenchSize.h, c);
+      if (rightDocked) {
+        out = clampRect({ ...out, x: Math.max(0, workbenchSize.w - out.w) }, workbenchSize.w, workbenchSize.h, c);
+      }
+      if (bottomDocked) {
+        out = clampRect({ ...out, y: Math.max(0, workbenchSize.h - out.h) }, workbenchSize.w, workbenchSize.h, c);
+      }
+      return out;
+    };
+
     let dirty = false;
     const next: PanelLayout = { ...panelLayout };
     for (const id of ["explorer", "git", "memory", "terminal"] as const) {
       const rect = panelLayout[id];
       if (!rect) continue;
-      const clamped = clampRect(
-        rect,
-        workbenchSize.w,
-        workbenchSize.h,
-        PANEL_CONSTRAINTS[id]
-      );
+      const fitted = fit(rect, PANEL_CONSTRAINTS[id]);
       if (
-        clamped.x !== rect.x ||
-        clamped.y !== rect.y ||
-        clamped.w !== rect.w ||
-        clamped.h !== rect.h
+        fitted.x !== rect.x ||
+        fitted.y !== rect.y ||
+        fitted.w !== rect.w ||
+        fitted.h !== rect.h
       ) {
-        next[id] = clamped;
+        next[id] = fitted;
         dirty = true;
       }
     }
     if (panelLayout.ai) {
-      const clampedAi: StoredAiPanel[] = [];
+      const fittedAi: StoredAiPanel[] = [];
       let aiDirty = false;
       panelLayout.ai.forEach((entry) => {
-        const c = clampRect(entry.rect, workbenchSize.w, workbenchSize.h, PANEL_CONSTRAINTS.ai);
-        clampedAi.push({ ...entry, rect: c });
+        const c = fit(entry.rect, PANEL_CONSTRAINTS.ai);
+        fittedAi.push({ ...entry, rect: c });
         if (
           c.x !== entry.rect.x ||
           c.y !== entry.rect.y ||
@@ -294,8 +345,8 @@ export function usePanelLayout(opts: {
         }
       });
       if (aiDirty) {
-        next.ai = clampedAi;
-        syncAiPanelsFromRects(clampedAi);
+        next.ai = fittedAi;
+        syncAiPanelsFromRects(fittedAi);
         dirty = true;
       }
     }
@@ -351,9 +402,9 @@ export function usePanelLayout(opts: {
     setZCounter((n) => {
       const next = n + 1;
       // Only the focused panel gets a fresh top z; the rest keep theirs. The
-      // +1000 base keeps any focused panel above the array-index fallback used
-      // for panels that haven't been focused yet.
-      setZMap((m) => ({ ...m, [panelId]: 1000 + next }));
+      // panel base keeps any focused panel above the array-index fallback used
+      // for panels that haven't been focused yet (see Z.panel in zLayers).
+      setZMap((m) => ({ ...m, [panelId]: Z.panel + next }));
       return next;
     });
   }
@@ -390,7 +441,7 @@ export function usePanelLayout(opts: {
       return nextPanels;
     });
     // A freshly opened panel comes up on top and becomes focused.
-    setZCounter((n) => { const next = n + 1; setZMap((m) => ({ ...m, [id]: 1000 + next })); return next; });
+    setZCounter((n) => { const next = n + 1; setZMap((m) => ({ ...m, [id]: Z.panel + next })); return next; });
     setFocusedPanel(id);
     return id;
   }

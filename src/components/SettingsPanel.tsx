@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
+import { Z } from "../zLayers";
 import { ChevronDown, ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { PROVIDER_GROUPS } from "../agent/providers";
@@ -1535,7 +1536,7 @@ function CustomEndpointsBlock({
             style={{
               position: "fixed",
               inset: 0,
-              zIndex: 5200,
+              zIndex: Z.modalRaised,
               display: "grid",
               placeItems: "center",
               background: "rgba(0,0,0,0.30)",
@@ -1890,14 +1891,14 @@ function AccountControl({
       {open && rect &&
         createPortal(
           <>
-            <div onMouseDown={closeMenu} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+            <div onMouseDown={closeMenu} style={{ position: "fixed", inset: 0, zIndex: Z.contextMenu }} />
             <div
               className="klide-surface"
               style={{
                 position: "fixed",
                 top: rect.bottom + 6,
                 left: Math.max(8, rect.right - menuWidth),
-                zIndex: 999,
+                zIndex: Z.contextMenu + 1,
                 width: menuWidth,
                 padding: 6,
                 borderRadius: "var(--radius-md)",

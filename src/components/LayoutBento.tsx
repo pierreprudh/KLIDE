@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { panelLabel, type GridLayout } from "../gridLayouts";
+import { Z } from "../zLayers";
 
 type Props = {
   gridLayouts: GridLayout[];
@@ -187,9 +188,9 @@ export function LayoutBento({
             background: "var(--bg-elevated)",
             border: "1px solid var(--border-strong)",
             boxShadow: "var(--shadow-popover, 0 8px 24px rgba(0,0,0,0.18))",
-            // 9999 puts the popover above FloatingPanels (10+), AI panels
-            // (10+), Quick View (20), and any other chrome in the app.
-            zIndex: 9999,
+            // Top tier: above floating panels, popovers, and modals — this
+            // status-bar picker should never be occluded by app chrome.
+            zIndex: Z.contextMenu,
             animation: "chrome-enter var(--motion-med) var(--ease-out)",
           }}
         >

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { Tooltip } from "./Tooltip";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -62,6 +63,7 @@ import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
 import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
+import { buildRunHandoff } from "../agentHandoff";
 
 // Mission Control — Klide's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
@@ -116,36 +118,37 @@ function SubagentStackToggle({
   onToggle: () => void;
 }) {
   return (
-    <span
-      role="button"
-      aria-label={expanded ? "Collapse subagents" : "Expand subagents"}
-      title={expanded ? "Collapse subagents" : "Expand subagents"}
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      style={{
-        height: 22,
-        minWidth: 30,
-        padding: "0 6px",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 3,
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        background: expanded ? "var(--accent-soft)" : "var(--bg-hover)",
-        color: expanded ? "var(--accent)" : "var(--fg-subtle)",
-        fontSize: 10,
-        fontFamily: "var(--font-mono)",
-        lineHeight: 1,
-      }}
-    >
-      {count}
-      <span aria-hidden style={{ fontSize: 10, transform: expanded ? "rotate(180deg)" : "none" }}>
-        ▾
+    <Tooltip label={expanded ? "Collapse subagents" : "Expand subagents"}>
+      <span
+        role="button"
+        aria-label={expanded ? "Collapse subagents" : "Expand subagents"}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        style={{
+          height: 22,
+          minWidth: 30,
+          padding: "0 6px",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 3,
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--border)",
+          background: expanded ? "var(--accent-soft)" : "var(--bg-hover)",
+          color: expanded ? "var(--accent)" : "var(--fg-subtle)",
+          fontSize: 10,
+          fontFamily: "var(--font-mono)",
+          lineHeight: 1,
+        }}
+      >
+        {count}
+        <span aria-hidden style={{ fontSize: 10, transform: expanded ? "rotate(180deg)" : "none" }}>
+          ▾
+        </span>
       </span>
-    </span>
+    </Tooltip>
   );
 }
 
@@ -228,9 +231,9 @@ function RunReasonChip({ run }: { run: Run }) {
   const reason = runBoardReason(run);
   if (reason.tone === "success") return null;
   return (
-    <span style={boardReasonChipStyle(reason.tone)} title={reason.detail}>
-      {reason.label}
-    </span>
+    <Tooltip label={reason.detail}>
+      <span style={boardReasonChipStyle(reason.tone)}>{reason.label}</span>
+    </Tooltip>
   );
 }
 
@@ -246,8 +249,8 @@ function RoutineBadge({ run }: { run: Pick<Run, "title"> }) {
   const routine = runRoutineInfo(run);
   if (!routine) return null;
   return (
+    <Tooltip label={routine.label}>
     <span
-      title={routine.label}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -275,6 +278,7 @@ function RoutineBadge({ run }: { run: Pick<Run, "title"> }) {
       />
       {routine.cadence === "routine" ? "Routine" : routine.cadence}
     </span>
+    </Tooltip>
   );
 }
 
@@ -2991,7 +2995,7 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
 function RunDetail({
   run,
   messages,
-  firstUserMessage,
+  handoffPrompt,
   hasMemory,
   onOpenInAiPanel,
   onResumeKlide,
@@ -3003,9 +3007,8 @@ function RunDetail({
   messages?: RunMessage[];
   /** A durable Project Memory note exists for this run (matched by runId). */
   hasMemory?: boolean;
-  /** First user message of a Klide run — used as the task prompt when
-   *  handing the run off to an external CLI. */
-  firstUserMessage: string | null;
+  /** Compact task state used when handing a Klide run off to an external CLI. */
+  handoffPrompt: string | null;
   /** Land the user in a new AI panel pinned to the chosen delegate provider. */
   onOpenInAiPanel?: (opts: {
     provider: TaskSource;
@@ -3026,7 +3029,7 @@ function RunDetail({
   // right command for each, so the UI just needs to be honest about it.
   const resumable = isDelegateId(run.source);
   // The full set of CLI sources we can offer as "Open in {source}". Klide
-  // runs hand off to one of these with the first user message as the task.
+  // runs hand off to one of these with compact task state as the prompt.
   const cliSources: DelegateId[] = [...DELEGATE_IDS];
 
   return (
@@ -3089,9 +3092,9 @@ function RunDetail({
             onClick={() => onResumeKlide(run.id)}
           />
         )}
-        {/* "Open in {other CLI}" — hands the run off to a fresh delegate
-            TUI in a new AI panel. Klide runs pass the first user message
-            as the task prompt so the new session starts with context. */}
+        {/* "Open in {other CLI}" hands the run off to a fresh delegate TUI in
+            a new AI panel. Klide runs pass compact task state as the prompt
+            so the new session starts with context, not just the first ask. */}
         {onOpenInAiPanel &&
           cliSources
             .filter((s) => s !== run.source)
@@ -3104,8 +3107,8 @@ function RunDetail({
                     provider: s,
                     workspaceRoot: run.cwd,
                     initialTask:
-                      run.source === "klide" && firstUserMessage
-                        ? firstUserMessage
+                      run.source === "klide" && handoffPrompt
+                        ? handoffPrompt
                         : undefined,
                   })
                 }
@@ -3322,9 +3325,9 @@ export function MissionControl({
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [expandedSubagentParents, setExpandedSubagentParents] = useState<Set<string>>(new Set());
   const [dismissedBoardRuns, setDismissedBoardRuns] = useState<Set<string>>(() => readDismissedBoardRuns());
-  // First user message of the currently selected Klide run. Used as the
-  // task prompt when handing the run off to a CLI via "Open in {CLI}".
-  const [firstUserMessage, setFirstUserMessage] = useState<string | null>(null);
+  // Compact task state for the currently selected Klide run. Used as the
+  // prompt when handing the run off to a CLI via "Open in {CLI}".
+  const [handoffPrompt, setHandoffPrompt] = useState<string | null>(null);
   // Run ids that already have a durable Project Memory note (matched by the
   // note's `runId` frontmatter). Drives the "memory saved" evidence signal so
   // the board shows which completed runs are remembered vs still un-captured.
@@ -3487,23 +3490,29 @@ export function MissionControl({
       : allRuns.find((r) => r.id === selectedId) ?? null;
 
   // When a Klide run (kind=run) is selected, fetch its transcript once and
-  // pull out the first user message — that's the prompt we'll hand off to
-  // a fresh delegate session if the user opens this run in another CLI.
+  // build the prompt we'll hand off to a fresh delegate session if the user
+  // opens this run in another CLI.
   useEffect(() => {
     if (!selected || selected.source !== "klide" || selected.kind !== "run") {
-      setFirstUserMessage((current) => (current === null ? current : null));
+      setHandoffPrompt((current) => (current === null ? current : null));
       return;
     }
     let cancelled = false;
-    setFirstUserMessage((current) => (current === null ? current : null));
+    setHandoffPrompt((current) => (current === null ? current : null));
     fetchRunMessages(selected)
       .then((msgs) => {
         if (cancelled) return;
-        const first = msgs.find((m) => m.role === "user");
-        setFirstUserMessage(first?.text?.trim() || null);
+        const handoff = buildRunHandoff({
+          title: selected.title,
+          sourceLabel: SOURCE_LABEL[selected.source],
+          cwd: selected.cwd,
+          model: selected.model,
+          messages: msgs.map((m) => ({ role: m.role, text: m.text })),
+        });
+        setHandoffPrompt(handoff.delegatePrompt);
       })
       .catch(() => {
-        if (!cancelled) setFirstUserMessage(null);
+        if (!cancelled) setHandoffPrompt(null);
       });
     return () => {
       cancelled = true;
@@ -4046,9 +4055,13 @@ export function MissionControl({
           <RunDetail
             run={convoToRun(selectedConvo)}
             messages={selectedConvo.messages}
-            firstUserMessage={
-              selectedConvo.messages.find((m) => m.role === "user")?.text ?? null
-            }
+            handoffPrompt={buildRunHandoff({
+              title: selectedConvo.title,
+              sourceLabel: "Klide",
+              cwd: selectedConvo.cwd,
+              model: selectedConvo.model,
+              messages: selectedConvo.messages.map((m) => ({ role: m.role, text: m.text })),
+            }).delegatePrompt}
             hasMemory={memoryRunIds.has(selectedConvo.id)}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
@@ -4059,7 +4072,7 @@ export function MissionControl({
         ) : selected ? (
           <RunDetail
             run={selected}
-            firstUserMessage={firstUserMessage}
+            handoffPrompt={handoffPrompt}
             hasMemory={memoryRunIds.has(selected.id)}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}

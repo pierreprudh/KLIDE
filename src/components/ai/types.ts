@@ -14,6 +14,10 @@ export type Msg =
       projectContext?: ProjectContextPayload;
       queueState?: "queued" | "running";
       queueId?: string;
+      /** Exact token count for this message's text under the active model's own
+       *  tokenizer (Ollama / Anthropic). `exact` is false when the provider has
+       *  no tokenizer endpoint and the number is a length-based estimate. */
+      tokenInfo?: { count: number; exact: boolean };
     }
   | {
       role: "assistant";
