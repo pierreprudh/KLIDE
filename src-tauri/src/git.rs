@@ -253,16 +253,17 @@ pub(crate) fn create_pr(
         );
     }
 
-    // Stage all changes
-    run_git(&workspace_root, &["add", "-A"])?;
-
-    // Check if there's anything to commit
+    // Commit exactly what the user staged in the Git Review UI — do NOT
+    // `git add -A`. A blanket add sweeps every untracked/unstaged file in the
+    // tree (scratch files, copied worktree config) into the PR commit, which is
+    // the worktree-bootstrap pollution bug. The commit/PR flow is staging-driven
+    // everywhere else; keep it that way here.
     let status = Command::new("git")
         .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
         .status()
         .map_err(|e| format!("Failed to check git status: {e}"))?;
     if status.success() {
-        return Err("No changes to commit".to_string());
+        return Err("No staged changes — stage files before opening a PR.".to_string());
     }
 
     // Create and switch to new branch

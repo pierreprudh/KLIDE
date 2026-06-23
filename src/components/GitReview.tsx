@@ -867,7 +867,9 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
   // Inline composer instead of window.prompt() — Tauri's macOS webview returns
   // null from prompt(), so the old flow silently did nothing.
   function createPr() {
-    if (!workspaceRoot) return;
+    // PR commits only what's staged (the backend no longer `git add -A`s), so
+    // require a staged set first — same contract as the commit button.
+    if (!workspaceRoot || stagedFiles.length === 0) return;
     setPrComposer({ title: commitMessage || "", body: "" });
   }
   async function submitPr() {
@@ -999,15 +1001,17 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           <TopAction onClick={() => void push()} disabled={actionLoading === "Pushed"} title="Push to upstream">Push</TopAction>
           <button
             onClick={() => void createPr()}
-            title="Open a pull request (⌘⇧P)"
+            disabled={stagedFiles.length === 0}
+            title={stagedFiles.length === 0 ? "Stage changes before opening a PR" : "Open a pull request (⌘⇧P)"}
             style={{
-              height: 32, padding: "0 12px", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 12, cursor: "pointer",
-              background: "transparent", color: "var(--fg-strong)",
+              height: 32, padding: "0 12px", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 12,
+              cursor: stagedFiles.length === 0 ? "not-allowed" : "pointer",
+              background: "transparent", color: stagedFiles.length === 0 ? "var(--fg-subtle)" : "var(--fg-strong)",
               border: "1px solid var(--border)",
               boxShadow: "inset 0 1px 0 var(--panel-highlight)",
               transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+            onMouseEnter={(e) => { if (stagedFiles.length > 0) e.currentTarget.style.background = "var(--bg-hover)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
           >
             Open PR
