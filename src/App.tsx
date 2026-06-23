@@ -1231,7 +1231,24 @@ function App() {
               <OrchestratorPreview />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
-            ) : panelLayout.anchored ? (
+            ) : null}
+            {/* The workbench stays mounted across view switches so an in-flight
+                agent run keeps streaming into the AI panel. Switching to Mission
+                Control / Git / Settings used to UNMOUNT it, dropping the live
+                event subscription — the answer then only "respawned" on return
+                via the transcript. Here it's hidden (display:none), not
+                unmounted, whenever an overlay view is showing. Grid mode owns
+                its own layout, so it's excluded. */}
+            {!activeGrid && (
+              <div
+                style={{
+                  display: view === "workbench" ? "flex" : "none",
+                  flex: 1,
+                  minWidth: 0,
+                  minHeight: 0,
+                }}
+              >
+                {panelLayout.anchored ? (
               <AnchoredWorkbench
                 workbenchRef={workbenchRef}
                 workbenchSize={workbenchSize}
@@ -1344,10 +1361,13 @@ function App() {
                       minHeight: 0,
                       borderRadius: "var(--radius-md)",
                       border: "1px solid color-mix(in srgb, var(--border) 82%, transparent)",
-                      background: "color-mix(in srgb, var(--bg) 92%, transparent)",
+                      // Solid (not translucent) and NO backdrop-filter: a
+                      // blurred backdrop here re-composites over a focused panel
+                      // once its z-index is bumped onto its own layer (Z.panel
+                      // ~1011), making the clicked panel vanish in the webview.
+                      // Killing the filter removes that compositing bug.
+                      background: "var(--bg)",
                       boxShadow: "inset 0 1px 0 var(--panel-highlight)",
-                      backdropFilter: "blur(10px)",
-                      WebkitBackdropFilter: "blur(10px)",
                       overflow: "hidden",
                       zIndex: 1,
                     }}
@@ -1597,6 +1617,8 @@ function App() {
                     </FloatingPanel>
                   );
                 })}
+              </div>
+            )}
               </div>
             )}
           </>

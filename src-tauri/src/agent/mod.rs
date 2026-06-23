@@ -1115,11 +1115,32 @@ pub async fn agent_start_run(
         .unwrap_or_else(run_id);
     let cancel = CancellationToken::new();
 
-    state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?
-        .insert(
+    // One live run per conversation id. The handle stays in the map with a
+    // terminal status after a run finishes, so reusing the id for a NEW run is
+    // fine — but starting one while the previous is still active would spawn a
+    // second loop appending to the same transcript (interleaved/duplicated seq
+    // numbers, the "dropped after compacting" corruption). Check + insert under
+    // one lock so the guard is atomic.
+    {
+        let mut runs = state
+            .runs
+            .lock()
+            .map_err(|_| "Agent state is unavailable".to_string())?;
+        if let Some(existing) = runs.get(&id) {
+            if matches!(
+                existing.status,
+                AgentRunStatus::Queued
+                    | AgentRunStatus::Running
+                    | AgentRunStatus::WaitingForPermission
+                    | AgentRunStatus::WaitingForDiff
+                    | AgentRunStatus::Paused
+            ) {
+                return Err(format!(
+                    "A run is already active for this conversation ({id}). Wait for it to finish or stop it first."
+                ));
+            }
+        }
+        runs.insert(
             id.clone(),
             AgentRunHandle {
                 status: AgentRunStatus::Running,
@@ -1132,6 +1153,7 @@ pub async fn agent_start_run(
                 rejected_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
             },
         );
+    }
 
     // Detach the loop so this command returns the run id immediately; the UI
     // follows progress through the event channel and can abort via the token.
