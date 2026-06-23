@@ -12,12 +12,14 @@
 // pieces that differ (flags, prefixes, session-id sniffing); the trait's
 // provided method does the assembly once.
 
+mod chat;
 mod claude_code;
 mod codex;
 mod omp;
 mod opencode;
 mod runs;
 
+pub use chat::run_subscription_chat;
 pub use claude_code::ClaudeCode;
 pub use codex::Codex;
 pub use omp::Omp;
