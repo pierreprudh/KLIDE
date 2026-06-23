@@ -54,13 +54,16 @@ import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
+import { writeMemory } from "../memory";
 import { eventsToMsgs } from "./ai/eventsToMsgs";
+import { buildRunHandoff, type HandoffSummary } from "../agentHandoff";
 import {
   genId,
   deriveTitle,
   messagesForPersist,
   estimateTokens,
   messageTokenEstimate,
+  countMessageTokens,
   fuzzyFiles,
   loadConversations,
   saveConversations,
@@ -685,7 +688,7 @@ export function AiPanel({
 
   function acceptSlash(idx: number) { const cmd = slashMatches[idx]; setSlash(null); if (cmd) cmd.run(); }
 
-  function saveHandoffToProjectMemory() {
+  async function saveHandoffToProjectMemory() {
     if (!workspaceRoot) {
       setInput("");
       const msg: Msg = { role: "assistant", content: "Open a workspace before saving a project handoff." };
@@ -695,12 +698,36 @@ export function AiPanel({
     }
     const handoff = buildHandoffSummary(msgsRef.current, projectContext);
     setInput("");
-    const msg: Msg = {
-      role: "assistant",
-      content: `Saved Project Memory handoff: ${handoff.title}`,
-    };
-    msgsRef.current = [...msgsRef.current, msg];
-    setMsgs(msgsRef.current);
+    try {
+      const entry = await writeMemory(workspaceRoot, {
+        title: handoff.title,
+        goal: handoff.goal,
+        plan: [],
+        decisions: [],
+        filesTouched: handoff.filesTouched,
+        nextSteps: handoff.nextSteps,
+        notes: handoff.body.replace(/^# /gm, "## "),
+        runId: currentId,
+        provider,
+        model,
+        mode: normalizeAgentMode(agentMode),
+        status: streaming ? "running" : "done",
+      });
+      const msg: Msg = {
+        role: "assistant",
+        content: `Saved Project Memory handoff: ${entry.title}`,
+      };
+      msgsRef.current = [...msgsRef.current, msg];
+      setMsgs(msgsRef.current);
+      onMemoryWritten?.({ relPath: entry.relPath, title: entry.title });
+    } catch (err) {
+      const msg: Msg = {
+        role: "assistant",
+        content: `Handoff failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+      msgsRef.current = [...msgsRef.current, msg];
+      setMsgs(msgsRef.current);
+    }
   }
 
   useEffect(() => { setFileList([]); }, [workspaceRoot]);
@@ -1070,6 +1097,38 @@ This user request requires workspace inspection. Before answering, you MUST call
   const processingQueueRef = useRef(false);
   const queueGenerationRef = useRef(0);
   const activeHarnessRunRef = useRef<string | null>(null);
+
+  // Fill in an exact per-message token count for user messages, using the
+  // active model's own tokenizer (Ollama / Anthropic) where available. User
+  // messages are append-only, so their index is stable once created — we patch
+  // by index after verifying the row is still the same message. The seen-set is
+  // keyed by index + length + model so a model switch re-counts.
+  const tokenCountedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    msgs.forEach((m, i) => {
+      if (m.role !== "user" || m.tokenInfo || !m.content.trim()) return;
+      const text = m.content;
+      const key = `${i}:${text.length}:${provider}:${model}`;
+      if (tokenCountedRef.current.has(key)) return;
+      tokenCountedRef.current.add(key);
+      void countMessageTokens(provider, model, text)
+        .then((info) => {
+          if (cancelled) return;
+          const cur = msgsRef.current[i];
+          if (cur?.role === "user" && cur.content === text && !cur.tokenInfo) {
+            const next = [...msgsRef.current];
+            next[i] = { ...cur, tokenInfo: info };
+            msgsRef.current = next;
+            setMsgs(next);
+          }
+        })
+        .catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [msgs, provider, model]);
 
   function abortActiveHarnessRun() {
     const runId = activeHarnessRunRef.current;
@@ -1859,6 +1918,13 @@ This user request requires workspace inspection. Before answering, you MUST call
             next[userIndex] = { ...existingUser, queueState: undefined, queueId: undefined };
             commit(next);
           }
+          // Exit the working state as soon as the terminal event is *observed*,
+          // not only when `await session.done` resolves — that promise can hang
+          // if the channel was disrupted, leaving "Working…" stuck. Safe: this
+          // fires once per finished run, never mid-run, so it can't race a
+          // queued turn into a concurrent run. The post-await cleanup still runs.
+          setStreaming(false);
+          setActivity(null);
           break;
         }
         case "run_error": {
@@ -1871,6 +1937,10 @@ This user request requires workspace inspection. Before answering, you MUST call
           } else {
             abortedByUser = true;
           }
+          // Same safety as run_result: leave the working state on the observed
+          // terminal event, not only via `await session.done`.
+          setStreaming(false);
+          setActivity(null);
           break;
         }
       }
@@ -1981,6 +2051,20 @@ This user request requires workspace inspection. Before answering, you MUST call
     // bottom so they can watch their message + the reply.
     forceStickToBottom();
     void drainQueue();
+  }
+
+  // Drop a still-queued turn (one that hasn't started running yet). drainQueue
+  // pulls turns out of queueRef the moment they start, so anything still in
+  // queuedTurns state is safe to cancel: remove it from the pending queue and
+  // delete its placeholder user bubble.
+  function clearQueue() {
+    const pending = new Set(queueRef.current.map((t) => t.clientId));
+    queueRef.current = [];
+    setQueuedTurns([]);
+    msgsRef.current = msgsRef.current.filter(
+      (m) => !(m.role === "user" && m.queueState === "queued" && m.queueId && pending.has(m.queueId)),
+    );
+    setMsgs(msgsRef.current);
   }
 
   async function drainQueue() {
@@ -2456,6 +2540,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                     onDelete={() => deleteMessage(i)}
                   />
                 )}
+                {!isEditing && m.tokenInfo && m.content.trim() && (
+                  <div
+                    className="klide-msg-meta"
+                    title={m.tokenInfo.exact ? "Exact count from the model's tokenizer" : "Estimate — this provider has no tokenizer endpoint"}
+                    style={{ marginTop: 3, fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-dim)", letterSpacing: "0.02em", userSelect: "none" }}
+                  >
+                    {m.tokenInfo.exact ? "" : "~"}{m.tokenInfo.count.toLocaleString()} tokens
+                  </div>
+                )}
               </div>
             );
           }
@@ -2490,6 +2583,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           // spacer so bodies stay column-aligned.
           const prevMsg = msgs[i - 1];
           const showAvatar = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
+          // Per-message actions belong on the *final* answer of a response, not
+          // on intermediate narration turns ("OK, let me look…") that are
+          // followed by more tool calls — otherwise the icon row appears in the
+          // middle of a multi-turn run. A response ends when the next message is
+          // a user turn (or there is none).
+          const nextMsg = msgs[i + 1];
+          const isResponseEnd = !nextMsg || nextMsg.role === "user";
           return (
             <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {showAvatar ? (
@@ -2501,7 +2601,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
-                {!isStreamingActive && !isAssistantPlaceholder && m.content?.trim() && (
+                {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
                       role="assistant"
@@ -2532,6 +2632,33 @@ This user request requires workspace inspection. Before answering, you MUST call
             </div>
           );
         })}
+        {/* "Working" heartbeat — shown while a run is in progress but nothing
+            else is animating. Covers the gap where the model is generating the
+            next turn (esp. providers that don't stream token deltas, so there's
+            no typing caret): without this the completed tool calls just sit
+            there and the agent looks stuck. Hidden when a tool is mid-run, a
+            placeholder/caret is already animating, or we're waiting on the user
+            (diff / permission / question). */}
+        {(() => {
+          const last = msgs[msgs.length - 1];
+          const tailPendingTool = last?.role === "tool" && /^Running /.test(last.content);
+          const tailPlaceholder = last?.role === "assistant" && !last.content && !last.thinking && !last.toolCalls;
+          const tailStreamingText = last?.role === "assistant" && !!last.content;
+          // A queued/running user bubble already carries its own activity hint
+          // (and the queue line sits right below), so the heartbeat is just noise.
+          const tailQueuedUser = last?.role === "user" && !!last.queueState;
+          const showWorking =
+            streaming && !pendingDiff && !pendingPermission && !pendingQuestion &&
+            !tailPendingTool && !tailPlaceholder && !tailStreamingText && !tailQueuedUser &&
+            queuedTurns.length === 0;
+          if (!showWorking) return null;
+          return (
+            <div className="ai-msg-in" style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 6px 32px", color: "var(--fg-dim)" }}>
+              <DotGridLoader size={11} label="Working" />
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-subtle)" }}>Working…</span>
+            </div>
+          );
+        })()}
         {serverStarting && (
           <div
             className="ai-msg-in"
@@ -2775,10 +2902,18 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
         )}
         {queuedTurns.length > 0 && (
-          <div style={{ minHeight: 18, display: "flex", alignItems: "center", gap: 6, color: "var(--fg-subtle)", fontSize: 11, padding: "0 2px 6px", flexWrap: "wrap" }}>
-            <span title={queuedTurns.map((t) => t.text).join("\n\n")} style={{ display: "inline-flex", alignItems: "center", maxWidth: "100%", minWidth: 0, height: 18, padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)" }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queuedTurns.length} queued</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 4px 6px", color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+            <span title={queuedTurns.map((t, i) => `${i + 1}. ${t.text}`).join("\n\n")} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {queuedTurns.length} queued
             </span>
+            <button type="button" onClick={clearQueue} title="Clear queue" aria-label="Clear queue"
+              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, padding: 0, border: "none", background: "transparent", color: "currentColor", opacity: 0.55, cursor: "pointer", transition: "opacity var(--motion-fast) var(--ease-out)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.55"; }}>
+              <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
           </div>
         )}
         {modeFlash && (
@@ -3091,32 +3226,27 @@ This user request requires workspace inspection. Before answering, you MUST call
 function buildHandoffSummary(
   msgs: Msg[],
   projectContext: ProjectContextSnapshot | null | undefined
-): { title: string; body: string } {
-  const userTurns = msgs.filter((m): m is Extract<Msg, { role: "user" }> => m.role === "user");
-  const assistantTurns = msgs.filter((m): m is Extract<Msg, { role: "assistant" }> => m.role === "assistant" && !m.delegateConsole);
-  const toolTurns = msgs.filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool");
-  const firstUser = userTurns[0]?.content.trim() || "Continue the current task.";
-  const lastUser = userTurns[userTurns.length - 1]?.content.trim() || firstUser;
-  const lastAssistant = assistantTurns[assistantTurns.length - 1]?.content.trim();
+): HandoffSummary {
   const contextItems = projectContext?.lens.slice(0, 8) ?? [];
-  const touched = [
-    ...new Set([
-      ...contextItems.map((item) => item.path),
-      ...userTurns.flatMap((turn) => turn.attachments?.map((attachment) => attachment.path) ?? []),
-    ].filter((path) => path && path !== "."))
-  ].slice(0, 10);
-  const toolNames = [...new Set(toolTurns.map((turn) => turn.toolName))].slice(0, 8);
-  const title = deriveTitle([{ role: "user", content: firstUser } as Msg]);
-  const body = [
-    `Goal: ${firstUser}`,
-    `Last user request: ${lastUser}`,
-    lastAssistant ? `Current state: ${lastAssistant.slice(0, 1200)}` : "Current state: no assistant summary yet.",
-    touched.length ? `Relevant files/areas:\n${touched.map((path) => `- ${path}`).join("\n")}` : "Relevant files/areas: none captured yet.",
-    contextItems.length
-      ? `Context lens:\n${contextItems.slice(0, 6).map((item) => `- ${item.label}: ${item.path} - ${item.detail.slice(0, 180)}`).join("\n")}`
-      : "Context lens: no active lens snapshot.",
-    toolNames.length ? `Tools used: ${toolNames.join(", ")}` : "Tools used: none.",
-    "Next pickup: read this handoff, inspect the relevant files, then continue from the last user request.",
-  ].join("\n\n");
-  return { title, body };
+  const files = msgs
+    .filter((m): m is Extract<Msg, { role: "user" }> => m.role === "user")
+    .flatMap((turn) => turn.attachments?.map((attachment) => attachment.path) ?? []);
+  const tools = msgs
+    .filter((m): m is Extract<Msg, { role: "tool" }> => m.role === "tool")
+    .map((turn) => turn.toolName);
+  return buildRunHandoff({
+    messages: msgs.flatMap((m) =>
+      (m.role === "user" || (m.role === "assistant" && !m.delegateConsole)) && m.content.trim()
+        ? [{ role: m.role, text: m.content }]
+        : []
+    ),
+    contextItems: contextItems.map((item) => ({
+      label: item.label,
+      path: item.path,
+      detail: item.detail,
+    })),
+    files,
+    tools,
+    sourceLabel: "Klide",
+  });
 }
