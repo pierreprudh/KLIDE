@@ -85,6 +85,7 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 - **Real delegate terminals** — Claude Code, Codex, and OpenCode run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
 - **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits and run approval-gated commands (`Tab` to switch)
 - **Quiet agent controls** — mode switching, provider selection, context pressure, history, skills, project rules, and diff review stay close to the work without becoming a dashboard
+- **Exact token counts** — each message shows its real token count from the model's own tokenizer (Ollama `/api/tokenize`, Anthropic `count_tokens`); providers without a tokenizer endpoint fall back to a clearly-marked (`~`) estimate
 - **`@`-mentions** — fuzzy-pick workspace files to attach as context
 - **Slash commands** — `/chat`, `/plan`, `/goal`, `/clear`, `/explain`, `/init`
 - **Keychain-stored keys** — API keys live in the OS keychain (env vars as fallback); managed from Settings → API

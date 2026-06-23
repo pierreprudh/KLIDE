@@ -939,6 +939,7 @@ pub fn run() {
             models::ai_context_window,
             models::ai_model_supports_tools,
             models::ai_model_supports_reflection,
+            models::ai_count_tokens,
             ai_list_tools,
             search_in_files,
             ai_provider_key_status,

@@ -601,6 +601,89 @@ fn ollama_probe_response_has_thinking(body: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Exact token count for a single message's text under a specific model's own
+/// tokenizer, where the provider exposes one; otherwise a clearly-marked
+/// estimate. `exact: false` means the caller should render the number as
+/// approximate (≈). This counts message *content* — the chat-template wrapper
+/// (role tags, tool framing, special tokens) the model also sees is not
+/// attributed here, so per-message counts won't sum to a full-prompt count.
+#[derive(serde::Serialize)]
+pub(crate) struct TokenCount {
+    pub tokens: u64,
+    pub exact: bool,
+}
+
+/// Mirror of the frontend `estimateTokens` heuristic (~3.7 chars/token) so the
+/// fallback path agrees with the live context gauge.
+fn estimate_tokens(text: &str) -> u64 {
+    if text.trim().is_empty() {
+        return 0;
+    }
+    (text.chars().count() as f64 / 3.7).ceil() as u64
+}
+
+#[tauri::command]
+pub(crate) async fn ai_count_tokens(
+    provider: String,
+    model: String,
+    text: String,
+) -> Result<TokenCount, String> {
+    if text.trim().is_empty() {
+        return Ok(TokenCount { tokens: 0, exact: true });
+    }
+
+    // Ollama exposes a local, free, instant tokenizer for the loaded model.
+    if provider == "ollama" {
+        let res = reqwest::Client::new()
+            .post(format!("{OLLAMA_URL}/api/tokenize"))
+            .json(&serde_json::json!({ "model": model, "text": text }))
+            .send()
+            .await;
+        // Older Ollama builds lack /api/tokenize — degrade to the estimate
+        // rather than erroring the whole call.
+        if let Ok(res) = res {
+            if res.status().is_success() {
+                if let Ok(value) = res.json::<serde_json::Value>().await {
+                    if let Some(tokens) = value.get("tokens").and_then(|t| t.as_array()) {
+                        return Ok(TokenCount { tokens: tokens.len() as u64, exact: true });
+                    }
+                }
+            }
+        }
+        return Ok(TokenCount { tokens: estimate_tokens(&text), exact: false });
+    }
+
+    // Anthropic's count_tokens endpoint is exact for Claude.
+    if provider == "anthropic" {
+        if let Some(key) = provider_key("anthropic")? {
+            let res = reqwest::Client::new()
+                .post("https://api.anthropic.com/v1/messages/count_tokens")
+                .header("x-api-key", key)
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .json(&serde_json::json!({
+                    "model": model,
+                    "messages": [{ "role": "user", "content": text }],
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("Unable to reach Anthropic: {e}"))?;
+            if res.status().is_success() {
+                if let Ok(value) = res.json::<serde_json::Value>().await {
+                    if let Some(n) = value.get("input_tokens").and_then(|v| v.as_u64()) {
+                        return Ok(TokenCount { tokens: n, exact: true });
+                    }
+                }
+            }
+        }
+        return Ok(TokenCount { tokens: estimate_tokens(&text), exact: false });
+    }
+
+    // OpenAI-wire providers (openai/mistral/xai/mlx/self-hosted) expose no
+    // count endpoint — exact counting would need a bundled per-model
+    // tokenizer. Best-effort estimate, marked approximate.
+    Ok(TokenCount { tokens: estimate_tokens(&text), exact: false })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,8 +1,27 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { Msg } from "./types";
 import { estimateProjectContextTokens } from "../../contextTray";
 
 export function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Exact token count for a string under a specific model's own tokenizer, where
+// the provider exposes one (Ollama /api/tokenize, Anthropic count_tokens);
+// otherwise a length-based estimate with `exact: false`. Counts message
+// content only — the chat-template wrapper the model also sees is not included,
+// so per-message counts won't sum to a full-prompt total.
+export async function countMessageTokens(
+  provider: string,
+  model: string,
+  text: string,
+): Promise<{ count: number; exact: boolean }> {
+  const res = await invoke<{ tokens: number; exact: boolean }>("ai_count_tokens", {
+    provider,
+    model,
+    text,
+  });
+  return { count: res.tokens, exact: res.exact };
 }
 
 export function genId(): string {
