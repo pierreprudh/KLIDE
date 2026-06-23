@@ -58,6 +58,22 @@ impl Delegate for ClaudeCode {
                                 mtime_ms: mtime_ms(&p),
                                 key: p.to_string_lossy().to_string(),
                             });
+                            continue;
+                        }
+                        if !p.is_dir() {
+                            continue;
+                        }
+                        let subagents = p.join("subagents");
+                        if let Ok(subagent_files) = std::fs::read_dir(&subagents) {
+                            for sf in subagent_files.flatten() {
+                                let sp = sf.path();
+                                if sp.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                                    out.push(RunCandidate {
+                                        mtime_ms: mtime_ms(&sp),
+                                        key: sp.to_string_lossy().to_string(),
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -106,6 +122,8 @@ impl RunParser for ClaudeRunParser {
 fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let content = std::fs::read_to_string(path).ok()?;
     let id = path.file_stem()?.to_string_lossy().to_string();
+    let parent_id = claude_subagent_parent_id(path);
+    let is_subagent_log = parent_id.is_some();
     let (mut title, mut model, mut cwd, mut branch) = (None, None, None, None);
     let mut count: u32 = 0;
     let mut created_ms: i64 = 0;
@@ -127,6 +145,11 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
             .get("isSidechain")
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
+        // In a parent Claude transcript, `isSidechain` lines are the child
+        // agent's chatter and should not inflate the parent's message count.
+        // In `.../<parent>/subagents/<agent>.jsonl`, every real turn carries
+        // that same flag, so treat it as the subagent's own main transcript.
+        let counts_as_main = is_subagent_log || !is_sidechain;
         // Capture first timestamp as creation time
         if created_ms == 0 {
             if let Some(ts) = v.get("ts").and_then(|t| t.as_i64()) {
@@ -145,7 +168,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         }
         match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => {
-                if !is_sidechain {
+                if counts_as_main {
                     count += 1;
                     if title.is_none() {
                         if let Some(t) = v.get("message").and_then(extract_user_text) {
@@ -155,7 +178,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                 }
             }
             Some("assistant") => {
-                if !is_sidechain {
+                if counts_as_main {
                     count += 1;
                     // Newest assistant turn wins — "what the run last did".
                     if let Some(t) = v.get("message").and_then(message_text) {
@@ -196,7 +219,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                             // (older builds) or the `Agent` tool (current). Each
                             // call is one sub-agent; we tally them from the main
                             // transcript only — sidechain turns are skipped above.
-                            if !is_sidechain && (name == "Agent" || name == "Task") {
+                            if counts_as_main && (name == "Agent" || name == "Task") {
                                 subagent_count += 1;
                             }
                         }
@@ -232,8 +255,20 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
         cost_usd,
         subagent_count,
         last_event,
-        parent_id: None,
+        parent_id,
     })
+}
+
+fn claude_subagent_parent_id(path: &std::path::Path) -> Option<String> {
+    let subagents_dir = path.parent()?;
+    if subagents_dir.file_name()?.to_str()? != "subagents" {
+        return None;
+    }
+    subagents_dir
+        .parent()?
+        .file_name()
+        .map(|id| id.to_string_lossy().to_string())
+        .filter(|id| !id.is_empty())
 }
 
 // Walk a message's content into a single readable string: text parts
@@ -402,6 +437,56 @@ mod tests {
         let found = ClaudeCode.discover_runs(home.to_str().unwrap());
         assert_eq!(found.len(), 1);
         assert!(found[0].key.ends_with("a.jsonl"));
+    }
+
+    #[test]
+    fn discovers_subagent_jsonl_files_under_parent_sessions() {
+        let home = temp_home("discover-subagents");
+        let proj = home.join(".claude/projects/-Users-x-proj");
+        let subagents = proj.join("parent-123/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(proj.join("parent-123.jsonl"), FIXTURE).unwrap();
+        std::fs::write(subagents.join("agent-a1.jsonl"), FIXTURE).unwrap();
+        std::fs::write(subagents.join("ignored.txt"), "x").unwrap();
+
+        let mut keys: Vec<String> = ClaudeCode
+            .discover_runs(home.to_str().unwrap())
+            .into_iter()
+            .map(|c| c.key)
+            .collect();
+        keys.sort();
+
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().any(|k| k.ends_with("parent-123.jsonl")));
+        assert!(keys
+            .iter()
+            .any(|k| k.ends_with("parent-123/subagents/agent-a1.jsonl")));
+    }
+
+    #[test]
+    fn parses_subagent_log_as_child_run() {
+        let home = temp_home("parse-subagent");
+        let subagents = home.join(".claude/projects/-Users-x-proj/parent-123/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let p = subagents.join("agent-a1.jsonl");
+        std::fs::write(
+            &p,
+            concat!(
+                r#"{"type":"user","isSidechain":true,"timestamp":"2026-06-23T09:15:22.629Z","cwd":"/Users/x/proj","message":{"content":"Explore the harness\nwith details"}}"#, "\n",
+                r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-4-5","usage":{"input_tokens":3,"output_tokens":5},"content":[{"type":"text","text":"Mapped the terrain."}]}}"#, "\n",
+            ),
+        )
+        .unwrap();
+
+        let run = parse_run(&p).unwrap();
+
+        assert_eq!(run.id, "agent-a1");
+        assert_eq!(run.parent_id.as_deref(), Some("parent-123"));
+        assert_eq!(run.title, "Explore the harness");
+        assert_eq!(run.message_count, 2);
+        assert_eq!(run.model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(run.cwd.as_deref(), Some("/Users/x/proj"));
+        assert_eq!(run.last_event.as_deref(), Some("Mapped the terrain."));
     }
 
     #[test]

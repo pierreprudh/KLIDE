@@ -23,6 +23,7 @@ import type { AgentEvent } from "./agent/types";
 import type { Conversation, Msg } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchRunMessages, type RunMessage as MissionRunMessage } from "./runs";
+import type { DelegateId } from "./delegates";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
 import { MemoryModal } from "./components/MemoryModal";
@@ -171,7 +172,7 @@ function App() {
   // clears the entry. One-at-a-time, key matched by panel id.
   const [pendingAiPanel, setPendingAiPanel] = useState<{
     panelId: string;
-    provider: "claude-code" | "codex" | "opencode";
+    provider: DelegateId;
     resumeSessionId: string | null;
     initialTask: string | null;
   } | null>(null);
@@ -682,7 +683,7 @@ function App() {
   // for claude-code / codex / opencode). For Klide handoff, the first user
   // message becomes the CLI's task arg via `initialTask`.
   function openRunInAiPanel(opts: {
-    provider: "claude-code" | "codex" | "opencode";
+    provider: DelegateId;
     workspaceRoot: string | null;
     resumeSessionId?: string;
     initialTask?: string;

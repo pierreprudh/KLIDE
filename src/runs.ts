@@ -7,7 +7,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentEvent } from "./agent/types";
 import { foldAgentEvents, foldedToRunMessages } from "./agent/foldEvents";
 
-export type RunSource = "claude-code" | "codex" | "opencode" | "omp" | "klide";
+import type { DelegateId } from "./delegates";
+
+export type RunSource = DelegateId | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
 export type RunBoardSection = "running" | "blocked" | "ready_for_review" | "done";
 
@@ -217,14 +219,13 @@ export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId"
     return "running";
   }
   if (run.status === "cancelled") {
-    return run.kind === "task" || run.parentId ? "ready_for_review" : "done";
+    return run.kind === "task" ? "ready_for_review" : "done";
   }
   // "Ready for Review" is for delegated work an agent produced on your behalf:
-  // queued tasks and Klide-spawned subagent runs (which carry a parentId — set
-  // only when Klide actually spawned the delegate). A top-level CLI session you
-  // opened and ended yourself has no parentId, so it belongs in Done alongside
-  // finished Klide conversations — you already drove it, nothing to inspect.
-  if (run.kind === "task" || run.parentId) return "ready_for_review";
+  // Mission Control todos are explicit assignments you created and may want
+  // to inspect. Subagents with parentId stay nested under their parent instead
+  // of becoming top-level review work.
+  if (run.kind === "task") return "ready_for_review";
   return "done";
 }
 
@@ -247,16 +248,11 @@ export function runAttentionReason(
     return { kind: "awaiting_input" };
   }
   if (run.status === "running") {
-    const idle = Date.now() - run.updatedMs;
-    if (idle >= STALE_RUNNING_MS) return { kind: "idle", idleMs: idle };
     return null;
   }
-  // Done / cancelled runs only enter the queue when there's a delegated
-  // artifact you haven't inspected yet — Klide-spawned subagents (parentId)
-  // and Mission Control todos that finished (kind === "task").
-  if (run.kind === "task" || run.parentId) {
-    return { kind: "awaiting_review", source: run.source };
-  }
+  // Completed work stays in the board sections/history. The top Attention
+  // strip is reserved for things that are actively blocked on the user or
+  // failed, not "maybe worth reading later" review work.
   return null;
 }
 

@@ -1,5 +1,6 @@
 import type { AgentMode, ProviderId } from "./types";
 import { customProviderSync } from "../customProviders";
+import { isDelegateId } from "../delegates";
 
 export type ProviderGroup = {
   label: string;
@@ -104,9 +105,7 @@ export function providerGroupsWithCustom(
 }
 
 export function isDelegateProvider(id: ProviderId): boolean {
-  return (
-    id === "claude-code" || id === "codex" || id === "opencode" || id === "omp"
-  );
+  return isDelegateId(id);
 }
 
 export function normalizeAgentMode(value: string | null): AgentMode {

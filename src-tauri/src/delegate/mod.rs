@@ -231,6 +231,35 @@ mod tests {
     }
 
     #[test]
+    fn frontend_delegate_ids_match_all() {
+        // The frontend keeps its own copy of the delegate id set in
+        // src/delegates.ts (a TypeScript union type can't be produced from a
+        // runtime call into Rust). This test is the seam that makes the two
+        // lists fail the build if they ever drift apart.
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/delegates.ts"),
+        )
+        .expect("read src/delegates.ts");
+        let start = ts.find("DELEGATE_IDS").expect("DELEGATE_IDS in delegates.ts");
+        let open = ts[start..].find('[').expect("opening [") + start;
+        let close = ts[open..].find(']').expect("closing ]") + open;
+        // Split the array literal on quotes; the quoted contents land on the
+        // odd indices ("", "claude-code", ", ", "codex", …).
+        let mut frontend: Vec<&str> = ts[open + 1..close]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+        frontend.sort_unstable();
+        let mut backend: Vec<&str> = ALL.iter().map(|d| d.id()).collect();
+        backend.sort_unstable();
+        assert_eq!(
+            backend, frontend,
+            "delegate::ALL and src/delegates.ts disagree — update both"
+        );
+    }
+
+    #[test]
     fn list_runs_merges_sources_and_pages() {
         // One Claude session (file mtime ≈ now) and two OpenCode sessions
         // with ancient explicit timestamps — the board sorts them together,

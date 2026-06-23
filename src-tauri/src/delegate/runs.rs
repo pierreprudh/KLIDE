@@ -40,8 +40,8 @@ pub struct AgentRun {
     /// Number of sub-agents this run spawned, counted from the transcript's
     /// own tool calls (Claude's `Agent` / `Task` tool). 0 when the source
     /// doesn't expose sub-agent calls or none ran. Distinct from `parent_id`,
-    /// which links a run to a *separate* parent session; here the sub-agents
-    /// live inside this run's own log, so we surface a count rather than rows.
+    /// which links a run row to a separate parent session when that child log
+    /// is discoverable (for example Claude's `subagents/*.jsonl` files).
     pub subagent_count: u32,
     /// One-line summary of the run's most recent assistant turn — "what it
     /// last did" — for the board's evidence line. The session title is the

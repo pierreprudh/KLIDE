@@ -57,6 +57,7 @@ import {
   type RunStatus,
   type RunToolCall,
 } from "../runs";
+import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
 import { modelBrand } from "../modelBrand";
@@ -99,6 +100,53 @@ function taskToRun(t: TaskSession): Run {
     updatedMs: t.startedMs,
     createdMs: t.startedMs,
   };
+}
+
+function isClaudeInternalSubagent(run: Pick<Run, "source" | "path">): boolean {
+  return run.source === "claude-code" && run.path.includes("/subagents/");
+}
+
+function SubagentStackToggle({
+  count,
+  expanded,
+  onToggle,
+}: {
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <span
+      role="button"
+      aria-label={expanded ? "Collapse subagents" : "Expand subagents"}
+      title={expanded ? "Collapse subagents" : "Expand subagents"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      style={{
+        height: 22,
+        minWidth: 30,
+        padding: "0 6px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 3,
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        background: expanded ? "var(--accent-soft)" : "var(--bg-hover)",
+        color: expanded ? "var(--accent)" : "var(--fg-subtle)",
+        fontSize: 10,
+        fontFamily: "var(--font-mono)",
+        lineHeight: 1,
+      }}
+    >
+      {count}
+      <span aria-hidden style={{ fontSize: 10, transform: expanded ? "rotate(180deg)" : "none" }}>
+        ▾
+      </span>
+    </span>
+  );
 }
 
 // Same for an AI-panel conversation — Klide's own chats join the board.
@@ -565,6 +613,7 @@ function RunRow({
   selected,
   onSelect,
   action,
+  dismissAction,
   compact,
   hasMemory,
 }: {
@@ -572,11 +621,27 @@ function RunRow({
   selected: boolean;
   onSelect: () => void;
   action?: React.ReactNode;
+  dismissAction?: {
+    label: string;
+    onDismiss: () => void;
+    danger?: boolean;
+  };
   compact?: boolean;
   /** A durable Project Memory note exists for this run (matched by runId). */
   hasMemory?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [dragX, setDragX] = useState(0);
+  const [swipeOpen, setSwipeOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef<{ x: number; y: number; active: boolean } | null>(null);
+  const dragXRef = useRef(0);
+  const suppressNextClick = useRef(false);
+  const actionWidth = 76;
+  const setSwipeX = (x: number) => {
+    dragXRef.current = x;
+    setDragX(x);
+  };
   const tokenSummary = runTokenSummary(run);
   const showEvidence = run.status !== "error";
   // The row stays quiet: just the passive attention badge, or a single
@@ -598,9 +663,67 @@ function RunRow({
   ) : (
     <RunAttentionBadge run={run} compact={compact} />
   );
-  return (
+  const row = (
     <button
-      onClick={onSelect}
+      onClick={(e) => {
+        if (suppressNextClick.current) {
+          e.preventDefault();
+          e.stopPropagation();
+          suppressNextClick.current = false;
+          return;
+        }
+        if (swipeOpen) {
+          e.preventDefault();
+          setSwipeOpen(false);
+          setSwipeX(0);
+          return;
+        }
+        onSelect();
+      }}
+      onPointerDown={(e) => {
+        if (!dismissAction) return;
+        if (e.button !== 0) return;
+        dragStart.current = { x: e.clientX, y: e.clientY, active: false };
+      }}
+      onPointerMove={(e) => {
+        const start = dragStart.current;
+        if (!dismissAction || !start) return;
+        const dx = e.clientX - start.x;
+        const dy = e.clientY - start.y;
+        if (!start.active && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+          start.active = true;
+          setDragging(true);
+          setSwipeOpen(false);
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        if (!start.active) return;
+        e.preventDefault();
+        const next = dx < -actionWidth ? -actionWidth - Math.sqrt(Math.abs(dx + actionWidth)) : dx;
+        setSwipeX(Math.max(-actionWidth - 10, Math.min(0, next)));
+      }}
+      onPointerUp={(e) => {
+        const start = dragStart.current;
+        if (start?.active) {
+          e.preventDefault();
+          const open = dragXRef.current < -30;
+          setSwipeOpen(open);
+          setSwipeX(open ? -actionWidth : 0);
+          suppressNextClick.current = true;
+          try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          } catch {
+            /* pointer capture may already be gone */
+          }
+        }
+        setDragging(false);
+        dragStart.current = null;
+      }}
+      onPointerCancel={() => {
+        dragStart.current = null;
+        setDragging(false);
+        setSwipeOpen(false);
+        setSwipeX(0);
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -615,8 +738,21 @@ function RunRow({
           ? "var(--bg-selected)"
           : hovered
           ? "var(--bg-hover)"
+          : dismissAction
+          ? "var(--bg-elevated)"
           : "transparent",
-        transition: "background var(--motion-fast) var(--ease-out)",
+        transform: dismissAction ? `translateX(${dragX}px)` : undefined,
+        touchAction: dismissAction ? "pan-y" : undefined,
+        boxShadow:
+          dismissAction && dragX < 0
+            ? "8px 0 24px color-mix(in srgb, #000 11%, transparent)"
+            : undefined,
+        transition:
+          dragging
+            ? "background var(--motion-fast) var(--ease-out)"
+            : "background var(--motion-fast) var(--ease-out), transform 420ms cubic-bezier(.18,.88,.22,1), box-shadow 420ms cubic-bezier(.18,.88,.22,1)",
+        position: "relative",
+        zIndex: swipeOpen ? 1 : 3,
       }}
     >
       {!compact && <RunAvatar source={run.source} kind={run.kind} model={run.model} />}
@@ -743,6 +879,66 @@ function RunRow({
       {rightRail}
     </button>
   );
+  if (!dismissAction) return row;
+  return (
+    <div
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: "var(--radius-sm)",
+        background: "var(--bg-elevated)",
+      }}
+    >
+      <button
+        type="button"
+        onPointerDown={(e) => {
+          e.stopPropagation();
+        }}
+        onPointerUp={(e) => {
+          e.stopPropagation();
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setSwipeOpen(false);
+          setSwipeX(0);
+          dismissAction.onDismiss();
+        }}
+        title={dismissAction.label}
+        aria-label={dismissAction.label}
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: actionWidth,
+          zIndex: 5,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 3,
+          border: "none",
+          borderRadius: "var(--radius-sm)",
+          background: dismissAction.danger
+            ? "linear-gradient(135deg, color-mix(in srgb, var(--danger, #B42318) 24%, var(--bg-elevated)), color-mix(in srgb, var(--danger, #B42318) 14%, var(--bg)))"
+            : "linear-gradient(135deg, color-mix(in srgb, var(--fg-subtle) 13%, var(--bg-elevated)), var(--bg-hover))",
+          color: dismissAction.danger ? "var(--danger, #B42318)" : "var(--fg-muted)",
+          fontSize: 9,
+          fontFamily: "var(--font-mono)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          cursor: "pointer",
+          opacity: Math.min(1, Math.abs(dragX) / actionWidth),
+          pointerEvents: swipeOpen || dragX <= -24 ? "auto" : "none",
+          transition: dragging ? "none" : "opacity 260ms cubic-bezier(.18,.88,.22,1)",
+        }}
+      >
+        <DismissIcon />
+        {dismissAction.label}
+      </button>
+      {row}
+    </div>
+  );
 }
 
 // ── Mission Control v3 — Attention queue ────────────────────────────────────
@@ -768,6 +964,47 @@ const ATTENTION_SEVERITY: Record<RunAttention["kind"], number> = {
   idle: 2,
   awaiting_review: 3,
 };
+
+const DISMISSED_ATTENTION_KEY = "klide-dismissed-attention";
+const DISMISSED_BOARD_KEY = "klide-dismissed-board-runs";
+
+function attentionDismissKey(run: Pick<Run, "source" | "id" | "status" | "updatedMs">): string {
+  return `${run.source}:${run.id}:${run.status}:${run.updatedMs}`;
+}
+
+function boardDismissKey(run: Pick<Run, "source" | "id" | "updatedMs">): string {
+  return `${run.source}:${run.id}:${run.updatedMs}`;
+}
+
+function readStringSet(key: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeStringSet(key: string, ids: Set<string>) {
+  localStorage.setItem(key, JSON.stringify(Array.from(ids)));
+}
+
+function readDismissedAttention(): Set<string> {
+  return readStringSet(DISMISSED_ATTENTION_KEY);
+}
+
+function writeDismissedAttention(ids: Set<string>) {
+  writeStringSet(DISMISSED_ATTENTION_KEY, ids);
+}
+
+function readDismissedBoardRuns(): Set<string> {
+  return readStringSet(DISMISSED_BOARD_KEY);
+}
+
+function writeDismissedBoardRuns(ids: Set<string>) {
+  writeStringSet(DISMISSED_BOARD_KEY, ids);
+}
 
 // Compact one-line summary for an attention reason, in the row's subtitle
 // slot. The label alone ("Failed", "Needs you") is too generic on a board
@@ -818,6 +1055,7 @@ function AttentionQueueItem({
   reason,
   isTask,
   onSelect,
+  onDismiss,
   onResumeKlide,
   onOpenInAiPanel,
 }: {
@@ -827,8 +1065,9 @@ function AttentionQueueItem({
    *  "send an agent" affordance is the right action for queued/error tasks. */
   isTask: boolean;
   onSelect: () => void;
+  onDismiss: () => void;
   onResumeKlide?: (runId: string) => void;
-  onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
+  onOpenInAiPanel?: (input: { provider: DelegateId; workspaceRoot: string | null; resumeSessionId: string }) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const subtitle = attentionSubtitle(reason, run.source);
@@ -840,13 +1079,12 @@ function AttentionQueueItem({
   const resumeAction: React.ReactNode | null =
     run.source === "klide" && onResumeKlide ? (
       <ResumeKlide runId={run.id} onResume={onResumeKlide} />
-    ) : (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") &&
-      onOpenInAiPanel ? (
+    ) : isDelegateId(run.source) && onOpenInAiPanel ? (
       <ResumeCli
         source={run.source}
         onResume={() =>
           onOpenInAiPanel({
-            provider: run.source as "claude-code" | "codex" | "opencode",
+            provider: run.source as DelegateId,
             workspaceRoot: run.cwd,
             resumeSessionId: run.id,
           })
@@ -945,6 +1183,7 @@ function AttentionQueueItem({
           flexShrink: 0,
         }}
       >
+        {hovered && action ? action : null}
         <span
           style={{
             width: 22,
@@ -953,7 +1192,14 @@ function AttentionQueueItem({
             placeItems: "center",
           }}
         >
-          {action && hovered ? action : <StatusDot status={run.status} size={7} />}
+          {hovered ? (
+            <DismissAttention
+              label={isTask ? "Delete task" : "Dismiss from attention"}
+              onDismiss={onDismiss}
+            />
+          ) : (
+            <StatusDot status={run.status} size={7} />
+          )}
         </span>
       </span>
     </button>
@@ -971,19 +1217,21 @@ function AttentionQueue({
   tasks: TaskSession[];
   onSelect: (run: Run) => void;
   onResumeKlide?: (runId: string) => void;
-  onOpenInAiPanel?: (input: { provider: "claude-code" | "codex" | "opencode"; workspaceRoot: string | null; resumeSessionId: string }) => void;
+  onOpenInAiPanel?: (input: { provider: DelegateId; workspaceRoot: string | null; resumeSessionId: string }) => void;
 }) {
   // Stable open/closed state — collapse the queue after the user dismisses
   // it once, and remember the choice across re-renders. The first render is
   // open when there's something to look at, so the user doesn't have to dig
   // for a 1-item queue.
   const [open, setOpen] = useState(true);
+  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissedAttention());
 
   const items = useMemo(() => {
     const taskIds = new Set(tasks.map((t) => t.id));
     return runs
       .map((run) => {
         const reason = runAttentionReason(run);
+        if (reason && dismissed.has(attentionDismissKey(run))) return null;
         return reason ? { run, reason, isTask: taskIds.has(run.id) } : null;
       })
       .filter((x): x is { run: Run; reason: RunAttention; isTask: boolean } => x !== null)
@@ -992,7 +1240,20 @@ function AttentionQueue({
         if (sev !== 0) return sev;
         return b.run.updatedMs - a.run.updatedMs;
       });
-  }, [runs, tasks]);
+  }, [runs, tasks, dismissed]);
+
+  function dismiss(run: Run, isTask: boolean) {
+    if (isTask && run.status !== "running") {
+      removeTask(run.id);
+      return;
+    }
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      next.add(attentionDismissKey(run));
+      writeDismissedAttention(next);
+      return next;
+    });
+  }
 
   // The strip is hidden entirely when nothing needs attention — its presence
   // is the signal. Returning null keeps the layout compact and avoids a
@@ -1034,7 +1295,7 @@ function AttentionQueue({
         <span
           style={{ color: "var(--fg-strong)" }}
         >
-          Needs you
+          Attention
         </span>
         <span style={{ opacity: 0.7 }}>{items.length}</span>
         <span style={{ marginLeft: "auto", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1 }}>
@@ -1057,6 +1318,7 @@ function AttentionQueue({
               reason={reason}
               isTask={isTask}
               onSelect={() => onSelect(run)}
+              onDismiss={() => dismiss(run, isTask)}
               onResumeKlide={onResumeKlide}
               onOpenInAiPanel={onOpenInAiPanel}
             />
@@ -1198,6 +1460,58 @@ function ReviewIcon() {
     >
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function DismissAttention({
+  label,
+  onDismiss,
+}: {
+  label: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <span
+      role="button"
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDismiss();
+      }}
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        borderRadius: "var(--radius-sm)",
+        border: "1px solid var(--border)",
+        color: "var(--fg-subtle)",
+        background: "var(--bg-hover)",
+      }}
+    >
+      <DismissIcon />
+    </span>
+  );
+}
+
+function DismissIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
     </svg>
   );
 }
@@ -2595,7 +2909,7 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
         <div style={{ padding: "6px 24px 24px" }}>
           <DetailLabel>Send an agent</DetailLabel>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            {(["claude-code", "codex", "opencode"] as const).map((s) => (
+            {DELEGATE_IDS.map((s) => (
               <FilterChip
                 key={s}
                 label={SOURCE_LABEL[s]}
@@ -2710,13 +3024,10 @@ function RunDetail({
   // All 3 external CLIs support resume flags today: `claude --resume <id>`,
   // `codex resume <id>`, and `opencode -s <id>`. The Rust seam builds the
   // right command for each, so the UI just needs to be honest about it.
-  const resumable =
-    run.source === "claude-code" ||
-    run.source === "codex" ||
-    run.source === "opencode";
+  const resumable = isDelegateId(run.source);
   // The full set of CLI sources we can offer as "Open in {source}". Klide
   // runs hand off to one of these with the first user message as the task.
-  const cliSources: TaskSource[] = ["claude-code", "codex", "opencode"];
+  const cliSources: DelegateId[] = [...DELEGATE_IDS];
 
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
@@ -3009,6 +3320,8 @@ export function MissionControl({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<RunSource | "all" | "subagent">("all");
   const [pinnedId, setPinnedId] = useState<string | null>(null);
+  const [expandedSubagentParents, setExpandedSubagentParents] = useState<Set<string>>(new Set());
+  const [dismissedBoardRuns, setDismissedBoardRuns] = useState<Set<string>>(() => readDismissedBoardRuns());
   // First user message of the currently selected Klide run. Used as the
   // task prompt when handing the run off to a CLI via "Open in {CLI}".
   const [firstUserMessage, setFirstUserMessage] = useState<string | null>(null);
@@ -3101,8 +3414,8 @@ export function MissionControl({
       ...tasks.map(taskToRun),
       ...convos.map(convoToRun).filter((c) => !diskIds.has(c.id)),
       ...runs,
-    ];
-  }, [tasks, convos, runs]);
+    ].filter((r) => r.kind === "task" || !dismissedBoardRuns.has(boardDismissKey(r)));
+  }, [tasks, convos, runs, dismissedBoardRuns]);
 
   // Parent links come exclusively from the Rust spawn mapping
   // (`by_delegate`/`by_external` in list_agent_runs), which records a real
@@ -3223,6 +3536,28 @@ export function MissionControl({
     } else {
       setPinnedId(null);
     }
+  }
+
+  function toggleSubagentStack(parentId: string) {
+    setExpandedSubagentParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  }
+
+  function dismissBoardRun(run: Run) {
+    if (run.kind === "task") {
+      removeTask(run.id);
+      return;
+    }
+    setDismissedBoardRuns((prev) => {
+      const next = new Set(prev);
+      next.add(boardDismissKey(run));
+      writeDismissedBoardRuns(next);
+      return next;
+    });
   }
 
   const attentionCount = filtered.filter(runNeedsAttention).length;
@@ -3398,14 +3733,23 @@ export function MissionControl({
                       (run.source === "claude-code" ||
                         run.source === "codex" ||
                         run.source === "opencode") &&
+                      !isClaudeInternalSubagent(run) &&
                       run.status !== "running" &&
                       onOpenInAiPanel;
                     const children = (childrenByParent.get(run.id) ?? [])
                       .slice()
                       .sort((a, b) => a.createdMs - b.createdMs);
+                    const expanded = children.length > 0 && expandedSubagentParents.has(run.id);
                     const parentSelected = run.id === selectedId;
+                    const parentDismissible = section === "blocked" || runAttentionReason(run) !== null;
                     return (
-                      <div key={run.id} style={{ position: "relative", margin: "0 8px 10px" }}>
+                      <div
+                        key={run.id}
+                        style={{
+                          position: "relative",
+                          margin: "0 8px 10px",
+                        }}
+                      >
                         {/* Main conversation card — top of the stack. */}
                         <div
                           style={{
@@ -3422,6 +3766,15 @@ export function MissionControl({
                             selected={parentSelected}
                             hasMemory={memoryRunIds.has(run.id)}
                             onSelect={() => selectRun(run)}
+                            dismissAction={
+                              parentDismissible
+                                ? {
+                                    label: run.kind === "task" ? "Delete" : "Dismiss",
+                                    danger: run.kind === "task" || run.status === "error",
+                                    onDismiss: () => dismissBoardRun(run),
+                                  }
+                                : undefined
+                            }
                             action={
                               sendable ? (
                                 <QuickSend
@@ -3432,6 +3785,12 @@ export function MissionControl({
                                 <ResumeKlide
                                   runId={run.id}
                                   onResume={(id) => onResumeKlideRun?.(id)}
+                                />
+                              ) : hasChildren(run.id) ? (
+                                <SubagentStackToggle
+                                  count={children.length}
+                                  expanded={expanded}
+                                  onToggle={() => toggleSubagentStack(run.id)}
                                 />
                               ) : cliResumable ? (
                                 <ResumeCli
@@ -3444,77 +3803,193 @@ export function MissionControl({
                                     })
                                   }
                                 />
-                              ) : hasChildren(run.id) ? (
-                                <span title={`${children.length} sub-agent${children.length > 1 ? "s" : ""}`} style={{
-                                  fontSize: 10, fontFamily: "var(--font-mono)",
-                                  color: "var(--fg-subtle)", padding: "2px 5px",
-                                  background: "var(--bg-hover)", borderRadius: "var(--radius-xs)",
-                                }}>
-                                  {children.length}
-                                </span>
                               ) : undefined
                             }
                           />
                         </div>
-                        {/* Reverse pyramid: each sub-agent card tucks under the
-                            one above and steps in on both sides, so the stack
-                            reads "spawned by the conversation on top". */}
-                        {children.map((child, i) => {
-                          const childSelected = child.id === selectedId;
-                          const childTask = tasks.find((t) => t.id === child.id);
-                          const childSendable =
-                            childTask && (childTask.status === "queued" || childTask.status === "error");
-                          const childCliResumable =
-                            child.kind === "run" &&
-                            (child.source === "claude-code" ||
-                              child.source === "codex" ||
-                              child.source === "opencode") &&
-                            child.status !== "running" &&
-                            onOpenInAiPanel;
-                          const inset = 14 * Math.min(i + 1, 3);
-                          return (
-                            <div
-                              key={child.id}
-                              style={{
-                                position: "relative",
-                                zIndex: children.length - i,
-                                margin: `-6px ${inset}px 0`,
-                                paddingTop: 6,
-                                border: "1px solid var(--border)",
-                                borderRadius: "var(--radius-md)",
-                                background: "var(--bg-elevated)",
-                                overflow: "hidden",
-                              }}
-                            >
-                              <RunRow
-                                run={child}
-                                selected={childSelected}
-                                compact
-                                hasMemory={memoryRunIds.has(child.id)}
-                                onSelect={() => selectRun(child)}
-                                action={
-                                  childSendable ? (
-                                    <QuickSend
-                                      taskId={child.id}
-                                      onSent={() => setSelectedId(child.id)}
+                        {children.length > 0 && !expanded ? (
+                          // Symmetric "sheets" peeking under the card — a calm depth cue
+                          // that a stack sits underneath. One sheet for a single child, two
+                          // for 2+ (a deeper, narrower one peeks below the nearest). The
+                          // count lives in the row's SubagentStackToggle badge, so these
+                          // stay unlabeled. No native `title` (it overlapped the next row).
+                          (() => {
+                            const sheets = Math.min(children.length, 2);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => toggleSubagentStack(run.id)}
+                                aria-label={`Expand ${children.length} sub-agent${children.length > 1 ? "s" : ""}`}
+                                style={{
+                                  position: "relative",
+                                  display: "block",
+                                  width: "100%",
+                                  height: sheets > 1 ? 10 : 6,
+                                  margin: "-1px 0 0",
+                                  border: "none",
+                                  background: "transparent",
+                                  cursor: "pointer",
+                                  padding: 0,
+                                }}
+                              >
+                                {/* Render deepest first so the nearest sheet paints on top. */}
+                                {Array.from({ length: sheets }).map((_, k) => {
+                                  const depth = sheets - 1 - k; // 0 = nearest the card
+                                  return (
+                                    <span
+                                      key={k}
+                                      aria-hidden
+                                      style={{
+                                        position: "absolute",
+                                        left: 7 + depth * 5,
+                                        right: 7 + depth * 5,
+                                        top: depth * 4,
+                                        height: 6,
+                                        border: "1px solid var(--border)",
+                                        borderTop: "none",
+                                        borderRadius: "0 0 var(--radius-md) var(--radius-md)",
+                                        background: "var(--bg-elevated)",
+                                      }}
                                     />
-                                  ) : childCliResumable ? (
-                                    <ResumeCli
-                                      source={child.source}
-                                      onResume={() =>
-                                        onOpenInAiPanel?.({
-                                          provider: child.source as TaskSource,
-                                          workspaceRoot: child.cwd,
-                                          resumeSessionId: child.id,
-                                        })
-                                      }
-                                    />
-                                  ) : undefined
-                                }
-                              />
+                                  );
+                                })}
+                              </button>
+                            );
+                          })()
+                        ) : null}
+                        {children.length > 0 ? (
+                          // Folder-tree layout that opens/closes smoothly. The grid track
+                          // animates 0fr↔1fr (handles dynamic height in both directions
+                          // with no unmount jank); the inner clip hides overflow while it
+                          // grows. A vertical rail descends from the parent card; each child
+                          // hangs off a ├ tick at its center, the last off a rounded └.
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateRows: expanded ? "1fr" : "0fr",
+                              opacity: expanded ? 1 : 0,
+                              transition:
+                                "grid-template-rows var(--motion-med) var(--ease-soft), opacity var(--motion-med) var(--ease-soft)",
+                            }}
+                          >
+                            <div style={{ overflow: "hidden", minHeight: 0 }}>
+                              <div style={{ display: "flex", flexDirection: "column", marginTop: 6 }}>
+                                {children.map((child, ci) => {
+                                  const childSelected = child.id === selectedId;
+                                  const childTask = tasks.find((t) => t.id === child.id);
+                                  const childSendable =
+                                    childTask && (childTask.status === "queued" || childTask.status === "error");
+                                  const childCliResumable =
+                                    child.kind === "run" &&
+                                    (child.source === "claude-code" ||
+                                      child.source === "codex" ||
+                                      child.source === "opencode") &&
+                                    !isClaudeInternalSubagent(child) &&
+                                    child.status !== "running" &&
+                                    onOpenInAiPanel;
+                                  const childDismissible =
+                                    boardSectionForRun(child) === "blocked" || runAttentionReason(child) !== null;
+                                  const isLast = ci === children.length - 1;
+                                  const first = ci === 0;
+                                  return (
+                                    <div
+                                      key={child.id}
+                                      style={{
+                                        position: "relative",
+                                        paddingLeft: 22,
+                                        marginBottom: isLast ? 0 : 6,
+                                      }}
+                                    >
+                                      {isLast ? (
+                                        // └ — rail drops to the card's center, then a rounded turn.
+                                        <span
+                                          aria-hidden
+                                          style={{
+                                            position: "absolute",
+                                            left: 9,
+                                            top: first ? -6 : 0,
+                                            height: first ? "calc(50% + 6px)" : "50%",
+                                            width: 9,
+                                            borderLeft: "1px solid var(--border)",
+                                            borderBottom: "1px solid var(--border)",
+                                            borderBottomLeftRadius: "var(--radius-sm)",
+                                          }}
+                                        />
+                                      ) : (
+                                        // ├ — rail runs straight through; tick meets the card center.
+                                        <>
+                                          <span
+                                            aria-hidden
+                                            style={{
+                                              position: "absolute",
+                                              left: 9,
+                                              top: first ? -6 : 0,
+                                              bottom: -6,
+                                              borderLeft: "1px solid var(--border)",
+                                            }}
+                                          />
+                                          <span
+                                            aria-hidden
+                                            style={{
+                                              position: "absolute",
+                                              left: 9,
+                                              top: "50%",
+                                              width: 9,
+                                              borderTop: "1px solid var(--border)",
+                                            }}
+                                          />
+                                        </>
+                                      )}
+                                      <div
+                                        style={{
+                                          border: "1px solid var(--border)",
+                                          borderRadius: "var(--radius-md)",
+                                          background: "var(--bg-elevated)",
+                                          overflow: "hidden",
+                                        }}
+                                      >
+                                        <RunRow
+                                          run={child}
+                                          selected={childSelected}
+                                          hasMemory={memoryRunIds.has(child.id)}
+                                          onSelect={() => selectRun(child)}
+                                          dismissAction={
+                                            childDismissible
+                                              ? {
+                                                  label: child.kind === "task" ? "Delete" : "Dismiss",
+                                                  danger: child.kind === "task" || child.status === "error",
+                                                  onDismiss: () => dismissBoardRun(child),
+                                                }
+                                              : undefined
+                                          }
+                                          action={
+                                            childSendable ? (
+                                              <QuickSend
+                                                taskId={child.id}
+                                                onSent={() => setSelectedId(child.id)}
+                                              />
+                                            ) : childCliResumable ? (
+                                              <ResumeCli
+                                                source={child.source}
+                                                onResume={() =>
+                                                  onOpenInAiPanel?.({
+                                                    provider: child.source as TaskSource,
+                                                    workspaceRoot: child.cwd,
+                                                    resumeSessionId: child.id,
+                                                  })
+                                                }
+                                              />
+                                            ) : undefined
+                                          }
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
-                          );
-                        })}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}

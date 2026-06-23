@@ -7,9 +7,12 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { RunSource, RunStatus } from "./runs";
+import type { RunStatus } from "./runs";
+import type { DelegateId } from "./delegates";
 
-export type TaskSource = Extract<RunSource, "claude-code" | "codex" | "opencode">;
+// Every delegate can be dispatched to a task. Derives from the one delegate
+// list so a new delegate is offerable without editing this file.
+export type TaskSource = DelegateId;
 
 export type TaskSession = {
   id: string;

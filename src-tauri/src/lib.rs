@@ -885,22 +885,22 @@ fn list_agent_runs(
 
 #[tauri::command]
 fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, String> {
-    // Sandbox: only ever read the two agent-log directories.
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let p = std::path::Path::new(&path);
-    let claude = std::path::Path::new(&home).join(".claude");
-    let codex = std::path::Path::new(&home).join(".codex");
-    if !(p.starts_with(&claude) || p.starts_with(&codex)) {
+    // Sandbox: only ever read the known agent-log directories. (OpenCode runs
+    // go through read_opencode_run instead — their key is a session id, not a
+    // path under home.)
+    let allowed = [".claude", ".codex", ".omp"];
+    if !allowed
+        .iter()
+        .any(|dir| p.starts_with(std::path::Path::new(&home).join(dir)))
+    {
         return Err("Path is outside the agent log directories".to_string());
     }
-    // Only "codex" was ever special-cased here; any other source reads as the
-    // Claude format. (OpenCode runs go through read_opencode_run instead —
-    // their key is a session id, not a path.)
-    let adapter: &dyn delegate::Delegate = if source == "codex" {
-        &delegate::Codex
-    } else {
-        &delegate::ClaudeCode
-    };
+    // Route through the registry so every delegate uses its own parser — an
+    // unknown source errors loudly instead of being mis-read as Claude.
+    let adapter = delegate::lookup(&source)
+        .ok_or_else(|| format!("No delegate adapter for source: {source}"))?;
     adapter.read_run(&home, &path)
 }
 
