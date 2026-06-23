@@ -638,7 +638,7 @@ export function AiPanel({
   // /auto-mode and /review-mode imply Goal mode (edits only happen there).
   const goalOrPlan = () => (modelSupportsTools || providerDelegatesWork ? "goal" : "plan") as AgentMode;
 
-  const SLASH_COMMANDS: { name: string; desc: string; run: () => void }[] = [
+  const SLASH_COMMANDS: { name: string; desc: string; run: () => void | Promise<void> }[] = [
     { name: "chat", desc: "Switch to Chat mode (no tools)", run: () => { selectMode("chat"); setInput(""); } },
     { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)", run: () => { selectMode("plan"); setInput(""); } },
     { name: "goal", desc: "Switch to Goal mode (can propose edits)", run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
@@ -662,6 +662,21 @@ export function AiPanel({
       void compactConversation();
     } },
     { name: "handoff", desc: "Save this task state into Project Memory", run: () => saveHandoffToProjectMemory() },
+    { name: "start", desc: "Start the local server (Ollama / MLX) for this provider", run: async () => {
+      setInput(""); setSlash(null);
+      if (!isLocalProvider) {
+        const note: Msg = { role: "system", content: `${providerName(provider)} runs in the cloud — there's no local server to start.` };
+        msgsRef.current = [...msgsRef.current, note];
+        setMsgs(msgsRef.current);
+        return;
+      }
+      // ensureLocalServerReady() flips `serverStarting`, which drives the
+      // centered DotGridLoader row ("Starting MLX local server…"). That row is
+      // the in-progress animation; on success it just disappears, and on
+      // failure the `serverError` banner surfaces the reason — so no extra
+      // mode-flash is needed here (that's reserved for /auto-mode etc.).
+      await ensureLocalServerReady();
+    } },
     { name: "explain", desc: "Explain a file — pick one next (read-only)", run: () => {
       setInput("Explain what this file does and how it works: @");
       setNextSendMode("plan");
@@ -1097,6 +1112,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   const processingQueueRef = useRef(false);
   const queueGenerationRef = useRef(0);
   const activeHarnessRunRef = useRef<string | null>(null);
+  // MLX's port can be up while the model is still cold (false readiness), which
+  // makes the first message stream-error. We warm the model on the first send
+  // for a given model and remember it here so later sends skip the round-trip;
+  // a model switch or a stream error clears it to force a re-warm.
+  const mlxWarmedRef = useRef<string | null>(null);
 
   // Fill in an exact per-message token count for user messages, using the
   // active model's own tokenizer (Ollama / Anthropic) where available. User
@@ -2012,6 +2032,8 @@ This user request requires workspace inspection. Before answering, you MUST call
       const failedUser = next[userIndex];
       if (failedUser?.role === "user") next[userIndex] = { ...failedUser, queueState: undefined, queueId: undefined };
       next[i] = { role: "assistant", content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.` };
+      // A failed MLX stream may mean the model went cold — re-warm next send.
+      if (turn.provider === "mlx") mlxWarmedRef.current = null;
       commit(next);
     }
     // Turn settled (done or errored): record it no longer in-flight. The panel
@@ -2086,7 +2108,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     setServerError(null);
     try {
       const running = await invoke<boolean>("ai_local_server_status", { provider });
-      if (running) {
+      // For MLX, "port is up" isn't enough — the model may still be cold. Only
+      // take the fast path once we've warmed this exact model; otherwise fall
+      // through to start, which warms it (and shows the starting animation).
+      if (running && (provider !== "mlx" || mlxWarmedRef.current === model)) {
         setServerRunning(true);
         setConnected(true);
         return true;
@@ -2104,6 +2129,8 @@ This user request requires workspace inspection. Before answering, you MUST call
         setServerError(`${providerName(provider)} did not start.`);
         return false;
       }
+      // ai_local_server_start blocks on an MLX warm-up before returning true.
+      if (provider === "mlx") mlxWarmedRef.current = model;
       return true;
     } catch (e) {
       const message = String(e);
