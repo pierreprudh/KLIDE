@@ -5,6 +5,8 @@ import { remainingCost, remainingDuration } from "../agent/budgetLedger";
 import type { CapacitySlot } from "../agent/capacityPlanner";
 import type { MissionTask } from "../agent/missionHarness";
 import type { WorkerAssignment } from "../agent/routingPolicy";
+import { buildGoalLoopDemo, type GoalLoopDemo } from "../agent/goalLoopDemo";
+import { latestGateAttempt, type GoalLoopGate, type GoalLoopGateVerdict } from "../agent/goalLoop";
 
 type Props = {
   state?: OrchestratorState;
@@ -26,6 +28,13 @@ export function OrchestratorPreview({ state: providedState, missionId }: Props) 
 
   const { mission, tasks, assignments, budget, capacity, validations, progress } = inspection;
   const assignmentByTask = new Map(assignments.map((assignment) => [assignment.taskId, assignment]));
+
+  // Pure, deterministic worked example — safe to compute after the early return
+  // (it is a plain call, not a hook).
+  const goalLoop = buildGoalLoopDemo({
+    goal: mission.intent || mission.title,
+    definitionOfDone: tasks[0]?.acceptanceCriteria ?? [],
+  });
 
   return (
     <div style={rootStyle}>
@@ -77,6 +86,8 @@ export function OrchestratorPreview({ state: providedState, missionId }: Props) 
           ))}
         </div>
       </section>
+
+      <GoalLoopSection demo={goalLoop} />
 
       <div style={twoColumnStyle}>
         <section style={sectionStyle}>
@@ -221,6 +232,125 @@ function Badge({ label, tone }: { label: string; tone: "accent" | "danger" | "wa
       {label}
     </span>
   );
+}
+
+function GoalLoopSection({ demo }: { demo: GoalLoopDemo }) {
+  const { spec, state, next } = demo;
+  const gateLabel = (id: string) => spec.gates.find((g: GoalLoopGate) => g.id === id)?.label ?? id;
+  const stopReason = state.stopReason;
+  const statusTone =
+    state.status === "passed"
+      ? "accent"
+      : state.status === "failed" || state.status === "stalled" || state.status === "budget-exhausted"
+        ? "danger"
+        : "neutral";
+
+  return (
+    <section style={sectionStyle}>
+      <div style={sectionHeaderStyle}>
+        <span>Goal Loop</span>
+        <span style={sectionHintStyle}>run snapshot → gates → done</span>
+      </div>
+      <div style={{ display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={goalTextStyle}>{spec.goal}</span>
+          <Badge label={state.status} tone={statusTone} />
+          <span style={loopMetaStyle}>
+            iter {state.iteration}/{spec.limits.maxIterations}
+          </span>
+        </div>
+
+        <div style={{ display: "grid", gap: 4 }}>
+          <span style={metricLabelStyle}>Definition of done</span>
+          <div style={criteriaStyle}>
+            {spec.definitionOfDone.map((d) => (
+              <span key={d}>{d}</span>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 5 }}>
+          <span style={metricLabelStyle}>Run snapshots (sample)</span>
+          {demo.snapshots.map((s) => (
+            <div key={s.label} style={tapeRowStyle}>
+              <Badge label={s.summary.status} tone={s.summary.status === "passed" ? "accent" : "danger"} />
+              <span style={{ color: "var(--fg-strong)" }}>{s.label}</span>
+              <span style={tapeDetailStyle}>
+                {s.summary.filesChanged} files · {s.summary.commandsRun} cmd · {s.summary.commandsFailed} failed
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gap: 6 }}>
+          <span style={metricLabelStyle}>Gates</span>
+          {spec.gates.map((gate: GoalLoopGate) => {
+            const latest = latestGateAttempt(state.attempts, gate.id);
+            const revisions = state.revisionsByGate[gate.id] ?? 0;
+            return (
+              <div key={gate.id} style={gateRowStyle}>
+                <VerdictDot verdict={latest?.verdict ?? null} />
+                <span style={gateLabelStyle}>{gate.label}</span>
+                <span style={gateOwnerStyle}>
+                  {gate.owner}
+                  {gate.required ? "" : " · optional"}
+                  {revisions > 0 ? ` · ${revisions} revise` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "grid", gap: 5 }}>
+          <span style={metricLabelStyle}>Loop tape</span>
+          {state.attempts.map((a, i) => (
+            <div key={`${a.id}:${i}`} style={tapeRowStyle}>
+              <VerdictDot verdict={a.verdict} />
+              <span style={{ color: "var(--fg-strong)" }}>{gateLabel(a.gateId)}</span>
+              <span style={tapeDetailStyle}>{a.feedback ?? a.evidence ?? ""}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={loopFooterStyle}>
+          {stopReason ? (
+            <Badge label={stopReason} tone={stopReason === "gates-clean" ? "accent" : "danger"} />
+          ) : null}
+          <span style={tapeDetailStyle}>{describeNext(next)}</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VerdictDot({ verdict }: { verdict: GoalLoopGateVerdict | null }) {
+  const map: Record<GoalLoopGateVerdict, { ch: string; color: string }> = {
+    pass: { ch: "✓", color: "var(--accent)" },
+    fail: { ch: "✗", color: "var(--danger, #B42318)" },
+    waive: { ch: "~", color: "var(--fg-subtle)" },
+  };
+  const v = verdict ? map[verdict] : { ch: "·", color: "var(--fg-dim)" };
+  return (
+    <span style={{ width: 14, textAlign: "center", color: v.color, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+      {v.ch}
+    </span>
+  );
+}
+
+function describeNext(next: GoalLoopDemo["next"]): string {
+  switch (next.type) {
+    case "record-result":
+      return "Record the result — every required gate passed.";
+    case "stop":
+      return next.detail;
+    case "revise":
+      return `Revise: ${next.reason}`;
+    case "ask-human":
+      return next.reason;
+    case "draft-plan":
+    case "run-delivery":
+      return next.reason;
+  }
 }
 
 function formatMoney(value: number | null): string {
@@ -423,6 +553,71 @@ const monoStyle = {
   fontFamily: "var(--font-mono)",
   fontSize: 11,
   whiteSpace: "nowrap",
+} satisfies React.CSSProperties;
+
+const goalTextStyle = {
+  flex: 1,
+  minWidth: 0,
+  color: "var(--fg-strong)",
+  fontSize: 13,
+  fontWeight: 650,
+  lineHeight: 1.3,
+} satisfies React.CSSProperties;
+
+const loopMetaStyle = {
+  color: "var(--fg-dim)",
+  fontSize: 11,
+  fontFamily: "var(--font-mono)",
+  whiteSpace: "nowrap",
+} satisfies React.CSSProperties;
+
+const gateRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 12,
+} satisfies React.CSSProperties;
+
+const gateLabelStyle = {
+  flex: 1,
+  minWidth: 0,
+  color: "var(--fg)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+} satisfies React.CSSProperties;
+
+const gateOwnerStyle = {
+  color: "var(--fg-dim)",
+  fontSize: 10,
+  fontFamily: "var(--font-mono)",
+  whiteSpace: "nowrap",
+} satisfies React.CSSProperties;
+
+const tapeRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 12,
+  minWidth: 0,
+} satisfies React.CSSProperties;
+
+const tapeDetailStyle = {
+  flex: 1,
+  minWidth: 0,
+  color: "var(--fg-subtle)",
+  fontSize: 11,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+} satisfies React.CSSProperties;
+
+const loopFooterStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  paddingTop: 10,
+  borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
 } satisfies React.CSSProperties;
 
 const meterTrackStyle = {

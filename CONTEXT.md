@@ -56,6 +56,21 @@ changes were diff-reviewed and command-validated. It is a guardrail against AI
 slop, not a proof that the implementation is correct.
 _Avoid_: test result, quality score, correctness
 
+**Goal loop**:
+A bounded supervisor contract above one or more Runs: explicit goal,
+definition of done, gates, revision/stall/budget limits, and a final stop
+reason. It does not execute Tools. The Harness still owns provider turns and
+Tool dispatch; the Goal loop decides whether the evidence is enough to keep
+going, revise, stop, or record completion.
+_Avoid_: autonomous mode, background agent, second harness
+
+**Gate**:
+A falsifiable review point in a Goal loop, such as plan coverage, delivery
+coverage, Diff scope, command validation, semantic review, budget, or human
+approval. A failed Gate creates bounded revision work; it does not create an
+unbounded retry loop.
+_Avoid_: vibe check, soft review, confidence score
+
 **Agent event**:
 A typed event a run emits (token, tool call, status change). The only way any surface learns what a run is doing.
 _Avoid_: message, update
