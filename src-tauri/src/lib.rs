@@ -32,6 +32,8 @@ pub(crate) const MLX_MODEL_PRESETS: &[&str] = &[
     MLX_DEFAULT_MODEL,
     "Qwen/Qwen3-4B-MLX-4bit",
     "mlx-community/gemma-2-9b-it-4bit",
+    "mlx-community/gemma-4-E4B-it-qat-4bit",
+    "mlx-community/gemma-4-12B-it-qat-4bit",
 ];
 
 #[derive(serde::Serialize)]

@@ -46,6 +46,8 @@ export const MLX_MODEL_PRESETS = [
   "mlx-community/Llama-3.1-8B-Instruct-4bit",
   "Qwen/Qwen3-4B-MLX-4bit",
   "mlx-community/gemma-2-9b-it-4bit",
+  "mlx-community/gemma-4-E4B-it-qat-4bit",
+  "mlx-community/gemma-4-12B-it-qat-4bit",
 ] as const;
 
 export const DEFAULT_MODELS: Record<ProviderId, string> = {

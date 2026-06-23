@@ -27,25 +27,68 @@ fn local_server_command(provider: &str, model: &str) -> Result<(String, Vec<Stri
         "ollama" => Ok(("ollama".to_string(), vec!["serve".to_string()])),
         "mlx" => {
             let model = canonical_mlx_model(model);
-            if let Ok(server) = resolve_command("mlx_lm.server") {
-                return Ok((server, vec!["--model".to_string(), model]));
+            // Gemma 4 ships the `gemma4_unified` multimodal arch, which mlx_lm
+            // can't load ("Model type gemma4_unified not supported") — only
+            // mlx-vlm does. Serve those through mlx_vlm.server, pairing the
+            // matching MTP "assistant" drafter for speculative decoding when a
+            // working one exists (see mtp_drafter_for).
+            if is_gemma4_model(&model) {
+                let mut args = vec!["--model".to_string(), model.clone()];
+                if let Some(drafter) = mtp_drafter_for(&model) {
+                    args.extend([
+                        "--draft-model".to_string(),
+                        drafter,
+                        "--draft-kind".to_string(),
+                        "mtp".to_string(),
+                    ]);
+                }
+                return mlx_server_command("mlx_vlm.server", args);
             }
-            let python = if std::env::consts::OS == "macos" {
-                "python3"
-            } else {
-                "python"
-            };
-            Ok((
-                python.to_string(),
-                vec![
-                    "-m".to_string(),
-                    "mlx_lm.server".to_string(),
-                    "--model".to_string(),
-                    model,
-                ],
-            ))
+            // Llama / Qwen / gemma-2 presets load fine in the lighter mlx_lm.
+            mlx_server_command("mlx_lm.server", vec!["--model".to_string(), model])
         }
         _ => Err(format!("{provider} is not a local server provider")),
+    }
+}
+
+// Resolve an MLX server entry point: prefer the installed console script, fall
+// back to `python -m <module>` so it works even when the script isn't on PATH.
+fn mlx_server_command(module: &str, args: Vec<String>) -> Result<(String, Vec<String>), String> {
+    if let Ok(server) = resolve_command(module) {
+        return Ok((server, args));
+    }
+    let python = if std::env::consts::OS == "macos" {
+        "python3"
+    } else {
+        "python"
+    };
+    let mut full = vec!["-m".to_string(), module.to_string()];
+    full.extend(args);
+    Ok((python.to_string(), full))
+}
+
+// Gemma 4 (12B, E4B, …) is the unified multimodal arch that needs mlx-vlm.
+fn is_gemma4_model(model: &str) -> bool {
+    model.to_lowercase().contains("gemma-4")
+}
+
+// The mlx-community MTP drafter for a `…-qat-Nbit` model is the same id with
+// `-qat-` → `-qat-assistant-` (e.g. gemma-4-12B-it-qat-4bit →
+// gemma-4-12B-it-qat-assistant-4bit), used via mlx_vlm `--draft-kind mtp`.
+//
+// Only the unified 12B/26B/31B drafters work: the E-series (E2B/E4B) drafter
+// is broken upstream in mlx-vlm 0.6.3 (reshape crash in masked_embedder), so
+// those return None and run drafter-free. Note: on a 16 GB Mac the 12B + its
+// drafter is memory-heavy and may swap/OOM — it fits comfortably with more RAM.
+fn mtp_drafter_for(model: &str) -> Option<String> {
+    let lower = model.to_lowercase();
+    if lower.contains("gemma-4-e") {
+        return None;
+    }
+    if model.contains("-qat-") && !model.contains("assistant") {
+        Some(model.replace("-qat-", "-qat-assistant-"))
+    } else {
+        None
     }
 }
 
@@ -300,5 +343,47 @@ mod tests {
             canonical_mlx_model("mlx-community/Llama-3.1-8B-Instruct-4bit"),
             "mlx-community/Llama-3.1-8B-Instruct-4bit"
         );
+    }
+
+    #[test]
+    fn mlx_command_routes_gemma4_to_vlm_and_others_to_lm() {
+        // Gemma 4 (unified multimodal arch) must go through mlx_vlm.server.
+        for model in [
+            "mlx-community/gemma-4-12B-it-qat-4bit",
+            "mlx-community/gemma-4-E4B-it-qat-4bit",
+        ] {
+            let (cmd, args) = local_server_command("mlx", model).unwrap();
+            assert!(cmd.contains("mlx_vlm.server") || args.contains(&"mlx_vlm.server".to_string()));
+        }
+
+        // Llama / gemma-2 load fine in the lighter mlx_lm.server.
+        for model in [
+            "mlx-community/Llama-3.1-8B-Instruct-4bit",
+            "mlx-community/gemma-2-9b-it-4bit",
+        ] {
+            let (cmd, args) = local_server_command("mlx", model).unwrap();
+            assert!(cmd.contains("mlx_lm.server") || args.contains(&"mlx_lm.server".to_string()));
+        }
+    }
+
+    #[test]
+    fn mtp_drafter_paired_for_unified_12b_but_not_e_series() {
+        // 12B unified: MTP drafter wired (its drafter works).
+        let (_, args) =
+            local_server_command("mlx", "mlx-community/gemma-4-12B-it-qat-4bit").unwrap();
+        assert!(args.contains(&"--draft-kind".to_string()));
+        assert!(args.contains(&"mtp".to_string()));
+        assert!(args.contains(&"mlx-community/gemma-4-12B-it-qat-assistant-4bit".to_string()));
+
+        // E4B: no drafter (broken upstream in mlx-vlm 0.6.3).
+        let (_, args) =
+            local_server_command("mlx", "mlx-community/gemma-4-E4B-it-qat-4bit").unwrap();
+        assert!(!args.contains(&"--draft-kind".to_string()));
+
+        assert_eq!(
+            mtp_drafter_for("mlx-community/gemma-4-12B-it-qat-4bit").as_deref(),
+            Some("mlx-community/gemma-4-12B-it-qat-assistant-4bit")
+        );
+        assert_eq!(mtp_drafter_for("mlx-community/gemma-4-E4B-it-qat-4bit"), None);
     }
 }
