@@ -100,6 +100,7 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 **Agent operations**
 - **Mission Control** — run board for Klide and delegate runs answering "what's running / what needs me / what changed" at a glance: per-run reasons + next action, evidence (last event, branch, files touched, tokens/cost, sub-agent count, memory status), transcript preview, resume, and "open in another CLI" handoff
 - **Project Memory** — durable handoff notes in `.klide/memory/`; completed runs draft a note you accept, edit, or skip before it becomes durable, plus a manual summarize action — all browsable in a centered Memory modal
+- **Memory git policy** — `.klide/memory/` is ignored by default because notes can contain private session context. Teams that want shared project memory can explicitly unignore and review those markdown files like docs.
 
 ## Roadmap
 

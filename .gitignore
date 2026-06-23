@@ -40,5 +40,10 @@ src-tauri/gen/
 .env.*
 !.env.example
 
+# --- Klide workspace state ---
+# Project Memory notes are local/private by default. Repos that want shared
+# memory can explicitly unignore this path in their own git policy.
+.klide/memory/
+
 # --- OS noise ---
 Thumbs.db
