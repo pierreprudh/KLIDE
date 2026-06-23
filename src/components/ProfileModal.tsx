@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Z } from "../zLayers";
 
 type AppUserInfo = {
   username: string;
@@ -82,7 +83,7 @@ export function ProfileModal({ open, workspaceRoot, onClose }: Props) {
       onClick={onClose}
       className="skills-tab-in"
       style={{
-        position: "fixed", inset: 0, zIndex: 5100,
+        position: "fixed", inset: 0, zIndex: Z.modal,
         display: "grid", placeItems: "center",
         background: "rgba(0,0,0,0.30)",
         backdropFilter: "blur(3px)",

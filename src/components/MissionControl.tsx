@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { Tooltip } from "./Tooltip";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -116,36 +117,37 @@ function SubagentStackToggle({
   onToggle: () => void;
 }) {
   return (
-    <span
-      role="button"
-      aria-label={expanded ? "Collapse subagents" : "Expand subagents"}
-      title={expanded ? "Collapse subagents" : "Expand subagents"}
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      style={{
-        height: 22,
-        minWidth: 30,
-        padding: "0 6px",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 3,
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        background: expanded ? "var(--accent-soft)" : "var(--bg-hover)",
-        color: expanded ? "var(--accent)" : "var(--fg-subtle)",
-        fontSize: 10,
-        fontFamily: "var(--font-mono)",
-        lineHeight: 1,
-      }}
-    >
-      {count}
-      <span aria-hidden style={{ fontSize: 10, transform: expanded ? "rotate(180deg)" : "none" }}>
-        ▾
+    <Tooltip label={expanded ? "Collapse subagents" : "Expand subagents"}>
+      <span
+        role="button"
+        aria-label={expanded ? "Collapse subagents" : "Expand subagents"}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        style={{
+          height: 22,
+          minWidth: 30,
+          padding: "0 6px",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 3,
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--border)",
+          background: expanded ? "var(--accent-soft)" : "var(--bg-hover)",
+          color: expanded ? "var(--accent)" : "var(--fg-subtle)",
+          fontSize: 10,
+          fontFamily: "var(--font-mono)",
+          lineHeight: 1,
+        }}
+      >
+        {count}
+        <span aria-hidden style={{ fontSize: 10, transform: expanded ? "rotate(180deg)" : "none" }}>
+          ▾
+        </span>
       </span>
-    </span>
+    </Tooltip>
   );
 }
 
@@ -228,9 +230,9 @@ function RunReasonChip({ run }: { run: Run }) {
   const reason = runBoardReason(run);
   if (reason.tone === "success") return null;
   return (
-    <span style={boardReasonChipStyle(reason.tone)} title={reason.detail}>
-      {reason.label}
-    </span>
+    <Tooltip label={reason.detail}>
+      <span style={boardReasonChipStyle(reason.tone)}>{reason.label}</span>
+    </Tooltip>
   );
 }
 
@@ -246,8 +248,8 @@ function RoutineBadge({ run }: { run: Pick<Run, "title"> }) {
   const routine = runRoutineInfo(run);
   if (!routine) return null;
   return (
+    <Tooltip label={routine.label}>
     <span
-      title={routine.label}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -275,6 +277,7 @@ function RoutineBadge({ run }: { run: Pick<Run, "title"> }) {
       />
       {routine.cadence === "routine" ? "Routine" : routine.cadence}
     </span>
+    </Tooltip>
   );
 }
 

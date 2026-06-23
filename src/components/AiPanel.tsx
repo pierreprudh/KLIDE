@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { usePortalMenu } from "../hooks/usePortalMenu";
 import { InlineDiffReview } from "./InlineDiffReview";
 import { InlineCommandReview } from "./InlineCommandReview";
 import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -47,6 +48,7 @@ import { enabledSkillsPrompt, type Skill } from "../skills";
 import { ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { renderMessageBody, CompactionRow } from "./ai/ChatMessage";
+import { MessageActions } from "./ai/MessageActions";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
 import { buildSystemPrompt } from "./ai/system-prompt";
@@ -67,6 +69,7 @@ import {
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
+import { Z } from "../zLayers";
 
 function LocalServerStartingRow({ providerLabel, centered = false }: { providerLabel: string; centered?: boolean }) {
   const hairline = (
@@ -387,8 +390,8 @@ export function AiPanel({
   const [input, setInput] = useState("");
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
-  const [contextHover, setContextHover] = useState(false);
-  const [contextTooltipPos, setContextTooltipPos] = useState<{ bottom: number; left: number; width: number; compact: boolean } | null>(null);
+  // Mode / reflection / context popovers live in `usePortalMenu` (declared
+  // with the mode + reflection menus below) — same names, so render is unchanged.
   const [summarizing, setSummarizing] = useState(false);
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -398,6 +401,12 @@ export function AiPanel({
   // Index of the assistant message whose Copy button just fired, for a brief
   // "Copied" confirmation. Reset on the next copy or render of a new message.
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  // Inline editing of a user message: index being edited + draft text.
+  // Editing happens in place — the bubble swaps to a textarea, the
+  // trailing conversation stays untouched. Commit on ⌘/Ctrl+Enter or
+  // blur; Escape cancels and restores the original.
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editingDraft, setEditingDraft] = useState("");
   const autoMemoryTimerRef = useRef<number | null>(null);
 
   const lastPublishRef = useRef({ count: -1, streaming: false });
@@ -469,62 +478,59 @@ export function AiPanel({
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
   const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
-  const [modeOpen, setModeOpen] = useState(false);
-  // Portalled to <body> with viewport coordinates (same pattern as
-  // ModelPicker) so the menu escapes the composer's `overflow: hidden` +
-  // the floating panel's `transform: translateZ(0)`, which would otherwise
-  // clip an `position: absolute` dropdown to the composer box.
-  const [modeMenuPos, setModeMenuPos] = useState<{ bottom: number; left: number } | null>(null);
-  const modeTriggerRef = useRef<HTMLButtonElement>(null);
-  const modeMenuRef = useRef<HTMLDivElement>(null);
-  const [reflectionOpen, setReflectionOpen] = useState(false);
-  const [reflectionMenuPos, setReflectionMenuPos] = useState<{ bottom: number; left: number } | null>(null);
-  const reflectionTriggerRef = useRef<HTMLButtonElement>(null);
-  const reflectionMenuRef = useRef<HTMLDivElement>(null);
-  const contextTriggerRef = useRef<HTMLButtonElement>(null);
-  function openModeMenu() {
-    const trigger = modeTriggerRef.current;
-    if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const width = 204;
-    setModeMenuPos({
-      bottom: Math.round(window.innerHeight - rect.top + 8),
-      left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
-    });
-    setModeOpen(true);
-  }
-  function closeModeMenu() { setModeOpen(false); setModeMenuPos(null); }
-  function openReflectionMenu() {
-    const trigger = reflectionTriggerRef.current;
-    if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const width = 176;
-    setReflectionMenuPos({
-      bottom: Math.round(window.innerHeight - rect.top + 8),
-      left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
-    });
-    setReflectionOpen(true);
-  }
-  function closeReflectionMenu() { setReflectionOpen(false); setReflectionMenuPos(null); }
-  function openContextTooltip() {
-    const trigger = contextTriggerRef.current;
-    if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const viewportPad = 8;
-    const width = Math.min(360, Math.max(272, window.innerWidth - viewportPad * 2));
-    const idealLeft = rect.right - width;
-    setContextTooltipPos({
-      bottom: Math.round(window.innerHeight - rect.top + 8),
-      left: Math.round(Math.min(Math.max(viewportPad, idealLeft), window.innerWidth - width - viewportPad)),
-      width: Math.round(width),
-      compact: width < 330,
-    });
-    setContextHover(true);
-  }
-  function closeContextTooltip() {
-    setContextHover(false);
-    setContextTooltipPos(null);
-  }
+  const {
+    open: modeOpen,
+    pos: modeMenuPos,
+    triggerRef: modeTriggerRef,
+    menuRef: modeMenuRef,
+    openMenu: openModeMenu,
+    close: closeModeMenu,
+  } = usePortalMenu({
+    computePos: (rect) => {
+      const width = 204;
+      return {
+        bottom: Math.round(window.innerHeight - rect.top + 8),
+        left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
+      };
+    },
+    closeOnOutsideClick: true,
+  });
+  const {
+    open: reflectionOpen,
+    pos: reflectionMenuPos,
+    triggerRef: reflectionTriggerRef,
+    menuRef: reflectionMenuRef,
+    openMenu: openReflectionMenu,
+    close: closeReflectionMenu,
+  } = usePortalMenu({
+    computePos: (rect) => {
+      const width = 176;
+      return {
+        bottom: Math.round(window.innerHeight - rect.top + 8),
+        left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
+      };
+    },
+    closeOnOutsideClick: true,
+  });
+  const {
+    open: contextHover,
+    pos: contextTooltipPos,
+    triggerRef: contextTriggerRef,
+    openMenu: openContextTooltip,
+    close: closeContextTooltip,
+  } = usePortalMenu({
+    computePos: (rect) => {
+      const viewportPad = 8;
+      const width = Math.min(360, Math.max(272, window.innerWidth - viewportPad * 2));
+      const idealLeft = rect.right - width;
+      return {
+        bottom: Math.round(window.innerHeight - rect.top + 8),
+        left: Math.round(Math.min(Math.max(viewportPad, idealLeft), window.innerWidth - width - viewportPad)),
+        width: Math.round(width),
+        compact: width < 330,
+      };
+    },
+  });
   const toggleMode = () => {
     setNextSendMode(null);
     setAgentMode((m) => {
@@ -543,62 +549,8 @@ export function AiPanel({
     closeModeMenu();
   }
   useEffect(() => { agentModeRef.current = agentMode; }, [agentMode]);
-  // Outside click — the trigger and the portalled menu are in different
-  // subtrees, so test both explicitly.
-  useEffect(() => {
-    if (!modeOpen) return;
-    function onDown(e: MouseEvent) {
-      const t = e.target as Node;
-      if (modeTriggerRef.current?.contains(t)) return;
-      if (modeMenuRef.current?.contains(t)) return;
-      closeModeMenu();
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [modeOpen]);
-  // The portalled menu can't follow the trigger across scroll/resize, so
-  // close it rather than let it drift.
-  useEffect(() => {
-    if (!modeOpen) return;
-    function onMove() { closeModeMenu(); }
-    window.addEventListener("scroll", onMove, true);
-    window.addEventListener("resize", onMove);
-    return () => {
-      window.removeEventListener("scroll", onMove, true);
-      window.removeEventListener("resize", onMove);
-    };
-  }, [modeOpen]);
-  useEffect(() => {
-    if (!reflectionOpen) return;
-    function onDown(e: MouseEvent) {
-      const t = e.target as Node;
-      if (reflectionTriggerRef.current?.contains(t)) return;
-      if (reflectionMenuRef.current?.contains(t)) return;
-      closeReflectionMenu();
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [reflectionOpen]);
-  useEffect(() => {
-    if (!reflectionOpen) return;
-    function onMove() { closeReflectionMenu(); }
-    window.addEventListener("scroll", onMove, true);
-    window.addEventListener("resize", onMove);
-    return () => {
-      window.removeEventListener("scroll", onMove, true);
-      window.removeEventListener("resize", onMove);
-    };
-  }, [reflectionOpen]);
-  useEffect(() => {
-    if (!contextHover) return;
-    function onMove() { closeContextTooltip(); }
-    window.addEventListener("scroll", onMove, true);
-    window.addEventListener("resize", onMove);
-    return () => {
-      window.removeEventListener("scroll", onMove, true);
-      window.removeEventListener("resize", onMove);
-    };
-  }, [contextHover]);
+  // Outside-click + scroll/resize auto-close for all three popovers now lives
+  // in usePortalMenu, not five hand-rolled effects here.
 
   const [fileList, setFileList] = useState<string[]>([]);
   const [mention, setMention] = useState<{ query: string } | null>(null);
@@ -2080,6 +2032,84 @@ This user request requires workspace inspection. Before answering, you MUST call
     }
   }
 
+  // Per-message actions (Retry / Edit / Branch / Delete). All assume the
+  // harness is idle — the chip row renders them disabled while `streaming`.
+  // Retrying or editing drops everything *after* the target and reuses the
+  // composer's `send` path so attachments/context-mode re-evaluation run
+  // again. Attachments from the original send are not re-attached (v1).
+  function retryFromMessage(i: number) {
+    if (streaming) return;
+    const m = msgs[i];
+    if (!m) return;
+    let userText: string | null = null;
+    let truncateAt: number;
+    if (m.role === "user") {
+      userText = m.content;
+      truncateAt = i;
+    } else {
+      let j = i - 1;
+      while (j >= 0 && msgs[j].role !== "user") j -= 1;
+      if (j < 0) return;
+      userText = (msgs[j] as Msg & { role: "user" }).content;
+      truncateAt = j;
+    }
+    if (!userText || !userText.trim()) return;
+    setMsgs(msgs.slice(0, truncateAt));
+    void send({ text: userText });
+  }
+
+  function editMessage(i: number) {
+    if (streaming) return;
+    const m = msgs[i];
+    if (m?.role !== "user") return;
+    setEditingIdx(i);
+    setEditingDraft(m.content);
+  }
+
+  function commitEdit(i: number) {
+    const m = msgs[i];
+    if (m?.role !== "user") return;
+    const text = editingDraft;
+    setEditingIdx(null);
+    setEditingDraft("");
+    if (!text.trim() || text === m.content) return;
+    // Replace the bubble in place, drop everything after, and resend —
+    // same path as `retryFromMessage` so attachments/context-mode are
+    // re-evaluated. The conversation id stays, so this is an in-place
+    // edit-and-regenerate, not a new chat.
+    const next = [...msgsRef.current].slice(0, i + 1);
+    next[i] = { ...(msgsRef.current[i] as Msg & { role: "user" }), content: text, queueState: undefined, queueId: undefined };
+    msgsRef.current = next;
+    setMsgs(next);
+    void send({ text });
+  }
+
+  function cancelEdit() {
+    setEditingIdx(null);
+    setEditingDraft("");
+  }
+
+  function branchFromMessage(i: number) {
+    if (streaming) return;
+    const newMsgs = msgs.slice(0, i + 1);
+    if (newMsgs.length === 0) return;
+    const nid = genId();
+    setCurrentId(nid);
+    setMsgs(newMsgs);
+    if (panelId) savePanelSession(panelId, nid, false);
+    setMeasuredPromptTokens(null);
+    setMeasuredUsageTokens(null);
+    // The msgs/currentId persist effect will write the branched chat; the
+    // previous one stays in localStorage untouched.
+  }
+
+  function deleteMessage(i: number) {
+    if (streaming) return;
+    const m = msgs[i];
+    if (m?.role !== "user") return;
+    setMsgs(msgs.slice(0, i));
+  }
+
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
     if (!text.trim() || serverStarting) return;
@@ -2392,12 +2422,40 @@ This user request requires workspace inspection. Before answering, you MUST call
           if (m.role === "user") {
             const queued = m.queueState === "queued";
             const running = m.queueState === "running";
+            const isEditing = editingIdx === i;
             return (
-              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
-                <div className={running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined}
-                  style={{ maxWidth: "88%", background: running ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))" : queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "13px 13px 4px 13px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1, backgroundSize: running ? "220% 100%" : undefined }}>
-                  {m.content}
-                </div>
+              <div key={i} className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+                {isEditing ? (
+                  <textarea
+                    autoFocus
+                    value={editingDraft}
+                    onChange={(e) => setEditingDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); commitEdit(i); }
+                      else if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+                    }}
+                    onBlur={() => commitEdit(i)}
+                    rows={Math.max(1, Math.min(10, editingDraft.split("\n").length))}
+                    style={{ maxWidth: "88%", width: "min(440px, 88%)", resize: "none", font: "inherit", fontSize: 13, lineHeight: 1.55, padding: "8px 12px", borderRadius: "13px 13px 4px 13px", border: "1px solid color-mix(in srgb, var(--accent) 50%, var(--border))", background: "var(--accent-soft)", color: "var(--fg-strong)", whiteSpace: "pre-wrap", wordBreak: "break-word", boxSizing: "border-box" }}
+                  />
+                ) : (
+                  <div className={running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined}
+                    style={{ maxWidth: "88%", background: running ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))" : queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "13px 13px 4px 13px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1, backgroundSize: running ? "220% 100%" : undefined }}>
+                    {m.content}
+                  </div>
+                )}
+                {!queued && !running && m.content.trim() && !isEditing && (
+                  <MessageActions
+                    role="user"
+                    copied={copiedIdx === i}
+                    disabled={streaming}
+                    onCopy={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
+                    onRetry={() => retryFromMessage(i)}
+                    onBranch={() => branchFromMessage(i)}
+                    onEdit={() => editMessage(i)}
+                    onDelete={() => deleteMessage(i)}
+                  />
+                )}
               </div>
             );
           }
@@ -2443,30 +2501,24 @@ This user request requires workspace inspection. Before answering, you MUST call
               )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
-                {i === msgs.length - 1 && !isStreamingActive && !isAssistantPlaceholder && m.content?.trim() && (
-                  <div className="ai-msg-actions" style={{ display: "flex", alignItems: "center", gap: 2, marginTop: 6, height: 22 }}>
-                    <button
-                      type="button"
-                      title="Copy message"
-                      aria-label="Copy message"
-                      onClick={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
-                      style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 22, padding: "0 7px", borderRadius: "var(--radius-sm)", border: "none", background: "transparent", color: "var(--fg-subtle)", fontSize: 11, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}
-                    >
-                      {copiedIdx === i ? (
-                        <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>Copied</>
-                      ) : (
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" /></svg>
-                      )}
-                    </button>
-                    {autoMemoryNotice && onOpenMemory && (
+                {!isStreamingActive && !isAssistantPlaceholder && m.content?.trim() && (
+                  <>
+                    <MessageActions
+                      role="assistant"
+                      copied={copiedIdx === i}
+                      disabled={streaming}
+                      onCopy={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
+                      onRetry={() => retryFromMessage(i)}
+                      onBranch={() => branchFromMessage(i)}
+                    />
+                    {autoMemoryNotice && onOpenMemory && isLast && (
                       <button
                         type="button"
+                        className="ai-msg-actions"
                         title={`Review memory draft: ${autoMemoryNotice}`}
                         aria-label="Review memory draft"
                         onClick={() => onOpenMemory()}
-                        style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 22, padding: "0 7px", borderRadius: "var(--radius-sm)", border: "none", background: "transparent", color: "var(--fg-subtle)", fontSize: 11, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 22, marginTop: 6, padding: "0 7px", borderRadius: "var(--radius-sm)", border: "none", background: "transparent", color: "var(--fg-subtle)", fontSize: 11, cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
                         onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}
                       >
@@ -2474,7 +2526,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                         Review draft
                       </button>
                     )}
-                  </div>
+                  </>
                 )}
               </div>
             </div>
@@ -2810,7 +2862,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
                   </button>
                   {modeOpen && modeMenuPos && createPortal(
-                    <div ref={modeMenuRef} role="menu" aria-label="Add context and mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 204, padding: 5, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-elevated)", boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)", zIndex: 200 }}>
+                    <div ref={modeMenuRef} role="menu" aria-label="Add context and mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 204, padding: 5, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-elevated)", boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)", zIndex: Z.popover }}>
                       <button type="button" role="menuitem" onClick={addFileMention} title="Add a file to the conversation context"
                         style={{ width: "100%", display: "flex", alignItems: "center", height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", color: "var(--fg)", font: "inherit", fontSize: 13, cursor: "pointer" }}
                         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -2903,7 +2955,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 	                    <span style={{ opacity: modelSupportsReflection ? 1 : 0.4, display: "inline-flex" }}><ReflectionBars level={activeReflection.level} /></span>
 	                  </button>
                   {reflectionOpen && reflectionMenuPos && createPortal(
-	                    <div ref={reflectionMenuRef} role="menu" aria-label="Reflection level" className="popover-enter" style={{ position: "fixed", left: reflectionMenuPos.left, bottom: reflectionMenuPos.bottom, width: 166, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 10px 26px rgba(38, 38, 32, 0.14)", zIndex: 205 }}>
+	                    <div ref={reflectionMenuRef} role="menu" aria-label="Reflection level" className="popover-enter" style={{ position: "fixed", left: reflectionMenuPos.left, bottom: reflectionMenuPos.bottom, width: 166, padding: 4, borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 10px 26px rgba(38, 38, 32, 0.14)", zIndex: Z.popover + 5 }}>
                       {reflectionOptions.map((option) => {
                         const active = option.value === reflectionLevel;
                         return (
@@ -2944,7 +2996,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   <circle cx="11" cy="11" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength="100" strokeDasharray={`${Math.max(2, Math.round(contextRatio * 100))} 100`} transform="rotate(-90 11 11)" style={{ transition: "stroke-dasharray var(--motion-med) var(--ease-out), stroke var(--motion-med) var(--ease-out)" }} />
                 </svg>
                 {contextHover && contextTooltipPos && createPortal(
-                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: 220 }}>
+                  <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: Z.tooltip }}>
                     <div style={{ display: "flex", alignItems: contextTooltipPos.compact ? "start" : "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
                       <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 620 }}>Context window</span>
                       <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}>{formatContextTokens(contextUsed)} / {formatContextTokens(effectiveContextLimit)} ({Math.round(contextRatio * 100)}%)</span>

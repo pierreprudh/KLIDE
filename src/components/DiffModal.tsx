@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { diffLines, Change } from "diff";
+import { Z } from "../zLayers";
 
 export type PendingEdit = {
   path: string;
@@ -46,7 +47,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 1000,
+        zIndex: Z.modal,
       }}
     >
       <div

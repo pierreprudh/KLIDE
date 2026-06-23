@@ -51,6 +51,11 @@ export type Layout = {
   // rects. New workspaces default to anchored; the user can opt back into
   // free mode from the status-bar Layout picker.
   anchored?: boolean;
+  // The workbench size this layout was last saved at. Lets us re-scale the
+  // saved rects proportionally when the app re-opens at a different window
+  // size (a bigger display, a different monitor) — see `scaleLayout`.
+  workbenchW?: number;
+  workbenchH?: number;
 };
 
 export type PanelConstraints = {
@@ -81,21 +86,63 @@ export const PANEL_GAP = 6;
 export function defaultLayout(workbenchW: number, workbenchH: number): Layout {
   const w = Math.max(0, workbenchW);
   const h = Math.max(0, workbenchH);
-  const terminalH = Math.min(220, Math.max(120, Math.floor(h * 0.28)));
-  const aiW = Math.min(360, Math.max(1, w));
+  // Size panels as a *share* of the workbench (clamped to ergonomic bounds)
+  // so the layout opens proportional to the window — a wide window gets a
+  // wider AI column and explorer, not the same fixed pixels it'd get on a
+  // laptop. Resizing then keeps these proportions (see usePanelLayout).
+  const clampDim = (v: number, min: number, max: number) =>
+    Math.round(Math.min(max, Math.max(min, v)));
+  const terminalH = clampDim(h * 0.26, 140, 300);
+  const aiW = clampDim(w * 0.26, 300, 460);
+  const explorerW = clampDim(w * 0.16, 220, 320);
+  const gitW = explorerW;
   const mainH = Math.max(1, h - terminalH - PANEL_GAP);
   // Side column panels — explorer + git side-by-side, both full main
   // height. Memory is now a centered modal (not a sidebar), so it has
   // no rect here.
-  const explorerW = 280;
-  const gitW = 280;
   return {
     anchored: true,
     explorer: { x: 0, y: 0, w: explorerW, h: mainH },
     git:      { x: explorerW + PANEL_GAP, y: 0, w: gitW, h: mainH },
     ai:       [{ id: "ai-main", rect: { x: Math.max(0, w - aiW), y: 0, w: aiW, h: mainH } }],
     terminal: { x: 0, y: mainH + PANEL_GAP, w: Math.max(1, w - aiW - PANEL_GAP), h: terminalH },
+    workbenchW: w,
+    workbenchH: h,
   };
+}
+
+// Re-scale a saved layout to a new workbench size, preserving each panel's
+// proportional share and its dock to the right/bottom edge. Used when the app
+// re-opens at a different window size than the layout was saved at. A no-op if
+// the layout carries no reference size or the size is unchanged.
+export function scaleLayout(layout: Layout, targetW: number, targetH: number): Layout {
+  const fromW = layout.workbenchW;
+  const fromH = layout.workbenchH;
+  if (!fromW || !fromH || targetW <= 0 || targetH <= 0) return layout;
+  if (fromW === targetW && fromH === targetH) return layout;
+  const sx = targetW / fromW;
+  const sy = targetH / fromH;
+  const scaleRect = (rect: PanelRect, c: PanelConstraints): PanelRect => {
+    const rightDocked = rect.x + rect.w >= fromW - 2;
+    const bottomDocked = rect.y + rect.h >= fromH - 2;
+    const scaled = {
+      x: Math.round(rect.x * sx),
+      y: Math.round(rect.y * sy),
+      w: Math.round(rect.w * sx),
+      h: Math.round(rect.h * sy),
+    };
+    let out = clampRect(scaled, targetW, targetH, c);
+    if (rightDocked) out = clampRect({ ...out, x: Math.max(0, targetW - out.w) }, targetW, targetH, c);
+    if (bottomDocked) out = clampRect({ ...out, y: Math.max(0, targetH - out.h) }, targetW, targetH, c);
+    return out;
+  };
+  const next: Layout = { ...layout, workbenchW: targetW, workbenchH: targetH };
+  if (layout.explorer) next.explorer = scaleRect(layout.explorer, PANEL_CONSTRAINTS.explorer);
+  if (layout.git) next.git = scaleRect(layout.git, PANEL_CONSTRAINTS.git);
+  if (layout.memory) next.memory = scaleRect(layout.memory, PANEL_CONSTRAINTS.memory);
+  if (layout.terminal) next.terminal = scaleRect(layout.terminal, PANEL_CONSTRAINTS.terminal);
+  if (layout.ai) next.ai = layout.ai.map((e) => ({ ...e, rect: scaleRect(e.rect, PANEL_CONSTRAINTS.ai) }));
+  return next;
 }
 
 const STORE_KEY = "klide-panel-layouts";

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { MemoryPanel } from "./MemoryPanel";
+import { Z } from "../zLayers";
 
 type Props = {
   open: boolean;
@@ -78,7 +79,7 @@ export function MemoryModal({
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 5000,
+        zIndex: Z.modal,
         display: "grid",
         placeItems: "center",
         background: "rgba(0,0,0,0.30)",

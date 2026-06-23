@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { readWorkspaceTextFile } from "../workspaceFs";
+import { Z } from "../zLayers";
 
 type CommandItem = {
   id: string;
@@ -153,7 +154,7 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 200,
+        zIndex: Z.popover,
         display: "flex",
         justifyContent: "center",
         paddingTop: "18vh",

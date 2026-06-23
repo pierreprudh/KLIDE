@@ -774,22 +774,13 @@ fn read_text_file(workspace_root: String, path: String) -> Result<String, String
 #[tauri::command]
 fn path_exists(workspace_root: String, path: String) -> Result<bool, String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
-    if std::path::Path::new(&path).exists() {
-        ws.resolve_abs_read(&path)?;
-        return Ok(true);
-    }
-    let target = ws.resolve_abs_new(&path)?;
-    Ok(target.exists())
+    Ok(ws.resolve_abs_readwrite(&path)?.exists())
 }
 
 #[tauri::command]
 fn write_text_file(workspace_root: String, path: String, content: String) -> Result<(), String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
-    let target = if std::path::Path::new(&path).exists() {
-        ws.resolve_abs_read(&path)?
-    } else {
-        ws.resolve_abs_new(&path)?
-    };
+    let target = ws.resolve_abs_readwrite(&path)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Unable to create folder: {e}"))?;
     }
@@ -926,8 +917,34 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+            use tauri::Manager;
 
             let handle = app.handle();
+
+            // Open at a comfortable fraction of the display the window lands on,
+            // centered — like a native macOS app, rather than a fixed pixel size
+            // that's cramped on a large screen and oversized on a laptop. The
+            // window starts hidden (tauri.conf.json `visible: false`) so the user
+            // never sees it snap from the config size to this one. Panels then
+            // lay out against the real size (the workbench ResizeObserver clamps
+            // every rect to it — see usePanelLayout).
+            if let Some(window) = app.get_webview_window("main") {
+                let monitor = window
+                    .current_monitor()
+                    .ok()
+                    .flatten()
+                    .or_else(|| window.primary_monitor().ok().flatten());
+                if let Some(monitor) = monitor {
+                    let screen = monitor.size().to_logical::<f64>(monitor.scale_factor());
+                    // ~80% wide / ~85% tall leaves room for the menu bar + Dock,
+                    // clamped so it never goes below the min size or absurdly big.
+                    let w = (screen.width * 0.80).clamp(960.0, 1600.0);
+                    let h = (screen.height * 0.85).clamp(640.0, 1040.0);
+                    let _ = window.set_size(tauri::LogicalSize::new(w, h));
+                }
+                let _ = window.center();
+                let _ = window.show();
+            }
 
             let open_folder = MenuItemBuilder::with_id("open-folder", "Open Folder…")
                 .accelerator("CmdOrCtrl+O")

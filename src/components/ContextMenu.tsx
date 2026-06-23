@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Z } from "../zLayers";
 
 export type MenuItem =
   | { type: "separator" }
@@ -49,7 +50,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
         e.preventDefault();
         onClose();
       }}
-      style={{ position: "fixed", inset: 0, zIndex: 9999 }}
+      style={{ position: "fixed", inset: 0, zIndex: Z.contextMenu }}
     >
       <div
         ref={menuRef}
