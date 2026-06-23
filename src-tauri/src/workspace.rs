@@ -146,6 +146,21 @@ impl Workspace {
         Ok(target)
     }
 
+    /// Resolve an absolute path for a read-or-write where the caller doesn't
+    /// yet know whether it exists: an existing path is validated as a read
+    /// (canonicalized, symlinks followed, containment checked), a not-yet-
+    /// existing one as a new write target (ancestor containment, no traversal).
+    /// Collapses the `if exists() { resolve_abs_read } else { resolve_abs_new }`
+    /// dance so the read-or-new decision lives behind the Workspace interface,
+    /// not in each caller.
+    pub fn resolve_abs_readwrite(&self, path: &str) -> Result<PathBuf, String> {
+        if std::path::Path::new(path).exists() {
+            self.resolve_abs_read(path)
+        } else {
+            self.resolve_abs_new(path)
+        }
+    }
+
     /// Render a resolved path back as workspace-relative for messages shown
     /// to the model and the user. The root itself displays as ".".
     pub fn display(&self, path: &Path) -> String {
@@ -204,6 +219,25 @@ mod tests {
         std::os::unix::fs::symlink("/etc", dir.join("sneaky")).unwrap();
         assert!(ws.resolve_existing("sneaky").is_err());
         assert!(ws.resolve_existing("sneaky/passwd").is_err());
+    }
+
+    #[test]
+    fn resolve_abs_readwrite_picks_read_for_existing_and_new_otherwise() {
+        let (dir, ws) = temp_workspace("readwrite");
+        // Canonicalize so the test's absolute paths match the workspace root
+        // (macOS temp_dir is /var/... but the root canonicalizes to /private/var/...).
+        let dir = dir.canonicalize().unwrap();
+        std::fs::write(dir.join("here.txt"), "x").unwrap();
+        // Existing in-workspace path resolves (as a read).
+        assert!(ws
+            .resolve_abs_readwrite(dir.join("here.txt").to_str().unwrap())
+            .is_ok());
+        // Not-yet-existing path under the root resolves (as a new target).
+        assert!(ws
+            .resolve_abs_readwrite(dir.join("sub/child.txt").to_str().unwrap())
+            .is_ok());
+        // An existing path outside the workspace is rejected.
+        assert!(ws.resolve_abs_readwrite("/etc/hosts").is_err());
     }
 
     #[test]
