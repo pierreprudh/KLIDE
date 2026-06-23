@@ -227,6 +227,50 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "stats", label: "Stats", icon: <BarChartIcon /> },
 ];
 
+// Searchable index for the "Look for a setting" box. Each entry points at the
+// section that holds it; typing surfaces the matching entries so you can jump
+// straight there instead of hunting through tabs. Keywords cover the words a
+// user is likely to type (synonyms included) rather than the exact label.
+type SettingIndexEntry = { label: string; section: SectionId; keywords: string };
+const settingsIndex: SettingIndexEntry[] = [
+  { label: "Panel visibility", section: "general", keywords: "explorer sidebar terminal ai panel show hide toggle" },
+  { label: "Theme", section: "appearance", keywords: "theme dark light color colour palette appearance" },
+  { label: "Automatic light/dark theme", section: "appearance", keywords: "auto theme system light dark switch" },
+  { label: "Panel sizes", section: "layout", keywords: "layout width height size resize panel" },
+  { label: "Layout presets", section: "layout", keywords: "layout preset bento grid workbench arrange" },
+  { label: "AI model", section: "ai", keywords: "ai model assistant provider default" },
+  { label: "Diff review before edits", section: "ai", keywords: "diff review approve confirm edits write apply" },
+  { label: "Stop after rejection", section: "ai", keywords: "stop reject rejection halt edits" },
+  { label: "System prompts", section: "ai", keywords: "prompt system chat plan goal instructions" },
+  { label: "Tool overrides", section: "ai", keywords: "tools tool enable disable allow override" },
+  { label: "Context window", section: "ai", keywords: "context window tokens length size" },
+  { label: "Effort & reflection", section: "ai", keywords: "effort budget reflection thinking reasoning" },
+  { label: "Max parallel tools", section: "ai", keywords: "parallel tools concurrency simultaneous" },
+  { label: "Max turns", section: "ai", keywords: "max turns loop limit iterations" },
+  { label: "Command timeout", section: "ai", keywords: "command timeout shell run seconds" },
+  { label: "Test after edit", section: "ai", keywords: "test verify after edit syntax check command" },
+  { label: "Auto-draft memory on run done", section: "ai", keywords: "memory draft auto note handoff summarize pending review" },
+  { label: "Local servers (Ollama / MLX)", section: "local-ai", keywords: "local ollama mlx server start stop concurrency model" },
+  { label: "API keys", section: "api", keywords: "api key keychain anthropic openai mistral xai token secret" },
+  { label: "CLI subscriptions", section: "subscription", keywords: "subscription claude code codex opencode login account auth cli" },
+  { label: "Editor font size", section: "editor", keywords: "editor font size text monaco" },
+  { label: "Line numbers", section: "editor", keywords: "editor line numbers gutter" },
+  { label: "Word wrap", section: "editor", keywords: "editor word wrap soft" },
+  { label: "Minimap", section: "editor", keywords: "editor minimap overview" },
+  { label: "Terminal", section: "terminal", keywords: "terminal shell font xterm" },
+  { label: "Usage & stats", section: "stats", keywords: "stats usage tokens cost transcripts runs" },
+];
+
+function matchSettings(query: string): SettingIndexEntry[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+  const sectionLabel = (id: SectionId) => sections.find((s) => s.id === id)?.label ?? "";
+  return settingsIndex.filter((entry) => {
+    const haystack = `${entry.label} ${entry.keywords} ${sectionLabel(entry.section)}`.toLowerCase();
+    return tokens.every((t) => haystack.includes(t));
+  });
+}
+
 // A section's subtree only mounts once its tab has been visited (`mounted`),
 // then stays mounted (hidden via display) so re-selecting it is instant and
 // in-progress edits survive a tab switch. Deferring the mount is what keeps
@@ -2022,6 +2066,10 @@ export function SettingsPanel({
   // Hover is React-controlled (not imperative .style mutation) so the tint
   // always clears on re-render — otherwise a hovered row stays highlighted.
   const [hoveredSection, setHoveredSection] = useState<SectionId | null>(null);
+  // "Look for a setting" query. While non-empty, the nav is replaced by a
+  // flat list of matching settings, each labelled with its section.
+  const [settingQuery, setSettingQuery] = useState("");
+  const settingMatches = useMemo(() => matchSettings(settingQuery), [settingQuery]);
   // Sections that have been opened at least once. Only these mount their
   // subtree (see `Section`); the rest stay unmounted so their per-provider
   // status `invoke`s don't fire on open. The starting section is pre-seeded.
@@ -2195,6 +2243,110 @@ export function SettingsPanel({
           Back to app
         </button>
 
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 9,
+              display: "grid",
+              placeItems: "center",
+              color: "var(--fg-dim)",
+              pointerEvents: "none",
+            }}
+          >
+            <SearchIcon />
+          </span>
+          <input
+            type="text"
+            value={settingQuery}
+            onChange={(e) => setSettingQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSettingQuery("");
+              if (e.key === "Enter" && settingMatches.length > 0) {
+                goToSection(settingMatches[0].section);
+                setSettingQuery("");
+              }
+            }}
+            placeholder="Look for a setting…"
+            aria-label="Look for a setting"
+            style={{
+              width: "100%",
+              height: 32,
+              padding: "0 26px 0 30px",
+              borderRadius: 9,
+              border: "1px solid var(--border)",
+              background: "var(--bg)",
+              color: "var(--fg-strong)",
+              fontSize: 12.5,
+              outline: "none",
+            }}
+          />
+          {settingQuery && (
+            <button
+              type="button"
+              onClick={() => setSettingQuery("")}
+              aria-label="Clear search"
+              style={{
+                position: "absolute",
+                right: 6,
+                width: 18,
+                height: 18,
+                display: "grid",
+                placeItems: "center",
+                borderRadius: 5,
+                color: "var(--fg-dim)",
+                cursor: "pointer",
+              }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {settingQuery.trim() ? (
+          // Search results replace the nav. Each row jumps to its section.
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, overflow: "auto", minHeight: 0 }}>
+            {settingMatches.length === 0 ? (
+              <p style={{ margin: "6px 10px", fontSize: 12, color: "var(--fg-dim)" }}>
+                No settings match “{settingQuery.trim()}”.
+              </p>
+            ) : (
+              settingMatches.map((entry) => {
+                const sectionLabel = sections.find((s) => s.id === entry.section)?.label ?? "";
+                return (
+                  <button
+                    key={`${entry.section}:${entry.label}`}
+                    type="button"
+                    onClick={() => {
+                      goToSection(entry.section);
+                      setSettingQuery("");
+                    }}
+                    onMouseEnter={() => setHoveredSection(entry.section)}
+                    onMouseLeave={() => setHoveredSection((h) => (h === entry.section ? null : h))}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      gap: 1,
+                      padding: "6px 10px",
+                      borderRadius: 9,
+                      border: "1px solid transparent",
+                      background: hoveredSection === entry.section ? "var(--bg-hover)" : "transparent",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ fontSize: 13, color: "var(--fg-strong)" }}>{entry.label}</span>
+                    <span style={{ fontSize: 10.5, color: "var(--fg-dim)", letterSpacing: "0.02em" }}>
+                      {sectionLabel}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        ) : (
         <nav
           ref={navFlip.trackRef}
           data-flip={navFlip.flip}
@@ -2268,6 +2420,7 @@ export function SettingsPanel({
             );
           })}
         </nav>
+        )}
       </aside>
 
       <div
@@ -4164,6 +4317,15 @@ function ArrowLeftIcon() {
     <IconBase>
       <path d="M19 12H5" />
       <path d="M12 19l-7-7 7-7" />
+    </IconBase>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <IconBase>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-3.6-3.6" />
     </IconBase>
   );
 }
