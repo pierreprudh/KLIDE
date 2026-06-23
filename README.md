@@ -16,7 +16,7 @@ Local models by default · online providers when you want them · real agent ter
 
 ![Status](https://img.shields.io/badge/status-v0.4--shipped-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS_·_Linux_·_Windows-555555?style=flat-square)
-![Binary](https://img.shields.io/badge/binary-~10_MB-4263EB?style=flat-square)
+![Binary](https://img.shields.io/badge/binary-~10_MB-5A7B4C?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-555555?style=flat-square)
 
 </div>
@@ -51,11 +51,11 @@ Klide aims for a third spot: not the next Cursor, but a calm operator surface fo
 | Token | Value (light / dark) | Used for |
 |---|---|---|
 | Theme | Light + dark | App shell and terminal share theme tokens |
-| `--bg` | `#FBFBFA` / `#11110F` | Window background |
-| `--bg-elevated` | `#F4F4F2` / `#171715` | Panels, sidebars |
-| `--fg` | `#555552` / `#C8C6BE` | Primary text |
-| `--border` | `#E8E7E3` / `#292824` | All dividers, 1px |
-| `--accent` | `#4263EB` / `#8EA2FF` | Active states only |
+| `--bg` | `#f7f4ed` / `#11110F` | Window background (bone cream) |
+| `--bg-elevated` | `#fcfbf8` / `#171715` | Panels, sidebars |
+| `--fg` | `#1c1c1c` / `#C8C6BE` | Primary text (charcoal) |
+| `--border` | `#eceae4` / `#292824` | All dividers, 1px |
+| `--accent` | `#5A7B4C` / `#8EA2FF` | Active states only (soft sage — deliberately not blue) |
 | UI font | `Atkinson Hyperlegible` | Sidebar, tabs, status bar |
 | Code font | `Monaspace` | Editor, terminal |
 
