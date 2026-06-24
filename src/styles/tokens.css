@@ -91,6 +91,13 @@
   --radius-lg: 8px;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-soft: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Sampled spring — lands at 1, overshoots gently to ~1.04, settles. */
+  --ease-spring: linear(
+    0, 0.0067, 0.0259, 0.0563, 0.0968, 0.1462, 0.2032, 0.2667,
+    0.3355, 0.4084, 0.4843, 0.5621, 0.6406, 0.7189, 0.7958, 0.8705,
+    0.942, 1.0095, 1.0291, 1.0408, 1.0456, 1.0442, 1.0376, 1.027,
+    1.0136, 0.9989, 0.9942, 0.9963, 0.9985, 1
+  );
   --motion-fast: 120ms;
   --motion-med: 180ms;
   --motion-slow: 240ms;
@@ -532,12 +539,100 @@ select.klide-field {
   --w-glass-hover: rgba(255, 255, 255, 0.085);
   --w-border:      rgba(255, 255, 255, 0.10);
   --w-atmos:       #6f9bff;
-  background:
-    radial-gradient(135% 78% at 50% 128%, rgba(0, 155, 235, 0.13), transparent 58%),
-    radial-gradient(90% 58% at 18% 8%, rgba(65, 130, 180, 0.045), transparent 60%),
-    linear-gradient(180deg, #010204 0%, #050810 50%, #070d18 100%);
+  /* Quiet, near-flat gutter — colour lives inside the framed card, not the
+     whole surface. */
+  background: linear-gradient(180deg, #07090e 0%, #080b11 100%);
   container-type: size;
   isolation: isolate;
+}
+
+/* Two-pane split: content column on the left, framed cosmos card on the
+   right (mirrors the reference layout). */
+.klide-welcome--split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.klide-welcome-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow-y: auto;
+}
+
+.klide-welcome-content {
+  width: min(520px, 100%);
+  margin: 0 auto;
+  padding: clamp(40px, 6vh, 96px) clamp(36px, 5.5vw, 88px);
+}
+
+.klide-welcome-wordmark {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--w-dim);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.klide-welcome-title {
+  margin: 0;
+  font-size: clamp(36px, 4.4vw, 52px);
+  line-height: 1.04;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  color: var(--w-fg);
+}
+
+.klide-welcome-sub {
+  margin: 14px 0 0;
+  max-width: 40ch;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--w-dim);
+}
+
+/* Right stage holds the framed card with padding so it floats inside a
+   white/dark gutter, like the reference. */
+.klide-welcome-stage {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  padding: clamp(20px, 2.4vw, 40px);
+  padding-left: 0;
+}
+
+.klide-welcome-card {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    radial-gradient(70% 56% at 50% 46%, rgba(40, 120, 200, 0.16), transparent 62%),
+    linear-gradient(180deg, #02040a 0%, #04060f 52%, #05080f 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
+@media (max-width: 880px) {
+  .klide-welcome--split {
+    flex-direction: column;
+  }
+  .klide-welcome-stage {
+    flex: 0 0 38vh;
+    padding: 0 clamp(20px, 5vw, 40px) clamp(20px, 4vh, 40px);
+  }
+  .klide-welcome-card {
+    border-radius: 18px;
+  }
 }
 
 /* The cosmos fills the whole surface. A single monochrome earth layer
@@ -550,33 +645,38 @@ select.klide-field {
   overflow: hidden;
   pointer-events: none;
   user-select: none;
+  /* Soft radial vignette so the art dissolves into the card rather than
+     ending at a hard rectangular edge. */
+  -webkit-mask-image: radial-gradient(82% 78% at 50% 46%, #000 52%, transparent 94%);
+  mask-image: radial-gradient(82% 78% at 50% 46%, #000 52%, transparent 94%);
 }
 
-/* Atmospheric glow hugging the horizon line. */
+/* Soft backlight behind the planet, centred in the card. */
 .klide-cosmos-glow {
   position: absolute;
   left: 50%;
-  top: var(--earth-glow-top);
-  width: var(--earth-glow-width);
-  height: var(--earth-glow-height);
-  transform: translateX(-50%);
+  top: 50%;
+  width: 78%;
+  height: 78%;
+  transform: translate(-50%, -50%);
   background: radial-gradient(
-    ellipse at 50% 0%,
-    color-mix(in srgb, var(--w-atmos) 18%, transparent) 0%,
-    color-mix(in srgb, var(--w-atmos) 7%, transparent) 28%,
-    transparent 58%
+    circle at 42% 40%,
+    color-mix(in srgb, var(--w-atmos) 16%, transparent) 0%,
+    color-mix(in srgb, var(--w-atmos) 6%, transparent) 34%,
+    transparent 64%
   );
-  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
-  filter: blur(28px);
-  opacity: 0.28;
+  filter: blur(34px);
+  opacity: 0.5;
 }
 
+/* Each ASCII layer is the full card-sized grid, centred so the generated
+   sphere sits dead-centre in the frame. */
 .klide-cosmos-layer {
   position: absolute;
   left: 50%;
-  top: var(--cosmos-top);
+  top: 50%;
   margin: 0;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   font-family: var(--font-mono);
   font-size: var(--cosmos-font);
   line-height: 1.0;
@@ -584,52 +684,56 @@ select.klide-field {
   white-space: pre;
 }
 
-.klide-cosmos-layer.is-earth {
-  color: rgba(205, 220, 230, 0.6);
-  opacity: 0.7;
-  transform: translate(-50%, var(--earth-sink));
-  clip-path: inset(39% 0 0 0);
-  /* Keep the planet as a low horizon band. When the window is compressed,
-     the sparse rim otherwise climbs into the controls and reads as loose
-     punctuation instead of a surface. */
-  mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.35) 50%, white 70%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.35) 50%, white 70%);
+/* Diagonal cool gradient painted across the glyphs — bright on the lit
+   upper-left, deepening into night toward the lower-right. */
+.klide-cosmos-layer.is-planet {
+  opacity: 0.94;
+  background-image: linear-gradient(
+    135deg,
+    #e9f5ff 0%,
+    #a9d2ff 22%,
+    #5e96e0 46%,
+    #356bb0 66%,
+    #1d3a6b 84%,
+    #142a4f 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 6px rgba(20, 90, 160, 0.16);
 }
 
-.klide-cosmos-layer.is-earth-glow {
-  color: rgba(36, 184, 255, 0.88);
-  opacity: 0.78;
-  transform: translate(-50%, var(--earth-sink));
-  clip-path: inset(39% 0 0 0);
+.klide-cosmos-layer.is-planet-glow {
+  opacity: 0.85;
+  background-image: linear-gradient(
+    135deg,
+    #f2faff 0%,
+    #9fdcff 40%,
+    #4aa8ff 78%,
+    #2f7fe0 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
   text-shadow:
-    0 0 7px rgba(0, 180, 255, 0.4),
-    0 0 17px rgba(0, 140, 255, 0.18);
-  mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.58) 50%, white 74%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 39%, rgba(255, 255, 255, 0.58) 50%, white 74%);
-}
-
-.klide-cosmos-layer.is-galaxy {
-  color: rgba(55, 160, 225, 0.62);
-  opacity: 0.34;
-  text-shadow:
-    0 0 7px rgba(20, 145, 230, 0.2),
-    0 0 18px rgba(120, 195, 245, 0.1);
-  mask-image: linear-gradient(90deg, transparent 0%, transparent 38%, rgba(255, 255, 255, 0.35) 50%, white 68%);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, transparent 38%, rgba(255, 255, 255, 0.35) 50%, white 68%);
+    0 0 7px rgba(60, 180, 255, 0.5),
+    0 0 18px rgba(0, 140, 255, 0.22);
 }
 
 .klide-cosmos-layer.is-stars {
-  color: rgba(42, 116, 165, 0.72);
-  opacity: 0.58;
-  text-shadow: 0 0 5px rgba(0, 120, 230, 0.18);
+  color: rgba(150, 180, 210, 0.6);
+  opacity: 0.5;
+  text-shadow: 0 0 4px rgba(120, 160, 220, 0.16);
 }
 
 .klide-cosmos-layer.is-bright-stars {
-  color: rgba(218, 232, 240, 0.68);
-  opacity: 0.7;
+  color: rgba(220, 234, 244, 0.7);
+  opacity: 0.72;
   text-shadow:
-    0 0 5px rgba(180, 225, 255, 0.28),
-    0 0 14px rgba(0, 135, 255, 0.18);
+    0 0 5px rgba(190, 225, 255, 0.3),
+    0 0 13px rgba(80, 160, 255, 0.16);
 }
 
 /* Glass action button — translucent, blurred, hairline border. */
@@ -637,36 +741,24 @@ select.klide-field {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  height: 44px;
-  padding: 0 20px;
-  border-radius: 11px;
-  background: var(--w-glass);
+  height: 42px;
+  padding: 0 18px;
+  border-radius: 10px;
+  background: transparent;
   border: 1px solid var(--w-border);
   color: var(--w-fg);
   font-size: 13.5px;
   font-weight: 500;
   letter-spacing: -0.005em;
   white-space: nowrap;
-  backdrop-filter: blur(16px) saturate(1.3);
-  -webkit-backdrop-filter: blur(16px) saturate(1.3);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    0 10px 34px rgba(0, 0, 0, 0.34);
   transition:
     background var(--motion-fast) var(--ease-out),
-    border-color var(--motion-fast) var(--ease-out),
-    box-shadow var(--motion-fast) var(--ease-out),
-    transform var(--motion-fast) var(--ease-out);
+    border-color var(--motion-fast) var(--ease-out);
 }
 
 .klide-welcome-glass-btn:hover {
-  background: var(--w-glass-hover);
-  border-color: rgba(255, 255, 255, 0.20);
-  transform: translateY(-1px);
-}
-
-.klide-welcome-glass-btn:active {
-  transform: translateY(0) scale(0.985);
+  background: var(--w-glass);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 .klide-welcome-glass-btn:focus-visible,
@@ -678,61 +770,144 @@ select.klide-field {
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
+/* One clear primary CTA — solid light fill, dark label (Linear/Vercel idiom). */
 .klide-welcome-glass-btn[data-primary="true"] {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: var(--w-fg);
+  border-color: var(--w-fg);
+  color: #0a0d14;
+  font-weight: 600;
 }
 
 .klide-welcome-glass-btn[data-primary="true"]:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: #ffffff;
+  border-color: #ffffff;
 }
 
-/* Glass recent row — same material, list geometry. */
+/* Quiet secondary — borderless ghost, demoted next to the primary. */
+.klide-welcome-glass-btn[data-quiet="true"] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--w-dim);
+  padding: 0 14px;
+}
+
+.klide-welcome-glass-btn[data-quiet="true"]:hover {
+  background: var(--w-glass);
+  border-color: transparent;
+  color: var(--w-fg);
+}
+
+/* Active (its composer is open) — subtle persistent wash. */
+.klide-welcome-glass-btn[data-active="true"] {
+  background: var(--w-glass);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.klide-welcome-glass-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Inline keycap hint inside a button. */
+.klide-welcome-kbd {
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  opacity: 0.7;
+}
+
+/* New-project / Clone composer. */
+.klide-welcome-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.klide-welcome-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.klide-welcome-input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: var(--w-glass);
+  border: 1px solid var(--w-border);
+  color: var(--w-fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: -0.002em;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.klide-welcome-input::placeholder {
+  color: var(--w-faint);
+}
+
+.klide-welcome-input:focus {
+  outline: none;
+  border-color: rgba(111, 155, 255, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.klide-welcome-composer-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--w-faint);
+}
+
+.klide-welcome-composer-error {
+  color: #ff938a;
+}
+
+/* Recent row — a clean list line, not a card. Flat by default, a faint
+   wash on hover, hairline between rows. */
 .klide-welcome-rrow {
   position: relative;
   display: flex;
   align-items: center;
   gap: 13px;
-  height: 46px;
-  padding: 0 12px 0 15px;
-  border-radius: 11px;
-  background: var(--w-glass);
-  border: 1px solid var(--w-border);
+  height: 44px;
+  padding: 0 8px 0 10px;
+  margin: 0 -10px;
+  border-radius: 9px;
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--w-fg);
   text-align: left;
-  backdrop-filter: blur(14px) saturate(1.2);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 8px 26px rgba(0, 0, 0, 0.26);
   transition:
     background var(--motion-fast) var(--ease-out),
-    border-color var(--motion-fast) var(--ease-out),
-    box-shadow var(--motion-fast) var(--ease-out),
-    transform var(--motion-fast) var(--ease-out);
+    border-color var(--motion-fast) var(--ease-out);
 }
 
 .klide-welcome-rrow:hover {
-  background: var(--w-glass-hover);
-  border-color: rgba(255, 255, 255, 0.18);
-  transform: translateY(-1px);
+  background: var(--w-glass);
+  border-color: var(--w-border);
 }
 
 .klide-welcome-rrow.is-placeholder {
-  opacity: 0.6;
-  background:
-    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.035), transparent),
-    rgba(255, 255, 255, 0.026);
-  border-color: rgba(255, 255, 255, 0.075);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  height: 44px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: transparent;
 }
 
 .klide-welcome-rrow.is-placeholder:hover {
-  transform: none;
-  background:
-    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.035), transparent),
-    rgba(255, 255, 255, 0.026);
-  border-color: rgba(255, 255, 255, 0.075);
+  background: rgba(255, 255, 255, 0.02);
+  border-color: transparent;
 }
 
 .klide-welcome-rrow-index {
@@ -807,14 +982,21 @@ select.klide-field {
   background: linear-gradient(to right, var(--w-border), transparent);
 }
 
+/* Ambient keyboard hint — scoped to the fixed-dark welcome palette. */
+.klide-welcome .klide-welcome-keys {
+  color: var(--w-faint);
+}
+
+.klide-welcome .klide-welcome-keys b {
+  color: var(--w-dim);
+}
+
 @media (max-width: 720px) {
   .klide-welcome {
-    background:
-      radial-gradient(150% 72% at 54% 122%, rgba(111, 155, 255, 0.18), transparent 58%),
-      linear-gradient(180deg, #080b12 0%, #0a0e18 52%, #0b1120 100%);
+    background: linear-gradient(180deg, #07090e 0%, #080b11 100%);
   }
 
-  .klide-welcome-glass-btn {
+  .klide-welcome-glass-btn[data-primary="true"] {
     flex: 1 1 170px;
     justify-content: center;
   }
@@ -831,15 +1013,18 @@ select.klide-field {
 
 /* Each content block fades up 10px with a touch of blur. The component
    sets --welcome-delay inline to cascade the wave top-to-bottom. */
+/* Spring-settled rise — the 2026 motion idiom: physics over fixed easing.
+   The linear() curve is a sampled critically-damped spring with a gentle
+   overshoot, so each block lifts and settles rather than gliding to a stop. */
 .klide-welcome-rise {
-  animation: klide-welcome-rise 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: klide-welcome-rise 640ms var(--ease-spring, cubic-bezier(0.16, 1, 0.3, 1)) both;
   animation-delay: var(--welcome-delay, 0ms);
 }
 
 @keyframes klide-welcome-rise {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(14px);
     filter: blur(3px);
   }
   to {
