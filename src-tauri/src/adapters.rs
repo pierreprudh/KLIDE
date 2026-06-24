@@ -262,6 +262,8 @@ impl StreamingProvider for OllamaAdapter {
                 completion_tokens: count("eval_count"),
                 eval_duration_ms: count("eval_duration").map(|ns| ns / 1_000_000),
                 prompt_eval_duration_ms: count("prompt_eval_duration").map(|ns| ns / 1_000_000),
+                // Local models are free — no billed cost to report.
+                cost_usd: None,
             };
             self.stop_reason = value
                 .get("done_reason")
@@ -492,6 +494,16 @@ impl StreamingProvider for OpenAiAdapter {
         if let Some(key) = &self.key {
             req = req.bearer_auth(key);
         }
+        // OpenRouter uses these optional headers for app attribution — they
+        // identify Klide on the user's OpenRouter activity dashboard and the
+        // public model-usage rankings. Harmless for other OpenAI-wire
+        // providers (they ignore unknown headers), but scoped to OpenRouter
+        // to keep requests to other endpoints byte-for-byte unchanged.
+        if self.provider == "openrouter" {
+            req = req
+                .header("HTTP-Referer", "https://github.com/pierreprudh/KLIDE")
+                .header("X-Title", "Klide");
+        }
         Ok(req)
     }
 
@@ -531,6 +543,9 @@ impl StreamingProvider for OpenAiAdapter {
                     completion_tokens: count("completion_tokens"),
                     eval_duration_ms: None,
                     prompt_eval_duration_ms: None,
+                    // OpenRouter reports the real charged cost here; other
+                    // OpenAI-wire providers omit it (priced from the table).
+                    cost_usd: usage.get("cost").and_then(|v| v.as_f64()),
                 };
             }
         }

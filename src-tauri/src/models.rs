@@ -18,6 +18,31 @@ use std::time::Instant;
 static OLLAMA_MODELS_CACHE: LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// Per-model metadata harvested from an OpenAI-wire `/models` listing.
+/// Aggregators like OpenRouter report the real context window and the
+/// per-model parameter list; plain OpenAI does not. All fields optional —
+/// `None` means "the endpoint didn't say", so callers keep their heuristic.
+#[derive(Clone, Debug, Default)]
+struct ModelMeta {
+    context_length: Option<usize>,
+    /// `Some(true/false)` when the endpoint advertises `supported_parameters`;
+    /// `None` when it doesn't (caller falls back to its optimistic default).
+    supports_tools: Option<bool>,
+    /// Prompt / completion price in USD per *million* tokens, when the
+    /// listing reports it (OpenRouter). `None` for endpoints that don't.
+    input_per_million: Option<f64>,
+    output_per_million: Option<f64>,
+}
+
+/// Cached `/models` metadata, keyed by provider id. OpenRouter's listing is
+/// 339 models, so we fetch it at most once per `MODEL_META_TTL` and serve the
+/// rest from memory — model switching shouldn't re-hit the network.
+static OPENAI_MODEL_META_CACHE: LazyLock<
+    Mutex<HashMap<String, (Instant, HashMap<String, ModelMeta>)>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const MODEL_META_TTL: Duration = Duration::from_secs(300);
+
 /// Cached results of the active Ollama reflection probe. Keyed by
 /// `"ollama:<model>"`. Lives for the Tauri process so we don't burn a
 /// chat inference on every model switch.
@@ -163,6 +188,159 @@ async fn fetch_openai_compatible_models(
     }
     let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     Ok(normalize_model_ids(&value))
+}
+
+/// Pull per-model metadata out of an OpenAI-wire `/models` response.
+/// OpenRouter shape: `data: [{ id, context_length, top_provider:
+/// { context_length }, supported_parameters: ["tools", …] }]`. Models the
+/// endpoint doesn't describe simply don't appear in the map.
+fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelMeta> {
+    let mut out = HashMap::new();
+    let Some(arr) = value.get("data").and_then(|d| d.as_array()) else {
+        return out;
+    };
+    for m in arr {
+        let Some(id) = m.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        // Top-level `context_length` is the model's window; `top_provider`
+        // can carry a (sometimes smaller) per-route value. Prefer top-level.
+        let context_length = m
+            .get("context_length")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                m.get("top_provider")
+                    .and_then(|tp| tp.get("context_length"))
+                    .and_then(|v| v.as_u64())
+            })
+            .map(|n| n as usize);
+        // The model supports tool calling iff `supported_parameters` lists
+        // "tools". Absent array → `None` (unknown), not `false`.
+        let supports_tools = m
+            .get("supported_parameters")
+            .and_then(|v| v.as_array())
+            .map(|params| params.iter().any(|p| p.as_str() == Some("tools")));
+        // OpenRouter prices are USD *per token*, encoded as strings
+        // (e.g. "0.000001") — sometimes numbers. Accept both, scale to
+        // per-million to match the local pricing table's units.
+        let price = |key: &str| -> Option<f64> {
+            m.get("pricing")
+                .and_then(|p| p.get(key))
+                .and_then(|v| {
+                    v.as_f64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+                })
+                .map(|per_token| per_token * 1_000_000.0)
+        };
+        out.insert(
+            id.to_string(),
+            ModelMeta {
+                context_length,
+                supports_tools,
+                input_per_million: price("prompt"),
+                output_per_million: price("completion"),
+            },
+        );
+    }
+    out
+}
+
+/// Fetch (and cache) `/models` metadata for an OpenAI-wire provider.
+/// Best-effort: returns an empty map for non-OpenAI-wire providers, when no
+/// key is configured, or on any network/parse failure — callers then fall
+/// back to their heuristics. Never errors.
+async fn openai_model_meta(provider: &str) -> HashMap<String, ModelMeta> {
+    {
+        let cache = OPENAI_MODEL_META_CACHE.lock().unwrap();
+        if let Some((ts, meta)) = cache.get(provider) {
+            if ts.elapsed() < MODEL_META_TTL {
+                return meta.clone();
+            }
+        }
+    }
+    let Some(entry) = providers::lookup(provider) else {
+        return HashMap::new();
+    };
+    let url = match entry.wire {
+        providers::WireFormat::OpenAi(cfg) => cfg.models_url,
+        _ => return HashMap::new(),
+    };
+    // No key (or an unresolved reference) → skip auth; OpenRouter's listing
+    // is public, but a key keeps it consistent with the chat path.
+    let key = provider_key(entry.id).ok().flatten();
+    let mut req = reqwest::Client::new().get(url);
+    if let Some(key) = key {
+        req = req.bearer_auth(key);
+    }
+    let Ok(res) = req.send().await else {
+        return HashMap::new();
+    };
+    if !res.status().is_success() {
+        return HashMap::new();
+    }
+    let Ok(body) = res.text().await else {
+        return HashMap::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return HashMap::new();
+    };
+    let meta = parse_openai_models_meta(&value);
+    OPENAI_MODEL_META_CACHE
+        .lock()
+        .unwrap()
+        .insert(provider.to_string(), (Instant::now(), meta.clone()));
+    meta
+}
+
+/// One model's metadata, flattened for the frontend model picker so it can
+/// show context window / tool support / price badges per row.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ModelMetaWire {
+    pub id: String,
+    pub context_length: Option<usize>,
+    pub supports_tools: Option<bool>,
+    pub input_per_million: Option<f64>,
+    pub output_per_million: Option<f64>,
+}
+
+/// Per-model metadata for a provider's picker. Empty for providers whose
+/// `/models` listing doesn't expose the richer fields (plain OpenAI), or when
+/// no key is set — the picker simply renders no badges then.
+#[tauri::command]
+pub(crate) async fn ai_provider_model_meta(
+    provider: String,
+) -> Result<Vec<ModelMetaWire>, String> {
+    let meta = openai_model_meta(&provider).await;
+    Ok(meta
+        .into_iter()
+        .map(|(id, m)| ModelMetaWire {
+            id,
+            context_length: m.context_length,
+            supports_tools: m.supports_tools,
+            input_per_million: m.input_per_million,
+            output_per_million: m.output_per_million,
+        })
+        .collect())
+}
+
+/// Resolve a model's context window, in priority order: an explicit override
+/// (local `num_ctx`), the provider's advertised per-model window (OpenRouter
+/// `/models`), then the name-based heuristic. Shared by the frontend gauge
+/// command and the harness's compaction threshold so the two never disagree.
+pub(crate) async fn resolve_context_window(provider: &str, model: &str) -> usize {
+    if let Some(entry) = providers::lookup(provider) {
+        if matches!(entry.models, providers::ModelsHandler::OpenAiModels) {
+            if let Some(window) = openai_model_meta(provider)
+                .await
+                .get(model)
+                .and_then(|m| m.context_length)
+            {
+                return window;
+            }
+        }
+    }
+    fallback_context_window(provider, model)
 }
 
 fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<Vec<String>, String> {
@@ -424,7 +602,10 @@ pub(crate) async fn ai_context_window(provider: String, model: String) -> Result
         return Ok(fallback_context_window("mlx", &model));
     }
 
-    Ok(fallback_context_window(&provider, &model))
+    // OpenAI-wire aggregators (OpenRouter) advertise the real per-model
+    // window in their `/models` listing; everything else falls back to the
+    // name-based heuristic inside `resolve_context_window`.
+    Ok(resolve_context_window(&provider, &model).await)
 }
 
 #[tauri::command]
@@ -474,6 +655,22 @@ pub(crate) async fn ai_model_supports_tools(
     // presets are all tool-capable instruct models, so advertise support.
     if provider == "mlx" {
         return Ok(true);
+    }
+
+    // OpenAI-wire aggregators (OpenRouter) advertise per-model tool support
+    // via `supported_parameters`. Trust it when present so agent/goal mode
+    // doesn't silently send `tools` to a chat-only model; if the endpoint
+    // doesn't say (plain OpenAI), keep the optimistic default.
+    if let Some(entry) = providers::lookup(&provider) {
+        if matches!(entry.models, providers::ModelsHandler::OpenAiModels) {
+            if let Some(supports) = openai_model_meta(&provider)
+                .await
+                .get(&model)
+                .and_then(|m| m.supports_tools)
+            {
+                return Ok(supports);
+            }
+        }
     }
 
     Ok(true)
@@ -769,6 +966,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_openai_models_meta_reads_window_and_tool_support() {
+        // OpenRouter `/models` shape: per-model context_length +
+        // supported_parameters. Tool support is true iff "tools" is listed.
+        let value = serde_json::json!({
+            "data": [
+                {
+                    "id": "google/gemini-3.5-flash",
+                    "context_length": 1_048_576,
+                    "supported_parameters": ["tools", "tool_choice", "response_format"],
+                    // OpenRouter encodes per-token prices as strings.
+                    "pricing": { "prompt": "0.0000015", "completion": "0.000009" }
+                },
+                {
+                    "id": "some/base-model",
+                    "context_length": 8_192,
+                    "supported_parameters": ["temperature", "top_p"]
+                },
+                {
+                    // Window only under top_provider; no supported_parameters.
+                    "id": "vendor/quiet",
+                    "top_provider": { "context_length": 32_768 }
+                },
+                { "noid": 1 }
+            ]
+        });
+        let meta = parse_openai_models_meta(&value);
+        assert_eq!(meta["google/gemini-3.5-flash"].context_length, Some(1_048_576));
+        assert_eq!(meta["google/gemini-3.5-flash"].supports_tools, Some(true));
+        // String prices scale per-token → per-million: 0.0000015 → 1.5.
+        assert_eq!(meta["google/gemini-3.5-flash"].input_per_million, Some(1.5));
+        assert_eq!(meta["google/gemini-3.5-flash"].output_per_million, Some(9.0));
+        // No pricing block → None, never 0.
+        assert_eq!(meta["vendor/quiet"].input_per_million, None);
+        assert_eq!(meta["some/base-model"].supports_tools, Some(false));
+        // Falls back to top_provider.context_length; tool support unknown.
+        assert_eq!(meta["vendor/quiet"].context_length, Some(32_768));
+        assert_eq!(meta["vendor/quiet"].supports_tools, None);
+        // Entry without an id is skipped, never panics.
+        assert_eq!(meta.len(), 3);
+    }
+
+    #[test]
     fn normalize_model_ids_pulls_string_ids_from_data() {
         let value = serde_json::json!({
             "data": [{ "id": "a" }, { "id": "b" }, { "noid": 1 }]
@@ -860,14 +1099,9 @@ mod tests {
 
     #[tokio::test]
     async fn mlx_provider_models_returns_presets_without_polling_server() {
+        // Asserts against the live preset constant rather than a hardcoded
+        // copy, so adding an MLX preset doesn't silently rot this test.
         let models = ai_provider_models("mlx".to_string()).await.unwrap();
-        assert_eq!(
-            models,
-            vec![
-                "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
-                "Qwen/Qwen3-4B-MLX-4bit".to_string(),
-                "mlx-community/gemma-2-9b-it-4bit".to_string(),
-            ]
-        );
+        assert_eq!(models, crate::MLX_MODEL_PRESETS.to_vec());
     }
 }

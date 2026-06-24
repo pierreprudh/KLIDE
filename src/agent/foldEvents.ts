@@ -33,6 +33,9 @@ export type AssistantMeta = {
   tps?: number;
   /** True iff `tokens` came from the provider, not the estimate. */
   exact?: boolean;
+  /** Per-turn cost in USD, carried from `AgentUsage.costUsd`. Absent for
+   *  local / subscription / unknown-price turns. */
+  costUsd?: number;
 };
 
 export type FoldedRow =
@@ -193,6 +196,7 @@ function computeMeta(
     tokensEstimate: hasUsage ? undefined : estimated || undefined,
     tps,
     exact: hasUsage,
+    costUsd: usage?.costUsd,
   };
 }
 
@@ -251,6 +255,7 @@ export function foldedToMsgs(rows: FoldedRow[]): Msg[] {
             tokens: row.meta.tokens,
             tps: row.meta.tps,
             exact: row.meta.exact,
+            costUsd: row.meta.costUsd,
           }
         : undefined,
     });

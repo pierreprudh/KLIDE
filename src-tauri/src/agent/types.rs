@@ -262,6 +262,13 @@ pub struct AgentUsage {
     /// Time spent processing the prompt, ms (Ollama prompt_eval_duration).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub prompt_eval_duration_ms: Option<u64>,
+    /// Per-turn cost in USD. Provider-reported when available (OpenRouter
+    /// sends the real charged amount), otherwise estimated from the local
+    /// pricing table × token counts. `None` for local / subscription /
+    /// unknown-price models. Persisted in the transcript, so reopened
+    /// conversations and Mission Control show the same cost the live panel did.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -438,6 +445,7 @@ mod tests {
             completion_tokens: None,
             eval_duration_ms: Some(450),
             prompt_eval_duration_ms: None,
+            cost_usd: None,
         };
         let v = serde_json::to_value(&u).expect("serialize");
         assert_eq!(v["promptTokens"], 120);
@@ -476,6 +484,7 @@ mod tests {
                 completion_tokens: Some(5),
                 eval_duration_ms: Some(200),
                 prompt_eval_duration_ms: None,
+                cost_usd: None,
             }),
             ts: 1_700_000_000,
         };

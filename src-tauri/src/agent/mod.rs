@@ -442,20 +442,32 @@ fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_jso
 /// Map the private provider-side `AiUsage` into the wire-format
 /// `AgentUsage` so the frontend can decode it without depending on a
 /// private type. Cheap (four `Option<u64>`s); done on every turn.
-fn agent_usage_from(usage: Option<AiUsage>) -> Option<AgentUsage> {
+fn agent_usage_from(usage: Option<AiUsage>, model: &str) -> Option<AgentUsage> {
     let u = usage?;
     let is_empty = u.prompt_tokens.is_none()
         && u.completion_tokens.is_none()
         && u.eval_duration_ms.is_none()
-        && u.prompt_eval_duration_ms.is_none();
+        && u.prompt_eval_duration_ms.is_none()
+        && u.cost_usd.is_none();
     if is_empty {
         return None;
     }
+    // Cost, in priority order: the provider's real charged amount
+    // (OpenRouter) wins; otherwise estimate from the local pricing table ×
+    // token counts (Anthropic/OpenAI direct). `None` for local /
+    // subscription / unknown-price models.
+    let cost_usd = u.cost_usd.or_else(|| {
+        match (u.prompt_tokens, u.completion_tokens) {
+            (Some(p), Some(c)) => crate::pricing::cost_for_run(model, p as i64, c as i64),
+            _ => None,
+        }
+    });
     Some(AgentUsage {
         prompt_tokens: u.prompt_tokens,
         completion_tokens: u.completion_tokens,
         eval_duration_ms: u.eval_duration_ms,
         prompt_eval_duration_ms: u.prompt_eval_duration_ms,
+        cost_usd,
     })
 }
 
@@ -1376,7 +1388,7 @@ async fn run_agent_loop(
         Ok(())
     };
 
-    let summary = AgentRunSummary {
+    let mut summary = AgentRunSummary {
         id: id.clone(),
         path: transcript_path(&runs_dir, &id)
             .to_string_lossy()
@@ -1469,11 +1481,15 @@ async fn run_agent_loop(
         .unwrap_or(DEFAULT_MAX_TURNS)
         .clamp(1, 1000);
     // Compaction is token-budget driven, not message-count driven: resolve the
-    // model's context window once (explicit `num_ctx` for local models, else a
-    // per-family fallback) and only trim once the prompt actually crowds it.
-    let context_window = request.num_ctx.unwrap_or_else(|| {
-        crate::models::fallback_context_window(&request.provider, &request.model)
-    });
+    // model's context window once (explicit `num_ctx` override, else the
+    // provider's advertised per-model window — OpenRouter — else a per-family
+    // fallback) and only trim once the prompt actually crowds it.
+    let context_window = match request.num_ctx {
+        Some(n) => n,
+        None => {
+            crate::models::resolve_context_window(&request.provider, &request.model).await
+        }
+    };
     let compact_threshold =
         compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
 
@@ -1570,13 +1586,29 @@ async fn run_agent_loop(
         messages.push(assistant_message);
         message_count += 1;
 
+        // Resolve this turn's usage once, then fold it into the run totals so
+        // Mission Control can show a running token + cost tally. The same
+        // value is attached to the assistant_message event below.
+        let turn_usage = agent_usage_from(response.usage.clone(), &summary.model);
+        if let Some(u) = &turn_usage {
+            summary.input_tokens = summary
+                .input_tokens
+                .saturating_add(u.prompt_tokens.unwrap_or(0) as i64);
+            summary.output_tokens = summary
+                .output_tokens
+                .saturating_add(u.completion_tokens.unwrap_or(0) as i64);
+            if let Some(c) = u.cost_usd {
+                summary.cost_usd = Some(summary.cost_usd.unwrap_or(0.0) + c);
+            }
+        }
+
         let tool_calls = match decision {
             TurnDecision::Final { content } => {
                 emit(AgentEvent::AssistantMessage {
                     run_id: id.clone(),
                     message_id: assistant_id,
                     content,
-                    usage: agent_usage_from(response.usage.clone()),
+                    usage: turn_usage,
                     ts: now_ms(),
                 })?;
                 emit(AgentEvent::RunResult {
@@ -1605,7 +1637,7 @@ async fn run_agent_loop(
                     run_id: id.clone(),
                     message_id: assistant_id,
                     content,
-                    usage: agent_usage_from(response.usage.clone()),
+                    usage: turn_usage,
                     ts: now_ms(),
                 })?;
                 tool_calls

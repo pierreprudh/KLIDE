@@ -74,6 +74,10 @@ export type AgentUsage = {
   evalDurationMs?: number;
   /** Time spent processing the prompt, ms (Ollama prompt_eval_duration). */
   promptEvalDurationMs?: number;
+  /** Per-turn cost in USD. Provider-reported when available (OpenRouter
+   *  sends the real charged amount), else estimated from the pricing table.
+   *  Absent for local / subscription / unknown-price models. */
+  costUsd?: number;
 };
 
 export type PermissionOption = {

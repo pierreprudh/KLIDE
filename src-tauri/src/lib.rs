@@ -117,6 +117,13 @@ pub(crate) struct AiUsage {
     /// Time spent processing the prompt, ms (Ollama prompt_eval_duration).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) prompt_eval_duration_ms: Option<u64>,
+    /// Real billed cost in USD, when the provider reports it directly.
+    /// OpenRouter attaches `usage.cost` to every response (the actual
+    /// charged amount, including any markup) — ground truth, not an
+    /// estimate. `None` for providers that don't report cost; those are
+    /// priced from the local table instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cost_usd: Option<f64>,
 }
 
 impl AiUsage {
@@ -125,6 +132,7 @@ impl AiUsage {
             && self.completion_tokens.is_none()
             && self.eval_duration_ms.is_none()
             && self.prompt_eval_duration_ms.is_none()
+            && self.cost_usd.is_none()
     }
 }
 
@@ -936,6 +944,7 @@ pub fn run() {
             read_agent_run,
             read_opencode_run,
             models::ai_provider_models,
+            models::ai_provider_model_meta,
             ai_subscription_status,
             app_user_info,
             models::ai_context_window,
