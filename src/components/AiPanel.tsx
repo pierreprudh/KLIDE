@@ -12,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { InlineDiffReview } from "./InlineDiffReview";
 import { InlineCommandReview } from "./InlineCommandReview";
-import { publishKlideConvo, settleKlideConvo } from "../klideConvos";
+import { deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
 import {
   estimateProjectContextTokens,
   lensItemsForPrompt,
@@ -66,6 +66,7 @@ import {
   countMessageTokens,
   fuzzyFiles,
   loadConversations,
+  persistConversation,
   saveConversations,
   loadPanelSession,
   savePanelSession,
@@ -1227,6 +1228,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (saved && saved.msgs.length > 0) {
       setMsgs(saved.msgs);
       msgsRef.current = saved.msgs;
+      if (saved.provider && saved.provider !== provider) onProviderChange?.(saved.provider);
+      if (saved.model && saved.model !== model) onModelChange(saved.model);
     }
     // Reconnect to a run that progressed while the panel was unmounted: the
     // harness keeps running in Rust and writes the transcript, but the live
@@ -1428,6 +1431,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     setCurrentId(c.id);
     setMsgs(c.msgs);
     msgsRef.current = c.msgs;
+    if (c.provider && c.provider !== provider) onProviderChange?.(c.provider);
+    if (c.model && c.model !== model) onModelChange(c.model);
     // Explicit resume is intent to continue this thread, so keep it pinned
     // across a remount (view switch) until it finishes or the user starts a
     // new chat — mirrors the in-flight re-attach path.
@@ -1461,6 +1466,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   function deleteConversation(id: string, e: ReactMouseEvent) {
     e.stopPropagation();
     setConversations((prev) => { const next = prev.filter((c) => c.id !== id); saveConversations(next); return next; });
+    deleteKlideConvo(id);
     if (id === currentId) {
       setMsgs([]);
       const nid = genId();
@@ -1523,12 +1529,18 @@ This user request requires workspace inspection. Before answering, you MUST call
     const toSave = messagesForPersist(msgs);
     if (toSave.length === 0) return;
     setConversations((prev) => {
-      const conv: Conversation = { id: currentId, title: deriveTitle(toSave), msgs: toSave, updatedAt: Date.now() };
-      const next = [conv, ...prev.filter((c) => c.id !== currentId)];
-      saveConversations(next);
-      return next;
+      const conv: Conversation = {
+        id: currentId,
+        title: deriveTitle(toSave),
+        msgs: toSave,
+        updatedAt: Date.now(),
+        provider,
+        model,
+        cwd: workspaceRoot,
+      };
+      return persistConversation(conv, prev);
     });
-  }, [msgs, currentId]);
+  }, [msgs, currentId, provider, model, workspaceRoot]);
 
   // Flush whatever the latest commit was on unmount so a view switch
   // mid-stream doesn't drop the in-flight conversation. `msgsRef` is
@@ -1537,19 +1549,15 @@ This user request requires workspace inspection. Before answering, you MUST call
   useEffect(() => () => {
     const snapshot = messagesForPersist(msgsRef.current);
     if (snapshot.length === 0) return;
-    const raw = (() => {
-      try { return localStorage.getItem("klide.conversations"); } catch { return null; }
-    })();
-    let list: Conversation[] = [];
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) list = parsed as Conversation[];
-      } catch { /* corrupt store — overwrite below */ }
-    }
-    const conv: Conversation = { id: currentId, title: deriveTitle(snapshot), msgs: snapshot, updatedAt: Date.now() };
-    const next = [conv, ...list.filter((c) => c.id !== currentId)];
-    saveConversations(next);
+    persistConversation({
+      id: currentId,
+      title: deriveTitle(snapshot),
+      msgs: snapshot,
+      updatedAt: Date.now(),
+      provider,
+      model,
+      cwd: workspaceRoot,
+    });
     // Intentionally only currentId at unmount matters; msgsRef is the
     // fresh source of truth for the snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps

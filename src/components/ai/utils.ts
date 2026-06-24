@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Msg } from "./types";
+import type { Conversation, Msg } from "./types";
 import { estimateProjectContextTokens } from "../../contextTray";
 
 export function cssVar(name: string): string {
@@ -109,6 +109,7 @@ export function fuzzyFiles(files: string[], query: string): string[] {
 }
 
 const CONVOS_KEY = "klide-conversations";
+const MAX_CONVERSATIONS = 100;
 
 export function loadConversations<T>(key?: string): T[] {
   try {
@@ -126,6 +127,23 @@ export function saveConversations<T>(list: T[], key?: string) {
   } catch {
     /* storage full or unavailable */
   }
+}
+
+export function upsertConversation(
+  conv: Conversation,
+  existing: Conversation[] = loadConversations<Conversation>(),
+): Conversation[] {
+  const next = [conv, ...existing.filter((c) => c.id !== conv.id)];
+  return next.slice(0, MAX_CONVERSATIONS);
+}
+
+export function persistConversation(
+  conv: Conversation,
+  existing?: Conversation[],
+): Conversation[] {
+  const next = upsertConversation(conv, existing);
+  saveConversations(next);
+  return next;
 }
 
 // A panel's *conversation* identity is separate from its *panel* identity

@@ -13,6 +13,7 @@ import {
   lastAgent,
   lastModel,
   removeTask,
+  renameTask,
   stopTask,
   subscribeTasks,
   type TaskSession,
@@ -20,8 +21,8 @@ import {
 } from "../tasks";
 import {
   getKlideConvos,
+  renameKlideConvo,
   subscribeKlideConvos,
-  type KlideConvo,
 } from "../klideConvos";
 import { listMemory, subscribeMemoryChanged } from "../memory";
 import type { ThemeId } from "../theme";
@@ -58,6 +59,19 @@ import {
   type RunStatus,
   type RunToolCall,
 } from "../runs";
+import {
+  buildRunLedger,
+  handoffTargetsFor,
+  presentRunSources,
+  readRunLedgerMetadata,
+  runMatchesLedgerQuery,
+  runLedgerKey,
+  sourceMatchesFilter,
+  writeRunLedgerMetadata,
+  type RunLedgerEntry,
+  type RunLedgerMetadataStore,
+  type RunSourceFilter,
+} from "../runLedger";
 import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
@@ -79,29 +93,6 @@ import { buildRunHandoff } from "../agentHandoff";
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-// Present a dispatched task as a Run so it shares the board's rows, filters
-// and status groups with the disk-log runs. `kind: "task"` is what tells
-// the row renderer to use the task avatar + TASK badge (vs. the Klide
-// spark used for AI-panel conversations).
-function taskToRun(t: TaskSession): Run {
-  return {
-    id: t.id,
-    path: "",
-    kind: "task",
-    // Undispatched todos wear the Klide mark until an agent is sent.
-    source: t.source ?? "klide",
-    title: t.title,
-    status: t.status,
-    model: t.model,
-    project: t.cwd ? t.cwd.split("/").filter(Boolean).pop() ?? null : null,
-    cwd: t.cwd,
-    branch: null,
-    messageCount: 0,
-    updatedMs: t.startedMs,
-    createdMs: t.startedMs,
-  };
 }
 
 function isClaudeInternalSubagent(run: Pick<Run, "source" | "path">): boolean {
@@ -150,25 +141,6 @@ function SubagentStackToggle({
       </span>
     </Tooltip>
   );
-}
-
-// Same for an AI-panel conversation — Klide's own chats join the board.
-function convoToRun(c: KlideConvo): Run {
-  return {
-    id: c.id,
-    path: "",
-    kind: "convo",
-    source: "klide",
-    title: c.title,
-    status: c.status,
-    model: c.model,
-    project: c.cwd ? c.cwd.split("/").filter(Boolean).pop() ?? null : null,
-    cwd: c.cwd,
-    branch: null,
-    messageCount: c.messages?.length ?? 0,
-    updatedMs: c.updatedMs,
-    createdMs: c.updatedMs,
-  };
 }
 
 // Minimal status text for places that need an explicit state. No colored
@@ -621,7 +593,7 @@ function RunRow({
   compact,
   hasMemory,
 }: {
-  run: Run;
+  run: RunLedgerEntry;
   selected: boolean;
   onSelect: () => void;
   action?: React.ReactNode;
@@ -786,6 +758,25 @@ function RunRow({
               }}
             >
               Task
+            </span>
+          )}
+          {run.archived && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: "var(--fg-subtle)",
+                background: "var(--bg-hover)",
+                border: "1px solid var(--border)",
+                padding: "1px 5px",
+                borderRadius: 999,
+                flexShrink: 0,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              Archived
             </span>
           )}
           <RoutineBadge run={run} />
@@ -1217,9 +1208,9 @@ function AttentionQueue({
   onResumeKlide,
   onOpenInAiPanel,
 }: {
-  runs: Run[];
+  runs: RunLedgerEntry[];
   tasks: TaskSession[];
-  onSelect: (run: Run) => void;
+  onSelect: (run: RunLedgerEntry) => void;
   onResumeKlide?: (runId: string) => void;
   onOpenInAiPanel?: (input: { provider: DelegateId; workspaceRoot: string | null; resumeSessionId: string }) => void;
 }) {
@@ -1238,7 +1229,7 @@ function AttentionQueue({
         if (reason && dismissed.has(attentionDismissKey(run))) return null;
         return reason ? { run, reason, isTask: taskIds.has(run.id) } : null;
       })
-      .filter((x): x is { run: Run; reason: RunAttention; isTask: boolean } => x !== null)
+      .filter((x): x is { run: RunLedgerEntry; reason: RunAttention; isTask: boolean } => x !== null)
       .sort((a, b) => {
         const sev = ATTENTION_SEVERITY[a.reason.kind] - ATTENTION_SEVERITY[b.reason.kind];
         if (sev !== 0) return sev;
@@ -1246,7 +1237,7 @@ function AttentionQueue({
       });
   }, [runs, tasks, dismissed]);
 
-  function dismiss(run: Run, isTask: boolean) {
+  function dismiss(run: RunLedgerEntry, isTask: boolean) {
     if (isTask && run.status !== "running") {
       removeTask(run.id);
       return;
@@ -2997,16 +2988,20 @@ function RunDetail({
   messages,
   handoffPrompt,
   hasMemory,
+  onRename,
+  onArchive,
   onOpenInAiPanel,
   onResumeKlide,
   onReviewDiff,
   onSaveMemory,
   summarizingFromRunId,
 }: {
-  run: Run;
+  run: RunLedgerEntry;
   messages?: RunMessage[];
   /** A durable Project Memory note exists for this run (matched by runId). */
   hasMemory?: boolean;
+  onRename?: (run: RunLedgerEntry, title: string) => void;
+  onArchive?: (run: RunLedgerEntry, archived: boolean) => void;
   /** Compact task state used when handing a Klide run off to an external CLI. */
   handoffPrompt: string | null;
   /** Land the user in a new AI panel pinned to the chosen delegate provider. */
@@ -3027,10 +3022,28 @@ function RunDetail({
   // All 3 external CLIs support resume flags today: `claude --resume <id>`,
   // `codex resume <id>`, and `opencode -s <id>`. The Rust seam builds the
   // right command for each, so the UI just needs to be honest about it.
-  const resumable = isDelegateId(run.source);
+  const resumable = isDelegateId(run.source) && run.capabilities.canResume;
   // The full set of CLI sources we can offer as "Open in {source}". Klide
   // runs hand off to one of these with compact task state as the prompt.
-  const cliSources: DelegateId[] = [...DELEGATE_IDS];
+  const cliSources: DelegateId[] = handoffTargetsFor(run);
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState(run.title);
+
+  useEffect(() => {
+    setRenameDraft(run.title);
+    setRenaming(false);
+  }, [run.id, run.source, run.title]);
+
+  function commitRename() {
+    const title = renameDraft.trim();
+    if (!title || title === run.title) {
+      setRenaming(false);
+      setRenameDraft(run.title);
+      return;
+    }
+    onRename?.(run, title);
+    setRenaming(false);
+  }
 
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
@@ -3061,17 +3074,79 @@ function RunDetail({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 14px", flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--fg-strong)", margin: 0 }}>
-          {run.title}
-        </h2>
+        {renaming ? (
+          <input
+            value={renameDraft}
+            onChange={(e) => setRenameDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") {
+                setRenaming(false);
+                setRenameDraft(run.title);
+              }
+            }}
+            onBlur={commitRename}
+            autoFocus
+            aria-label="Rename session"
+            style={{
+              minWidth: "min(420px, 100%)",
+              flex: "1 1 260px",
+              height: 32,
+              padding: "0 9px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border-strong)",
+              background: "var(--bg)",
+              color: "var(--fg-strong)",
+              fontSize: 18,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              outline: "none",
+            }}
+          />
+        ) : (
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--fg-strong)", margin: 0 }}>
+            {run.title}
+          </h2>
+        )}
         <RoutineBadge run={run} />
       </div>
 
       <RunEvidenceStrip run={run} hasMemory={hasMemory} />
 
+      {run.archived && (
+        <div
+          style={{
+            margin: "0 0 12px",
+            padding: "7px 9px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            background: "var(--bg-hover)",
+            color: "var(--fg-subtle)",
+            fontSize: 12,
+          }}
+        >
+          Archived session
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <CopyButton value={run.path || null} label="Copy log path" />
         <CopyButton value={run.cwd} label="Copy cwd" />
+        {onRename && run.capabilities.canRename && (
+          <ActionButton
+            label={renaming ? "Save name" : "Rename"}
+            onClick={() => {
+              if (renaming) commitRename();
+              else setRenaming(true);
+            }}
+          />
+        )}
+        {onArchive && run.capabilities.canArchive && (
+          <ActionButton
+            label={run.archived ? "Unarchive" : "Archive"}
+            onClick={() => onArchive(run, !run.archived)}
+          />
+        )}
         {resumable && onOpenInAiPanel && (
           <ActionButton
             label={`Resume in ${SOURCE_LABEL[run.source]}`}
@@ -3085,7 +3160,7 @@ function RunDetail({
             }
           />
         )}
-        {run.source === "klide" && onResumeKlide && (
+        {run.source === "klide" && run.capabilities.canResume && onResumeKlide && (
           <ActionButton
             label="Resume in Klide"
             primary
@@ -3096,8 +3171,8 @@ function RunDetail({
             a new AI panel. Klide runs pass compact task state as the prompt
             so the new session starts with context, not just the first ask. */}
         {onOpenInAiPanel &&
+          run.capabilities.canOpenInOtherAgent &&
           cliSources
-            .filter((s) => s !== run.source)
             .map((s) => (
               <ActionButton
                 key={s}
@@ -3114,13 +3189,13 @@ function RunDetail({
                 }
               />
             ))}
-        {onReviewDiff && (
+        {onReviewDiff && run.capabilities.canReviewDiff && (
           <ActionButton
             label={run.source === "klide" ? "Review diff" : "Open Git Review"}
             onClick={() => onReviewDiff({ id: run.id, source: run.source, cwd: run.cwd })}
           />
         )}
-        {onSaveMemory && run.source === "klide" && (
+        {onSaveMemory && run.source === "klide" && run.capabilities.canSaveMemory && (
           <ActionButton
             label={summarizingFromRunId === run.id ? "Saving…" : "Save memory"}
             disabled={summarizingFromRunId === run.id}
@@ -3267,6 +3342,25 @@ function RefreshIcon() {
   );
 }
 
+function SearchIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-3.5-3.5" />
+    </svg>
+  );
+}
+
 const PAGE = 20;
 
 export function MissionControl({
@@ -3321,7 +3415,10 @@ export function MissionControl({
   const [nextOffset, setNextOffset] = useState(0);
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [sourceFilter, setSourceFilter] = useState<RunSource | "all" | "subagent">("all");
+  const [sourceFilter, setSourceFilter] = useState<RunSourceFilter>("all");
+  const [sessionQuery, setSessionQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [ledgerMetadata, setLedgerMetadata] = useState<RunLedgerMetadataStore>(() => readRunLedgerMetadata());
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [expandedSubagentParents, setExpandedSubagentParents] = useState<Set<string>>(new Set());
   const [dismissedBoardRuns, setDismissedBoardRuns] = useState<Set<string>>(() => readDismissedBoardRuns());
@@ -3404,21 +3501,23 @@ export function MissionControl({
     void load();
   }, []);
 
-  // Your todos lead the board, then Klide's own conversations, then runs
-  // pulled off disk from the external CLIs. A Klide chat shares one id across
-  // the live in-memory convo and its on-disk transcript (the AI panel keys the
-  // harness run by the convo id), so drop the convo whenever its on-disk twin
-  // is loaded — the on-disk run carries the full transcript and supports
-  // resume, while the convo is a lossy snapshot. The convo survives only until
-  // its transcript shows up in the runs list.
-  const allRuns = useMemo(() => {
-    const diskIds = new Set(runs.map((r) => r.id));
-    return [
-      ...tasks.map(taskToRun),
-      ...convos.map(convoToRun).filter((c) => !diskIds.has(c.id)),
-      ...runs,
-    ].filter((r) => r.kind === "task" || !dismissedBoardRuns.has(boardDismissKey(r)));
-  }, [tasks, convos, runs, dismissedBoardRuns]);
+  // The run ledger is the canonical Mission Control projection: todos,
+  // live/durable Klide conversations, and on-disk transcripts all become
+  // one normalized row shape with capability flags attached.
+  const allRuns = useMemo(
+    () =>
+      buildRunLedger({
+        tasks,
+        convos,
+        runs,
+        workspaceRoot,
+        dismissedBoardRuns,
+        dismissKey: boardDismissKey,
+        metadata: ledgerMetadata,
+        showArchived,
+      }),
+    [tasks, convos, runs, workspaceRoot, dismissedBoardRuns, ledgerMetadata, showArchived]
+  );
 
   // Parent links come exclusively from the Rust spawn mapping
   // (`by_delegate`/`by_external` in list_agent_runs), which records a real
@@ -3430,22 +3529,16 @@ export function MissionControl({
   const linkedRuns = allRuns;
 
   // Which source chips to show — only sources actually present.
-  const presentSources = useMemo(() => {
-    const set = new Set<RunSource>();
-    for (const r of allRuns) set.add(r.source);
-    return Array.from(set);
-  }, [allRuns]);
+  const presentSources = useMemo(() => presentRunSources(allRuns), [allRuns]);
 
   const filtered = useMemo(() => {
-    const base = sourceFilter === "all" ? linkedRuns : linkedRuns.filter((r) => {
-      if (sourceFilter === "subagent") return r.source === "claude-code" || r.source === "codex" || r.source === "opencode";
-      return r.source === sourceFilter;
-    });
-    return base;
-  }, [linkedRuns, sourceFilter]);
+    return linkedRuns.filter(
+      (r) => sourceMatchesFilter(r, sourceFilter) && runMatchesLedgerQuery(r, sessionQuery)
+    );
+  }, [linkedRuns, sourceFilter, sessionQuery]);
 
   const grouped = useMemo(() => {
-    const by: Record<RunBoardSection, Run[]> = {
+    const by: Record<RunBoardSection, RunLedgerEntry[]> = {
       running: [],
       blocked: [],
       ready_for_review: [],
@@ -3480,12 +3573,15 @@ export function MissionControl({
   // full transcript and a working resume. The convo only renders when no
   // on-disk twin exists yet (e.g. a brand-new chat before the runs list
   // refreshes).
-  const selectedConvo =
+  const selectedConvo = selectedTask || runs.some((r) => r.id === selectedId)
+    ? null
+    : convos.find((c) => c.id === selectedId && (!workspaceRoot || !c.cwd || c.cwd === workspaceRoot)) ?? null;
+  const selectedConvoRun =
     selectedTask || runs.some((r) => r.id === selectedId)
       ? null
-      : convos.find((c) => c.id === selectedId) ?? null;
+      : allRuns.find((r) => r.id === selectedId && r.origin === "klide-convo") ?? null;
   const selected =
-    selectedTask || selectedConvo
+    selectedTask || selectedConvoRun
       ? null
       : allRuns.find((r) => r.id === selectedId) ?? null;
 
@@ -3569,6 +3665,48 @@ export function MissionControl({
     });
   }
 
+  function patchLedgerMetadata(
+    run: RunLedgerEntry,
+    patch: (current: NonNullable<RunLedgerMetadataStore[string]>) => NonNullable<RunLedgerMetadataStore[string]>
+  ) {
+    setLedgerMetadata((prev) => {
+      const key = runLedgerKey(run);
+      const next = {
+        ...prev,
+        [key]: patch(prev[key] ?? {}),
+      };
+      writeRunLedgerMetadata(next);
+      return next;
+    });
+  }
+
+  function renameLedgerRun(run: RunLedgerEntry, title: string) {
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+    if (run.origin === "task") {
+      renameTask(run.id, nextTitle);
+    } else if (run.origin === "klide-convo" || run.source === "klide") {
+      renameKlideConvo(run.id, nextTitle);
+    }
+    patchLedgerMetadata(run, (current) => ({
+      ...current,
+      title: nextTitle,
+      updatedMs: Date.now(),
+    }));
+  }
+
+  function archiveLedgerRun(run: RunLedgerEntry, archived: boolean) {
+    patchLedgerMetadata(run, (current) => ({
+      ...current,
+      archived,
+      updatedMs: Date.now(),
+    }));
+    if (archived && selectedId === run.id && !showArchived) {
+      setPinnedId(null);
+      setSelectedId(null);
+    }
+  }
+
   const attentionCount = filtered.filter(runNeedsAttention).length;
   const runningCount = grouped.running.length;
   const blockedCount = grouped.blocked.length;
@@ -3626,6 +3764,47 @@ export function MissionControl({
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div
+              style={{
+                position: "relative",
+                flex: "1 1 170px",
+                minWidth: 0,
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  left: 9,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  display: "grid",
+                  placeItems: "center",
+                  color: "var(--fg-subtle)",
+                  pointerEvents: "none",
+                }}
+              >
+                <SearchIcon />
+              </span>
+              <input
+                value={sessionQuery}
+                onChange={(e) => setSessionQuery(e.target.value)}
+                aria-label="Search sessions"
+                placeholder="Search sessions"
+                style={{
+                  width: "100%",
+                  height: 26,
+                  padding: "3px 8px 3px 27px",
+                  borderRadius: 999,
+                  border: "1px solid var(--border)",
+                  background: "var(--bg)",
+                  color: "var(--fg-strong)",
+                  fontSize: 11,
+                  fontFamily: "inherit",
+                  outline: "none",
+                }}
+              />
+            </div>
             <select
               value={sourceFilter}
               onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)}
@@ -3633,7 +3812,7 @@ export function MissionControl({
               style={{
                 fontSize: 11, padding: "3px 20px 3px 9px", borderRadius: 999,
                 border: "1px solid var(--border)", color: "var(--fg-strong)",
-                background: "var(--bg)", minWidth: 0, flex: 1, cursor: "pointer",
+                background: "var(--bg)", minWidth: 96, flex: "0 0 128px", cursor: "pointer",
                 fontFamily: "inherit", appearance: "auto",
               }}
             >
@@ -3643,6 +3822,26 @@ export function MissionControl({
                 <option key={s} value={s}>{SOURCE_LABEL[s]}</option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={() => setShowArchived((v) => !v)}
+              aria-pressed={showArchived}
+              title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
+              style={{
+                height: 26,
+                padding: "0 9px",
+                borderRadius: 999,
+                border: "1px solid var(--border)",
+                background: showArchived ? "var(--bg-selected)" : "var(--bg)",
+                color: showArchived ? "var(--accent)" : "var(--fg-subtle)",
+                fontSize: 11,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              Archived
+            </button>
             <button
               onClick={() => void load()}
               title="Refresh"
@@ -3683,15 +3882,15 @@ export function MissionControl({
               <div style={{ color: "var(--fg-strong)", marginBottom: 5 }}>
                 No matching runs.
               </div>
-              Mission Control reads Claude Code and Codex session logs from your
-              local machine. Start or refresh an agent session, then come back here.
+              Mission Control reads local session logs and Klide conversations.
+              Adjust the search or source filter, or start a new agent run.
             </div>
           )}
           {(() => {
             // Build parent → children map from ALL linked runs (not filtered).
             // This ensures children know their parent exists even when the parent
             // is hidden by the source filter (e.g. showing only "subagent").
-            const childrenByParent = new Map<string, Run[]>();
+            const childrenByParent = new Map<string, RunLedgerEntry[]>();
             const visibleParentIds = new Set(filtered.map((r) => r.id));
             for (const r of linkedRuns) {
               if (r.parentId) {
@@ -4051,9 +4250,9 @@ export function MissionControl({
       <div style={{ flex: 1, minWidth: 0 }}>
         {selectedTask ? (
           <TaskDetail task={selectedTask} theme={theme} />
-        ) : selectedConvo ? (
+        ) : selectedConvo && selectedConvoRun ? (
           <RunDetail
-            run={convoToRun(selectedConvo)}
+            run={selectedConvoRun}
             messages={selectedConvo.messages}
             handoffPrompt={buildRunHandoff({
               title: selectedConvo.title,
@@ -4063,6 +4262,8 @@ export function MissionControl({
               messages: selectedConvo.messages.map((m) => ({ role: m.role, text: m.text })),
             }).delegatePrompt}
             hasMemory={memoryRunIds.has(selectedConvo.id)}
+            onRename={renameLedgerRun}
+            onArchive={archiveLedgerRun}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
@@ -4074,6 +4275,8 @@ export function MissionControl({
             run={selected}
             handoffPrompt={handoffPrompt}
             hasMemory={memoryRunIds.has(selected.id)}
+            onRename={renameLedgerRun}
+            onArchive={archiveLedgerRun}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}

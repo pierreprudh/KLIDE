@@ -70,6 +70,9 @@ export type Conversation = {
   title: string;
   msgs: Msg[];
   updatedAt: number;
+  provider?: ProviderId;
+  model?: string | null;
+  cwd?: string | null;
 };
 
 export type PendingEditRequest = {
