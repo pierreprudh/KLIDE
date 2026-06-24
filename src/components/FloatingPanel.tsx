@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import {
   PANEL_CONSTRAINTS,
@@ -42,6 +42,12 @@ export function FloatingPanel({
   // The transition is on for *passive* rect changes (window resize, layout
   // re-clamp) so the panel glides to its new bounds the way macOS does.
   const [isInteracting, setIsInteracting] = useState(false);
+  // The panel's own DOM node, so a live drag can move it imperatively
+  // (one compositor transform per frame) instead of pushing rect state up
+  // to the parent and re-rendering the whole panel subtree — including the
+  // heavy AiPanel chat — 60+ times a second. State is committed once on
+  // release.
+  const panelRef = useRef<HTMLDivElement>(null);
   const panelTransition = isInteracting
     ? "none"
     : "left var(--motion-med) var(--ease-soft), " +
@@ -126,21 +132,46 @@ export function FloatingPanel({
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "none";
 
+    // Track the latest clamped rect so mouse-up can commit it to state once.
+    // During the drag itself we only nudge the panel's `transform` — `left`/
+    // `top` stay React-controlled at `startRect`, so an unrelated re-render
+    // (e.g. tokens streaming into AiPanel) can't snap the panel back.
+    let latest = startRect;
     function onMoveDrag(ev: MouseEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      const next: PanelRect = {
-        x: startRect.x + dx,
-        y: startRect.y + dy,
+      // A move keeps the panel at its current size, so clamp the *origin*
+      // against that size to keep the whole panel on-screen. (clampRect is
+      // built for resizing — it pins x to the edge and shrinks width to fit,
+      // which for a pure move would let a full-width panel slide off-screen.)
+      const maxX = Math.max(0, workbenchW - startRect.w);
+      const maxY = Math.max(0, workbenchH - startRect.h);
+      latest = {
+        x: Math.max(0, Math.min(startRect.x + dx, maxX)),
+        y: Math.max(0, Math.min(startRect.y + dy, maxY)),
         w: startRect.w,
         h: startRect.h,
       };
-      onMove(clampRect(next, workbenchW, workbenchH, constraints));
+      const el = panelRef.current;
+      if (el) {
+        el.style.transform = `translate3d(${latest.x - startRect.x}px, ${latest.y - startRect.y}px, 0)`;
+      }
     }
 
     function onUp() {
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousSelect;
+      // Settle the DOM to the final position with the transition still off
+      // (isInteracting is still true here), then hand the rect to React. The
+      // commit re-renders with the same left/top the node already shows, so
+      // nothing animates and there's no snap-back flicker.
+      const el = panelRef.current;
+      if (el) {
+        el.style.transform = "";
+        el.style.left = `${latest.x}px`;
+        el.style.top = `${latest.y}px`;
+      }
+      onMove(latest);
       setIsInteracting(false);
       window.removeEventListener("mousemove", onMoveDrag);
       window.removeEventListener("mouseup", onUp);
@@ -152,6 +183,7 @@ export function FloatingPanel({
 
   return (
     <div
+      ref={panelRef}
       onMouseDown={onFocus}
       style={{
         position: "absolute",
