@@ -73,6 +73,15 @@ export type Conversation = {
   provider?: ProviderId;
   model?: string | null;
   cwd?: string | null;
+  branch?: string | null;
+  worktree?: string | null;
+  forkedFrom?: {
+    conversationId: string;
+    title: string;
+    messageIndex: number;
+    createdAt: number;
+    mode: "chat" | "worktree";
+  } | null;
 };
 
 export type PendingEditRequest = {

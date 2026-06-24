@@ -19,10 +19,10 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
-import type { AgentEvent } from "./agent/types";
+import type { AgentEvent, ProviderId } from "./agent/types";
 import type { Conversation, Msg } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
-import { fetchRunMessages, type RunMessage as MissionRunMessage } from "./runs";
+import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
 import type { DelegateId } from "./delegates";
 import type { GitStatus } from "./gitTypes";
 import { GitReview } from "./components/GitReview";
@@ -129,6 +129,7 @@ function detectLanguage(path: string): string {
 function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [view, setView] = useState<"workbench" | "runs" | "orchestrator" | "settings" | "git-review">("workbench");
+  const [gitReviewRoot, setGitReviewRoot] = useState<string | null>(null);
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
@@ -346,6 +347,7 @@ function App() {
     activeGridId != null
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
       : null;
+  const effectiveGitReviewRoot = gitReviewRoot ?? workspaceRoot;
   const activityState: Record<ActivityPanel, boolean> = {
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
     git: view === "git-review",
@@ -425,6 +427,7 @@ function App() {
     }
     // Git is a dedicated full-window view, not a sidebar panel.
     if (panel === "git") {
+      setGitReviewRoot(null);
       setView((v) => (v === "git-review" ? "workbench" : "git-review"));
       return;
     }
@@ -556,6 +559,7 @@ function App() {
             stopAfterRejection={stopAfterRejection}
             skills={skills}
             harnessSettings={harnessSettings}
+            onForkConversationInWorktree={forkConversationInWorktree}
             resumeConversation={
               resumeTarget?.panelId === (aiPanels[0]?.id ?? "ai-main")
                 ? resumeTarget.convo
@@ -600,6 +604,29 @@ function App() {
   async function openFolderDialog() {
     const picked = await open({ directory: true });
     if (typeof picked === "string") setWorkspaceRoot(picked);
+  }
+
+  // New project: pick a parent location, create + `git init` the folder in
+  // Rust, then open it. Throws on error so the welcome screen can show it.
+  async function newProject(name: string) {
+    const parent = await open({
+      directory: true,
+      title: "Choose where to create the project",
+    });
+    if (typeof parent !== "string") return;
+    const path = await invoke<string>("project_create", { parentDir: parent, name });
+    setWorkspaceRoot(path);
+  }
+
+  // Clone: pick a parent location, `git clone` into it, then open the result.
+  async function cloneRepo(url: string) {
+    const parent = await open({
+      directory: true,
+      title: "Choose where to clone the repository",
+    });
+    if (typeof parent !== "string") return;
+    const path = await invoke<string>("project_clone", { url, parentDir: parent });
+    setWorkspaceRoot(path);
   }
 
   async function refreshGitStatus(root: string | null) {
@@ -677,6 +704,145 @@ function App() {
     }
   }
 
+  function forkConversationFromRun(
+    run: Run,
+    messages: MissionRunMessage[],
+    cwd?: string | null,
+    gitMeta?: { branch?: string | null; worktree?: string | null },
+  ): Conversation {
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : Date.now().toString(36);
+    const provider = run.source === "klide" && run.provider ? (run.provider as ProviderId) : undefined;
+    return {
+      id,
+      title: `Fork: ${run.title}`,
+      msgs: runMessagesToAiMsgs(messages),
+      updatedAt: Date.now(),
+      provider,
+      model: run.model,
+      cwd,
+      branch: gitMeta?.branch ?? null,
+      worktree: gitMeta?.worktree ?? null,
+    };
+  }
+
+  function openForkedConversation(run: Run, convo: Conversation) {
+    const provider = convo.provider;
+    setView("workbench");
+    if (!aiVisible) togglePanel("ai");
+    const panelId = appendAiPanel({
+      provider,
+      model: run.model ?? undefined,
+      cwd: convo.cwd ?? undefined,
+    });
+    setResumeTarget({ panelId, convo });
+  }
+
+  async function forkRun(run: Run, preloadedMessages?: MissionRunMessage[]) {
+    try {
+      const messages = preloadedMessages ?? await fetchRunMessages(run);
+      if (messages.length === 0) {
+        setFileNotice("Run has no readable messages to fork.");
+        return;
+      }
+      openForkedConversation(run, forkConversationFromRun(run, messages, run.cwd, {
+        branch: run.branch,
+        worktree: run.worktree,
+      }));
+      setFileNotice(`Forked "${run.title}" into a new Klide conversation.`);
+    } catch (e) {
+      setFileNotice(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function forkRunInWorktree(run: Run, preloadedMessages?: MissionRunMessage[]) {
+    const baseRoot = run.cwd ?? workspaceRoot;
+    if (!baseRoot) {
+      setFileNotice("Open a workspace folder first.");
+      return;
+    }
+    try {
+      const messages = preloadedMessages ?? await fetchRunMessages(run);
+      if (messages.length === 0) {
+        setFileNotice("Run has no readable messages to fork.");
+        return;
+      }
+      const branch = `klide/fork-${Date.now().toString(36)}`;
+      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+        "git_worktree_add",
+        { workspaceRoot: baseRoot, branch, copyFiles: null }
+      );
+      openForkedConversation(run, forkConversationFromRun(run, messages, wt.path, {
+        branch: wt.branch,
+        worktree: wt.path.split("/").filter(Boolean).pop() ?? wt.branch,
+      }));
+      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
+      setFileNotice(`Forked "${run.title}" into worktree ${wt.branch}${copied}.`);
+    } catch (e) {
+      setFileNotice(`Worktree fork failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function forkConversationInWorktree(convo: Conversation, baseRoot: string | null) {
+    const root = baseRoot ?? workspaceRoot;
+    if (!root) {
+      setFileNotice("Open a workspace folder first.");
+      return;
+    }
+    try {
+      const branch = `klide/turn-${Date.now().toString(36)}`;
+      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+        "git_worktree_add",
+        { workspaceRoot: root, branch, copyFiles: null }
+      );
+      const forked: Conversation = {
+        ...convo,
+        cwd: wt.path,
+        branch: wt.branch,
+        worktree: wt.path.split("/").filter(Boolean).pop() ?? wt.branch,
+        updatedAt: Date.now(),
+      };
+      setView("workbench");
+      if (!aiVisible) togglePanel("ai");
+      const panelId = appendAiPanel({
+        provider: forked.provider,
+        model: forked.model ?? undefined,
+        cwd: wt.path,
+      });
+      setResumeTarget({ panelId, convo: forked });
+      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
+      setFileNotice(`Branched turn into worktree ${wt.branch}${copied}.`);
+    } catch (e) {
+      setFileNotice(`Turn worktree branch failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function mergeWorktreeRun(run: Run) {
+    if (!workspaceRoot) {
+      setFileNotice("Open the main workspace folder before merging a worktree.");
+      return;
+    }
+    if (!run.branch) {
+      setFileNotice("Run has no branch to merge.");
+      return;
+    }
+    if (!run.worktree) {
+      setFileNotice("Run did not execute in a linked worktree.");
+      return;
+    }
+    if (!confirm(`Merge ${run.branch} into the main checkout?`)) return;
+    try {
+      const msg = await invoke<string>("git_worktree_merge", { workspaceRoot, branch: run.branch });
+      await refreshGitStatus(workspaceRoot);
+      setFileNotice(msg);
+    } catch (e) {
+      setFileNotice(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+
   // "Open in {CLI}" / "Resume in {CLI}" from Mission Control — land the user
   // in a fresh AI panel pinned to that delegate provider. The AI panel is
   // the natural home for an agent TUI (it already renders DelegateTerminalSurface
@@ -738,10 +904,8 @@ function App() {
   // is already mounted in the detail pane (it lists every file the agent
   // changed with revert affordances), so the row action is just: make sure
   // the run is selected. For external CLI runs we switch to the GitReview
-  // view; the user can navigate from there. (CLI runs whose cwd differs
-  // from the current workspaceRoot will show the wrong diff — that case
-  // is rare in practice; if it becomes common we'll add a per-run diff
-  // overlay later.)
+  // view pinned to the run's cwd, so worktree-backed runs show the right
+  // branch, status, and diff rather than the main checkout.
   function reviewDiffFromRun(run: { id: string; source: string; cwd: string | null }) {
     if (run.source === "klide") {
       // MissionControl is rendered as a single view, so the run is "selected"
@@ -750,10 +914,14 @@ function App() {
       // bus (see pendingCheckpointRunId below).
       setPendingCheckpointRunId(run.id);
     } else {
+      if (!run.cwd) {
+        setFileNotice("Run has no workspace root, so there is no checkout to review.");
+        return;
+      }
+      setGitReviewRoot(run.cwd);
       setView("git-review");
     }
   }
-
   // "Save Memory" from Mission Control — fetch the run's transcript, ask
   // the model for a structured note, and write it to .klide/memory/. Then
   // open the MemoryModal so the user can see the entry. Klide-only for
@@ -1132,6 +1300,8 @@ function App() {
         <WelcomeScreen
           recentFolders={recentFolders}
           onOpenFolder={openFolderDialog}
+          onNewProject={newProject}
+          onCloneRepo={cloneRepo}
           onOpenRecent={setWorkspaceRoot}
           onRemoveRecent={forgetFolder}
           onOpenSettings={() => setView("settings")}
@@ -1208,10 +1378,17 @@ function App() {
             <ActivityBar active={activityState} onToggle={togglePanel} />
             {view === "git-review" ? (
               <GitReview
-                workspaceRoot={workspaceRoot}
-                gitStatus={gitStatus}
-                onRefreshGitStatus={() => workspaceRoot ? refreshGitStatus(workspaceRoot) : Promise.resolve()}
-                onBack={() => setView("workbench")}
+                workspaceRoot={effectiveGitReviewRoot}
+                gitStatus={effectiveGitReviewRoot === workspaceRoot ? gitStatus : null}
+                onRefreshGitStatus={() =>
+                  effectiveGitReviewRoot && effectiveGitReviewRoot === workspaceRoot
+                    ? refreshGitStatus(effectiveGitReviewRoot)
+                    : Promise.resolve()
+                }
+                onBack={() => {
+                  setGitReviewRoot(null);
+                  setView("workbench");
+                }}
                 theme={theme}
               />
             ) : view === "runs" ? (
@@ -1222,6 +1399,9 @@ function App() {
                 onOpenInAiPanel={openRunInAiPanel}
                 onReviewDiff={reviewDiffFromRun}
                 onSaveMemory={saveMemoryFromRun}
+                onForkRun={forkRun}
+                onForkRunInWorktree={forkRunInWorktree}
+                onMergeWorktreeRun={mergeWorktreeRun}
                 pendingCheckpointRunId={pendingCheckpointRunId}
                 onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
                 summarizingFromRunId={summarizingFromRun}
@@ -1595,6 +1775,7 @@ function App() {
                         skills={skills}
                         harnessSettings={harnessSettings}
                         onDuplicate={appendAiPanel}
+                        onForkConversationInWorktree={forkConversationInWorktree}
                         onClose={
                           aiPanels.length > 1 ? () => closeAiPanel(panel.id) : undefined
                         }

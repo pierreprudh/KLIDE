@@ -13,6 +13,9 @@ export type KlideConvo = {
   status: RunStatus;
   model: string | null;
   cwd: string | null;
+  branch: string | null;
+  worktree?: string | null;
+  forkedFrom?: Conversation["forkedFrom"];
   messages: RunMessage[];
   updatedMs: number;
 };
@@ -23,6 +26,27 @@ const MAX_CONVOS = 100;
 function safeStatus(status: unknown): RunStatus {
   if (status === "cancelled" || status === "error") return status;
   return "done";
+}
+
+function safeForkedFrom(value: unknown): Conversation["forkedFrom"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as NonNullable<Conversation["forkedFrom"]>;
+  if (
+    typeof v.conversationId !== "string" ||
+    typeof v.title !== "string" ||
+    typeof v.messageIndex !== "number" ||
+    typeof v.createdAt !== "number" ||
+    (v.mode !== "chat" && v.mode !== "worktree")
+  ) {
+    return null;
+  }
+  return {
+    conversationId: v.conversationId,
+    title: v.title,
+    messageIndex: v.messageIndex,
+    createdAt: v.createdAt,
+    mode: v.mode,
+  };
 }
 
 function msgToRunMessage(m: Msg): RunMessage | null {
@@ -41,6 +65,9 @@ function conversationToConvo(c: Conversation): KlideConvo | null {
     status: "done",
     model: c.model ?? null,
     cwd: c.cwd ?? null,
+    branch: c.branch ?? null,
+    worktree: c.worktree ?? null,
+    forkedFrom: c.forkedFrom ?? null,
     messages,
     updatedMs: c.updatedAt,
   };
@@ -59,7 +86,13 @@ function readStoredConvos(): KlideConvo[] {
         Array.isArray(c.messages) &&
         typeof c.updatedMs === "number"
       )
-      .map((c) => ({ ...c, status: safeStatus(c.status) }));
+      .map((c) => ({
+        ...c,
+        status: safeStatus(c.status),
+        branch: typeof c.branch === "string" ? c.branch : null,
+        worktree: typeof c.worktree === "string" ? c.worktree : null,
+        forkedFrom: safeForkedFrom(c.forkedFrom),
+      }));
   } catch {
     return [];
   }

@@ -614,6 +614,7 @@ function BranchMenu({ branches, current, onSelect, onClose }: {
 export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack, theme: _theme }: Props) {
   const [log, setLog] = useState<GitLog | null>(null);
   const [logLoading, setLogLoading] = useState(false);
+  const [localStatus, setLocalStatus] = useState<GitStatus | null>(null);
   const [prs, setPrs] = useState<PullRequest[] | null>(null);
   const [prsLoading, setPrsLoading] = useState(false);
   const [prError, setPrError] = useState<string | null>(null);
@@ -676,24 +677,44 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     }
   }, [workspaceRoot]);
 
+  const refreshStatus = useCallback(async () => {
+    if (!workspaceRoot) {
+      setLocalStatus(null);
+      return;
+    }
+    try {
+      const next = await invoke<GitStatus>("git_status", { workspaceRoot });
+      setLocalStatus(next);
+      await onRefreshGitStatus();
+    } catch (e) {
+      setLocalStatus(null);
+      setActionMessage({ kind: "err", text: e instanceof Error ? e.message : String(e) });
+    }
+  }, [workspaceRoot, onRefreshGitStatus]);
+
   useEffect(() => {
     if (workspaceRoot) {
+      setOpen(null);
+      void refreshStatus();
       void refreshLog();
       void refreshStashes();
       void refreshPrs();
     } else {
       setLog(null);
+      setLocalStatus(null);
       setPrs(null);
       setStashes(null);
     }
-  }, [workspaceRoot, refreshLog, refreshStashes, refreshPrs]);
+  }, [workspaceRoot, refreshStatus, refreshLog, refreshStashes, refreshPrs]);
+
+  const reviewStatus = localStatus ?? gitStatus;
 
   // Auto-select the first file when the status changes.
   useEffect(() => {
-    if (open || !gitStatus) return;
-    const first = gitStatus.files[0];
+    if (open || !reviewStatus) return;
+    const first = reviewStatus.files[0];
     if (first) setOpen({ path: first.path, staged: first.staged });
-  }, [gitStatus, open]);
+  }, [reviewStatus, open]);
 
   // Toast-style messages auto-clear after a few seconds.
   useEffect(() => {
@@ -702,7 +723,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     return () => clearTimeout(id);
   }, [actionMessage]);
 
-  const files = gitStatus?.files ?? [];
+  const files = reviewStatus?.files ?? [];
   const stagedFiles = files.filter((f) => f.staged);
   const changedFiles = files.filter((f) => !f.staged);
   const totalAdditions = useMemo(() => {
@@ -727,21 +748,21 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     if (!workspaceRoot) return;
     try {
       await withAction("Staged", () => invoke("git_stage", { workspaceRoot, path }));
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
   async function unstageFile(path: string) {
     if (!workspaceRoot) return;
     try {
       await withAction("Unstaged", () => invoke("git_unstage", { workspaceRoot, path }));
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
   async function discardFile(path: string) {
     if (!workspaceRoot) return;
     try {
       await withAction("Discarded", () => invoke("git_discard", { workspaceRoot, path }));
-      await onRefreshGitStatus();
+      await refreshStatus();
       if (open?.path === path) setOpen(null);
     } catch { /* message already shown */ }
   }
@@ -749,14 +770,14 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     if (!workspaceRoot) return;
     try {
       await withAction("Staged all", () => invoke("git_stage", { workspaceRoot, path: "." }));
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
   async function unstageAll() {
     if (!workspaceRoot) return;
     try {
       await withAction("Unstaged all", () => invoke("git_unstage", { workspaceRoot, path: "." }));
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
 
@@ -767,7 +788,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
       await withAction("Committed", () => invoke("git_commit", { workspaceRoot, message: commitMessage }));
       setCommitMessage("");
       setOpen(null);
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
     finally { setCommitLoading(false); }
   }
@@ -784,7 +805,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     try {
       await withAction("Pulled", () => invoke("git_pull", { workspaceRoot }));
       await refreshLog();
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
   async function push() {
@@ -804,7 +825,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
       setBranchMenuOpen(false);
       setOpen(null);
       await refreshLog();
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
   async function stashPush() {
@@ -812,7 +833,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     try {
       await withAction("Stashed", () => invoke("git_stash", { workspaceRoot, action: "push", message: "WIP" }));
       await refreshStashes();
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
   async function stashPop() {
@@ -820,7 +841,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     try {
       await withAction("Stash popped", () => invoke("git_stash", { workspaceRoot, action: "pop" }));
       await refreshStashes();
-      await onRefreshGitStatus();
+      await refreshStatus();
     } catch { /* message already shown */ }
   }
 
@@ -849,7 +870,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     try {
       await withAction(`Checked out #${n}`, () => invoke("git_pr_checkout", { workspaceRoot, number: n }));
       await refreshLog();
-      await onRefreshGitStatus();
+      await refreshStatus();
       if (selectedPr?.number === n) setSelectedPr(null);
     } catch { /* message already shown */ }
   }
@@ -860,7 +881,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
       await withAction(`Merged #${n}`, () => invoke("git_pr_merge", { workspaceRoot, number: n, method: "merge" }));
       await refreshPrs();
       await refreshLog();
-      await onRefreshGitStatus();
+      await refreshStatus();
       if (selectedPr?.number === n) setSelectedPr(null);
     } catch { /* message already shown */ }
   }
@@ -921,6 +942,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
       </Center>
     );
   }
+  const reviewRootName = workspaceRoot.split("/").filter(Boolean).pop() ?? workspaceRoot;
 
   return (
     <div
@@ -941,7 +963,27 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           </svg>
         </button>
         <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 11, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Git Review</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <span style={{ fontSize: 11, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Git Review</span>
+            <span
+              title={workspaceRoot}
+              style={{
+                maxWidth: 220,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontSize: 10.5,
+                color: "var(--fg-subtle)",
+                border: "1px solid var(--border)",
+                borderRadius: 999,
+                padding: "1px 7px",
+                background: "var(--bg-elevated)",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {reviewRootName}
+            </span>
+          </div>
           <div style={{ position: "relative" }}>
             <button
               onClick={() => setBranchMenuOpen((v) => !v)}
@@ -950,7 +992,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
               }}
               title="Switch branch"
             >
-              <BranchPill branch={log?.branch ?? gitStatus?.branch ?? "—"} ahead={log?.ahead ?? 0} behind={log?.behind ?? 0} />
+              <BranchPill branch={log?.branch ?? reviewStatus?.branch ?? "—"} ahead={log?.ahead ?? 0} behind={log?.behind ?? 0} />
             </button>
             {branchMenuOpen && log && (
               <BranchMenu
@@ -1100,7 +1142,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
                 WebkitBackdropFilter: "blur(12px) saturate(1.1)",
               }}
             >
-              <StatusDot label={statusLabel(gitStatus?.files.find((f) => f.path === open.path)?.status ?? "")} />
+              <StatusDot label={statusLabel(reviewStatus?.files.find((f) => f.path === open.path)?.status ?? "")} />
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
               <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)" }}>{open.staged ? "staged" : "working"}</span>
             </div>

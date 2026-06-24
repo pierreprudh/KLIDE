@@ -92,6 +92,14 @@ export type Run = {
   branch: string | null;
   /** Linked git worktree the run executed in; null for a main checkout. */
   worktree?: string | null;
+  /** Optional local lineage for Klide conversation forks. */
+  forkedFrom?: {
+    conversationId: string;
+    title: string;
+    messageIndex: number;
+    createdAt: number;
+    mode: "chat" | "worktree";
+  } | null;
   messageCount: number;
   /** Real token usage summed from the session log; absent when the source doesn't record it. */
   inputTokens?: number;

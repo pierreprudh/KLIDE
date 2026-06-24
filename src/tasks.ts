@@ -29,7 +29,68 @@ export type TaskSession = {
   startedMs: number;
 };
 
-let sessions: TaskSession[] = [];
+const TASKS_KEY = "klide.tasks";
+const MAX_TASKS = 100;
+
+function isRunStatus(value: unknown): value is RunStatus {
+  return (
+    value === "running" ||
+    value === "waiting" ||
+    value === "queued" ||
+    value === "done" ||
+    value === "cancelled" ||
+    value === "error"
+  );
+}
+
+function safeStatus(status: unknown): RunStatus {
+  // PTY sessions are process-local. After an app restart, a previously
+  // running task is only a durable work record, not a live terminal.
+  if (status === "running" || status === "waiting") return "done";
+  return isRunStatus(status) ? status : "queued";
+}
+
+function safeSource(source: unknown): TaskSource | null {
+  if (source === "claude-code" || source === "codex" || source === "opencode") return source;
+  return null;
+}
+
+function readTasks(): TaskSession[] {
+  try {
+    const raw = localStorage.getItem(TASKS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((task): task is Partial<TaskSession> =>
+        task &&
+        typeof task.id === "string" &&
+        typeof task.title === "string"
+      )
+      .map((task) => ({
+        id: task.id!,
+        title: task.title!,
+        source: safeSource(task.source),
+        model: typeof task.model === "string" ? task.model : null,
+        status: safeStatus(task.status),
+        cwd: typeof task.cwd === "string" ? task.cwd : null,
+        startedMs: typeof task.startedMs === "number" ? task.startedMs : Date.now(),
+      }))
+      .sort((a, b) => b.startedMs - a.startedMs)
+      .slice(0, MAX_TASKS);
+  } catch {
+    return [];
+  }
+}
+
+function persistTasks() {
+  try {
+    localStorage.setItem(TASKS_KEY, JSON.stringify(sessions.slice(0, MAX_TASKS)));
+  } catch {
+    /* storage full or unavailable */
+  }
+}
+
+let sessions: TaskSession[] = readTasks();
 // Raw PTY output per dispatched task, so re-opening a task replays its
 // scrollback instead of showing a blank terminal.
 const buffers = new Map<string, string>();
@@ -42,6 +103,7 @@ function emitChange() {
 function patch(id: string, fields: Partial<TaskSession>) {
   if (!sessions.some((s) => s.id === id)) return;
   sessions = sessions.map((s) => (s.id === id ? { ...s, ...fields } : s));
+  persistTasks();
   emitChange();
 }
 
@@ -116,6 +178,7 @@ export function addTask(title: string, workspaceRoot: string | null): TaskSessio
     startedMs: Date.now(),
   };
   sessions = [task, ...sessions];
+  persistTasks();
   emitChange();
   return task;
 }
@@ -177,6 +240,12 @@ export async function stopTask(id: string): Promise<void> {
   patch(id, { status: "done" });
 }
 
+export function renameTask(id: string, title: string): void {
+  const nextTitle = title.trim();
+  if (!nextTitle) return;
+  patch(id, { title: nextTitle });
+}
+
 // Drop a task off the board (todos you no longer want, finished runs).
 // Running tasks must be stopped first.
 export function removeTask(id: string): void {
@@ -184,5 +253,6 @@ export function removeTask(id: string): void {
   if (!task || task.status === "running") return;
   sessions = sessions.filter((s) => s.id !== id);
   buffers.delete(id);
+  persistTasks();
   emitChange();
 }

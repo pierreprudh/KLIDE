@@ -194,6 +194,7 @@ export function WelcomeScreen({
   const [composerBusy, setComposerBusy] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const composerInputRef = useRef<HTMLInputElement | null>(null);
+  const [keyProbe, setKeyProbe] = useState<string | null>(null); // TEMP probe
   // rootRef is the framed cosmos card on the right; the ASCII art is sized to
   // fit that card rather than the whole welcome surface.
   const [surface, setSurface] = useState({ width: 620, height: 720 });
@@ -261,6 +262,12 @@ export function WelcomeScreen({
   // screen is mounted, so it never clashes with editor shortcuts.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // TEMP PROBE — remove once shortcuts are confirmed.
+      if (e.metaKey || e.ctrlKey) {
+        setKeyProbe(
+          `key=${JSON.stringify(e.key)} code=${e.code} meta=${e.metaKey} ctrl=${e.ctrlKey} shift=${e.shiftKey}`
+        );
+      }
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       // Match N by physical key (e.code) so it's layout-independent.
       if (e.code === "KeyN" || e.key === "n" || e.key === "N") {
@@ -476,6 +483,21 @@ export function WelcomeScreen({
               <span>
                 <b>⌘1</b>–<b>⌘{Math.min(recents.length, MAX_RECENTS)}</b> open a recent folder
               </span>
+            </div>
+          )}
+
+          {/* TEMP PROBE — shows what the last ⌘/Ctrl keypress reported. */}
+          {keyProbe && (
+            <div
+              style={{
+                marginTop: 14,
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: "#7fd0ff",
+                wordBreak: "break-all",
+              }}
+            >
+              {keyProbe}
             </div>
           )}
         </div>

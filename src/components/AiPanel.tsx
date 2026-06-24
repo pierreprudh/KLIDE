@@ -194,6 +194,7 @@ type Props = {
   projectContext?: ProjectContextSnapshot | null;
   harnessSettings?: AiHarnessSettings;
   onDuplicate?: (snapshot: { provider: ProviderId; model: string }) => void;
+  onForkConversationInWorktree?: (conversation: Conversation, baseRoot: string | null) => void;
   onProviderChange?: (provider: ProviderId) => void;
   onClose?: () => void;
   resumeConversation?: Conversation | null;
@@ -359,6 +360,7 @@ export function AiPanel({
   projectContext,
   harnessSettings,
   onDuplicate,
+  onForkConversationInWorktree,
   onProviderChange,
   onClose,
   resumeConversation,
@@ -391,6 +393,16 @@ export function AiPanel({
     const prior = panelId ? loadPanelSession(panelId) : null;
     return prior ? prior.convoId : genId();
   });
+  const [currentForkedFrom, setCurrentForkedFrom] = useState<Conversation["forkedFrom"]>(null);
+  const currentForkedFromRef = useRef<Conversation["forkedFrom"]>(null);
+  const [conversationGitMeta, setConversationGitMeta] = useState<{ branch: string | null; worktree: string | null }>({
+    branch: null,
+    worktree: null,
+  });
+  const conversationGitMetaRef = useRef<{ branch: string | null; worktree: string | null }>({
+    branch: null,
+    worktree: null,
+  });
   const [input, setInput] = useState("");
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -413,7 +425,7 @@ export function AiPanel({
   const [editingDraft, setEditingDraft] = useState("");
   const autoMemoryTimerRef = useRef<number | null>(null);
 
-  const lastPublishRef = useRef({ count: -1, streaming: false });
+  const lastPublishRef = useRef({ count: -1, streaming: false, meta: "" });
   useEffect(() => {
     if (msgs.length === 0) {
       // Active chat is empty — explicitly settle the MC row for this
@@ -422,12 +434,20 @@ export function AiPanel({
       // (msgs stays non-empty in the persisted store), so they no
       // longer kill the live row.
       settleKlideConvo(currentId);
-      lastPublishRef.current = { count: -1, streaming: false };
+      lastPublishRef.current = { count: -1, streaming: false, meta: "" };
       return;
     }
     const last = lastPublishRef.current;
-    if (streaming && last.streaming && last.count === msgs.length) return;
-    lastPublishRef.current = { count: msgs.length, streaming };
+    const metaKey = JSON.stringify({
+      id: currentId,
+      model: model ?? null,
+      cwd: workspaceRoot,
+      branch: conversationGitMeta.branch,
+      worktree: conversationGitMeta.worktree,
+      forkedFrom: currentForkedFrom ?? null,
+    });
+    if (streaming && last.streaming && last.count === msgs.length && last.meta === metaKey) return;
+    lastPublishRef.current = { count: msgs.length, streaming, meta: metaKey };
     const firstUser = msgs.find((m) => m.role === "user");
     publishKlideConvo({
       id: currentId,
@@ -439,6 +459,9 @@ export function AiPanel({
       status: streaming ? "running" : "done",
       model: model ?? null,
       cwd: workspaceRoot,
+      branch: conversationGitMeta.branch,
+      worktree: conversationGitMeta.worktree,
+      forkedFrom: currentForkedFrom ?? null,
       messages: msgs.flatMap((m) =>
         (m.role === "user" || (m.role === "assistant" && !m.delegateConsole)) && m.content.trim()
           ? [{ role: m.role, text: m.content }]
@@ -446,7 +469,7 @@ export function AiPanel({
       ),
       updatedMs: Date.now(),
     });
-  }, [msgs, streaming, model, workspaceRoot, currentId]);
+  }, [msgs, streaming, model, workspaceRoot, currentId, currentForkedFrom, conversationGitMeta]);
 
   const [contextLimit, setContextLimit] = useState(128_000);
   // The provider's own prompt-token count from the latest finished turn — the
@@ -1214,6 +1237,8 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  useEffect(() => { currentForkedFromRef.current = currentForkedFrom; }, [currentForkedFrom]);
+  useEffect(() => { conversationGitMetaRef.current = conversationGitMeta; }, [conversationGitMeta]);
 
   // Restore the persisted conversation for `currentId` on first mount so a
   // view switch back from Mission Control / Settings / Git Review re-opens
@@ -1228,6 +1253,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (saved && saved.msgs.length > 0) {
       setMsgs(saved.msgs);
       msgsRef.current = saved.msgs;
+      setCurrentForkedFrom(saved.forkedFrom ?? null);
+      setConversationGitMeta({ branch: saved.branch ?? null, worktree: saved.worktree ?? null });
       if (saved.provider && saved.provider !== provider) onProviderChange?.(saved.provider);
       if (saved.model && saved.model !== model) onModelChange(saved.model);
     }
@@ -1323,6 +1350,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     setMeasuredUsageTokens(null);
     const nid = genId();
     setCurrentId(nid);
+    setCurrentForkedFrom(null);
+    setConversationGitMeta({ branch: null, worktree: null });
     // Fresh chat, no run yet → inactive. A remount before the first send
     // simply starts fresh again (nothing to lose); the first send flips it
     // active so a mid-run view switch re-attaches.
@@ -1429,6 +1458,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     setHistoryOpen(false);
     abortActiveHarnessRun();
     setCurrentId(c.id);
+    setCurrentForkedFrom(c.forkedFrom ?? null);
+    setConversationGitMeta({ branch: c.branch ?? null, worktree: c.worktree ?? null });
     setMsgs(c.msgs);
     msgsRef.current = c.msgs;
     if (c.provider && c.provider !== provider) onProviderChange?.(c.provider);
@@ -1471,6 +1502,8 @@ This user request requires workspace inspection. Before answering, you MUST call
       setMsgs([]);
       const nid = genId();
       setCurrentId(nid);
+      setCurrentForkedFrom(null);
+      setConversationGitMeta({ branch: null, worktree: null });
       if (panelId) savePanelSession(panelId, nid, false);
       setMeasuredPromptTokens(null);
       setMeasuredUsageTokens(null);
@@ -1537,10 +1570,13 @@ This user request requires workspace inspection. Before answering, you MUST call
         provider,
         model,
         cwd: workspaceRoot,
+        branch: conversationGitMeta.branch,
+        worktree: conversationGitMeta.worktree,
+        forkedFrom: currentForkedFrom ?? null,
       };
       return persistConversation(conv, prev);
     });
-  }, [msgs, currentId, provider, model, workspaceRoot]);
+  }, [msgs, currentId, provider, model, workspaceRoot, currentForkedFrom, conversationGitMeta]);
 
   // Flush whatever the latest commit was on unmount so a view switch
   // mid-stream doesn't drop the in-flight conversation. `msgsRef` is
@@ -1557,6 +1593,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       provider,
       model,
       cwd: workspaceRoot,
+      branch: conversationGitMetaRef.current.branch,
+      worktree: conversationGitMetaRef.current.worktree,
+      forkedFrom: currentForkedFromRef.current ?? null,
     });
     // Intentionally only currentId at unmount matters; msgsRef is the
     // fresh source of truth for the snapshot.
@@ -1848,16 +1887,20 @@ This user request requires workspace inspection. Before answering, you MUST call
             tps = Math.round(tokens / (decodeMs / 1000));
           }
           const exact = usage?.completionTokens !== undefined;
-          // Per-message cost from this turn's real token usage × the model's
-          // list price. Only when the provider reported both counts AND the
-          // model has a known price (hosted, non-subscription) — local and
-          // subscription turns leave costUsd undefined (no per-token bill).
+          // Per-message cost. The provider's own figure wins when present —
+          // OpenRouter reports the real charged amount (incl. markup), which
+          // beats any table estimate and covers models the table doesn't
+          // price. Otherwise fall back to this turn's token counts × the
+          // model's list price. Local / subscription turns leave costUsd
+          // undefined (no per-token bill).
           const costUsd =
-            pricing && usage?.promptTokens !== undefined && usage?.completionTokens !== undefined
-              ? (usage.promptTokens * pricing.inputPerMillion +
-                  usage.completionTokens * pricing.outputPerMillion) /
-                1_000_000
-              : undefined;
+            usage?.costUsd !== undefined
+              ? usage.costUsd
+              : pricing && usage?.promptTokens !== undefined && usage?.completionTokens !== undefined
+                ? (usage.promptTokens * pricing.inputPerMillion +
+                    usage.completionTokens * pricing.outputPerMillion) /
+                  1_000_000
+                : undefined;
           next[i] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider, meta: { ms: turnMs, tokens, promptTokens: usage?.promptTokens, ttftMs, tps, exact, costUsd } };
           commit(next);
           break;
@@ -2213,13 +2256,48 @@ This user request requires workspace inspection. Before answering, you MUST call
     const newMsgs = msgs.slice(0, i + 1);
     if (newMsgs.length === 0) return;
     const nid = genId();
+    const lineage: Conversation["forkedFrom"] = {
+      conversationId: currentId,
+      title: deriveTitle(msgsRef.current),
+      messageIndex: i,
+      createdAt: Date.now(),
+      mode: "chat",
+    };
     setCurrentId(nid);
+    setCurrentForkedFrom(lineage);
     setMsgs(newMsgs);
     if (panelId) savePanelSession(panelId, nid, false);
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
     // The msgs/currentId persist effect will write the branched chat; the
     // previous one stays in localStorage untouched.
+  }
+
+  function branchMessageInWorktree(i: number) {
+    if (streaming) return;
+    const newMsgs = msgs.slice(0, i + 1);
+    if (newMsgs.length === 0) return;
+    const nid = genId();
+    const lineage: Conversation["forkedFrom"] = {
+      conversationId: currentId,
+      title: deriveTitle(msgsRef.current),
+      messageIndex: i,
+      createdAt: Date.now(),
+      mode: "worktree",
+    };
+    onForkConversationInWorktree?.(
+      {
+        id: nid,
+        title: `Branch: ${deriveTitle(newMsgs)}`,
+        msgs: newMsgs,
+        updatedAt: Date.now(),
+        provider,
+        model,
+        cwd: workspaceRoot,
+        forkedFrom: lineage,
+      },
+      workspaceRoot,
+    );
   }
 
   function deleteMessage(i: number) {
@@ -2571,6 +2649,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     onCopy={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
                     onRetry={() => retryFromMessage(i)}
                     onBranch={() => branchFromMessage(i)}
+                    onBranchInWorktree={onForkConversationInWorktree ? () => branchMessageInWorktree(i) : undefined}
                     onEdit={() => editMessage(i)}
                     onDelete={() => deleteMessage(i)}
                   />
@@ -2645,6 +2724,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                       onCopy={() => { void navigator.clipboard?.writeText(m.content); setCopiedIdx(i); window.setTimeout(() => setCopiedIdx((c) => (c === i ? null : c)), 1400); }}
                       onRetry={() => retryFromMessage(i)}
                       onBranch={() => branchFromMessage(i)}
+                      onBranchInWorktree={onForkConversationInWorktree ? () => branchMessageInWorktree(i) : undefined}
                     />
                     {autoMemoryNotice && onOpenMemory && isLast && (
                       <button

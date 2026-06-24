@@ -29,6 +29,27 @@ pub(crate) struct GitDiff {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct GitBranchDiffFile {
+    path: String,
+    status: String,
+    additions: usize,
+    deletions: usize,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitBranchDiff {
+    base_branch: String,
+    branch: String,
+    merge_base: String,
+    diff: String,
+    additions: usize,
+    deletions: usize,
+    files: Vec<GitBranchDiffFile>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct GitCommit {
     hash: String,
     short_hash: String,
@@ -371,6 +392,88 @@ pub(crate) fn git_diff(
     })
 }
 
+#[tauri::command]
+pub(crate) fn git_branch_diff(
+    workspace_root: String,
+    branch: String,
+    base_branch: Option<String>,
+) -> Result<GitBranchDiff, String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("Branch to compare is required".to_string());
+    }
+    let base_branch = match base_branch {
+        Some(base) if !base.trim().is_empty() => base.trim().to_string(),
+        _ => {
+            let current = git_output(&workspace_root, &["branch", "--show-current"])?;
+            let current = current.trim();
+            if current.is_empty() {
+                return Err("Current checkout is detached; choose a base branch first.".to_string());
+            }
+            current.to_string()
+        }
+    };
+
+    let merge_base = git_output(&workspace_root, &["merge-base", &base_branch, branch])?;
+    let merge_base = merge_base.trim().to_string();
+    if merge_base.is_empty() {
+        return Err(format!(
+            "No merge base found between {base_branch} and {branch}."
+        ));
+    }
+
+    let range = format!("{merge_base}..{branch}");
+    let diff = git_output(&workspace_root, &["diff", "--find-renames", &range])?;
+    let (additions, deletions) = count_diff_lines(&diff);
+
+    let numstat = git_output(&workspace_root, &["diff", "--numstat", &range])?;
+    let name_status = git_output(&workspace_root, &["diff", "--name-status", &range])?;
+    let mut statuses = std::collections::HashMap::<String, String>::new();
+    for line in name_status.lines() {
+        let mut parts = line.split('\t');
+        let Some(status) = parts.next() else { continue };
+        let path = if status.starts_with('R') || status.starts_with('C') {
+            let _old = parts.next();
+            parts.next()
+        } else {
+            parts.next()
+        };
+        if let Some(path) = path {
+            statuses.insert(path.to_string(), status.to_string());
+        }
+    }
+
+    let mut files = Vec::new();
+    for line in numstat.lines() {
+        let mut parts = line.split('\t');
+        let Some(adds) = parts.next() else { continue };
+        let Some(dels) = parts.next() else { continue };
+        let path = parts.collect::<Vec<_>>().join("\t");
+        if path.is_empty() {
+            continue;
+        }
+        files.push(GitBranchDiffFile {
+            status: statuses
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| "M".to_string()),
+            additions: adds.parse::<usize>().unwrap_or(0),
+            deletions: dels.parse::<usize>().unwrap_or(0),
+            path,
+        });
+    }
+
+    Ok(GitBranchDiff {
+        base_branch,
+        branch: branch.to_string(),
+        merge_base,
+        diff,
+        additions,
+        deletions,
+        files,
+    })
+}
+
 // -----------------------------------------------------------------------------
 // Git Review — full-window view: history, branches, sync, stash, PRs.
 // -----------------------------------------------------------------------------
@@ -562,6 +665,74 @@ pub(crate) fn git_fetch(workspace_root: String, remote: Option<String>) -> Resul
 pub(crate) fn git_pull(workspace_root: String) -> Result<String, String> {
     run_git(&workspace_root, &["pull", "--ff-only"])?;
     Ok("Pulled (fast-forward)".to_string())
+}
+
+/// The folder name git would create when cloning `url`: the last path segment
+/// with any trailing `.git` removed.
+fn repo_dir_name(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    let last = trimmed.rsplit(['/', ':']).next().unwrap_or(trimmed);
+    last.trim_end_matches(".git").to_string()
+}
+
+/// Create a new project folder named `name` inside `parent_dir`, initialise a
+/// git repo, and return the new folder's absolute path. The name is restricted
+/// to a single path segment so we never write outside the chosen location.
+#[tauri::command]
+pub(crate) fn project_create(parent_dir: String, name: String) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Project name can't be empty".into());
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err("Project name can't contain slashes".into());
+    }
+    let parent = std::path::Path::new(&parent_dir);
+    if !parent.is_dir() {
+        return Err("That location isn't a folder".into());
+    }
+    let target = parent.join(name);
+    if target.exists() {
+        return Err(format!("\"{name}\" already exists here"));
+    }
+    std::fs::create_dir(&target).map_err(|e| format!("Couldn't create the folder: {e}"))?;
+    // Best-effort `git init` — a missing git binary shouldn't fail the create.
+    let _ = run_git(&target.to_string_lossy(), &["init"]);
+    Ok(target.to_string_lossy().to_string())
+}
+
+/// Clone `url` into `parent_dir` and return the path of the created repo.
+#[tauri::command]
+pub(crate) fn project_clone(url: String, parent_dir: String) -> Result<String, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("Repository URL can't be empty".into());
+    }
+    let parent = std::path::Path::new(&parent_dir);
+    if !parent.is_dir() {
+        return Err("That location isn't a folder".into());
+    }
+    let target = parent.join(repo_dir_name(url));
+    if target.exists() {
+        return Err(format!(
+            "\"{}\" already exists here",
+            target.file_name().and_then(|n| n.to_str()).unwrap_or("repo")
+        ));
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(parent)
+        .args(["clone", url])
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    if target.is_dir() {
+        Ok(target.to_string_lossy().to_string())
+    } else {
+        Err("Clone finished but the new folder couldn't be located".into())
+    }
 }
 
 #[tauri::command]
@@ -1194,6 +1365,14 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repo_dir_name_strips_dot_git_and_segments() {
+        assert_eq!(repo_dir_name("https://github.com/user/klide.git"), "klide");
+        assert_eq!(repo_dir_name("https://github.com/user/klide"), "klide");
+        assert_eq!(repo_dir_name("git@github.com:user/klide.git"), "klide");
+        assert_eq!(repo_dir_name("https://github.com/user/klide/"), "klide");
+    }
 
     #[test]
     fn worktree_dir_name_sanitizes_and_collapses() {

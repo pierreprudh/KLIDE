@@ -940,6 +940,7 @@ pub fn run() {
             git::git_unstage,
             git::git_commit,
             git::git_diff,
+            git::git_branch_diff,
             list_agent_runs,
             read_agent_run,
             read_opencode_run,
@@ -1005,7 +1006,9 @@ pub fn run() {
             git::git_worktree_add,
             git::git_worktree_list,
             git::git_worktree_merge,
-            git::git_worktree_remove
+            git::git_worktree_remove,
+            git::project_create,
+            git::project_clone
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

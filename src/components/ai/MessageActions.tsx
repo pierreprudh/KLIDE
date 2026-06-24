@@ -3,8 +3,8 @@
 // enclosing bubble; the opacity transition lives on `.ai-msg-actions`.
 //
 // Visible chip set, per role:
-//   assistant → Copy · Retry · Branch
-//   user      → Edit · Copy · Retry · Branch · Delete
+//   assistant → Copy · Retry · Branch · Branch in worktree
+//   user      → Edit · Copy · Retry · Branch · Branch in worktree · Delete
 //
 // Anything that would race with an in-flight run (Edit / Retry / Delete /
 // Branch) is rendered disabled while `streaming` is true.
@@ -94,6 +94,18 @@ const BranchIcon = () => (
   </svg>
 );
 
+const WorktreeBranchIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="6" cy="6" r="2.2" />
+    <circle cx="6" cy="18" r="2.2" />
+    <circle cx="18" cy="9" r="2.2" />
+    <path d="M6 8.2v7.6" />
+    <path d="M6 12h6a3 3 0 0 0 3-3v-.6" />
+    <path d="M15 18h6" />
+    <path d="M18 15v6" />
+  </svg>
+);
+
 const TrashIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M3 6h18" />
@@ -111,6 +123,7 @@ type Props = {
   onCopy: () => void;
   onRetry: () => void;
   onBranch: () => void;
+  onBranchInWorktree?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
 };
@@ -122,6 +135,7 @@ export function MessageActions({
   onCopy,
   onRetry,
   onBranch,
+  onBranchInWorktree,
   onEdit,
   onDelete,
 }: Props) {
@@ -150,6 +164,11 @@ export function MessageActions({
       <Chip title="Branch into a new chat" onClick={onBranch} disabled={disabled}>
         <BranchIcon />
       </Chip>
+      {onBranchInWorktree && (
+        <Chip title="Branch into a new worktree" onClick={onBranchInWorktree} disabled={disabled}>
+          <WorktreeBranchIcon />
+        </Chip>
+      )}
       {role === "user" && onDelete && (
         <Chip
           title="Delete this message and everything after"

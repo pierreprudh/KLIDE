@@ -79,6 +79,21 @@ import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
 import { buildRunHandoff } from "../agentHandoff";
 
+type GitBranchDiffSummary = {
+  baseBranch: string;
+  branch: string;
+  mergeBase: string;
+  diff: string;
+  additions: number;
+  deletions: number;
+  files: Array<{
+    path: string;
+    status: string;
+    additions: number;
+    deletions: number;
+  }>;
+};
+
 // Mission Control — Klide's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
 // sessions), grouped by status, with a metadata detail pane. Inspired by the
@@ -338,6 +353,20 @@ function ClaudeCodeLogo({ size = 13 }: { size?: number }) {
     />
   );
 }
+// Klide's own brand mark (the app icon). Worn by Klide-harness runs that go
+// through a model proxy like OpenRouter, where the model could be anything —
+// the run belongs to Klide's harness, so it carries the Klide mark, not the
+// underlying maker's logo.
+function KlideLogo({ size = 13 }: { size?: number }) {
+  return (
+    <img
+      src="/klide-logo.png"
+      alt=""
+      aria-hidden="true"
+      style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+    />
+  );
+}
 // Codex and Z.AI marks are white-on-transparent — invert them on light themes
 // via the white-logo-img rule in tokens.css so they stay visible everywhere.
 function CodexLogo({ size = 13 }: { size?: number }) {
@@ -469,11 +498,13 @@ function SourceLogo({
   source,
   kind,
   model,
+  provider,
   size = 14,
 }: {
   source: RunSource;
   kind?: RunKind;
   model?: string | null;
+  provider?: string | null;
   size?: number;
 }) {
   // Tasks always wear the task mark — even after dispatch — so a row reads
@@ -536,7 +567,17 @@ function SourceLogo({
       </span>
     );
   }
-  // Klide's own runs wear the logo of the model they used — Ollama for local
+  // Klide-harness runs routed through OpenRouter wear the Klide mark: it's our
+  // own harness calling the OpenRouter API, and the model behind the proxy
+  // could be anything, so the run belongs to Klide rather than any one maker.
+  if (source === "klide" && provider === "openrouter") {
+    return (
+      <span style={{ width: size, height: size, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <KlideLogo size={size} />
+      </span>
+    );
+  }
+  // Other Klide runs wear the logo of the model they used — Ollama for local
   // lfm2.5/llama, OpenAI for gpt, Anthropic for claude, etc. — so the board
   // reads as "which model ran this". Falls back to the quiet spark when the
   // model is unknown or absent.
@@ -572,15 +613,17 @@ function RunAvatar({
   source,
   kind,
   model,
+  provider,
   size = 22,
 }: {
   source: RunSource;
   kind?: RunKind;
   model?: string | null;
+  provider?: string | null;
   size?: number;
 }) {
   return (
-    <SourceLogo source={source} kind={kind} model={model} size={size} />
+    <SourceLogo source={source} kind={kind} model={model} provider={provider} size={size} />
   );
 }
 
@@ -731,7 +774,7 @@ function RunRow({
         zIndex: swipeOpen ? 1 : 3,
       }}
     >
-      {!compact && <RunAvatar source={run.source} kind={run.kind} model={run.model} />}
+      {!compact && <RunAvatar source={run.source} kind={run.kind} model={run.model} provider={run.provider} />}
       <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
         <span
           style={{
@@ -1122,7 +1165,7 @@ function AttentionQueueItem({
         transition: "background var(--motion-fast) var(--ease-out)",
       }}
     >
-      <RunAvatar source={run.source} kind={run.kind} model={run.model} />
+      <RunAvatar source={run.source} kind={run.kind} model={run.model} provider={run.provider} />
       <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
         <span
           style={{
@@ -1653,6 +1696,15 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
     <EvidenceMeta key="section" label="Board" value={BOARD_SECTION_LABEL[section]} title={BOARD_SECTION_HINT[section]} />,
   ];
   if (run.branch) meta.push(<EvidenceMeta key="branch" label="Branch" value={run.branch} />);
+  if (run.forkedFrom)
+    meta.push(
+      <EvidenceMeta
+        key="forked"
+        label="Forked"
+        value={`${run.forkedFrom.mode === "worktree" ? "Worktree" : "Chat"} · #${run.forkedFrom.messageIndex + 1}`}
+        title={`Forked from ${run.forkedFrom.title}`}
+      />,
+    );
   if (run.worktree)
     meta.push(
       <EvidenceMeta
@@ -1801,6 +1853,36 @@ function CopyButton({ value, label = "Copy" }: { value: string | null; label?: s
       {copied ? "Copied" : label}
     </button>
   );
+}
+
+function runMessagesToMarkdown(run: Pick<Run, "source" | "title" | "id" | "model" | "cwd" | "branch" | "worktree">, messages: RunMessage[]): string {
+  const header = [
+    `# ${run.title}`,
+    "",
+    `- Source: ${SOURCE_LABEL[run.source]}`,
+    `- Run: \`${run.id}\``,
+    run.model ? `- Model: \`${run.model}\`` : null,
+    run.cwd ? `- Workspace: \`${run.cwd}\`` : null,
+    run.branch ? `- Branch: \`${run.branch}\`` : null,
+    run.worktree ? `- Worktree: \`${run.worktree}\`` : null,
+  ].filter((line): line is string => line !== null);
+  const turns = messages.map((m) => {
+    const role = m.role === "user" ? "User" : SOURCE_LABEL[run.source];
+    const tools = (m.tools ?? [])
+      .map((tool) => {
+        const result = tool.result ? `\n\nResult:\n\n\`\`\`text\n${tool.result}\n\`\`\`` : "";
+        const input = tool.input === undefined ? "" : `\n\nInput:\n\n\`\`\`json\n${JSON.stringify(tool.input, null, 2)}\n\`\`\``;
+        return `\n\nTool: \`${tool.name}\`${input}${result}`;
+      })
+      .join("");
+    return `## ${role}\n\n${m.text}${tools}`;
+  });
+  return `${header.join("\n")}\n\n---\n\n${turns.join("\n\n---\n\n")}\n`;
+}
+
+async function messagesForRun(run: Run, preloaded?: RunMessage[]): Promise<RunMessage[]> {
+  if (preloaded) return preloaded;
+  return fetchRunMessages(run);
 }
 
 function DetailLabel({ children, id }: { children: React.ReactNode; id?: string }) {
@@ -2985,11 +3067,18 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
 
 function RunDetail({
   run,
+  workspaceRoot,
   messages,
   handoffPrompt,
   hasMemory,
   onRename,
   onArchive,
+  onFork,
+  onForkInWorktree,
+  onMergeWorktree,
+  forkParent,
+  forkChildren = [],
+  onSelectLineageRun,
   onOpenInAiPanel,
   onResumeKlide,
   onReviewDiff,
@@ -2997,11 +3086,18 @@ function RunDetail({
   summarizingFromRunId,
 }: {
   run: RunLedgerEntry;
+  workspaceRoot: string | null;
   messages?: RunMessage[];
   /** A durable Project Memory note exists for this run (matched by runId). */
   hasMemory?: boolean;
   onRename?: (run: RunLedgerEntry, title: string) => void;
   onArchive?: (run: RunLedgerEntry, archived: boolean) => void;
+  onFork?: (run: RunLedgerEntry, messages?: RunMessage[]) => void;
+  onForkInWorktree?: (run: RunLedgerEntry, messages?: RunMessage[]) => void;
+  onMergeWorktree?: (run: RunLedgerEntry) => void;
+  forkParent?: RunLedgerEntry | null;
+  forkChildren?: RunLedgerEntry[];
+  onSelectLineageRun?: (run: RunLedgerEntry) => void;
   /** Compact task state used when handing a Klide run off to an external CLI. */
   handoffPrompt: string | null;
   /** Land the user in a new AI panel pinned to the chosen delegate provider. */
@@ -3028,10 +3124,17 @@ function RunDetail({
   const cliSources: DelegateId[] = handoffTargetsFor(run);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(run.title);
+  const [exportState, setExportState] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [compareState, setCompareState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [branchDiff, setBranchDiff] = useState<GitBranchDiffSummary | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   useEffect(() => {
     setRenameDraft(run.title);
     setRenaming(false);
+    setCompareState("idle");
+    setBranchDiff(null);
+    setCompareError(null);
   }, [run.id, run.source, run.title]);
 
   function commitRename() {
@@ -3045,10 +3148,47 @@ function RunDetail({
     setRenaming(false);
   }
 
+  async function exportTranscript() {
+    setExportState("copying");
+    try {
+      const rows = await messagesForRun(run, messages);
+      if (rows.length === 0) throw new Error("No readable messages.");
+      await navigator.clipboard.writeText(runMessagesToMarkdown(run, rows));
+      setExportState("copied");
+      window.setTimeout(() => setExportState((state) => (state === "copied" ? "idle" : state)), 1400);
+    } catch {
+      setExportState("error");
+      window.setTimeout(() => setExportState((state) => (state === "error" ? "idle" : state)), 1800);
+    }
+  }
+
+  async function compareBranchWithBase() {
+    if (!workspaceRoot || !run.branch) {
+      setCompareError("No base workspace or branch available for this run.");
+      setCompareState("error");
+      return;
+    }
+    setCompareState("loading");
+    setCompareError(null);
+    try {
+      const next = await invoke<GitBranchDiffSummary>("git_branch_diff", {
+        workspaceRoot,
+        branch: run.branch,
+        baseBranch: null,
+      });
+      setBranchDiff(next);
+      setCompareState("ready");
+    } catch (err) {
+      setBranchDiff(null);
+      setCompareError(err instanceof Error ? err.message : String(err));
+      setCompareState("error");
+    }
+  }
+
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <RunAvatar source={run.source} size={30} />
+        <RunAvatar source={run.source} provider={run.provider} size={30} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span
             style={{ fontSize: 12, color: "var(--fg-strong)", fontFamily: "var(--font-mono)" }}
@@ -3113,6 +3253,99 @@ function RunDetail({
 
       <RunEvidenceStrip run={run} hasMemory={hasMemory} />
 
+      {(forkParent || forkChildren.length > 0) && (
+        <div
+          style={{
+            margin: "0 0 12px",
+            padding: "8px 10px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            background: "var(--bg-elevated)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            fontSize: 12,
+          }}
+        >
+          {forkParent && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <span style={{ color: "var(--fg-subtle)", flexShrink: 0 }}>Parent</span>
+              <span
+                style={{
+                  minWidth: 0,
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: "var(--fg-strong)",
+                }}
+                title={forkParent.title}
+              >
+                {forkParent.title}
+              </span>
+              {onSelectLineageRun && (
+                <ActionButton label="Open parent" onClick={() => onSelectLineageRun(forkParent)} />
+              )}
+            </div>
+          )}
+          {forkChildren.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ color: "var(--fg-subtle)" }}>
+                Forks from this run
+              </div>
+              {forkChildren.slice(0, 5).map((child) => (
+                <button
+                  key={child.id}
+                  type="button"
+                  onClick={() => onSelectLineageRun?.(child)}
+                  disabled={!onSelectLineageRun}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    width: "100%",
+                    minWidth: 0,
+                    padding: "4px 0",
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--fg-strong)",
+                    cursor: onSelectLineageRun ? "pointer" : "default",
+                    textAlign: "left",
+                    font: "inherit",
+                  }}
+                >
+                  <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", fontSize: 11, flexShrink: 0 }}>
+                    #{(child.forkedFrom?.messageIndex ?? 0) + 1}
+                  </span>
+                  <span
+                    style={{
+                      minWidth: 0,
+                      flex: 1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={child.title}
+                  >
+                    {child.title}
+                  </span>
+                  {child.worktree && (
+                    <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", fontSize: 11, flexShrink: 0 }}>
+                      worktree
+                    </span>
+                  )}
+                </button>
+              ))}
+              {forkChildren.length > 5 && (
+                <div style={{ color: "var(--fg-subtle)", fontSize: 11 }}>
+                  +{forkChildren.length - 5} more forks
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {run.archived && (
         <div
           style={{
@@ -3145,6 +3378,52 @@ function RunDetail({
           <ActionButton
             label={run.archived ? "Unarchive" : "Archive"}
             onClick={() => onArchive(run, !run.archived)}
+          />
+        )}
+        {run.capabilities.canExportTranscript && (
+          <ActionButton
+            label={
+              exportState === "copying"
+                ? "Exporting…"
+                : exportState === "copied"
+                ? "Copied transcript"
+                : exportState === "error"
+                ? "Export failed"
+                : "Export transcript"
+            }
+            disabled={exportState === "copying"}
+            onClick={() => void exportTranscript()}
+          />
+        )}
+        {onFork && run.capabilities.canFork && (
+          <ActionButton
+            label="Fork"
+            onClick={() => onFork(run, messages)}
+          />
+        )}
+        {onForkInWorktree && run.capabilities.canFork && (run.cwd || run.source === "klide") && (
+          <ActionButton
+            label="Fork in worktree"
+            onClick={() => onForkInWorktree(run, messages)}
+          />
+        )}
+        {onMergeWorktree && run.worktree && run.branch && (
+          <ActionButton
+            label="Merge worktree"
+            onClick={() => onMergeWorktree(run)}
+          />
+        )}
+        {run.worktree && run.branch && (
+          <ActionButton
+            label={
+              compareState === "loading"
+                ? "Comparing…"
+                : branchDiff
+                ? "Refresh compare"
+                : "Compare with base"
+            }
+            disabled={compareState === "loading"}
+            onClick={() => void compareBranchWithBase()}
           />
         )}
         {resumable && onOpenInAiPanel && (
@@ -3212,6 +3491,109 @@ function RunDetail({
         )}
       </div>
 
+      {(branchDiff || compareError) && (
+        <div
+          style={{
+            margin: "0 0 16px",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--bg-elevated)",
+            overflow: "hidden",
+          }}
+        >
+          {branchDiff ? (
+            <>
+              <div
+                style={{
+                  padding: "9px 10px",
+                  borderBottom: "1px solid var(--border)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ color: "var(--fg-subtle)" }}>Compare</span>
+                <span style={{ color: "var(--fg-strong)", fontFamily: "var(--font-mono)" }}>
+                  {branchDiff.baseBranch}...{branchDiff.branch}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ color: "#2F9E44", fontFamily: "var(--font-mono)" }}>+{branchDiff.additions}</span>
+                <span style={{ color: "#D64545", fontFamily: "var(--font-mono)" }}>-{branchDiff.deletions}</span>
+              </div>
+              <div style={{ maxHeight: 180, overflow: "auto", padding: "4px 0" }}>
+                {branchDiff.files.length === 0 ? (
+                  <div style={{ padding: "10px", color: "var(--fg-subtle)", fontSize: 12 }}>
+                    No committed changes against base.
+                  </div>
+                ) : (
+                  branchDiff.files.map((file) => (
+                    <div
+                      key={`${file.status}-${file.path}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "48px minmax(0, 1fr) 64px",
+                        gap: 8,
+                        alignItems: "center",
+                        padding: "5px 10px",
+                        fontSize: 12,
+                        borderTop: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                      }}
+                    >
+                      <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>{file.status}</span>
+                      <span
+                        style={{
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          color: "var(--fg-strong)",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                        title={file.path}
+                      >
+                        {file.path}
+                      </span>
+                      <span style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>
+                        <span style={{ color: "#2F9E44" }}>+{file.additions}</span>{" "}
+                        <span style={{ color: "#D64545" }}>-{file.deletions}</span>
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+              {branchDiff.diff.trim() && (
+                <details style={{ borderTop: "1px solid var(--border)" }}>
+                  <summary style={{ cursor: "pointer", padding: "8px 10px", color: "var(--fg-subtle)", fontSize: 12 }}>
+                    Raw diff
+                  </summary>
+                  <pre
+                    style={{
+                      margin: 0,
+                      padding: 10,
+                      maxHeight: 260,
+                      overflow: "auto",
+                      background: "var(--bg)",
+                      color: "var(--fg)",
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {branchDiff.diff}
+                  </pre>
+                </details>
+              )}
+            </>
+          ) : (
+            <div style={{ padding: "9px 10px", color: "var(--danger, #B42318)", fontSize: 12 }}>
+              {compareError}
+            </div>
+          )}
+        </div>
+      )}
+
       {!messages && (
         <div
           style={{
@@ -3270,6 +3652,15 @@ function RunDetail({
         </dd>
         <MetaRow label="Project" value={run.project ?? "—"} />
         <MetaRow label="Branch" value={run.branch ?? "—"} />
+        {run.forkedFrom && (
+          <>
+            <MetaRow label="Forked from" value={run.forkedFrom.title} />
+            <MetaRow
+              label="Fork point"
+              value={`${run.forkedFrom.mode === "worktree" ? "worktree" : "chat"} message #${run.forkedFrom.messageIndex + 1}`}
+            />
+          </>
+        )}
         <MetaRow label="Messages" value={String(run.messageCount)} />
         <MetaRow label="Updated" value={relativeTime(run.updatedMs)} />
         {run.path && <MetaRow label="Log" value={run.path} />}
@@ -3370,6 +3761,9 @@ export function MissionControl({
   onOpenInAiPanel,
   onReviewDiff,
   onSaveMemory,
+  onForkRun,
+  onForkRunInWorktree,
+  onMergeWorktreeRun,
   pendingCheckpointRunId,
   onPendingCheckpointConsumed,
   summarizingFromRunId,
@@ -3395,6 +3789,9 @@ export function MissionControl({
    *  structured note, and open the memory modal. Klide-only in this
    *  slice; CLI rows get a "not supported" toast. */
   onSaveMemory?: (run: { id: string; source: string; provider?: string | null; model: string | null; cwd: string | null }) => void;
+  onForkRun?: (run: Run, messages?: RunMessage[]) => void;
+  onForkRunInWorktree?: (run: Run, messages?: RunMessage[]) => void;
+  onMergeWorktreeRun?: (run: Run) => void;
   /** When set, the detail pane focuses the CheckpointPanel for this runId
    *  (Klide runs) — used to make `onReviewDiff` from a Klide row feel
    *  instant. The MissionControl consumes it on mount. */
@@ -3584,6 +3981,27 @@ export function MissionControl({
     selectedTask || selectedConvoRun
       ? null
       : allRuns.find((r) => r.id === selectedId) ?? null;
+  const forkChildrenByParent = useMemo(() => {
+    const byParent = new Map<string, RunLedgerEntry[]>();
+    for (const run of allRuns) {
+      const parentId = run.forkedFrom?.conversationId;
+      if (!parentId) continue;
+      const children = byParent.get(parentId) ?? [];
+      children.push(run);
+      byParent.set(parentId, children);
+    }
+    for (const children of byParent.values()) {
+      children.sort((a, b) => b.updatedMs - a.updatedMs || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    }
+    return byParent;
+  }, [allRuns]);
+  const selectedRunForLineage = selectedConvoRun ?? selected;
+  const selectedForkParent = selectedRunForLineage?.forkedFrom
+    ? allRuns.find((r) => r.id === selectedRunForLineage.forkedFrom?.conversationId) ?? null
+    : null;
+  const selectedForkChildren = selectedRunForLineage
+    ? forkChildrenByParent.get(selectedRunForLineage.id) ?? []
+    : [];
 
   // When a Klide run (kind=run) is selected, fetch its transcript once and
   // build the prompt we'll hand off to a fresh delegate session if the user
@@ -3641,6 +4059,13 @@ export function MissionControl({
     } else {
       setPinnedId(null);
     }
+  }
+
+  function selectLineageRun(run: RunLedgerEntry) {
+    setSourceFilter("all");
+    setSessionQuery("");
+    setSelectedId(run.id);
+    setPinnedId(run.id);
   }
 
   function toggleSubagentStack(parentId: string) {
@@ -4253,6 +4678,7 @@ export function MissionControl({
         ) : selectedConvo && selectedConvoRun ? (
           <RunDetail
             run={selectedConvoRun}
+            workspaceRoot={workspaceRoot}
             messages={selectedConvo.messages}
             handoffPrompt={buildRunHandoff({
               title: selectedConvo.title,
@@ -4264,6 +4690,12 @@ export function MissionControl({
             hasMemory={memoryRunIds.has(selectedConvo.id)}
             onRename={renameLedgerRun}
             onArchive={archiveLedgerRun}
+            onFork={onForkRun}
+            onForkInWorktree={onForkRunInWorktree}
+            onMergeWorktree={onMergeWorktreeRun}
+            forkParent={selectedForkParent}
+            forkChildren={selectedForkChildren}
+            onSelectLineageRun={selectLineageRun}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
@@ -4273,10 +4705,17 @@ export function MissionControl({
         ) : selected ? (
           <RunDetail
             run={selected}
+            workspaceRoot={workspaceRoot}
             handoffPrompt={handoffPrompt}
             hasMemory={memoryRunIds.has(selected.id)}
             onRename={renameLedgerRun}
             onArchive={archiveLedgerRun}
+            onFork={onForkRun}
+            onForkInWorktree={onForkRunInWorktree}
+            onMergeWorktree={onMergeWorktreeRun}
+            forkParent={selectedForkParent}
+            forkChildren={selectedForkChildren}
+            onSelectLineageRun={selectLineageRun}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
