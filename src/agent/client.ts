@@ -131,3 +131,7 @@ export async function listCheckpoints(runId: string): Promise<CheckpointEntry[]>
 export async function revertCheckpoint(runId: string, toolCallId: string): Promise<void> {
   await invoke("agent_revert_checkpoint", { runId, toolCallId });
 }
+
+export async function revertRunCheckpoints(runId: string): Promise<{ reverted: number }> {
+  return invoke<{ reverted: number }>("agent_revert_run_checkpoints", { runId });
+}

@@ -2,6 +2,9 @@ import { type ReactNode } from "react";
 
 type Props = {
   command: string;
+  kind?: "command" | "network";
+  detail?: string;
+  externalPaths?: string[];
   onReject: () => void;
   onApproveOnce: () => void;
   /** Approve this exact command for the rest of the run (allowlist, session). */
@@ -9,6 +12,8 @@ type Props = {
   /** Approve this exact command for future runs in this workspace (project
    *  allowlist, persisted). */
   onApproveForProject?: () => void;
+  pattern?: string;
+  onApprovePattern?: (pattern: string) => void;
 };
 
 /** A bare icon action — no container, just the glyph, coloring on hover. Keeps
@@ -58,11 +63,19 @@ function BareAction({
  *  containers. Lives inline under the requesting turn. */
 export function InlineCommandReview({
   command,
+  kind = "command",
+  detail,
+  externalPaths = [],
   onReject,
   onApproveOnce,
   onApproveForRun,
   onApproveForProject,
+  pattern,
+  onApprovePattern,
 }: Props) {
+  const canApprovePattern = !!pattern && !!onApprovePattern && pattern !== command;
+  const approveRunLabel = kind === "network" ? "Approve target for this run" : "Approve for this run";
+  const approveProjectLabel = kind === "network" ? "Approve target for this project" : "Approve for this project";
   return (
     <div
       className="ai-qa-card"
@@ -84,18 +97,43 @@ export function InlineCommandReview({
         style={{
           flex: 1,
           minWidth: 0,
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          lineHeight: 1.5,
-          color: "var(--fg-strong)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          display: "grid",
+          gap: 2,
         }}
-        title={command}
       >
-        <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>
-        {command}
+        <span
+          style={{
+            minWidth: 0,
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: "var(--fg-strong)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={command}
+        >
+          {kind === "command" && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
+          {command}
+        </span>
+        {(detail || externalPaths.length > 0) && (
+          <span
+            style={{
+              minWidth: 0,
+              fontSize: 11,
+              lineHeight: 1.35,
+              color: "var(--fg-subtle)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={[detail, externalPaths.length ? `Outside workspace: ${externalPaths.join(", ")}` : ""].filter(Boolean).join(" ")}
+          >
+            {detail}
+            {externalPaths.length > 0 ? `${detail ? " " : ""}Outside workspace: ${externalPaths.join(", ")}` : ""}
+          </span>
+        )}
       </span>
       <span style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
         <BareAction label="Cancel" tone="danger" onClick={onReject}>
@@ -104,7 +142,7 @@ export function InlineCommandReview({
           </svg>
         </BareAction>
         {onApproveForRun && (
-          <BareAction label="Approve for this run" tone="neutral" onClick={onApproveForRun}>
+          <BareAction label={approveRunLabel} tone="neutral" onClick={onApproveForRun}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="17" x2="12" y2="22" />
               <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
@@ -112,9 +150,17 @@ export function InlineCommandReview({
           </BareAction>
         )}
         {onApproveForProject && (
-          <BareAction label="Approve for this project" tone="neutral" onClick={onApproveForProject}>
+          <BareAction label={approveProjectLabel} tone="neutral" onClick={onApproveForProject}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+            </svg>
+          </BareAction>
+        )}
+        {kind === "command" && canApprovePattern && (
+          <BareAction label={`Approve pattern: ${pattern}`} tone="neutral" onClick={() => onApprovePattern!(pattern!)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6h16M4 12h10M4 18h7" />
+              <path d="m17 14 1 2 2 .5-1.4 1.5.2 2-1.8-.9-1.8.9.2-2L14 16.5l2-.5Z" />
             </svg>
           </BareAction>
         )}

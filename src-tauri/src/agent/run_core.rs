@@ -147,12 +147,13 @@ pub(super) fn compaction_threshold(context_window: usize, reply_reserve: usize) 
 }
 
 /// Auto-compaction, expressed purely. Replaces the body of *older* verbose
-/// `role: "tool"` messages with a short `[compacted: <name>]` placeholder so a
-/// long conversation doesn't blow the model's context window — while leaving
-/// the system prompt (`skip(1)`) and the most recent [`KEEP_RECENT_TOOL_RESULTS`]
-/// results intact. Compacts oldest-first and stops after 5 rewrites per pass;
-/// the loop calls it each turn, so it catches up gradually. No I/O: it just
-/// mutates `messages`, which makes it unit-testable without a supervisor.
+/// `role: "tool"` messages with a short summary and excerpt so a long
+/// conversation doesn't blow the model's context window while still preserving
+/// the shape of what happened. The system prompt (`skip(1)`) and the most
+/// recent [`KEEP_RECENT_TOOL_RESULTS`] results are kept verbatim. Compacts
+/// oldest-first and stops after 5 rewrites per pass; the loop calls it each
+/// turn, so it catches up gradually. No I/O: it just mutates `messages`, which
+/// makes it unit-testable without a supervisor.
 pub(super) fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
     let long_tool_results: Vec<usize> = messages
         .iter()
@@ -164,7 +165,7 @@ pub(super) fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
                     .and_then(|v| v.as_str())
                     .map(|s| s.len())
                     .unwrap_or(0)
-                    > 200
+                    > MIN_COMPACTABLE_BYTES
         })
         .map(|(i, _)| i)
         .collect();
@@ -174,12 +175,56 @@ pub(super) fn compact_old_tool_results(messages: &mut [serde_json::Value]) {
         .saturating_sub(KEEP_RECENT_TOOL_RESULTS);
     for &i in long_tool_results.iter().take(eligible).take(5) {
         let msg = &mut messages[i];
-        let name = msg.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-        msg["content"] = serde_json::Value::String(format!("[compacted: {name}]"));
+        let name = msg
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("tool")
+            .to_string();
+        let content = msg
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let summary = compacted_tool_summary(&name, &content);
+        // Defensive: compaction must never *grow* a message. The eligibility
+        // threshold already guarantees this for well-formed text, but a result
+        // dominated by multi-byte characters could in theory summarize larger;
+        // if so, leave it verbatim.
+        if summary.len() >= content.len() {
+            continue;
+        }
+        msg["content"] = serde_json::Value::String(summary);
         if let Some(obj) = msg.as_object_mut() {
             obj.remove("name");
         }
     }
+}
+
+/// A `role: "tool"` result must exceed this byte size before it is worth
+/// compacting. The summary header plus the [`compacted_tool_summary`] excerpt
+/// runs a few hundred bytes, so compacting anything smaller would *grow* the
+/// prompt — exactly the opposite of the point. Keep this comfortably above the
+/// excerpt budget so every eligible result genuinely shrinks.
+const MIN_COMPACTABLE_BYTES: usize = 1_000;
+
+fn compacted_tool_summary(name: &str, content: &str) -> String {
+    const EXCERPT_CHARS: usize = 600;
+    let line_count = content.lines().count().max(1);
+    let char_count = content.chars().count();
+    let mut excerpt = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if excerpt.is_empty() {
+        excerpt = content.chars().take(EXCERPT_CHARS).collect();
+    }
+    if excerpt.chars().count() > EXCERPT_CHARS {
+        excerpt = excerpt.chars().take(EXCERPT_CHARS).collect::<String>();
+        excerpt.push_str("\n[excerpt truncated]");
+    }
+    format!("[compacted: {name}; original {line_count} line(s), {char_count} char(s)]\n{excerpt}")
 }
 
 #[cfg(test)]

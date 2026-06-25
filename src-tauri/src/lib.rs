@@ -982,6 +982,7 @@ pub fn run() {
             agent::agent_read_run,
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,
+            agent::agent_revert_run_checkpoints,
             skills::install_skill,
             skills::uninstall_skill,
             skills::list_filesystem_skills,

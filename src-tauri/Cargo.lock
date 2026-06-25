@@ -2099,6 +2099,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shell-words",
  "syn 2.0.117",
  "tauri",
  "tauri-build",

@@ -65,6 +65,9 @@ pub struct NormalizedToolCall {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
     ReadOnly,
+    // Reads from the network. Goal-only and routed through the network
+    // permission/profile gate in the Harness loop.
+    Network,
     Write,
     // Pauses the run for user input (Q&A today; future: confirmation prompts).
     // The registry is the source of truth — the harness dispatches on kind, not
@@ -84,7 +87,6 @@ pub enum ToolCapability {
     WriteWorkspace,
     RunCommand,
     PauseForUser,
-    #[allow(dead_code)]
     Network,
 }
 
@@ -92,6 +94,7 @@ impl ToolKind {
     pub fn capability(self) -> ToolCapability {
         match self {
             ToolKind::ReadOnly => ToolCapability::ReadWorkspace,
+            ToolKind::Network => ToolCapability::Network,
             ToolKind::Write => ToolCapability::WriteWorkspace,
             ToolKind::Command => ToolCapability::RunCommand,
             ToolKind::Pause => ToolCapability::PauseForUser,
@@ -274,7 +277,7 @@ fn registry() -> Vec<ToolEntry> {
             summary: default_summary,
         },
         ToolEntry {
-            kind: ToolKind::ReadOnly,
+            kind: ToolKind::Network,
             schema: schema("web_search", "Search the web for documentation or current information. Returns up to 10 results with title, URL, and snippet.",
                 serde_json::json!({
                     "query": { "type": "string", "description": "The search query." }
@@ -285,7 +288,7 @@ fn registry() -> Vec<ToolEntry> {
             summary: default_summary,
         },
         ToolEntry {
-            kind: ToolKind::ReadOnly,
+            kind: ToolKind::Network,
             schema: schema("web_fetch", "Fetch the content of a URL and return it as text. Use for reading documentation, blog posts, or API references.",
                 serde_json::json!({
                     "url": { "type": "string", "description": "The URL to fetch." }
@@ -1114,6 +1117,137 @@ pub async fn run_command_capture_in(
         content: format!("{header}\n\n{body}"),
         metadata: None,
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommandPreflight {
+    pub external_paths: Vec<String>,
+}
+
+/// Best-effort scan that surfaces command arguments resolving *outside* the
+/// workspace, so the permission prompt can show them. This is transparency, not
+/// a sandbox: the command still runs an arbitrary shell. We tokenize, expand
+/// `~`, `$HOME`/`$PWD`, resolve relative paths against the command's `cwd`, and
+/// flag anything that normalizes outside the (canonical) workspace root.
+///
+/// We only treat a token as a path when it is absolute, tilde/var-prefixed, or
+/// contains a `/` (or is `..`) — a bare word like `test` or `--all` is never a
+/// path candidate, which keeps false positives near zero. (OpenCode's upstream
+/// uses a tree-sitter bash grammar for this; we trade that fidelity for far
+/// fewer moving parts.)
+pub fn preflight_command(root: &str, cwd: &str, command: &str) -> CommandPreflight {
+    let Ok(ws) = Workspace::new(root) else {
+        return CommandPreflight::default();
+    };
+    let root = normalize_path(ws.root());
+    // Relative arguments resolve against the command's working directory.
+    let base = resolve_command_cwd(&ws, cwd).unwrap_or_else(|_| ws.root().to_path_buf());
+    let home = std::env::var("HOME").ok();
+
+    let tokens = shell_words::split(command).unwrap_or_else(|_| {
+        command
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    });
+    let mut external_paths = Vec::new();
+    for token in tokens {
+        for candidate in path_candidates(&token, home.as_deref(), &base) {
+            let path = normalize_command_path(&candidate);
+            if !path.starts_with(&root) {
+                let display = path.to_string_lossy().to_string();
+                if !external_paths.iter().any(|p| p == &display) {
+                    external_paths.push(display);
+                }
+            }
+        }
+    }
+    CommandPreflight { external_paths }
+}
+
+/// Pull candidate paths out of one shell token. Splits on `=` so env
+/// assignments (`FOO=/x`) and `--flag=path` forms are both seen; expands `~`
+/// and `$HOME`/`$PWD`; joins genuinely-relative paths onto `base`.
+fn path_candidates(token: &str, home: Option<&str>, base: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for raw in token.split('=') {
+        let trimmed = raw
+            .trim_start_matches(|c| matches!(c, '<' | '>' | '&' | '"' | '\''))
+            .trim_end_matches(|c| matches!(c, ',' | ';' | '"' | '\''));
+        if trimmed.is_empty() {
+            continue;
+        }
+        let expanded =
+            expand_tilde(trimmed, home).unwrap_or_else(|| expand_vars(trimmed, home, base));
+        if expanded.starts_with('/') {
+            out.push(PathBuf::from(expanded));
+        } else if expanded == ".." || expanded.contains('/') {
+            // Relative — only worth resolving when it can actually point
+            // outside (a `/` or a bare `..`); resolve against the command cwd.
+            out.push(base.join(&expanded));
+        }
+    }
+    out
+}
+
+fn expand_tilde(segment: &str, home: Option<&str>) -> Option<String> {
+    let home = home?;
+    if segment == "~" {
+        return Some(home.to_string());
+    }
+    segment
+        .strip_prefix("~/")
+        .map(|rest| format!("{}/{}", home.trim_end_matches('/'), rest))
+}
+
+fn expand_vars(segment: &str, home: Option<&str>, base: &Path) -> String {
+    let mut out = segment.to_string();
+    if let Some(home) = home {
+        out = out.replace("${HOME}", home).replace("$HOME", home);
+    }
+    let base = base.to_string_lossy();
+    out.replace("${PWD}", &base).replace("$PWD", &base)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn normalize_command_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return normalize_path(&canonical);
+    }
+
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        match cursor.file_name() {
+            Some(name) => missing.push(name.to_os_string()),
+            None => return normalize_path(path),
+        }
+        match cursor.parent() {
+            Some(parent) => cursor = parent,
+            None => return normalize_path(path),
+        }
+    }
+
+    let mut out = std::fs::canonicalize(cursor)
+        .map(|p| normalize_path(&p))
+        .unwrap_or_else(|_| normalize_path(cursor));
+    for part in missing.iter().rev() {
+        out.push(part);
+    }
+    normalize_path(&out)
 }
 
 fn resolve_command_cwd(ws: &Workspace, cwd: &str) -> Result<PathBuf, String> {
@@ -2620,13 +2754,112 @@ mod tests {
             r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"pwd","cwd":"workspace"}]}"#,
         );
 
-        assert_eq!(find_tool_kind_for_workspace("read_file", None), Some(ToolKind::ReadOnly));
+        assert_eq!(
+            find_tool_kind_for_workspace("read_file", None),
+            Some(ToolKind::ReadOnly)
+        );
+        assert_eq!(
+            find_tool_kind_for_workspace("web_search", None),
+            Some(ToolKind::Network)
+        );
         assert_eq!(
             find_tool_kind_for_workspace("workspace_probe", Some(&root)),
             Some(ToolKind::Command)
         );
         assert!(tool_allowed_in_mode(&AgentMode::Goal, ToolKind::Command));
         assert!(!tool_allowed_in_mode(&AgentMode::Plan, ToolKind::Command));
+        assert!(tool_allowed_in_mode(&AgentMode::Goal, ToolKind::Network));
+        assert!(!tool_allowed_in_mode(&AgentMode::Plan, ToolKind::Network));
+        let plan = list_tools_for_workspace(&AgentMode::Plan, &[], Some(&root));
+        assert!(
+            !plan
+                .iter()
+                .any(|schema| schema["function"]["name"] == "web_search"),
+            "Plan mode must not advertise network tools"
+        );
+    }
+
+    #[test]
+    fn command_preflight_surfaces_external_absolute_paths() {
+        let dir = std::env::temp_dir().join(format!("klide-preflight-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Canonicalize so the workspace root and resolved candidates share the
+        // same symlink form (macOS /var → /private/var).
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        let inside = dir.join("out.txt").to_string_lossy().to_string();
+        let preflight = preflight_command(
+            &root,
+            &root,
+            &format!("cat {inside} > /tmp/klide-out && FOO=/var/tmp/cache echo ok"),
+        );
+        assert!(
+            preflight
+                .external_paths
+                .iter()
+                .any(|p| p.ends_with("/tmp/klide-out")),
+            "{:?}",
+            preflight.external_paths
+        );
+        assert!(
+            preflight
+                .external_paths
+                .iter()
+                .any(|p| p.ends_with("/var/tmp/cache")),
+            "{:?}",
+            preflight.external_paths
+        );
+        assert!(
+            !preflight.external_paths.iter().any(|p| p == &inside),
+            "workspace paths should not be flagged"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn command_preflight_catches_relative_tilde_and_env_escapes() {
+        let dir = std::env::temp_dir().join(format!("klide-preflight-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        // A relative `..` chain that climbs out of the workspace.
+        let rel = preflight_command(&root, &root, "cat ../../../etc/klide-escape");
+        assert!(
+            rel.external_paths.iter().any(|p| p.ends_with("/klide-escape")),
+            "relative escape must be flagged: {:?}",
+            rel.external_paths
+        );
+
+        // A relative path that stays inside is left alone.
+        let inside = preflight_command(&root, &root, "cat ./src/main.rs");
+        assert!(
+            inside.external_paths.is_empty(),
+            "in-workspace relative paths must not be flagged: {:?}",
+            inside.external_paths
+        );
+
+        // Bare words (subcommands / flags) are never treated as paths.
+        let bare = preflight_command(&root, &root, "cargo test --all-features");
+        assert!(
+            bare.external_paths.is_empty(),
+            "bare words must not be flagged: {:?}",
+            bare.external_paths
+        );
+
+        // `$HOME` and `~` both expand and resolve outside the workspace.
+        if std::env::var("HOME").is_ok() {
+            let home = preflight_command(&root, &root, "cat $HOME/.klide-secret && cat ~/other");
+            assert!(
+                home.external_paths.len() >= 2,
+                "tilde and $HOME escapes must be flagged: {:?}",
+                home.external_paths
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

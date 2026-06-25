@@ -300,7 +300,7 @@ pub(crate) fn summarize_validation(events: &[AgentEvent]) -> AgentValidationSumm
 
     if permissions_denied > 0 {
         warnings.push(format!(
-            "{permissions_denied} command permission request(s) denied."
+            "{permissions_denied} permission request(s) denied."
         ));
     }
 

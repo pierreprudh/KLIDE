@@ -149,7 +149,7 @@ async fn dispatch_eval_tool(root: &str, run_id: &str, call: &NormalizedToolCall)
             },
             Err(result) => result,
         },
-        Some(ToolKind::ReadOnly) => execute_read_only_tool(root, call, run_id),
+        Some(ToolKind::ReadOnly | ToolKind::Network) => execute_read_only_tool(root, call, run_id),
         Some(ToolKind::Pause) => ToolResult {
             ok: false,
             content: "Scripted eval cannot answer pause tools.".to_string(),

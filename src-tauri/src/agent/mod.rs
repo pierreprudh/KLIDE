@@ -1,6 +1,7 @@
 mod command_allowlist;
 #[cfg(test)]
 mod eval;
+mod network_allowlist;
 mod run_core;
 pub mod todo;
 pub mod tools;
@@ -16,9 +17,9 @@ use self::run_core::{
 use self::tools::{
     apply_write, clean_context_ids, clear_run_snapshots, dynamic_tool_command,
     execute_read_only_tool, execute_write_tool_preview, find_tool_kind_for_workspace,
-    parse_tool_calls, recover_text_tool_calls, run_command_capture, run_command_capture_in,
-    schemas_for_mode, tool_allowed_in_mode, tool_kind_label, tool_summary_for_workspace,
-    NormalizedToolCall, ToolKind,
+    parse_tool_calls, preflight_command, recover_text_tool_calls, run_command_capture,
+    run_command_capture_in, schemas_for_mode, tool_allowed_in_mode, tool_kind_label,
+    tool_summary_for_workspace, NormalizedToolCall, ToolKind,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
@@ -71,6 +72,13 @@ pub struct AgentRunHandle {
     /// Shell commands the user rejected this run. Same idea as `rejected_edits`:
     /// proposing the exact same command again is auto-declined, not re-asked.
     pub rejected_commands: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Network targets approved for this run, such as `web_search` or
+    /// `host:docs.rs`. Kept separate from command approvals so trust scopes
+    /// don't bleed across capability kinds.
+    pub approved_network: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Network targets rejected this run. Re-proposing the same target is
+    /// auto-declined instead of re-prompting.
+    pub rejected_network: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 pub struct AgentSupervisorState {
@@ -456,12 +464,12 @@ fn agent_usage_from(usage: Option<AiUsage>, model: &str) -> Option<AgentUsage> {
     // (OpenRouter) wins; otherwise estimate from the local pricing table ×
     // token counts (Anthropic/OpenAI direct). `None` for local /
     // subscription / unknown-price models.
-    let cost_usd = u.cost_usd.or_else(|| {
-        match (u.prompt_tokens, u.completion_tokens) {
+    let cost_usd = u
+        .cost_usd
+        .or_else(|| match (u.prompt_tokens, u.completion_tokens) {
             (Some(p), Some(c)) => crate::pricing::cost_for_run(model, p as i64, c as i64),
             _ => None,
-        }
-    });
+        });
     Some(AgentUsage {
         prompt_tokens: u.prompt_tokens,
         completion_tokens: u.completion_tokens,
@@ -780,7 +788,11 @@ where
         } else {
             // Default 180s; configurable for long builds. Clamped so a bad
             // setting can't disable the runaway guard.
-            let timeout_secs = ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+            let timeout_secs = ctx
+                .request
+                .command_timeout_secs
+                .unwrap_or(180)
+                .clamp(1, 1800);
             Ok((
                 "run_command".to_string(),
                 command.clone(),
@@ -820,8 +832,12 @@ where
     } else {
         format!("{cwd} :: {command}")
     };
+    let preflight = preflight_command(root_value, &cwd, &command);
     // Skip the prompt if this exact command/cwd was already approved for the
-    // run, or is on the project allowlist passed at start.
+    // run, or is on the project allowlist passed at start. Wildcard allowlist
+    // rules are intentionally narrower than exact approvals: if a wildcard
+    // command references outside-workspace paths, ask again so the path is
+    // visible to the user instead of being hidden behind a broad pattern.
     let (run_ok, pre_rejected) = with_run_handle(ctx.app, ctx.id, |h| {
         (
             h.approved_commands.lock().unwrap().contains(&approval_key),
@@ -829,12 +845,13 @@ where
         )
     })
     .unwrap_or((false, false));
+    let matched_rule =
+        command_allowlist::match_rule(&ctx.request.command_allowlist, &command, &approval_key);
     let pre_approved = run_ok
-        || ctx
-            .request
-            .command_allowlist
-            .iter()
-            .any(|c| c == &command || c == &approval_key);
+        || matched_rule
+            .as_ref()
+            .map(|rule| rule.exact || preflight.external_paths.is_empty())
+            .unwrap_or(false);
 
     if pre_approved {
         return Ok(ToolOutcome::Produced(
@@ -853,15 +870,34 @@ Do not run it again — take a different approach or ask the user what they'd pr
         }));
     }
 
+    let external_paths = preflight.external_paths.clone();
+    let mut permission_reason = reason;
+    if !external_paths.is_empty() {
+        permission_reason.push_str(" It references paths outside the workspace: ");
+        permission_reason.push_str(&external_paths.join(", "));
+        permission_reason.push('.');
+    }
+    if let Some(rule) = matched_rule.as_ref() {
+        permission_reason.push_str(&format!(
+            " Project rule `{}` matched, but this command still needs approval.",
+            rule.pattern
+        ));
+    }
+
     let request_id = format!("perm_{}_{}", ctx.id, call.id);
     let perm = serde_json::json!({
         "id": request_id,
         "runId": ctx.id,
         "toolCallId": call.id,
         "toolName": permission_tool_name,
-        "input": { "command": command, "cwd": cwd },
+        "input": {
+            "command": command,
+            "cwd": cwd,
+            "externalPaths": external_paths,
+            "matchedAllowRule": matched_rule.as_ref().map(|rule| rule.pattern.clone())
+        },
         "summary": permission_summary,
-        "reason": reason,
+        "reason": permission_reason,
         "options": [
             { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
             { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
@@ -920,7 +956,16 @@ Do not run it again — take a different approach or ask the user what they'd pr
     // Project scope also persists to the on-disk project allowlist so future
     // runs skip the prompt entirely.
     if allowed && scope == "project" {
-        if let Err(err) = command_allowlist::add(root_value, &command) {
+        let pattern = decision_val
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&command);
+        let persisted = if pattern.contains('*') || pattern.contains('?') {
+            command_allowlist::add_rule(root_value, pattern)
+        } else {
+            command_allowlist::add(root_value, pattern)
+        };
+        if let Err(err) = persisted {
             eprintln!("failed to persist project command allowlist: {err}");
         }
     }
@@ -940,6 +985,206 @@ Do not run it again — take a different approach or ask the user what they'd pr
             ok: false,
             content: "Rejected by user: command not run. Do not propose this exact \
 command again — take a different approach or ask the user what they'd prefer."
+                .to_string(),
+            metadata: None,
+        }
+    };
+    Ok(ToolOutcome::Produced(result))
+}
+
+struct NetworkInvocation {
+    target: String,
+    summary: String,
+    reason: String,
+    input: serde_json::Value,
+}
+
+fn network_invocation(call: &NormalizedToolCall) -> Result<NetworkInvocation, ToolResult> {
+    match call.name.as_str() {
+        "web_search" => {
+            let query = call
+                .input
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ToolResult {
+                    ok: false,
+                    content: "web_search requires a query.".to_string(),
+                    metadata: None,
+                })?;
+            Ok(NetworkInvocation {
+                target: "web_search".to_string(),
+                summary: format!("web_search {query}"),
+                reason: "The agent wants to search the web.".to_string(),
+                input: serde_json::json!({
+                    "query": query,
+                    "target": "web_search"
+                }),
+            })
+        }
+        "web_fetch" => {
+            let url = call
+                .input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ToolResult {
+                    ok: false,
+                    content: "web_fetch requires a url.".to_string(),
+                    metadata: None,
+                })?;
+            let parsed = reqwest::Url::parse(url).map_err(|e| ToolResult {
+                ok: false,
+                content: format!("web_fetch requires a valid URL: {e}"),
+                metadata: None,
+            })?;
+            let host = parsed.host_str().ok_or_else(|| ToolResult {
+                ok: false,
+                content: "web_fetch URL must include a host.".to_string(),
+                metadata: None,
+            })?;
+            let host = host.to_ascii_lowercase();
+            Ok(NetworkInvocation {
+                target: format!("host:{host}"),
+                summary: format!("web_fetch {host}"),
+                reason: format!("The agent wants to fetch content from {host}."),
+                input: serde_json::json!({
+                    "url": url,
+                    "host": host,
+                    "target": format!("host:{host}")
+                }),
+            })
+        }
+        _ => Ok(NetworkInvocation {
+            target: format!("tool:{}", call.name),
+            summary: call.name.clone(),
+            reason: "The agent wants to use a network-capability tool.".to_string(),
+            input: serde_json::json!({
+                "target": format!("tool:{}", call.name)
+            }),
+        }),
+    }
+}
+
+async fn process_network_tool<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    emit: &mut E,
+) -> Result<ToolOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let root_value = match ctx.request.workspace_root.as_deref() {
+        Some(root) => root,
+        None => return Ok(ToolOutcome::Produced(no_workspace_result())),
+    };
+    let invocation = match network_invocation(call) {
+        Ok(invocation) => invocation,
+        Err(result) => return Ok(ToolOutcome::Produced(result)),
+    };
+    let target = invocation.target.clone();
+
+    let (run_ok, pre_rejected) = with_run_handle(ctx.app, ctx.id, |h| {
+        (
+            h.approved_network.lock().unwrap().contains(&target),
+            h.rejected_network.lock().unwrap().contains(&target),
+        )
+    })
+    .unwrap_or((false, false));
+    let project_ok = network_allowlist::is_allowed(root_value, &target).unwrap_or(false);
+
+    if run_ok || project_ok {
+        return Ok(ToolOutcome::Produced(execute_read_only_tool(
+            root_value, call, ctx.id,
+        )));
+    }
+    if pre_rejected {
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: "You already proposed this exact network target and the user rejected it. \
+Do not use it again — take a different approach or ask the user what they'd prefer."
+                .to_string(),
+            metadata: None,
+        }));
+    }
+
+    let request_id = format!("perm_{}_{}", ctx.id, call.id);
+    let perm = serde_json::json!({
+        "id": request_id,
+        "runId": ctx.id,
+        "toolCallId": call.id,
+        "toolName": call.name,
+        "input": invocation.input,
+        "summary": invocation.summary,
+        "reason": invocation.reason,
+        "options": [
+            { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
+            { "optionId": "allow_run", "label": "Approve target for this run", "behavior": "allow", "scope": "run" },
+            { "optionId": "allow_project", "label": "Approve target for this project", "behavior": "allow", "scope": "project" },
+            { "optionId": "deny", "label": "Reject", "behavior": "deny" }
+        ]
+    });
+
+    let decision = match pause_for_user(
+        ctx.app,
+        ctx.id,
+        AgentRunStatus::WaitingForPermission,
+        AgentEvent::PermissionRequested {
+            run_id: ctx.id.to_string(),
+            request: perm,
+            ts: now_ms(),
+        },
+        "{\"behavior\":\"deny\"}",
+        ctx.cancel,
+        emit,
+        |handle, tx| {
+            *handle.pending_permission.lock().unwrap() = Some(tx);
+        },
+    )
+    .await?
+    {
+        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
+        PauseOutcome::Resolved(decision) => decision,
+    };
+
+    let decision_val: serde_json::Value =
+        serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
+    let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
+    let scope = decision_val
+        .get("scope")
+        .and_then(|s| s.as_str())
+        .unwrap_or("once");
+
+    emit(AgentEvent::PermissionResolved {
+        run_id: ctx.id.to_string(),
+        request_id: request_id.clone(),
+        decision: decision_val.clone(),
+        ts: now_ms(),
+    })?;
+
+    if allowed && (scope == "run" || scope == "project") {
+        with_run_handle(ctx.app, ctx.id, |h| {
+            h.approved_network.lock().unwrap().insert(target.clone());
+        });
+    }
+    if allowed && scope == "project" {
+        if let Err(err) = network_allowlist::add(root_value, &target) {
+            eprintln!("failed to persist project network allowlist: {err}");
+        }
+    }
+
+    let result = if allowed {
+        execute_read_only_tool(root_value, call, ctx.id)
+    } else {
+        with_run_handle(ctx.app, ctx.id, |h| {
+            h.rejected_network.lock().unwrap().insert(target);
+        });
+        ToolResult {
+            ok: false,
+            content: "Rejected by user: network request not run. Do not propose this exact \
+network target again — take a different approach or ask the user what they'd prefer."
                 .to_string(),
             metadata: None,
         }
@@ -976,11 +1221,10 @@ where
     // "Reject" sticks; tell the model to change course rather than re-surfacing
     // the same diff.
     let edit_key = format!("{}::{}", proposal.path, proposal.new_hash);
-    let already_rejected =
-        with_run_handle(ctx.app, ctx.id, |h| {
-            h.rejected_edits.lock().unwrap().contains(&edit_key)
-        })
-        .unwrap_or(false);
+    let already_rejected = with_run_handle(ctx.app, ctx.id, |h| {
+        h.rejected_edits.lock().unwrap().contains(&edit_key)
+    })
+    .unwrap_or(false);
     if already_rejected {
         return Ok(ToolOutcome::Produced(ToolResult {
             ok: false,
@@ -1045,8 +1289,8 @@ Do not propose it again — take a different approach or ask the user what they'
                 // agent_list_checkpoints deserializes.
                 let checkpoint_dir = ctx.runs_dir.join(ctx.id).join("checkpoints");
                 let _ = std::fs::create_dir_all(&checkpoint_dir);
-                let checkpoint_file =
-                    checkpoint_dir.join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
+                let checkpoint_file = checkpoint_dir
+                    .join(format!("{}.json", sanitize_file_id(&proposal.tool_call_id)));
                 let entry = CheckpointEntry {
                     tool_call_id: proposal.tool_call_id.clone(),
                     path: proposal.path.clone(),
@@ -1059,7 +1303,11 @@ Do not propose it again — take a different approach or ask the user what they'
                 if let Ok(json) = serde_json::to_string(&entry) {
                     let _ = std::fs::write(&checkpoint_file, json);
                 }
-                let timeout_secs = ctx.request.command_timeout_secs.unwrap_or(180).clamp(1, 1800);
+                let timeout_secs = ctx
+                    .request
+                    .command_timeout_secs
+                    .unwrap_or(180)
+                    .clamp(1, 1800);
                 run_test_after_edit(
                     root,
                     ctx.request.test_after_edit_command.as_deref(),
@@ -1163,6 +1411,8 @@ pub async fn agent_start_run(
                 approved_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
                 rejected_edits: std::sync::Mutex::new(std::collections::HashSet::new()),
                 rejected_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
+                approved_network: std::sync::Mutex::new(std::collections::HashSet::new()),
+                rejected_network: std::sync::Mutex::new(std::collections::HashSet::new()),
             },
         );
     }
@@ -1486,9 +1736,7 @@ async fn run_agent_loop(
     // fallback) and only trim once the prompt actually crowds it.
     let context_window = match request.num_ctx {
         Some(n) => n,
-        None => {
-            crate::models::resolve_context_window(&request.provider, &request.model).await
-        }
+        None => crate::models::resolve_context_window(&request.provider, &request.model).await,
     };
     let compact_threshold =
         compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
@@ -1715,6 +1963,7 @@ async fn run_agent_loop(
             let outcome = match kind {
                 Some(ToolKind::Pause) => process_pause_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Command) => process_command_tool(&ctx, &call, &mut emit).await?,
+                Some(ToolKind::Network) => process_network_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Write) => process_write_tool(&ctx, &call, &mut emit).await?,
                 // Read-only tools: serve the concurrently-computed result when
                 // present (cap > 1); otherwise execute inline (sequential
@@ -2104,6 +2353,25 @@ pub(crate) fn revert_checkpoint_at(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RevertCheckpointsResult {
+    reverted: usize,
+}
+
+pub(crate) fn revert_all_checkpoints_at(
+    runs_dir: &Path,
+    run_id: &str,
+) -> Result<RevertCheckpointsResult, String> {
+    let entries = list_checkpoints_at(runs_dir, run_id)?;
+    let mut reverted = 0usize;
+    for entry in entries {
+        revert_checkpoint_at(runs_dir, run_id, &entry.tool_call_id)?;
+        reverted += 1;
+    }
+    Ok(RevertCheckpointsResult { reverted })
+}
+
 #[tauri::command]
 pub async fn agent_list_checkpoints(
     app: tauri::AppHandle,
@@ -2121,6 +2389,15 @@ pub async fn agent_revert_checkpoint(
 ) -> Result<(), String> {
     let runs_dir = app_runs_dir(&app)?;
     revert_checkpoint_at(&runs_dir, &run_id, &tool_call_id)
+}
+
+#[tauri::command]
+pub async fn agent_revert_run_checkpoints(
+    app: tauri::AppHandle,
+    run_id: String,
+) -> Result<RevertCheckpointsResult, String> {
+    let runs_dir = app_runs_dir(&app)?;
+    revert_all_checkpoints_at(&runs_dir, &run_id)
 }
 
 #[cfg(test)]
@@ -2648,7 +2925,7 @@ mod turn_decision_tests {
 
     #[test]
     fn compaction_rewrites_old_tool_results_and_keeps_the_system_prompt() {
-        let long = "x".repeat(250);
+        let long = "x".repeat(2_000);
         // One result past the recency window, so exactly the oldest is eligible.
         let mut messages =
             vec![serde_json::json!({ "role": "system", "content": "x".repeat(300) })];
@@ -2658,19 +2935,22 @@ mod turn_decision_tests {
         compact_old_tool_results(&mut messages);
         // System prompt untouched even though it is long.
         assert_eq!(messages[0]["content"].as_str().unwrap().len(), 300);
-        // The single oldest result collapsed; its name dropped.
-        assert_eq!(messages[1]["content"], "[compacted: read_file]");
+        // The single oldest result collapsed with an excerpt; its name dropped.
+        assert!(messages[1]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("[compacted: read_file; original"));
         assert!(messages[1].get("name").is_none());
         // Everything inside the recency window survives verbatim.
         assert_eq!(
             messages.last().unwrap()["content"].as_str().unwrap().len(),
-            250
+            2_000
         );
     }
 
     #[test]
     fn compaction_preserves_the_recent_working_set() {
-        let long = "x".repeat(250);
+        let long = "x".repeat(2_000);
         // Exactly the window's worth of reads — nothing is old enough to gut.
         let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
         for _ in 0..KEEP_RECENT_TOOL_RESULTS {
@@ -2679,7 +2959,12 @@ mod turn_decision_tests {
         compact_old_tool_results(&mut messages);
         let compacted = messages
             .iter()
-            .filter(|m| m["content"].as_str() == Some("[compacted: read_file]"))
+            .filter(|m| {
+                m["content"]
+                    .as_str()
+                    .map(|s| s.starts_with("[compacted: read_file; original"))
+                    .unwrap_or(false)
+            })
             .count();
         assert_eq!(
             compacted, 0,
@@ -2714,9 +2999,10 @@ mod turn_decision_tests {
             compact_old_tool_results(&mut messages);
         }
         assert!(
-            messages
-                .iter()
-                .all(|m| m["content"].as_str() != Some("[compacted: read_file]")),
+            messages.iter().all(|m| !m["content"]
+                .as_str()
+                .map(|s| s.starts_with("[compacted: read_file; original"))
+                .unwrap_or(false)),
             "a small prompt under a large window must not be compacted"
         );
     }
@@ -2733,8 +3019,28 @@ mod turn_decision_tests {
     }
 
     #[test]
+    fn compaction_never_grows_a_medium_result() {
+        // A result that clears the old 200-byte bar but is smaller than the
+        // summary header + excerpt would be. Compacting it would *grow* the
+        // prompt, so it must be left verbatim.
+        let medium = "z".repeat(500);
+        let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
+        for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 1) {
+            messages.push(tool_msg("read_file", &medium));
+        }
+        compact_old_tool_results(&mut messages);
+        assert!(
+            messages
+                .iter()
+                .filter(|m| m["role"].as_str() == Some("tool"))
+                .all(|m| m["content"].as_str() == Some(medium.as_str())),
+            "medium results must stay verbatim — compaction must never grow a message"
+        );
+    }
+
+    #[test]
     fn compaction_stops_after_five_rewrites_per_pass() {
-        let long = "y".repeat(250);
+        let long = "y".repeat(2_000);
         let mut messages = vec![serde_json::json!({ "role": "system", "content": "sys" })];
         // 5 + window eligible, but a single pass caps at 5 rewrites.
         for _ in 0..(KEEP_RECENT_TOOL_RESULTS + 7) {
@@ -2743,7 +3049,12 @@ mod turn_decision_tests {
         compact_old_tool_results(&mut messages);
         let compacted = messages
             .iter()
-            .filter(|m| m["content"].as_str() == Some("[compacted: read_file]"))
+            .filter(|m| {
+                m["content"]
+                    .as_str()
+                    .map(|s| s.starts_with("[compacted: read_file; original"))
+                    .unwrap_or(false)
+            })
             .count();
         assert_eq!(compacted, 5);
     }
@@ -2877,6 +3188,35 @@ mod provider_caller_tests {
                 true
             )]
         );
+    }
+}
+
+#[cfg(test)]
+mod network_permission_tests {
+    use super::*;
+
+    #[test]
+    fn web_fetch_permission_targets_the_host() {
+        let call = NormalizedToolCall {
+            id: "call_fetch".to_string(),
+            name: "web_fetch".to_string(),
+            input: serde_json::json!({ "url": "https://Docs.RS/crate/serde" }),
+        };
+        let invocation = network_invocation(&call).expect("valid fetch");
+        assert_eq!(invocation.target, "host:docs.rs");
+        assert_eq!(invocation.input["host"], "docs.rs");
+    }
+
+    #[test]
+    fn web_search_permission_uses_search_target() {
+        let call = NormalizedToolCall {
+            id: "call_search".to_string(),
+            name: "web_search".to_string(),
+            input: serde_json::json!({ "query": "serde docs" }),
+        };
+        let invocation = network_invocation(&call).expect("valid search");
+        assert_eq!(invocation.target, "web_search");
+        assert_eq!(invocation.input["target"], "web_search");
     }
 }
 
@@ -3039,6 +3379,44 @@ mod checkpoint_tests {
         let second = revert_checkpoint_at(&runs, run, "edit_x");
         assert!(second.is_err(), "second revert should fail: {second:?}");
         assert!(second.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn revert_all_consumes_every_checkpoint_newest_first() {
+        let (runs, ws) = make_sandbox("revert-all");
+        let run = "run_all";
+        let rel = "note.md";
+        let abs = ws.join(rel);
+        std::fs::write(&abs, "v3").unwrap();
+
+        let older = checkpoint_json(
+            "turn1_tool_1",
+            rel,
+            "v1",
+            "v2",
+            false,
+            ws.to_str().unwrap(),
+            1,
+        );
+        let newer = checkpoint_json(
+            "turn2_tool_1",
+            rel,
+            "v2",
+            "v3",
+            false,
+            ws.to_str().unwrap(),
+            2,
+        );
+        write_checkpoint(&runs, run, "turn1_tool_1", &older);
+        write_checkpoint(&runs, run, "turn2_tool_1", &newer);
+
+        let result = revert_all_checkpoints_at(&runs, run).expect("revert all");
+        assert_eq!(result.reverted, 2);
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "v1");
+        assert!(
+            list_checkpoints_at(&runs, run).unwrap().is_empty(),
+            "all checkpoint files should be consumed"
+        );
     }
 
     #[test]

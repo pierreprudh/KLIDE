@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listCheckpoints, revertCheckpoint } from "../agent/client";
+import { listCheckpoints, revertCheckpoint, revertRunCheckpoints } from "../agent/client";
 import type { CheckpointEntry } from "../agent/types";
 import { DiffModal, type PendingEdit } from "./DiffModal";
 
@@ -42,6 +42,8 @@ export function CheckpointPanel({ runId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<CheckpointEntry | null>(null);
   const [reverting, setReverting] = useState<string | null>(null);
+  const [revertingAll, setRevertingAll] = useState(false);
+  const [revertingTurn, setRevertingTurn] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,6 +74,39 @@ export function CheckpointPanel({ runId }: Props) {
     }
   }
 
+  async function handleRevertAll() {
+    if (!window.confirm(`Revert all ${entries.length} remaining file change${entries.length === 1 ? "" : "s"} for this run?`)) return;
+    setRevertingAll(true);
+    setError(null);
+    try {
+      await revertRunCheckpoints(runId);
+      setEntries([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      await load();
+    } finally {
+      setRevertingAll(false);
+    }
+  }
+
+  async function handleRevertTurn(turn: number, group: CheckpointEntry[]) {
+    if (!window.confirm(`Revert ${group.length} file change${group.length === 1 ? "" : "s"} from turn ${turn}?`)) return;
+    setRevertingTurn(turn);
+    setError(null);
+    try {
+      for (const entry of group) {
+        await revertCheckpoint(runId, entry.toolCallId);
+      }
+      const revertedIds = new Set(group.map((entry) => entry.toolCallId));
+      setEntries((prev) => prev.filter((entry) => !revertedIds.has(entry.toolCallId)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      await load();
+    } finally {
+      setRevertingTurn(null);
+    }
+  }
+
   const groups = useMemo(() => groupByTurn(entries), [entries]);
 
   const muted = { fontSize: 12, color: "var(--fg-subtle)" } as const;
@@ -82,19 +117,79 @@ export function CheckpointPanel({ runId }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={() => void handleRevertAll()}
+          disabled={revertingAll || !!reverting}
+          style={{
+            fontSize: 11,
+            padding: "3px 8px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--danger, #B42318)",
+            color: "var(--danger, #B42318)",
+            background: revertingAll
+              ? "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)"
+              : "transparent",
+            cursor: revertingAll || !!reverting ? "default" : "pointer",
+            opacity: revertingAll || !!reverting ? 0.6 : 1,
+          }}
+          onMouseEnter={(e) => {
+            if (!revertingAll && !reverting)
+              e.currentTarget.style.background = "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)";
+          }}
+          onMouseLeave={(e) => {
+            if (!revertingAll && !reverting) e.currentTarget.style.background = "transparent";
+          }}
+        >
+          {revertingAll ? "Reverting…" : "Revert all"}
+        </button>
+      </div>
       {groups.map(({ turn, entries: group }) => (
         <div key={turn}>
           <div
             style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              marginBottom: 6,
+            }}
+          >
+            <div
+              style={{
               fontSize: 10,
               letterSpacing: "0.06em",
               textTransform: "uppercase",
               color: "var(--fg-subtle)",
               fontFamily: "var(--font-mono)",
-              marginBottom: 6,
-            }}
-          >
-            Turn {turn} · {group.length} file{group.length === 1 ? "" : "s"}
+              }}
+            >
+              Turn {turn} · {group.length} file{group.length === 1 ? "" : "s"}
+            </div>
+            <button
+              onClick={() => void handleRevertTurn(turn, group)}
+              disabled={revertingAll || revertingTurn === turn || !!reverting}
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
+                color: "var(--fg-subtle)",
+                background: revertingTurn === turn ? "var(--bg-hover)" : "transparent",
+                cursor: revertingAll || revertingTurn === turn || !!reverting ? "default" : "pointer",
+                opacity: revertingAll || revertingTurn === turn || !!reverting ? 0.6 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!revertingAll && revertingTurn !== turn && !reverting)
+                  e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                if (!revertingAll && revertingTurn !== turn && !reverting)
+                  e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {revertingTurn === turn ? "…" : "Revert turn"}
+            </button>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {group.map((entry) => (

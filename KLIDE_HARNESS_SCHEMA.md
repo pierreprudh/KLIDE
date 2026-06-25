@@ -47,8 +47,8 @@ Tools are filtered by **kind** per mode (`tools.rs:list_tools`):
 | Mode | Tools exposed |
 |---|---|
 | **Chat** | none — converse from visible context only |
-| **Plan** | `ReadOnly` tools only (12) — inspect, never edit or execute shell-backed dynamic tools |
-| **Goal** | all kinds (17) + dynamic command tools — inspect + diff-reviewed edits + approval-gated commands + pause |
+| **Plan** | `ReadOnly` workspace tools only (10) — inspect local context, never edit, execute shell-backed dynamic tools, or use network |
+| **Goal** | all kinds (17) + dynamic command tools — inspect + approval-gated network reads + diff-reviewed edits + approval-gated commands + pause |
 
 *Dynamic tools* (`load_dynamic_tools`) are shell-backed command tools loaded at
 runtime from `.agents/tools.json`. They are Goal-only and pass through the same
@@ -61,7 +61,7 @@ warnings for unverified implementation work.
 
 ## Tool registry (`src-tauri/src/agent/tools.rs`)
 
-### Read-only (Plan + Goal) — 12
+### Read-only workspace tools (Plan + Goal) — 10
 
 | Tool | Purpose | Lineage |
 |---|---|---|
@@ -73,10 +73,15 @@ warnings for unverified implementation work.
 | `get_git_diff` | Diff for the workspace or one path (staged optional). | K |
 | `get_git_log` | Recent commit history (hash/subject/date/author). | K |
 | `clean_context` | Drop dead-end tool results from the current turn (replaced by `[cleaned: …]`), keeping the prompt cache intact. | K (OC compaction spirit) |
-| `web_search` | Web search, up to 10 results. | CC/CX/OC |
-| `web_fetch` | Fetch a URL as text. | CC/CX/OC |
 | `get_todo_list` | Read the project TODO list. | CC (TodoWrite) |
 | `update_todo_list` | add/complete/uncomplete/edit/remove/clear todos. *(Read-only kind: mutates the todo store, not workspace files — no diff review.)* | CC (TodoWrite) |
+
+### Network (Goal only) — 2
+
+| Tool | Purpose | Lineage |
+|---|---|---|
+| `web_search` | Web search, up to 10 results. Pauses for approval; run/project approval targets `web_search`. | CC/CX/OC + K (approval gate) |
+| `web_fetch` | Fetch a URL as text. Pauses for approval; run/project approval targets the fetched host, e.g. `host:docs.rs`, persisted in `.klide/network-allowlist.json` for project scope. | CC/CX/OC + K (approval gate) |
 
 ### Write (Goal only, every edit is diff-reviewed) — 3
 
@@ -90,7 +95,7 @@ warnings for unverified implementation work.
 
 | Tool | Purpose | Lineage |
 |---|---|---|
-| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every new command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. "Approve for this run" stores the exact command in memory for the current run; "Approve for project" persists it to `.klide/command-allowlist.json` for future Klide runs in that workspace. Killed after a **timeout** (default 180s, Settings → Harness) so a hung command can't stall the run; output capped at 16KB. | CC/CX/OC (bash tool) + K (approval gate) |
+| `run_command` | Run a shell command from the workspace root; returns stdout + stderr + exit code. The agent's way to run tests, build, typecheck, lint, install — i.e. verify its own work. Every new command is shown for **approval before it runs** (same permission gate diff review is for edits), via the wired `PermissionRequested`/`agent_resolve_permission` flow. The Harness preflights paths resolving outside the workspace (absolute, `~`/`$HOME`/`$PWD`, and relative `..` escapes) and shows them in the permission request. "Approve for this run" stores the exact command/cwd in memory for the current run; "Approve for project" persists the exact command to `.klide/command-allowlist.json`, whose `rules` array can also hold intentional wildcard patterns like `cargo test *`. Killed after a **timeout** (default 180s, Settings → Harness) so a hung command can't stall the run; output capped at 16KB. | CC/CX/OC (bash tool) + K (approval gate) |
 
 ### Pause (Goal only) — 1
 
@@ -109,7 +114,9 @@ Why edits land cleanly even on small local models:
 3. **Post-edit syntax verify** — freshly written Rust/JSON is parsed in-process
    ("omp's post-edit diagnostics, lite", `tools.rs:1897`); advisory, not blocking.
 4. **Diff review** — every write pauses for the user to APPLY or REJECT via a
-   `oneshot` channel before anything touches disk. *(K)*
+   `oneshot` channel before anything touches disk. Applied writes can be
+   reverted one checkpoint at a time or all remaining checkpoints for the Run.
+   *(K)*
 
 ## Delegate mode *(K — the delegate seam)*
 

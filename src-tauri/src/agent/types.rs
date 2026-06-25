@@ -92,8 +92,8 @@ pub struct StartRunRequest {
     /// failing check is returned to the model as a not-ok tool result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_after_edit_command: Option<String>,
-    /// Commands pre-approved for `run_command` (exact match) — the project
-    /// allowlist, so trusted commands skip the approval prompt.
+    /// Commands or wildcard command rules pre-approved for `run_command` by
+    /// the project allowlist, so trusted commands skip the approval prompt.
     #[serde(default)]
     pub command_allowlist: Vec<String>,
     /// Whether file edits pause for diff review before applying. `None` or

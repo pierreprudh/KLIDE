@@ -1725,9 +1725,25 @@ This user request requires workspace inspection. Before answering, you MUST call
   const [pendingPermission, setPendingPermission] = useState<{
     runId: string;
     requestId: string;
+    toolName: string;
+    kind: "command" | "network";
     command: string;
     summary: string;
+    reason: string;
+    externalPaths: string[];
+    suggestedPattern?: string;
   } | null>(null);
+
+  function suggestCommandPattern(command: string): string | undefined {
+    const words = (command.match(/"[^"]+"|'[^']+'|\S+/g) ?? [])
+      .map((word) => word.replace(/^["']|["']$/g, ""))
+      .filter(Boolean);
+    const stop = words.findIndex((word) => word === "&&" || word === "||" || word === ";" || word === "|");
+    const head = (stop >= 0 ? words.slice(0, stop) : words).filter(Boolean);
+    if (head.length < 2) return undefined;
+    const keep = head[0] === "npm" && head[1] === "run" && head[2] ? 3 : 2;
+    return `${head.slice(0, keep).join(" ")} *`;
+  }
 
   async function runHarnessTurn(turn: QueuedTurn, generation: number) {
     if (queueGenerationRef.current !== generation) return;
@@ -1951,12 +1967,25 @@ This user request requires workspace inspection. Before answering, you MUST call
           break;
         }
         case "permission_requested": {
-          const req = event.request as { id: string; summary?: string; input?: { command?: string } };
+          const req = event.request as {
+            id: string;
+            toolName?: string;
+            summary?: string;
+            reason?: string;
+            input?: { command?: string; externalPaths?: string[] };
+          };
+          const isCommand = !!req.input?.command;
+          const command = req.input?.command ?? req.summary ?? req.toolName ?? "permission request";
           setPendingPermission({
             runId: event.runId,
             requestId: req.id,
-            command: req.input?.command ?? "",
-            summary: req.summary ?? req.input?.command ?? "command",
+            toolName: req.toolName ?? "permission",
+            kind: isCommand ? "command" : "network",
+            command,
+            summary: req.summary ?? command,
+            reason: req.reason ?? "",
+            externalPaths: Array.isArray(req.input?.externalPaths) ? req.input.externalPaths : [],
+            suggestedPattern: isCommand ? suggestCommandPattern(command) : undefined,
           });
           break;
         }
@@ -2367,14 +2396,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     });
   }
 
-  function approveCommand(scope: "once" | "run" | "project" = "once") {
+  function approveCommand(scope: "once" | "run" | "project" = "once", pattern?: string) {
     if (!pendingPermission) return;
     const snapshot = pendingPermission;
     setPendingPermission(null);
     void resolvePermission({
       runId: snapshot.runId,
       requestId: snapshot.requestId,
-      decision: { behavior: "allow", scope },
+      decision: pattern ? { behavior: "allow", scope, pattern } : { behavior: "allow", scope },
     }).catch((err) => console.error("Failed to approve command:", err));
   }
 
@@ -2898,10 +2927,15 @@ This user request requires workspace inspection. Before answering, you MUST call
         {pendingPermission && (
           <InlineCommandReview
             command={pendingPermission.command}
+            kind={pendingPermission.kind}
+            detail={pendingPermission.reason}
+            externalPaths={pendingPermission.externalPaths}
             onReject={rejectCommand}
             onApproveOnce={() => approveCommand("once")}
             onApproveForRun={() => approveCommand("run")}
             onApproveForProject={() => approveCommand("project")}
+            pattern={pendingPermission.suggestedPattern}
+            onApprovePattern={(pattern) => approveCommand("project", pattern)}
           />
         )}
         {pendingQuestion && (

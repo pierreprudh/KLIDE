@@ -70,7 +70,7 @@ Every Tool has one capability:
 | `WriteWorkspace` | `Write` | Goal-only. Produces a Diff proposal and waits for Diff review before writing. |
 | `RunCommand` | `Command` | Goal-only. Produces a permission request and runs only after approval. |
 | `PauseForUser` | `Pause` | Goal-only. Pauses the Run for typed user input. |
-| `Network` | Reserved | Future network Tools should be permission-profiled explicitly. |
+| `Network` | `Network` | Goal-only. Produces a permission request and reads from the network only after approval. |
 
 Dynamic tools loaded from `.agents/tools.json` are shell-backed command tools.
 They are always `RunCommand` capability, Goal-only, approval-gated, timeout
@@ -90,11 +90,14 @@ directory.
 
 Command-capability Tools are not executed by the Tool registry. The Harness:
 
-1. Builds the exact command and cwd.
-2. Emits `PermissionRequested`.
-3. Waits for `agent_resolve_permission`.
-4. Runs the command only when the decision is `allow`.
-5. Emits `PermissionResolved` and the Tool result.
+1. Builds the command and cwd.
+2. Runs a preflight that surfaces command arguments resolving outside the
+   Workspace — absolute paths, `~`/`$HOME`/`$PWD` expansions, and relative
+   `..` escapes resolved against the command cwd. (Transparency, not a sandbox.)
+3. Emits `PermissionRequested`.
+4. Waits for `agent_resolve_permission`.
+5. Runs the command only when the decision is `allow`.
+6. Emits `PermissionResolved` and the Tool result.
 
 Approval scopes:
 
@@ -102,11 +105,21 @@ Approval scopes:
 |---|---|
 | `once` | Run this exact command/cwd once. |
 | `run` | Skip re-prompting for this exact command/cwd during the current Run. |
-| `project` | Currently treated like `run`; durable project policy should become an explicit future module. |
+| `project` | Persist this exact command under `.klide/command-allowlist.json` for future Runs in the same Workspace. |
 
 Rejected commands are remembered for the current Run. If the model proposes the
 same command/cwd again, the Harness auto-declines and tells the model to take a
 different approach.
+
+The project allowlist remains backward-compatible with `commands: string[]` and
+also accepts `rules: [{ "pattern": "cargo test *" }]`. Wildcard rules do not
+silently approve commands that introduce new outside-Workspace absolute paths;
+the Harness asks again so the path is visible to the user.
+
+Network-capability Tools use the same pause/resume permission channel, but store
+separate network targets. `web_search` uses the `web_search` target; `web_fetch`
+uses `host:<domain>`, such as `host:docs.rs`. Project-scoped network approvals
+persist under `.klide/network-allowlist.json` and never imply command approval.
 
 ## Diff Review
 
@@ -114,7 +127,8 @@ Write-capability Tools never write immediately. They create a `DiffProposal`.
 The Harness emits `DiffProposed`, waits for the user, then either applies the
 write or returns a rejection result to the model.
 
-Applied writes create checkpoints so the user can roll back.
+Applied writes create checkpoints so the user can roll back one edit, or revert
+all remaining checkpoints for a Run.
 
 Rejected edits are remembered by `<path>::<new_hash>` for the current Run. If
 the model proposes the same resulting file contents again, the Harness

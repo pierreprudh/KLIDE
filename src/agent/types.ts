@@ -99,7 +99,7 @@ export type PermissionRequest = {
 };
 
 export type PermissionDecision =
-  | { behavior: "allow"; scope: "once" | "run" | "project" | "user" }
+  | { behavior: "allow"; scope: "once" | "run" | "project" | "user"; pattern?: string }
   | { behavior: "deny"; message?: string }
   | { behavior: "ask_later" };
 
