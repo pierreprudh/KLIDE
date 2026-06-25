@@ -79,7 +79,12 @@ export function writeRunLedgerMetadata(store: RunLedgerMetadataStore): void {
   }
 }
 
-function projectName(cwd: string | null): string | null {
+/**
+ * The project a run belongs to: the basename of its working directory. Shared
+ * by ledger construction (per-run `project`) and Mission Control's project
+ * filter so the dropdown's "current project" default matches run labels exactly.
+ */
+export function projectName(cwd: string | null): string | null {
   return cwd ? cwd.split("/").filter(Boolean).pop() ?? null : null;
 }
 
@@ -215,6 +220,23 @@ export function presentRunSources(entries: Pick<RunLedgerEntry, "source">[]): Ru
   const set = new Set<RunSource>();
   for (const entry of entries) set.add(entry.source);
   return Array.from(set);
+}
+
+export type ProjectFilter = string | "all";
+
+export function projectMatchesFilter(
+  run: Pick<RunLedgerEntry, "project">,
+  filter: ProjectFilter,
+): boolean {
+  if (filter === "all") return true;
+  return run.project === filter;
+}
+
+/** Unique, sorted project names present across the given runs (skips unscoped runs). */
+export function presentProjects(entries: Pick<RunLedgerEntry, "project">[]): string[] {
+  const set = new Set<string>();
+  for (const entry of entries) if (entry.project) set.add(entry.project);
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
 export function handoffTargetsFor(run: Pick<RunLedgerEntry, "source">): TaskSource[] {

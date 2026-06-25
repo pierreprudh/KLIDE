@@ -62,12 +62,16 @@ import {
 import {
   buildRunLedger,
   handoffTargetsFor,
+  presentProjects,
   presentRunSources,
+  projectMatchesFilter,
+  projectName,
   readRunLedgerMetadata,
   runMatchesLedgerQuery,
   runLedgerKey,
   sourceMatchesFilter,
   writeRunLedgerMetadata,
+  type ProjectFilter,
   type RunLedgerEntry,
   type RunLedgerMetadataStore,
   type RunSourceFilter,
@@ -112,50 +116,6 @@ function cssVar(name: string): string {
 
 function isClaudeInternalSubagent(run: Pick<Run, "source" | "path">): boolean {
   return run.source === "claude-code" && run.path.includes("/subagents/");
-}
-
-function SubagentStackToggle({
-  count,
-  expanded,
-  onToggle,
-}: {
-  count: number;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <Tooltip label={expanded ? "Collapse subagents" : "Expand subagents"}>
-      <span
-        role="button"
-        aria-label={expanded ? "Collapse subagents" : "Expand subagents"}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        style={{
-          height: 22,
-          minWidth: 30,
-          padding: "0 6px",
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 3,
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--border)",
-          background: expanded ? "var(--accent-soft)" : "var(--bg-hover)",
-          color: expanded ? "var(--accent)" : "var(--fg-subtle)",
-          fontSize: 10,
-          fontFamily: "var(--font-mono)",
-          lineHeight: 1,
-        }}
-      >
-        {count}
-        <span aria-hidden style={{ fontSize: 10, transform: expanded ? "rotate(180deg)" : "none" }}>
-          ▾
-        </span>
-      </span>
-    </Tooltip>
-  );
 }
 
 // Minimal status text for places that need an explicit state. No colored
@@ -871,7 +831,9 @@ function RunRow({
                 compact rows, which have no avatar). External runs keep their
                 product/model mark inline. */}
             <RunReasonChip run={run} />
-            {run.source === "klide" && !compact ? null : run.source === "claude-code" ? null : run.model ? (
+            {run.source === "klide" && !compact ? null : run.source === "claude-code" ? null : run.source === "klide" && run.provider === "openrouter" ? (
+              <KlideLogo size={13} />
+            ) : run.model ? (
               <ModelBadge model={run.model} size={13} />
             ) : run.source === "codex" ? (
               <CodexLogo size={13} />
@@ -3363,8 +3325,6 @@ function RunDetail({
       )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <CopyButton value={run.path || null} label="Copy log path" />
-        <CopyButton value={run.cwd} label="Copy cwd" />
         {onRename && run.capabilities.canRename && (
           <ActionButton
             label={renaming ? "Save name" : "Rename"}
@@ -3489,6 +3449,10 @@ function RunDetail({
             }
           />
         )}
+        {/* Copy utilities trail the bar — rare, and the paths themselves now
+            live in the "More details" disclosure rather than up top. */}
+        <CopyButton value={run.path || null} label="Copy log path" />
+        <CopyButton value={run.cwd} label="Copy cwd" />
       </div>
 
       {(branchDiff || compareError) && (
@@ -3620,7 +3584,7 @@ function RunDetail({
           gridTemplateColumns: "auto 1fr",
           gap: "7px 18px",
           fontSize: 12,
-          margin: "0 0 22px",
+          margin: "0 0 12px",
         }}
       >
         <dt style={{ color: "var(--fg-subtle)" }}>Model</dt>
@@ -3643,7 +3607,9 @@ function RunDetail({
             <>
               {/* Klide rows show the model's own provider logo; external
                   product runs (claude-code/codex) keep their product mark. */}
-              {run.source === "klide"
+              {run.source === "klide" && run.provider === "openrouter"
+                ? <KlideLogo size={13} />
+                : run.source === "klide"
                 ? resolveModelLogo(run.model, 13) ?? <ProviderLogo id={run.source as any} size={13} />
                 : <ProviderLogo id={run.source as any} size={13} />}
               {run.model}
@@ -3652,20 +3618,49 @@ function RunDetail({
         </dd>
         <MetaRow label="Project" value={run.project ?? "—"} />
         <MetaRow label="Branch" value={run.branch ?? "—"} />
-        {run.forkedFrom && (
-          <>
-            <MetaRow label="Forked from" value={run.forkedFrom.title} />
-            <MetaRow
-              label="Fork point"
-              value={`${run.forkedFrom.mode === "worktree" ? "worktree" : "chat"} message #${run.forkedFrom.messageIndex + 1}`}
-            />
-          </>
-        )}
         <MetaRow label="Messages" value={String(run.messageCount)} />
         <MetaRow label="Updated" value={relativeTime(run.updatedMs)} />
-        {run.path && <MetaRow label="Log" value={run.path} />}
-        {run.cwd && <MetaRow label="Directory" value={run.cwd} />}
       </dl>
+
+      {/* Secondary facts — fork lineage and the long log/cwd paths — are the
+          noisiest rows but the least-glanced-at, so they sit behind a
+          disclosure rather than pushing the conversation further down. */}
+      {(run.forkedFrom || run.path || run.cwd) && (
+        <details style={{ margin: "0 0 22px" }}>
+          <summary
+            style={{
+              cursor: "pointer",
+              color: "var(--fg-subtle)",
+              fontSize: 12,
+              marginBottom: 8,
+              userSelect: "none",
+            }}
+          >
+            More details
+          </summary>
+          <dl
+            style={{
+              display: "grid",
+              gridTemplateColumns: "auto 1fr",
+              gap: "7px 18px",
+              fontSize: 12,
+              margin: 0,
+            }}
+          >
+            {run.forkedFrom && (
+              <>
+                <MetaRow label="Forked from" value={run.forkedFrom.title} />
+                <MetaRow
+                  label="Fork point"
+                  value={`${run.forkedFrom.mode === "worktree" ? "worktree" : "chat"} message #${run.forkedFrom.messageIndex + 1}`}
+                />
+              </>
+            )}
+            {run.path && <MetaRow label="Log" value={run.path} />}
+            {run.cwd && <MetaRow label="Directory" value={run.cwd} />}
+          </dl>
+        </details>
+      )}
 
       {run.source === "klide" && (
         <>
@@ -3700,13 +3695,24 @@ function ActionButton({
       title={disabled && !onClick ? "Not wired yet" : undefined}
       style={{
         fontSize: 12,
+        fontWeight: primary ? 560 : 400,
         padding: "5px 12px",
         borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        color: disabled ? "var(--fg-subtle)" : primary ? "var(--fg-strong)" : "var(--fg)",
-        background: primary && !disabled ? "var(--accent-soft)" : "transparent",
+        border: `1px solid ${primary && !disabled ? "var(--accent)" : "var(--border)"}`,
+        color: disabled ? "var(--fg-subtle)" : primary ? "#fff" : "var(--fg)",
+        background: primary && !disabled ? "var(--accent)" : "transparent",
         opacity: disabled ? 0.55 : 1,
         cursor: disabled ? "default" : "pointer",
+        transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), filter var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        if (primary) e.currentTarget.style.filter = "brightness(1.08)";
+        else { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.filter = "none";
+        if (!primary) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "var(--border)"; }
       }}
     >
       {label}
@@ -3749,6 +3755,82 @@ function SearchIcon() {
       <circle cx="11" cy="11" r="7" />
       <path d="M20 20l-3.5-3.5" />
     </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+// A calm filter dropdown: a pill matching the search input, with one custom
+// chevron instead of the heavy native double-arrow. Keeps the bar consistent.
+function FilterSelect({
+  value,
+  onChange,
+  ariaLabel,
+  children,
+}: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  ariaLabel: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ position: "relative", flex: "0 0 auto", display: "flex" }}>
+      <select
+        value={value}
+        onChange={onChange}
+        aria-label={ariaLabel}
+        style={{
+          height: 26,
+          padding: "0 26px 0 10px",
+          borderRadius: 999,
+          border: "1px solid var(--border)",
+          color: "var(--fg-strong)",
+          background: "var(--bg)",
+          fontSize: 11,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          outline: "none",
+          appearance: "none",
+          WebkitAppearance: "none",
+          MozAppearance: "none",
+        }}
+        onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+        onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+      >
+        {children}
+      </select>
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          right: 9,
+          top: "50%",
+          transform: "translateY(-50%)",
+          display: "grid",
+          placeItems: "center",
+          color: "var(--fg-subtle)",
+          pointerEvents: "none",
+        }}
+      >
+        <ChevronDownIcon />
+      </span>
+    </div>
   );
 }
 
@@ -3813,6 +3895,13 @@ export function MissionControl({
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<RunSourceFilter>("all");
+  // Default the project filter to the project Klide is currently rooted in, so a
+  // user juggling several projects only sees the active one's runs on open. They
+  // can switch to "All projects" (or any other) from the dropdown.
+  const currentProject = projectName(workspaceRoot);
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>(
+    () => currentProject ?? "all"
+  );
   const [sessionQuery, setSessionQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [ledgerMetadata, setLedgerMetadata] = useState<RunLedgerMetadataStore>(() => readRunLedgerMetadata());
@@ -3928,11 +4017,25 @@ export function MissionControl({
   // Which source chips to show — only sources actually present.
   const presentSources = useMemo(() => presentRunSources(allRuns), [allRuns]);
 
+  // Projects to list in the dropdown: every project with runs, plus the current
+  // project even when it has none yet (so the default selection always resolves
+  // to a real <option> instead of an empty select).
+  const projectOptions = useMemo(() => {
+    const present = presentProjects(allRuns);
+    if (currentProject && !present.includes(currentProject)) {
+      return [currentProject, ...present].sort((a, b) => a.localeCompare(b));
+    }
+    return present;
+  }, [allRuns, currentProject]);
+
   const filtered = useMemo(() => {
     return linkedRuns.filter(
-      (r) => sourceMatchesFilter(r, sourceFilter) && runMatchesLedgerQuery(r, sessionQuery)
+      (r) =>
+        sourceMatchesFilter(r, sourceFilter) &&
+        projectMatchesFilter(r, projectFilter) &&
+        runMatchesLedgerQuery(r, sessionQuery)
     );
-  }, [linkedRuns, sourceFilter, sessionQuery]);
+  }, [linkedRuns, sourceFilter, projectFilter, sessionQuery]);
 
   const grouped = useMemo(() => {
     const by: Record<RunBoardSection, RunLedgerEntry[]> = {
@@ -4185,14 +4288,22 @@ export function MissionControl({
             >
               {loading
                 ? "loading…"
-                : `${attentionCount} attention · ${runningCount} running · ${blockedCount} blocked`}
+                : [
+                    attentionCount > 0 ? `${attentionCount} attention` : null,
+                    runningCount > 0 ? `${runningCount} running` : null,
+                    blockedCount > 0 ? `${blockedCount} blocked` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Row 1: search shares its line with the refresh action. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div
               style={{
                 position: "relative",
-                flex: "1 1 170px",
+                flex: "1 1 auto",
                 minWidth: 0,
               }}
             >
@@ -4228,25 +4339,55 @@ export function MissionControl({
                   fontFamily: "inherit",
                   outline: "none",
                 }}
+                onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+                onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
               />
             </div>
-            <select
+            <button
+              onClick={() => void load()}
+              title="Refresh"
+              aria-label="Refresh runs"
+              style={{
+                width: 26,
+                height: 26,
+                flexShrink: 0,
+                display: "grid",
+                placeItems: "center",
+                color: "var(--fg-subtle)",
+                borderRadius: "var(--radius-sm)",
+                transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
+            >
+              <RefreshIcon />
+            </button>
+            </div>
+            {/* Row 2: the filter options share one line. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <FilterSelect
               value={sourceFilter}
               onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)}
-              aria-label="Filter runs"
-              style={{
-                fontSize: 11, padding: "3px 20px 3px 9px", borderRadius: 999,
-                border: "1px solid var(--border)", color: "var(--fg-strong)",
-                background: "var(--bg)", minWidth: 96, flex: "0 0 128px", cursor: "pointer",
-                fontFamily: "inherit", appearance: "auto",
-              }}
+              ariaLabel="Filter runs"
             >
               <option value="all">All runs</option>
               <option value="subagent">Subagent</option>
               {presentSources.map((s) => (
                 <option key={s} value={s}>{SOURCE_LABEL[s]}</option>
               ))}
-            </select>
+            </FilterSelect>
+            {projectOptions.length > 0 && (
+              <FilterSelect
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value as ProjectFilter)}
+                ariaLabel="Filter by project"
+              >
+                <option value="all">All projects</option>
+                {projectOptions.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </FilterSelect>
+            )}
             <button
               type="button"
               onClick={() => setShowArchived((v) => !v)}
@@ -4254,37 +4395,23 @@ export function MissionControl({
               title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
               style={{
                 height: 26,
-                padding: "0 9px",
+                padding: "0 11px",
                 borderRadius: 999,
-                border: "1px solid var(--border)",
+                border: `1px solid ${showArchived ? "var(--accent)" : "var(--border)"}`,
                 background: showArchived ? "var(--bg-selected)" : "var(--bg)",
                 color: showArchived ? "var(--accent)" : "var(--fg-subtle)",
                 fontSize: 11,
                 fontFamily: "inherit",
                 cursor: "pointer",
                 flexShrink: 0,
+                transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
               }}
+              onMouseEnter={(e) => { if (!showArchived) { e.currentTarget.style.borderColor = "var(--border-strong)"; e.currentTarget.style.color = "var(--fg-strong)"; } }}
+              onMouseLeave={(e) => { if (!showArchived) { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--fg-subtle)"; } }}
             >
               Archived
             </button>
-            <button
-              onClick={() => void load()}
-              title="Refresh"
-              aria-label="Refresh runs"
-              style={{
-                marginLeft: "auto",
-                width: 26,
-                height: 26,
-                display: "grid",
-                placeItems: "center",
-                color: "var(--fg-subtle)",
-                borderRadius: "var(--radius-sm)",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <RefreshIcon />
-            </button>
+            </div>
           </div>
         </header>
 
@@ -4398,7 +4525,10 @@ export function MissionControl({
                             run={run}
                             selected={parentSelected}
                             hasMemory={memoryRunIds.has(run.id)}
-                            onSelect={() => selectRun(run)}
+                            onSelect={() => {
+                              selectRun(run);
+                              if (hasChildren(run.id)) toggleSubagentStack(run.id);
+                            }}
                             dismissAction={
                               parentDismissible
                                 ? {
@@ -4418,12 +4548,6 @@ export function MissionControl({
                                 <ResumeKlide
                                   runId={run.id}
                                   onResume={(id) => onResumeKlideRun?.(id)}
-                                />
-                              ) : hasChildren(run.id) ? (
-                                <SubagentStackToggle
-                                  count={children.length}
-                                  expanded={expanded}
-                                  onToggle={() => toggleSubagentStack(run.id)}
                                 />
                               ) : cliResumable ? (
                                 <ResumeCli
