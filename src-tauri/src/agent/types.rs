@@ -209,6 +209,12 @@ pub struct AgentRunSummary {
     /// by `write_summary` when absent. `None` before any assistant turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<String>,
+    /// Name of the linked git worktree the run executed in, when `cwd` is a
+    /// linked worktree rather than the repo's main checkout. `None` for runs in
+    /// a main working copy (the common case) or outside a git repo. Derived from
+    /// `cwd` in `agent_list_runs`, mirroring the delegate board's `worktree`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation: Option<AgentValidationSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]

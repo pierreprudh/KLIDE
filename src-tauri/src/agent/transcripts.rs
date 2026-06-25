@@ -675,6 +675,7 @@ mod tests {
             files_touched: 0,
             cost_usd: None,
             last_event: None,
+            worktree: None,
             validation: None,
             parent_id: None,
         };
@@ -719,6 +720,7 @@ mod tests {
             files_touched: 0,
             cost_usd: None,
             last_event: None,
+            worktree: None,
             validation: None,
             parent_id: None,
         };

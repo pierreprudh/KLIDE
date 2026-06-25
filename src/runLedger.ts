@@ -145,6 +145,20 @@ export function taskToLedgerEntry(
   return withCapabilities(run, "task", metadata);
 }
 
+// "What it last did" for a live convo, mirroring the Rust transcript's
+// `last_assistant_summary`: the newest assistant turn's first non-empty line,
+// capped at 120 chars. Lets a mid-run convo show the same evidence line as its
+// on-disk twin instead of going blank until the run settles to disk.
+function convoLastEvent(messages: KlideConvo["messages"]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const line = m.text.split("\n").find((l) => l.trim().length > 0)?.trim();
+    if (line) return line.slice(0, 120);
+  }
+  return undefined;
+}
+
 export function convoToLedgerEntry(
   c: KlideConvo,
   metadata?: RunLedgerMetadataStore,
@@ -163,6 +177,7 @@ export function convoToLedgerEntry(
     worktree: c.worktree ?? null,
     forkedFrom: c.forkedFrom ?? null,
     messageCount: c.messages?.length ?? 0,
+    lastEvent: convoLastEvent(c.messages ?? []),
     updatedMs: c.updatedMs,
     createdMs: c.updatedMs,
   };

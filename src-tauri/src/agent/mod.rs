@@ -1659,6 +1659,7 @@ async fn run_agent_loop(
         files_touched: 0,
         cost_usd: None,
         last_event: None,
+        worktree: None,
         validation: None,
         parent_id: request.parent_id.clone(),
     };
@@ -2242,6 +2243,14 @@ pub async fn agent_list_runs(
             && !live_run_ids.contains(&summary.id)
         {
             summary.status = "cancelled".to_string();
+        }
+        // Evidence parity with the delegate board: surface the linked git
+        // worktree a Klide run executed in (when its cwd is one). Derived, not
+        // persisted, so historical runs pick it up too. See `worktree_label`.
+        if summary.worktree.is_none() {
+            if let Some(cwd) = summary.cwd.as_deref() {
+                summary.worktree = crate::delegate::worktree_label(cwd);
+            }
         }
     }
     Ok(summaries)
