@@ -10,7 +10,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
-import { OrchestratorPreview } from "./components/OrchestratorPreview";
+// OrchestratorPreview is the fixture dashboard; temporarily replaced by the
+// console prototype on the orchestrator view (see render below).
+import { OrchestratorConsolePrototype } from "./components/OrchestratorConsolePrototype";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea } from "./components/EditorArea";
@@ -1408,7 +1410,9 @@ function App() {
                 onBack={() => setView("workbench")}
               />
             ) : view === "orchestrator" ? (
-              <OrchestratorPreview />
+              // PROTOTYPE: evaluating v0.5 orchestrator-console layouts. Swap
+              // back to <OrchestratorPreview /> once a variant is chosen.
+              <OrchestratorConsolePrototype />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : null}
