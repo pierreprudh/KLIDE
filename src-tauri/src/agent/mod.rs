@@ -1,4 +1,5 @@
 mod command_allowlist;
+mod permission;
 #[cfg(test)]
 mod eval;
 mod network_allowlist;
@@ -833,41 +834,32 @@ where
         format!("{cwd} :: {command}")
     };
     let preflight = preflight_command(root_value, &cwd, &command);
-    // Skip the prompt if this exact command/cwd was already approved for the
-    // run, or is on the project allowlist passed at start. Wildcard allowlist
-    // rules are intentionally narrower than exact approvals: if a wildcard
-    // command references outside-workspace paths, ask again so the path is
-    // visible to the user instead of being hidden behind a broad pattern.
-    let (run_ok, pre_rejected) = with_run_handle(ctx.app, ctx.id, |h| {
-        (
-            h.approved_commands.lock().unwrap().contains(&approval_key),
-            h.rejected_commands.lock().unwrap().contains(&approval_key),
-        )
-    })
-    .unwrap_or((false, false));
+    // Wildcard allowlist rules are intentionally narrower than exact approvals:
+    // if a wildcard command references outside-workspace paths, ask again so the
+    // path is visible to the user instead of hidden behind a broad pattern. That
+    // nuance is command-specific, so the project verdict is computed here and
+    // handed to the engine as a plain bool.
     let matched_rule =
         command_allowlist::match_rule(&ctx.request.command_allowlist, &command, &approval_key);
-    let pre_approved = run_ok
-        || matched_rule
-            .as_ref()
-            .map(|rule| rule.exact || preflight.external_paths.is_empty())
-            .unwrap_or(false);
+    let project_ok = matched_rule
+        .as_ref()
+        .map(|rule| rule.exact || preflight.external_paths.is_empty())
+        .unwrap_or(false);
 
-    if pre_approved {
-        return Ok(ToolOutcome::Produced(
-            run_command_capture_in(root_value, &cwd, &command, timeout_secs).await,
-        ));
-    }
-    if pre_rejected {
-        // The user already rejected this exact command this run. Don't
-        // re-prompt — tell the model so it changes course.
-        return Ok(ToolOutcome::Produced(ToolResult {
-            ok: false,
-            content: "You already proposed this exact command and the user rejected it. \
-Do not run it again — take a different approach or ask the user what they'd prefer."
-                .to_string(),
-            metadata: None,
-        }));
+    match permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok) {
+        permission::Precheck::Execute => {
+            return Ok(ToolOutcome::Produced(
+                run_command_capture_in(root_value, &cwd, &command, timeout_secs).await,
+            ));
+        }
+        permission::Precheck::AutoReject(msg) => {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: msg.to_string(),
+                metadata: None,
+            }));
+        }
+        permission::Precheck::Ask => {}
     }
 
     let external_paths = preflight.external_paths.clone();
@@ -884,9 +876,8 @@ Do not run it again — take a different approach or ask the user what they'd pr
         ));
     }
 
-    let request_id = format!("perm_{}_{}", ctx.id, call.id);
     let perm = serde_json::json!({
-        "id": request_id,
+        "id": permission::request_id(ctx, call),
         "runId": ctx.id,
         "toolCallId": call.id,
         "toolName": permission_tool_name,
@@ -906,88 +897,27 @@ Do not run it again — take a different approach or ask the user what they'd pr
         ]
     });
 
-    let decision = match pause_for_user(
-        ctx.app,
-        ctx.id,
-        AgentRunStatus::WaitingForPermission,
-        AgentEvent::PermissionRequested {
-            run_id: ctx.id.to_string(),
-            request: perm,
-            ts: now_ms(),
-        },
-        "{\"behavior\":\"deny\"}",
-        ctx.cancel,
-        emit,
-        |handle, tx| {
-            *handle.pending_permission.lock().unwrap() = Some(tx);
-        },
-    )
-    .await?
-    {
-        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
-        PauseOutcome::Resolved(decision) => decision,
+    let decision = match permission::run_gate(ctx, call, perm, emit).await? {
+        permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
+        decision => decision,
     };
+    permission::record(
+        ctx,
+        permission::Capability::Command,
+        &approval_key,
+        &command,
+        &decision,
+    );
 
-    let decision_val: serde_json::Value =
-        serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
-    let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
-    let scope = decision_val
-        .get("scope")
-        .and_then(|s| s.as_str())
-        .unwrap_or("once");
-
-    emit(AgentEvent::PermissionResolved {
-        run_id: ctx.id.to_string(),
-        request_id: request_id.clone(),
-        decision: decision_val.clone(),
-        ts: now_ms(),
-    })?;
-
-    // Remember run/project-scoped approvals so an identical command later in
-    // this run runs without re-asking.
-    if allowed && (scope == "run" || scope == "project") {
-        with_run_handle(ctx.app, ctx.id, |h| {
-            h.approved_commands
-                .lock()
-                .unwrap()
-                .insert(approval_key.clone());
-        });
-    }
-    // Project scope also persists to the on-disk project allowlist so future
-    // runs skip the prompt entirely.
-    if allowed && scope == "project" {
-        let pattern = decision_val
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&command);
-        let persisted = if pattern.contains('*') || pattern.contains('?') {
-            command_allowlist::add_rule(root_value, pattern)
-        } else {
-            command_allowlist::add(root_value, pattern)
-        };
-        if let Err(err) = persisted {
-            eprintln!("failed to persist project command allowlist: {err}");
+    let result = match decision {
+        permission::GateDecision::Approved { .. } => {
+            run_command_capture_in(root_value, &cwd, &command, timeout_secs).await
         }
-    }
-
-    let result = if allowed {
-        run_command_capture_in(root_value, &cwd, &command, timeout_secs).await
-    } else {
-        // Remember the rejection so re-proposing the same command is
-        // auto-declined instead of re-asked.
-        with_run_handle(ctx.app, ctx.id, |h| {
-            h.rejected_commands
-                .lock()
-                .unwrap()
-                .insert(approval_key.clone());
-        });
-        ToolResult {
+        _ => ToolResult {
             ok: false,
-            content: "Rejected by user: command not run. Do not propose this exact \
-command again — take a different approach or ask the user what they'd prefer."
-                .to_string(),
+            content: permission::Capability::Command.rejected_message().to_string(),
             metadata: None,
-        }
+        },
     };
     Ok(ToolOutcome::Produced(result))
 }
@@ -1085,34 +1015,26 @@ where
         Err(result) => return Ok(ToolOutcome::Produced(result)),
     };
     let target = invocation.target.clone();
-
-    let (run_ok, pre_rejected) = with_run_handle(ctx.app, ctx.id, |h| {
-        (
-            h.approved_network.lock().unwrap().contains(&target),
-            h.rejected_network.lock().unwrap().contains(&target),
-        )
-    })
-    .unwrap_or((false, false));
     let project_ok = network_allowlist::is_allowed(root_value, &target).unwrap_or(false);
 
-    if run_ok || project_ok {
-        return Ok(ToolOutcome::Produced(execute_read_only_tool(
-            root_value, call, ctx.id,
-        )));
-    }
-    if pre_rejected {
-        return Ok(ToolOutcome::Produced(ToolResult {
-            ok: false,
-            content: "You already proposed this exact network target and the user rejected it. \
-Do not use it again — take a different approach or ask the user what they'd prefer."
-                .to_string(),
-            metadata: None,
-        }));
+    match permission::precheck(ctx, permission::Capability::Network, &target, project_ok) {
+        permission::Precheck::Execute => {
+            return Ok(ToolOutcome::Produced(execute_read_only_tool(
+                root_value, call, ctx.id,
+            )));
+        }
+        permission::Precheck::AutoReject(msg) => {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: msg.to_string(),
+                metadata: None,
+            }));
+        }
+        permission::Precheck::Ask => {}
     }
 
-    let request_id = format!("perm_{}_{}", ctx.id, call.id);
     let perm = serde_json::json!({
-        "id": request_id,
+        "id": permission::request_id(ctx, call),
         "runId": ctx.id,
         "toolCallId": call.id,
         "toolName": call.name,
@@ -1127,67 +1049,25 @@ Do not use it again — take a different approach or ask the user what they'd pr
         ]
     });
 
-    let decision = match pause_for_user(
-        ctx.app,
-        ctx.id,
-        AgentRunStatus::WaitingForPermission,
-        AgentEvent::PermissionRequested {
-            run_id: ctx.id.to_string(),
-            request: perm,
-            ts: now_ms(),
-        },
-        "{\"behavior\":\"deny\"}",
-        ctx.cancel,
-        emit,
-        |handle, tx| {
-            *handle.pending_permission.lock().unwrap() = Some(tx);
-        },
-    )
-    .await?
-    {
-        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
-        PauseOutcome::Resolved(decision) => decision,
+    let decision = match permission::run_gate(ctx, call, perm, emit).await? {
+        permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
+        decision => decision,
     };
+    permission::record(
+        ctx,
+        permission::Capability::Network,
+        &target,
+        &target,
+        &decision,
+    );
 
-    let decision_val: serde_json::Value =
-        serde_json::from_str(&decision).unwrap_or(serde_json::json!({ "behavior": "deny" }));
-    let allowed = decision_val.get("behavior").and_then(|b| b.as_str()) == Some("allow");
-    let scope = decision_val
-        .get("scope")
-        .and_then(|s| s.as_str())
-        .unwrap_or("once");
-
-    emit(AgentEvent::PermissionResolved {
-        run_id: ctx.id.to_string(),
-        request_id: request_id.clone(),
-        decision: decision_val.clone(),
-        ts: now_ms(),
-    })?;
-
-    if allowed && (scope == "run" || scope == "project") {
-        with_run_handle(ctx.app, ctx.id, |h| {
-            h.approved_network.lock().unwrap().insert(target.clone());
-        });
-    }
-    if allowed && scope == "project" {
-        if let Err(err) = network_allowlist::add(root_value, &target) {
-            eprintln!("failed to persist project network allowlist: {err}");
-        }
-    }
-
-    let result = if allowed {
-        execute_read_only_tool(root_value, call, ctx.id)
-    } else {
-        with_run_handle(ctx.app, ctx.id, |h| {
-            h.rejected_network.lock().unwrap().insert(target);
-        });
-        ToolResult {
+    let result = match decision {
+        permission::GateDecision::Approved { .. } => execute_read_only_tool(root_value, call, ctx.id),
+        _ => ToolResult {
             ok: false,
-            content: "Rejected by user: network request not run. Do not propose this exact \
-network target again — take a different approach or ask the user what they'd prefer."
-                .to_string(),
+            content: permission::Capability::Network.rejected_message().to_string(),
             metadata: None,
-        }
+        },
     };
     Ok(ToolOutcome::Produced(result))
 }

@@ -46,6 +46,41 @@ impl Delegate for Codex {
         ])
     }
 
+    fn login_commands(&self) -> Vec<String> {
+        ["", " --device-auth", " --with-api-key", " --with-access-token"]
+            .iter()
+            .map(|tail| format!("codex login{tail}"))
+            .collect()
+    }
+
+    /// `codex login status` prints plain text; "logged in" anywhere in a
+    /// successful run means authenticated. stderr is the fallback channel.
+    fn check_auth(&self, command_path: &str) -> Result<(bool, String), String> {
+        let output = std::process::Command::new(command_path)
+            .args(["login", "status"])
+            .output()
+            .map_err(|e| format!("Unable to check Codex login: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let text = if stdout.is_empty() { stderr } else { stdout };
+        let connected = output.status.success() && text.to_lowercase().contains("logged in");
+        Ok((
+            connected,
+            if text.is_empty() {
+                "Unknown".to_string()
+            } else {
+                text
+            },
+        ))
+    }
+
+    fn install_paths(&self, home: &str) -> Vec<String> {
+        vec![
+            format!("{home}/.local/bin/codex"),
+            "/Applications/Codex.app/Contents/Resources/codex".to_string(),
+        ]
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let root = std::path::Path::new(home).join(".codex/sessions");
         let mut files = Vec::new();

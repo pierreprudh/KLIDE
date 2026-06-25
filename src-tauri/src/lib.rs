@@ -338,22 +338,10 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
     let command_path = resolved.as_ref().ok().cloned();
     let installed = resolved.is_ok();
 
-    let login_options = match provider.as_str() {
-        "claude-code" => vec![
-            "claude auth login --claudeai".to_string(),
-            "claude auth login --console".to_string(),
-            "claude auth login --sso".to_string(),
-            "claude setup-token".to_string(),
-        ],
-        "codex" => vec![
-            "codex login".to_string(),
-            "codex login --device-auth".to_string(),
-            "codex login --with-api-key".to_string(),
-            "codex login --with-access-token".to_string(),
-        ],
-        "opencode" => vec!["opencode".to_string()],
-        _ => Vec::new(),
-    };
+    // All per-CLI auth knowledge lives behind the Delegate seam. Every
+    // subscription provider is a delegate, so this lookup always resolves.
+    let adapter = delegate::lookup(&provider);
+    let login_options = adapter.map(|d| d.login_commands()).unwrap_or_default();
 
     if !installed {
         return Ok(AiConnectionStatus {
@@ -366,61 +354,9 @@ fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String
         });
     }
 
-    let (connected, detail) = match provider.as_str() {
-        "claude-code" => {
-            let output = Command::new(command_path.as_deref().unwrap_or(spec.cmd))
-                .args(["auth", "status"])
-                .output()
-                .map_err(|e| format!("Unable to check Claude auth: {e}"))?;
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let value = serde_json::from_str::<serde_json::Value>(&stdout).ok();
-            let logged_in = value
-                .as_ref()
-                .and_then(|v| v.get("loggedIn"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(output.status.success());
-            let method = value
-                .as_ref()
-                .and_then(|v| v.get("authMethod"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            let provider_name = value
-                .as_ref()
-                .and_then(|v| v.get("apiProvider"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            (
-                logged_in,
-                if logged_in {
-                    format!("Logged in via {method} ({provider_name})")
-                } else {
-                    "Not logged in".to_string()
-                },
-            )
-        }
-        "codex" => {
-            let output = Command::new(command_path.as_deref().unwrap_or(spec.cmd))
-                .args(["login", "status"])
-                .output()
-                .map_err(|e| format!("Unable to check Codex login: {e}"))?;
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let text = if stdout.is_empty() { stderr } else { stdout };
-            let connected = output.status.success() && text.to_lowercase().contains("logged in");
-            (
-                connected,
-                if text.is_empty() {
-                    "Unknown".to_string()
-                } else {
-                    text
-                },
-            )
-        }
-        "opencode" => (
-            true,
-            "OpenCode CLI is installed; authentication is handled by OpenCode.".to_string(),
-        ),
-        _ => (false, "Unknown provider".to_string()),
+    let (connected, detail) = match adapter {
+        Some(d) => d.check_auth(command_path.as_deref().unwrap_or(spec.cmd))?,
+        None => (false, "Unknown provider".to_string()),
     };
 
     Ok(AiConnectionStatus {
@@ -566,21 +502,17 @@ pub(crate) fn resolve_command(command: &str) -> Result<String, String> {
     }
 
     let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = match command {
-        "claude" => vec![format!("{home}/.local/bin/claude")],
-        "codex" => vec![
-            format!("{home}/.local/bin/codex"),
-            "/Applications/Codex.app/Contents/Resources/codex".to_string(),
-        ],
-        "opencode" => vec![
-            format!("{home}/.opencode/bin/opencode"),
-            format!("{home}/.local/bin/opencode"),
-        ],
-        "mlx_lm.server" => vec![
-            format!("{home}/.pyenv/shims/mlx_lm.server"),
-            format!("{home}/.local/bin/mlx_lm.server"),
-        ],
-        _ => Vec::new(),
+    // Delegate binaries keep their install-path fallbacks behind the seam;
+    // only non-delegate binaries (the MLX local server) stay tabled here.
+    let candidates = match delegate::ALL.iter().find(|d| d.binary() == command) {
+        Some(d) => d.install_paths(&home),
+        None => match command {
+            "mlx_lm.server" => vec![
+                format!("{home}/.pyenv/shims/mlx_lm.server"),
+                format!("{home}/.local/bin/mlx_lm.server"),
+            ],
+            _ => Vec::new(),
+        },
     };
     candidates
         .into_iter()

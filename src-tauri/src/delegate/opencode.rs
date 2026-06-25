@@ -91,6 +91,26 @@ impl Delegate for OpenCode {
         None
     }
 
+    /// OpenCode has no Klide-facing login command — auth is configured inside
+    /// the TUI itself. Launching it is the only "login" action we can offer.
+    fn login_commands(&self) -> Vec<String> {
+        vec!["opencode".to_string()]
+    }
+
+    fn check_auth(&self, _command_path: &str) -> Result<(bool, String), String> {
+        Ok((
+            true,
+            "OpenCode CLI is installed; authentication is handled by OpenCode.".to_string(),
+        ))
+    }
+
+    fn install_paths(&self, home: &str) -> Vec<String> {
+        vec![
+            format!("{home}/.opencode/bin/opencode"),
+            format!("{home}/.local/bin/opencode"),
+        ]
+    }
+
     /// One candidate per session row. The mtime is the session's own
     /// `time_updated` (not the DB file's mtime — they diverge while the WAL
     /// is being flushed). The key holds the session id, not a file path; the

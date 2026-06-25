@@ -42,6 +42,49 @@ impl Delegate for ClaudeCode {
         ])
     }
 
+    fn login_commands(&self) -> Vec<String> {
+        ["--claudeai", "--console", "--sso"]
+            .iter()
+            .map(|flag| format!("claude auth login {flag}"))
+            .chain(std::iter::once("claude setup-token".to_string()))
+            .collect()
+    }
+
+    /// `claude auth status` prints JSON: `{ loggedIn, authMethod, apiProvider }`.
+    fn check_auth(&self, command_path: &str) -> Result<(bool, String), String> {
+        let output = std::process::Command::new(command_path)
+            .args(["auth", "status"])
+            .output()
+            .map_err(|e| format!("Unable to check Claude auth: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let value = serde_json::from_str::<serde_json::Value>(&stdout).ok();
+        let field = |key: &str| {
+            value
+                .as_ref()
+                .and_then(|v| v.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string()
+        };
+        let logged_in = value
+            .as_ref()
+            .and_then(|v| v.get("loggedIn"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(output.status.success());
+        Ok((
+            logged_in,
+            if logged_in {
+                format!("Logged in via {} ({})", field("authMethod"), field("apiProvider"))
+            } else {
+                "Not logged in".to_string()
+            },
+        ))
+    }
+
+    fn install_paths(&self, home: &str) -> Vec<String> {
+        vec![format!("{home}/.local/bin/claude")]
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         let root = std::path::Path::new(home).join(".claude/projects");

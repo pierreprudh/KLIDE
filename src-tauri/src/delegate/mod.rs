@@ -113,6 +113,32 @@ pub trait Delegate: Sync {
     /// the same value `discover_runs` produced — a transcript path or a
     /// session id, depending on the CLI.
     fn read_run(&self, home: &str, key: &str) -> Result<Vec<RunMessage>, String>;
+
+    // ── Authentication & install (subscription status) ───────────────────
+    //
+    // How a CLI logs in, how to ask whether it's logged in, and where its
+    // binary hides when it isn't on PATH — all per-CLI knowledge, so it lives
+    // behind the seam with everything else. `ai_subscription_status` and
+    // `resolve_command` in lib.rs ask the adapter; they hold no CLI strings.
+
+    /// Shell commands the user can run to authenticate this CLI, shown when it
+    /// is installed but not logged in. Default: none — the CLI needs no login.
+    fn login_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether the CLI is currently authenticated, plus a human detail line.
+    /// `command_path` is the resolved binary to invoke. Default: a CLI with no
+    /// login is usable as soon as it is installed (OpenCode's posture).
+    fn check_auth(&self, _command_path: &str) -> Result<(bool, String), String> {
+        Ok((true, format!("{} CLI is installed.", self.binary())))
+    }
+
+    /// Absolute paths to probe when the binary isn't found on PATH. `home` is
+    /// the user's home dir. Default: none — PATH is expected to be enough.
+    fn install_paths(&self, _home: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Parses one delegate's run candidates into board rows. Holding this as a
@@ -230,6 +256,49 @@ mod tests {
     #[test]
     fn unknown_provider_has_no_adapter() {
         assert!(lookup("gemini-cli").is_none());
+    }
+
+    #[test]
+    fn login_commands_per_cli() {
+        // Same spirit as the resume matrix: these strings are surfaced to the
+        // user verbatim and used to drive auth, so pin them.
+        assert_eq!(
+            ClaudeCode.login_commands(),
+            vec![
+                "claude auth login --claudeai",
+                "claude auth login --console",
+                "claude auth login --sso",
+                "claude setup-token",
+            ]
+        );
+        assert_eq!(
+            Codex.login_commands(),
+            vec![
+                "codex login",
+                "codex login --device-auth",
+                "codex login --with-api-key",
+                "codex login --with-access-token",
+            ]
+        );
+        assert_eq!(OpenCode.login_commands(), vec!["opencode"]);
+        // Omp is not a subscription CLI — the default (no login) applies.
+        assert!(Omp.login_commands().is_empty());
+    }
+
+    #[test]
+    fn install_paths_cover_delegate_binaries() {
+        let home = "/home/u";
+        assert_eq!(
+            ClaudeCode.install_paths(home),
+            vec!["/home/u/.local/bin/claude"]
+        );
+        assert_eq!(
+            OpenCode.install_paths(home),
+            vec!["/home/u/.opencode/bin/opencode", "/home/u/.local/bin/opencode"]
+        );
+        assert!(Codex
+            .install_paths(home)
+            .contains(&"/Applications/Codex.app/Contents/Resources/codex".to_string()));
     }
 
     #[test]
