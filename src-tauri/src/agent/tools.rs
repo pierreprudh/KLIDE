@@ -828,9 +828,131 @@ pub fn recover_text_tool_calls(content: &str) -> (Vec<NormalizedToolCall>, Strin
     }
     cleaned.push_str(rest);
     if calls.is_empty() {
-        return recover_applied_tool_call_text(content);
+        let (applied, applied_cleaned) = recover_applied_tool_call_text(content);
+        if !applied.is_empty() {
+            return (applied, applied_cleaned);
+        }
+        return recover_json_action_calls(content);
     }
     (calls, cleaned.trim().to_string())
+}
+
+/// Last-resort recovery for the bare JSON "action" shape some small models
+/// (notably LFM2.5) fall into when they drop out of native tool-calling:
+///
+/// ```json
+/// { "action": "read_file", "path": "./README.md" }
+/// ```
+///
+/// The tool is named by an `action` / `tool` / `tool_name` key (or a `name`
+/// key paired with `arguments`), and the arguments are either an explicit
+/// `action_input` / `arguments` / `parameters` / `input` object or the object's
+/// remaining sibling keys. Scans the content for balanced top-level `{…}`
+/// objects, converts every action-shaped one to a call, and returns the content
+/// with those objects stripped. Anything that isn't an action object (ordinary
+/// prose, JSON the model wrote as an answer) is left untouched.
+fn recover_json_action_calls(content: &str) -> (Vec<NormalizedToolCall>, String) {
+    let bytes = content.as_bytes();
+    let mut calls = Vec::new();
+    let mut cleaned = String::new();
+    let mut last_kept = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            if let Some(end) = balanced_object_end(content, i) {
+                if let Some((name, input)) = json_action_call(&content[i..end]) {
+                    cleaned.push_str(&content[last_kept..i]);
+                    calls.push(NormalizedToolCall {
+                        id: format!("tool_{}", calls.len()),
+                        name,
+                        input,
+                    });
+                    last_kept = end;
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    if calls.is_empty() {
+        return (Vec::new(), content.to_string());
+    }
+    cleaned.push_str(&content[last_kept..]);
+    (calls, cleaned.trim().to_string())
+}
+
+/// Byte offset just past the `}` that closes the object opened at `start`,
+/// respecting strings and escapes. `None` if the braces never balance.
+fn balanced_object_end(s: &str, start: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    for i in start..bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+        } else {
+            match c {
+                b'"' => in_str = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Parse one balanced JSON object as an action-shaped tool call, or `None` if
+/// it doesn't carry a tool name.
+fn json_action_call(slice: &str) -> Option<(String, serde_json::Value)> {
+    const NAME_KEYS: [&str; 3] = ["action", "tool", "tool_name"];
+    const ARG_KEYS: [&str; 4] = ["action_input", "arguments", "parameters", "input"];
+    let value: serde_json::Value = serde_json::from_str(slice).ok()?;
+    let obj = value.as_object()?;
+    let (name_key, name) = NAME_KEYS
+        .iter()
+        .find_map(|k| obj.get(*k).and_then(|v| v.as_str()).map(|s| (*k, s)))
+        .or_else(|| {
+            // Structured {"name":…,"arguments":…} emitted without the special
+            // tokens — only treat `name` as the tool when args accompany it,
+            // so plain prose objects with a "name" field aren't hijacked.
+            (obj.contains_key("arguments") || obj.contains_key("parameters"))
+                .then(|| obj.get("name").and_then(|v| v.as_str()).map(|s| ("name", s)))
+                .flatten()
+        })?;
+    if name.is_empty() {
+        return None;
+    }
+    let input = ARG_KEYS
+        .iter()
+        .find_map(|k| obj.get(*k))
+        .filter(|v| v.is_object())
+        .cloned()
+        .unwrap_or_else(|| {
+            let mut m = serde_json::Map::new();
+            for (k, v) in obj {
+                if k == name_key || ARG_KEYS.contains(&k.as_str()) {
+                    continue;
+                }
+                m.insert(k.clone(), v.clone());
+            }
+            serde_json::Value::Object(m)
+        });
+    Some((name.to_string(), input))
 }
 
 fn recover_applied_tool_call_text(content: &str) -> (Vec<NormalizedToolCall>, String) {
@@ -2558,6 +2680,53 @@ mod tests {
     #[test]
     fn no_recovery_for_plain_content() {
         let content = "Just a normal answer with no tool calls.";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert!(calls.is_empty());
+        assert_eq!(cleaned, content);
+    }
+
+    #[test]
+    fn recovers_bare_json_action_object() {
+        // The shape LFM2.5 leaks: action names the tool, args are siblings.
+        let content = "{\n\"action\": \"read_file\",\n\"path\": \"./src/components/Tabs.tsx\"\n}";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(
+            calls[0].input,
+            serde_json::json!({ "path": "./src/components/Tabs.tsx" })
+        );
+        assert_eq!(cleaned, "");
+    }
+
+    #[test]
+    fn recovers_json_action_amid_prose_with_trailing_noise() {
+        // A trailing `?` (model unsure) must not defeat the balanced-brace scan,
+        // and surrounding prose is preserved.
+        let content = "Let me look at the readme.\n{ \"action\": \"read_file\", \"path\": \"./README.md\" } ?";
+        let (calls, cleaned) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].input, serde_json::json!({ "path": "./README.md" }));
+        assert_eq!(cleaned, "Let me look at the readme.\n ?");
+    }
+
+    #[test]
+    fn recovers_json_action_with_nested_action_input() {
+        let content = "{\"action\":\"grep\",\"action_input\":{\"query\":\"export default\",\"path\":\"src\"}}";
+        let (calls, _) = recover_text_tool_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(
+            calls[0].input,
+            serde_json::json!({ "query": "export default", "path": "src" })
+        );
+    }
+
+    #[test]
+    fn json_object_without_action_key_is_left_as_prose() {
+        // A plain JSON object the model wrote as an *answer* must not be hijacked.
+        let content = "Here is the config: { \"port\": 8080, \"host\": \"localhost\" }";
         let (calls, cleaned) = recover_text_tool_calls(content);
         assert!(calls.is_empty());
         assert_eq!(cleaned, content);

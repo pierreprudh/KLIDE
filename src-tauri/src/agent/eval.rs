@@ -17,12 +17,12 @@
 
 #![cfg(test)]
 
+use super::run_core::{assistant_provider_message, tool_provider_message};
 use super::tools::{
     apply_write, execute_read_only_tool, execute_write_tool_preview, find_tool_kind_for_workspace,
     parse_tool_calls, run_command_capture, NormalizedToolCall, ToolKind,
 };
 use super::types::ToolResult;
-use super::{assistant_provider_message, tool_provider_message};
 
 /// One scripted tool call. `write_file` / `create_file` are auto-applied (the
 /// eval stands in for the user approving the diff); `run_command` is run

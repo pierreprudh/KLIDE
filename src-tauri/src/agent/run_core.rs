@@ -5,7 +5,12 @@
 //! TODO context refresh, and token-budget compaction.
 
 use super::todo;
-use super::types::{AgentAttachment, AgentMode, StartRunRequest};
+use super::tools::{
+    clean_context_ids, parse_tool_calls, recover_text_tool_calls, tool_allowed_in_mode,
+    tool_kind_label, NormalizedToolCall, ToolKind,
+};
+use super::types::{AgentAttachment, AgentContentBlock, AgentMode, StartRunRequest, ToolResult};
+use crate::AiChatResponse;
 
 /// The handful of provider quirks the run loop's behavior depends on, gathered
 /// in one place so the loop asks about a capability instead of comparing
@@ -61,6 +66,32 @@ pub(super) fn compaction_system_message(summary: &str) -> serde_json::Value {
     })
 }
 
+pub(super) fn assistant_provider_message(
+    content: &str,
+    raw_tool_calls: &[serde_json::Value],
+) -> serde_json::Value {
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": content,
+    });
+    if !raw_tool_calls.is_empty() {
+        message["tool_calls"] = serde_json::Value::Array(raw_tool_calls.to_vec());
+    }
+    message
+}
+
+pub(super) fn tool_provider_message(
+    call: &NormalizedToolCall,
+    result: &ToolResult,
+) -> serde_json::Value {
+    serde_json::json!({
+        "role": "tool",
+        "content": result.content,
+        "name": call.name,
+        "tool_call_id": call.id,
+    })
+}
+
 pub(super) fn provider_messages(
     request: &StartRunRequest,
     system: String,
@@ -111,6 +142,226 @@ pub(super) fn refresh_todo_context(messages: &mut [serde_json::Value], todo_text
             msg["content"] = todo_context_message(todo_text)["content"].clone();
             break;
         }
+    }
+}
+
+/// The pure outcome of interpreting one assistant turn's provider response —
+/// the heart of the run loop with every Tauri / channel / filesystem
+/// dependency stripped out. `decide_turn` decides whether the model produced a
+/// final answer or wants to call tools, and assembles the exact content blocks
+/// the loop emits.
+pub(super) enum TurnDecision {
+    /// The model produced a tool-free answer — the run is complete. `content`
+    /// is the finalized `AssistantMessage` body: thinking promoted to the
+    /// answer when `content` was empty (otherwise preserved as its own block),
+    /// with the truncation notice appended when the provider cut the reply off.
+    Final { content: Vec<AgentContentBlock> },
+    /// The model requested one or more tools. `content` is the assistant body
+    /// (thinking + text + tool-call blocks); `tool_calls` are the normalized,
+    /// id-stamped calls the loop executes in order.
+    Continue {
+        content: Vec<AgentContentBlock>,
+        tool_calls: Vec<NormalizedToolCall>,
+    },
+}
+
+/// One turn's decision plus the provider-wire assistant message the loop pushes
+/// into `messages` (so the next turn replays this turn's reasoning + tool
+/// calls). The loop pushes `assistant_message`, then acts on `decision`.
+pub(super) struct TurnStep {
+    pub(super) assistant_message: serde_json::Value,
+    pub(super) decision: TurnDecision,
+}
+
+/// Interpret one assistant turn purely: normalize tool calls (including the
+/// text-embedded recovery path for local models that narrate calls instead of
+/// emitting the structured field), stamp fallback ids unique across the run,
+/// and assemble the content blocks. `prior_turns` + `turn` only feed the id
+/// stamping; everything else is derived from `response`.
+pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: usize) -> TurnStep {
+    let mut tool_calls = parse_tool_calls(&response.tool_calls);
+    let mut raw_tool_calls = response.tool_calls.clone();
+    let mut content_text = response.content.clone();
+    let mut thinking_text = response.thinking.clone();
+    // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
+    // `<|tool_call_start|>...<|tool_call_end|>` text instead of the structured
+    // field — and route that text into either the content or thinking channel.
+    if tool_calls.is_empty() {
+        let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
+        if recovered.is_empty() {
+            if let Some(th) = thinking_text.as_deref() {
+                let (rt, cleaned_thinking) = recover_text_tool_calls(th);
+                if !rt.is_empty() {
+                    recovered = rt;
+                    cleaned_content = content_text.clone();
+                    thinking_text = if cleaned_thinking.is_empty() {
+                        None
+                    } else {
+                        Some(cleaned_thinking)
+                    };
+                }
+            }
+        }
+        if !recovered.is_empty() {
+            raw_tool_calls = recovered
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "function": { "name": c.name, "arguments": c.input }
+                    })
+                })
+                .collect();
+            tool_calls = recovered;
+            content_text = cleaned_content;
+        }
+    }
+
+    // Fallback ids ("tool_<idx>") are only unique within one response —
+    // stamp the turn so ids stay unique across the whole run.
+    let turn_label = prior_turns + turn;
+    for call in tool_calls.iter_mut() {
+        if call.id.starts_with("tool_") {
+            call.id = format!("turn{turn_label}_{}", call.id);
+        }
+    }
+    let tool_calls = tool_calls;
+    let assistant_message = assistant_provider_message(&content_text, &raw_tool_calls);
+
+    if tool_calls.is_empty() {
+        let mut content = Vec::new();
+        let thinking = thinking_text.filter(|t| !t.trim().is_empty());
+        let mut answer_text = if content_text.trim().is_empty() {
+            thinking.clone().unwrap_or_default()
+        } else {
+            if let Some(t) = thinking.clone() {
+                content.push(AgentContentBlock::Thinking { text: t });
+            }
+            content_text.clone()
+        };
+        if response.stop_reason.as_deref() == Some("length") {
+            answer_text.push_str(
+                "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
+mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
+conversation, then ask again._",
+            );
+        }
+        content.push(AgentContentBlock::Text { text: answer_text });
+        TurnStep {
+            assistant_message,
+            decision: TurnDecision::Final { content },
+        }
+    } else {
+        let mut content = Vec::new();
+        if let Some(t) = thinking_text.as_deref() {
+            if !t.trim().is_empty() {
+                content.push(AgentContentBlock::Thinking {
+                    text: t.to_string(),
+                });
+            }
+        }
+        if !content_text.trim().is_empty() {
+            content.push(AgentContentBlock::Text {
+                text: content_text.clone(),
+            });
+        }
+        for call in &tool_calls {
+            content.push(AgentContentBlock::ToolCall {
+                tool_call_id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            });
+        }
+        TurnStep {
+            assistant_message,
+            decision: TurnDecision::Continue {
+                content,
+                tool_calls,
+            },
+        }
+    }
+}
+
+/// Pure plan for one tool call after the loop has resolved the call's kind.
+/// Execution stays in `mod.rs`; this only answers whether the call should run
+/// or be rejected because its capability is outside the current mode.
+pub(super) enum ToolStepPlan {
+    Execute { kind: Option<ToolKind> },
+    Blocked { result: ToolResult },
+}
+
+pub(super) fn plan_tool_step(
+    mode: &AgentMode,
+    call: &NormalizedToolCall,
+    kind: Option<ToolKind>,
+) -> ToolStepPlan {
+    if let Some(kind) = kind {
+        if !tool_allowed_in_mode(mode, kind) {
+            return ToolStepPlan::Blocked {
+                result: ToolResult {
+                    ok: false,
+                    content: format!(
+                        "Tool '{}' has {} capability and is not available in {:?} mode.",
+                        call.name,
+                        tool_kind_label(kind),
+                        mode
+                    ),
+                    metadata: None,
+                },
+            };
+        }
+    }
+    ToolStepPlan::Execute { kind }
+}
+
+/// Choose the read-only calls worth precomputing in parallel. This is pure over
+/// the call list: no threads, no filesystem, and no event emission.
+pub(super) fn parallel_read_calls<F>(
+    calls: &[NormalizedToolCall],
+    workspace_root: Option<&str>,
+    max_parallel: usize,
+    mut kind_for: F,
+) -> Vec<NormalizedToolCall>
+where
+    F: FnMut(&NormalizedToolCall, Option<&str>) -> Option<ToolKind>,
+{
+    if max_parallel <= 1 || workspace_root.is_none() {
+        return Vec::new();
+    }
+    let reads: Vec<NormalizedToolCall> = calls
+        .iter()
+        .filter(|call| matches!(kind_for(call, workspace_root), Some(ToolKind::ReadOnly)))
+        .cloned()
+        .collect();
+    if reads.len() > 1 {
+        reads
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn clean_context_request(call: &NormalizedToolCall) -> Option<Vec<String>> {
+    if call.name != "clean_context" {
+        return None;
+    }
+    Some(
+        call.input
+            .get("ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+pub(super) fn apply_clean_context_if_requested(
+    call: &NormalizedToolCall,
+    messages: &mut Vec<serde_json::Value>,
+) {
+    if let Some(ids) = clean_context_request(call) {
+        clean_context_ids(&ids, messages);
     }
 }
 
@@ -266,5 +517,131 @@ mod tests {
             assert!(caps.structured_replay, "{id}");
             assert!(!caps.minimal_chat_context, "{id}");
         }
+    }
+
+    fn call(name: &str) -> NormalizedToolCall {
+        NormalizedToolCall {
+            id: format!("call_{name}"),
+            name: name.to_string(),
+            input: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn plan_tool_step_blocks_every_known_tool_in_chat_mode() {
+        match plan_tool_step(
+            &AgentMode::Chat,
+            &call("read_file"),
+            Some(ToolKind::ReadOnly),
+        ) {
+            ToolStepPlan::Blocked { result } => {
+                assert!(!result.ok);
+                assert!(result.content.contains("not available in Chat mode"));
+                assert!(result.content.contains("read workspace"));
+            }
+            ToolStepPlan::Execute { .. } => panic!("chat mode must not execute tools"),
+        }
+    }
+
+    #[test]
+    fn plan_tool_step_allows_read_only_tools_in_plan_mode() {
+        match plan_tool_step(
+            &AgentMode::Plan,
+            &call("read_file"),
+            Some(ToolKind::ReadOnly),
+        ) {
+            ToolStepPlan::Execute { kind } => assert_eq!(kind, Some(ToolKind::ReadOnly)),
+            ToolStepPlan::Blocked { result } => panic!("read-only tool was blocked: {result:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_tool_step_blocks_commands_in_plan_mode() {
+        match plan_tool_step(
+            &AgentMode::Plan,
+            &call("run_command"),
+            Some(ToolKind::Command),
+        ) {
+            ToolStepPlan::Blocked { result } => {
+                assert!(!result.ok);
+                assert!(result.content.contains("run command"));
+                assert!(result.content.contains("Plan mode"));
+            }
+            ToolStepPlan::Execute { .. } => panic!("plan mode must not execute commands"),
+        }
+    }
+
+    #[test]
+    fn plan_tool_step_allows_goal_capabilities() {
+        for kind in [
+            ToolKind::ReadOnly,
+            ToolKind::Write,
+            ToolKind::Command,
+            ToolKind::Pause,
+            ToolKind::Network,
+        ] {
+            match plan_tool_step(&AgentMode::Goal, &call("tool"), Some(kind)) {
+                ToolStepPlan::Execute { kind: actual } => assert_eq!(actual, Some(kind)),
+                ToolStepPlan::Blocked { result } => {
+                    panic!("goal capability was blocked: {result:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plan_tool_step_preserves_unknown_tool_path() {
+        match plan_tool_step(&AgentMode::Goal, &call("made_up"), None) {
+            ToolStepPlan::Execute { kind } => assert_eq!(kind, None),
+            ToolStepPlan::Blocked { .. } => panic!("unknown tools should reach normal execution"),
+        }
+    }
+
+    #[test]
+    fn parallel_read_calls_selects_only_read_batch_when_useful() {
+        let calls = vec![call("read_a"), call("write_a"), call("read_b")];
+        let selected = parallel_read_calls(&calls, Some("/workspace"), 3, |call, _root| {
+            if call.name.starts_with("read") {
+                Some(ToolKind::ReadOnly)
+            } else {
+                Some(ToolKind::Write)
+            }
+        });
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].name, "read_a");
+        assert_eq!(selected[1].name, "read_b");
+
+        assert!(
+            parallel_read_calls(&calls, Some("/workspace"), 1, |_call, _root| {
+                Some(ToolKind::ReadOnly)
+            })
+            .is_empty()
+        );
+        assert!(
+            parallel_read_calls(&calls, None, 3, |_call, _root| { Some(ToolKind::ReadOnly) })
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn clean_context_request_extracts_ids_and_apply_cleans_messages() {
+        let clean = NormalizedToolCall {
+            id: "clean".to_string(),
+            name: "clean_context".to_string(),
+            input: serde_json::json!({ "ids": ["a", "missing"] }),
+        };
+        assert_eq!(
+            clean_context_request(&clean).as_deref(),
+            Some(&["a".to_string(), "missing".to_string()][..])
+        );
+
+        let mut messages = vec![
+            serde_json::json!({ "role": "tool", "tool_call_id": "a", "name": "grep", "content": "noisy result" }),
+            serde_json::json!({ "role": "tool", "tool_call_id": "b", "name": "read_file", "content": "keep me" }),
+        ];
+        apply_clean_context_if_requested(&clean, &mut messages);
+        assert_eq!(messages[0]["content"], "[cleaned: grep]");
+        assert!(messages[0].get("name").is_none());
+        assert_eq!(messages[1]["content"], "keep me");
     }
 }

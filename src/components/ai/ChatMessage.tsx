@@ -15,37 +15,28 @@ function normalizeThinking(text: string): string {
 
 function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }) {
   return (
-    <details
-      open={streaming}
-      style={{
-        margin: "0 0 8px",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        background: "color-mix(in srgb, var(--bg-elevated) 50%, var(--bg))",
-        overflow: "hidden",
-      }}
-    >
+    <details open={streaming} className="klide-think" style={{ margin: "2px 0 6px" }}>
       <summary
         style={{
-          display: "flex",
+          display: "inline-flex",
           alignItems: "center",
           gap: 7,
-          padding: "6px 10px",
+          padding: "1px 0",
           cursor: "pointer",
           listStyle: "none",
           userSelect: "none",
-          color: "var(--fg-subtle)",
+          color: "var(--fg-dim)",
         }}
       >
         <span
           aria-hidden
           style={{
-            width: 6,
-            height: 6,
+            width: 5,
+            height: 5,
             borderRadius: "50%",
-            background: streaming ? "var(--accent)" : "var(--fg-dim)",
+            background: streaming ? "var(--accent)" : "currentColor",
             boxShadow: streaming
-              ? "0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent)"
+              ? "0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent)"
               : "none",
             animation: streaming
               ? "klide-pulse 1.6s ease-in-out infinite"
@@ -66,13 +57,13 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
         </span>
         <span
           aria-hidden
+          className="klide-think-chev"
           style={{
-            marginLeft: "auto",
             width: 8,
             height: 8,
             display: "grid",
             placeItems: "center",
-            color: "var(--fg-dim)",
+            opacity: 0.7,
             transition: "transform var(--motion-fast) var(--ease-out)",
           }}
         >
@@ -83,12 +74,12 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
       </summary>
       <div
         style={{
-          padding: "6px 12px 10px",
+          margin: "5px 0 2px",
+          paddingLeft: 11,
+          borderLeft: "1px solid var(--border)",
           fontSize: 12,
           lineHeight: 1.6,
           color: "var(--fg-subtle)",
-          borderTop: "1px solid var(--border)",
-          background: "color-mix(in srgb, var(--bg) 70%, transparent)",
         }}
       >
         {renderMarkdown(normalizeThinking(text))}

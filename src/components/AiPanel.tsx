@@ -19,7 +19,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission } from "../agent/client";
+import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints } from "../agent/client";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
@@ -498,6 +498,17 @@ export function AiPanel({
   const [serverRunning, setServerRunning] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  // Distinct files this run has written, so the composer can offer a one-click
+  // "undo what this run did" without a round-trip to Mission Control. Reset
+  // when the conversation changes (a loaded-from-history run reverts via the
+  // CheckpointPanel instead). Set is the source of truth; count drives render.
+  const runChangedPathsRef = useRef<Set<string>>(new Set());
+  const [revertableFiles, setRevertableFiles] = useState(0);
+  const [reverting, setReverting] = useState(false);
+  // Set when the user hits Stop while a local server is still warming up —
+  // there is no harness run to abort yet, so we flag the pending send to bail
+  // once the server is ready instead of launching a turn they backed out of.
+  const cancelledWarmupRef = useRef(false);
   const [serverRefresh] = useState(0);
   const [agentMode, setAgentMode] = useState<AgentMode>(
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
@@ -1182,6 +1193,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   function stopCurrentStream() {
+    // Stop pressed during warm-up: no harness run exists yet, so flag the
+    // pending send to bail once the server is ready (see send()).
+    if (serverStarting) cancelledWarmupRef.current = true;
     abortActiveHarnessRun();
     if (providerDelegatesWork) { void invoke("delegate_pty_stop", { sessionId: `${currentId}:${provider}` }); }
     // Bump the queue generation so any in-flight runProcessQueue sees its
@@ -1196,6 +1210,44 @@ This user request requires workspace inspection. Before answering, you MUST call
     setPendingQuestion(null);
     setPendingPermission(null);
     setQuestionAnswer("");
+  }
+
+  // Switching conversations (or loading one from history) starts a fresh
+  // revert scope — the previous run's changes are no longer "what I just did".
+  useEffect(() => {
+    runChangedPathsRef.current = new Set();
+    setRevertableFiles(0);
+  }, [currentId]);
+
+  // One-click undo of every file this run wrote, then re-sync the open editors
+  // and workbench to the reverted on-disk state. `revertRunCheckpoints` rolls
+  // the run's whole checkpoint set back; the per-file/per-turn granularity
+  // still lives in the Mission Control CheckpointPanel.
+  async function revertThisRun() {
+    const count = revertableFiles;
+    if (count === 0 || reverting) return;
+    if (!window.confirm(`Revert ${count} file change${count === 1 ? "" : "s"} this run made?`)) return;
+    const paths = Array.from(runChangedPathsRef.current);
+    setReverting(true);
+    try {
+      await revertRunCheckpoints(currentId);
+      runChangedPathsRef.current = new Set();
+      setRevertableFiles(0);
+      if (workspaceRoot && onFileWritten) {
+        for (const p of paths) {
+          try {
+            onFileWritten(p, await readWorkspaceTextFile(workspaceRoot, p));
+          } catch {
+            /* the run created this file → it's gone again after revert */
+          }
+        }
+      }
+      onWorkspaceChanged?.();
+    } catch (e) {
+      console.error("Failed to revert run:", e);
+    } finally {
+      setReverting(false);
+    }
   }
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1996,6 +2048,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           break;
         }
         case "file_changed": {
+          runChangedPathsRef.current.add(event.path);
+          setRevertableFiles(runChangedPathsRef.current.size);
           if (workspaceRoot && onFileWritten) {
             void (async () => {
               try {
@@ -2344,7 +2398,10 @@ This user request requires workspace inspection. Before answering, you MUST call
       await invoke("delegate_pty_write", { sessionId: `${currentId}:${provider}`, data: `${text}\r` });
       return;
     }
+    cancelledWarmupRef.current = false;
     if (!(await ensureLocalServerReady())) return;
+    // User hit Stop while the server was warming up — back out before launching.
+    if (cancelledWarmupRef.current) { cancelledWarmupRef.current = false; return; }
     const requestedMode = opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const availableMode: AgentMode =
       !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
@@ -3071,6 +3128,23 @@ This user request requires workspace inspection. Before answering, you MUST call
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{modeFlash.text}</span>
           </div>
         )}
+        {!streaming && revertableFiles > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 4px 6px", fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              This run changed {revertableFiles} file{revertableFiles === 1 ? "" : "s"}
+            </span>
+            <button type="button" onClick={() => void revertThisRun()} disabled={reverting}
+              title="Undo every file change this run made"
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--danger, #B42318)", background: "transparent", color: "var(--danger, #B42318)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: reverting ? "default" : "pointer", opacity: reverting ? 0.6 : 1, transition: "background var(--motion-fast) var(--ease-out)" }}
+              onMouseEnter={(e) => { if (!reverting) e.currentTarget.style.background = "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-3" />
+              </svg>
+              {reverting ? "Reverting…" : "Revert"}
+            </button>
+          </div>
+        )}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
@@ -3121,7 +3195,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               else if (e.key === "Tab" && !providerDelegatesWork) { e.preventDefault(); toggleMode(); }
-              else if (e.key === "Escape" && streaming) { e.preventDefault(); stopCurrentStream(); }
+              else if (e.key === "Escape" && (streaming || serverStarting)) { e.preventDefault(); stopCurrentStream(); }
             }}
             onFocus={() => { setComposerFocused(true); }}
             onBlur={() => { setComposerFocused(false); setMention(null); setSlash(null); }}
@@ -3335,8 +3409,8 @@ This user request requires workspace inspection. Before answering, you MUST call
                   document.body
                 )}
               </button>
-            {streaming ? (
-              <button onClick={stopCurrentStream} aria-label="Stop generation" title="Stop (Esc)"
+            {streaming || serverStarting ? (
+              <button onClick={stopCurrentStream} aria-label="Stop generation" title={serverStarting ? "Cancel (Esc)" : "Stop (Esc)"}
                 style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border)", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}>

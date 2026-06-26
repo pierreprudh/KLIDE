@@ -12,22 +12,24 @@ pub mod types;
 #[cfg(test)]
 use self::run_core::KEEP_RECENT_TOOL_RESULTS;
 use self::run_core::{
-    append_attachments, compact_old_tool_results, compaction_system_message, compaction_threshold,
-    estimate_prompt_tokens, provider_messages, refresh_todo_context, ProviderCaps,
+    append_attachments, apply_clean_context_if_requested, assistant_provider_message,
+    compact_old_tool_results, compaction_system_message, compaction_threshold, decide_turn,
+    estimate_prompt_tokens, parallel_read_calls, plan_tool_step, provider_messages,
+    refresh_todo_context, tool_provider_message, ProviderCaps, ToolStepPlan, TurnDecision,
+    TurnStep,
 };
 use self::tools::{
-    apply_write, clean_context_ids, clear_run_snapshots, dynamic_tool_command,
-    execute_read_only_tool, execute_write_tool_preview, find_tool_kind_for_workspace,
-    parse_tool_calls, preflight_command, recover_text_tool_calls, run_command_capture,
-    run_command_capture_in, schemas_for_mode, tool_allowed_in_mode, tool_kind_label,
-    tool_summary_for_workspace, NormalizedToolCall, ToolKind,
+    apply_write, clear_run_snapshots, dynamic_tool_command, execute_read_only_tool,
+    execute_write_tool_preview, find_tool_kind_for_workspace, preflight_command,
+    run_command_capture, run_command_capture_in, schemas_for_mode, tool_summary_for_workspace,
+    NormalizedToolCall, ToolKind,
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
     write_summary,
 };
 use self::types::{
-    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
+    AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentRunStatus,
     AgentRunSummary, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest, StartRunRequest,
     StartRunResponse, SubmitUserTurnRequest, ToolResult,
 };
@@ -206,29 +208,6 @@ fn snapshot_for(request: &StartRunRequest) -> AgentContextSnapshot {
             estimated_tokens: 0,
             omitted: Vec::new(),
         })
-}
-
-fn assistant_provider_message(
-    content: &str,
-    raw_tool_calls: &[serde_json::Value],
-) -> serde_json::Value {
-    let mut message = serde_json::json!({
-        "role": "assistant",
-        "content": content,
-    });
-    if !raw_tool_calls.is_empty() {
-        message["tool_calls"] = serde_json::Value::Array(raw_tool_calls.to_vec());
-    }
-    message
-}
-
-fn tool_provider_message(call: &NormalizedToolCall, result: &ToolResult) -> serde_json::Value {
-    serde_json::json!({
-        "role": "tool",
-        "content": result.content,
-        "name": call.name,
-        "tool_call_id": call.id,
-    })
 }
 
 /// Replay a prior run's transcript back into provider-shaped messages so
@@ -485,18 +464,6 @@ fn no_workspace_result() -> ToolResult {
         ok: false,
         content: "Error: no workspace folder is open. Ask the user to open one before using tools."
             .to_string(),
-        metadata: None,
-    }
-}
-
-fn tool_not_allowed_result(mode: &AgentMode, name: &str, kind: ToolKind) -> ToolResult {
-    ToolResult {
-        ok: false,
-        content: format!(
-            "Tool '{name}' has {} capability and is not available in {:?} mode.",
-            tool_kind_label(kind),
-            mode
-        ),
         metadata: None,
     }
 }
@@ -1320,169 +1287,6 @@ pub async fn agent_start_run(
     Ok(StartRunResponse { run_id: id })
 }
 
-/// The pure outcome of interpreting one assistant turn's provider response —
-/// the heart of the run loop with every Tauri / channel / filesystem
-/// dependency stripped out. `decide_turn` decides whether the model produced a
-/// final answer or wants to call tools, and assembles the exact content blocks
-/// the loop emits. Keeping the decision pure makes it unit-testable without
-/// standing up a supervisor or an app handle.
-enum TurnDecision {
-    /// The model produced a tool-free answer — the run is complete. `content`
-    /// is the finalized `AssistantMessage` body: thinking promoted to the
-    /// answer when `content` was empty (otherwise preserved as its own block),
-    /// with the truncation notice appended when the provider cut the reply off.
-    Final { content: Vec<AgentContentBlock> },
-    /// The model requested one or more tools. `content` is the assistant body
-    /// (thinking + text + tool-call blocks); `tool_calls` are the normalized,
-    /// id-stamped calls the loop executes in order.
-    Continue {
-        content: Vec<AgentContentBlock>,
-        tool_calls: Vec<NormalizedToolCall>,
-    },
-}
-
-/// One turn's decision plus the provider-wire assistant message the loop pushes
-/// into `messages` (so the next turn replays this turn's reasoning + tool
-/// calls). The loop pushes `assistant_message`, then acts on `decision`.
-struct TurnStep {
-    assistant_message: serde_json::Value,
-    decision: TurnDecision,
-}
-
-/// Interpret one assistant turn purely: normalize tool calls (including the
-/// text-embedded recovery path for local models that narrate calls instead of
-/// emitting the structured field), stamp fallback ids unique across the run,
-/// and assemble the content blocks. `prior_turns` + `turn` only feed the id
-/// stamping; everything else is derived from `response`.
-fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: usize) -> TurnStep {
-    let mut tool_calls = parse_tool_calls(&response.tool_calls);
-    let mut raw_tool_calls = response.tool_calls.clone();
-    let mut content_text = response.content.clone();
-    let mut thinking_text = response.thinking.clone();
-    // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
-    // `<|tool_call_start|>…<|tool_call_end|>` text instead of the structured
-    // field — and route that text into *either* the content or the
-    // reasoning/thinking channel (LFM2.5 emits into thinking). Scan the
-    // content first, then the thinking, so the call is recovered wherever
-    // it lands. Only attempt it when the structured field came back empty
-    // so we never second-guess a well-behaved provider.
-    if tool_calls.is_empty() {
-        let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
-        if recovered.is_empty() {
-            if let Some(th) = thinking_text.as_deref() {
-                let (rt, cleaned_thinking) = recover_text_tool_calls(th);
-                if !rt.is_empty() {
-                    recovered = rt;
-                    cleaned_content = content_text.clone();
-                    thinking_text = if cleaned_thinking.is_empty() {
-                        None
-                    } else {
-                        Some(cleaned_thinking)
-                    };
-                }
-            }
-        }
-        if !recovered.is_empty() {
-            // Synthesize a structured tool_calls payload so the assistant
-            // turn we replay back to the model is coherent (tool call →
-            // tool result), and strip the raw tokens from the content.
-            raw_tool_calls = recovered
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "function": { "name": c.name, "arguments": c.input }
-                    })
-                })
-                .collect();
-            tool_calls = recovered;
-            content_text = cleaned_content;
-        }
-    }
-    // Fallback ids ("tool_<idx>") are only unique within one response —
-    // stamp the turn so ids stay unique across the whole run (checkpoints
-    // and the frontend reducer key on them). Offset by the turns already on
-    // disk so follow-up turns in a reused conversation don't reuse an id
-    // from an earlier turn and clobber its checkpoint file.
-    let turn_label = prior_turns + turn;
-    for call in tool_calls.iter_mut() {
-        if call.id.starts_with("tool_") {
-            call.id = format!("turn{turn_label}_{}", call.id);
-        }
-    }
-    let tool_calls = tool_calls;
-    let assistant_message = assistant_provider_message(&content_text, &raw_tool_calls);
-
-    if tool_calls.is_empty() {
-        let mut content = Vec::new();
-        // Thinking models (LFM2.5) can route the entire final answer into
-        // the reasoning channel and leave `content` empty. An empty answer
-        // helps no one and renders as an open "thought process" with no
-        // body — so when content is empty, promote the thinking to the
-        // answer. Models that separate reasoning from answer (non-empty
-        // content) keep thinking as its own disclosure, unchanged.
-        let thinking = thinking_text.filter(|t| !t.trim().is_empty());
-        let mut answer_text = if content_text.trim().is_empty() {
-            thinking.clone().unwrap_or_default()
-        } else {
-            if let Some(t) = thinking.clone() {
-                content.push(AgentContentBlock::Thinking { text: t });
-            }
-            content_text.clone()
-        };
-        // Ollama reports `done_reason: "length"` when the reply was cut off
-        // because the KV cache (num_ctx) filled mid-generation — the model
-        // didn't "decide" to stop, it ran out of room. Without this the
-        // answer just ends mid-sentence and looks complete. Flag it inline
-        // and point at the fix (raise the context window for this model).
-        if response.stop_reason.as_deref() == Some("length") {
-            answer_text.push_str(
-                "\n\n---\n_⚠ Response cut off — the model hit its context limit (num_ctx) \
-mid-answer. Raise this model's context window in Settings → Harness, or start a fresh \
-conversation, then ask again._",
-            );
-        }
-        content.push(AgentContentBlock::Text { text: answer_text });
-        TurnStep {
-            assistant_message,
-            decision: TurnDecision::Final { content },
-        }
-    } else {
-        let mut content = Vec::new();
-        // Preserve the reasoning channel on tool-calling turns too. The frontend
-        // keys its "thought process" disclosure off a Thinking block, so without
-        // this the reasoning streamed live is wiped at finalization — a turn that
-        // reasons and then calls a tool (LFM2.5 routes both through the thinking
-        // channel) renders as a vanished thought process with no body. The
-        // no-tool branch above already does this; keep the two consistent.
-        if let Some(t) = thinking_text.as_deref() {
-            if !t.trim().is_empty() {
-                content.push(AgentContentBlock::Thinking {
-                    text: t.to_string(),
-                });
-            }
-        }
-        if !content_text.trim().is_empty() {
-            content.push(AgentContentBlock::Text {
-                text: content_text.clone(),
-            });
-        }
-        for call in &tool_calls {
-            content.push(AgentContentBlock::ToolCall {
-                tool_call_id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.input.clone(),
-            });
-        }
-        TurnStep {
-            assistant_message,
-            decision: TurnDecision::Continue {
-                content,
-                tool_calls,
-            },
-        }
-    }
-}
-
 async fn run_agent_loop(
     app: tauri::AppHandle,
     runs_dir: PathBuf,
@@ -1785,17 +1589,11 @@ async fn run_agent_loop(
             std::collections::HashMap::new();
         if max_parallel > 1 {
             if let Some(root) = request.workspace_root.as_deref() {
-                let read_calls: Vec<NormalizedToolCall> = tool_calls
-                    .iter()
-                    .filter(|c| {
-                        matches!(
-                            find_tool_kind_for_workspace(&c.name, Some(root)),
-                            Some(ToolKind::ReadOnly)
-                        )
-                    })
-                    .cloned()
-                    .collect();
-                if read_calls.len() > 1 {
+                let read_calls =
+                    parallel_read_calls(&tool_calls, Some(root), max_parallel, |call, root| {
+                        find_tool_kind_for_workspace(&call.name, root)
+                    });
+                if !read_calls.is_empty() {
                     precomputed =
                         run_read_tools_parallel(root, read_calls, max_parallel, &id).await;
                 }
@@ -1819,19 +1617,19 @@ async fn run_agent_loop(
 
             let tool_result: ToolResult;
 
-            if let Some(kind) = kind {
-                if !tool_allowed_in_mode(&request.mode, kind) {
-                    tool_result = tool_not_allowed_result(&request.mode, &call.name, kind);
+            let kind = match plan_tool_step(&request.mode, &call, kind) {
+                ToolStepPlan::Execute { kind } => kind,
+                ToolStepPlan::Blocked { result } => {
                     emit(AgentEvent::ToolCallFinished {
                         run_id: id.clone(),
                         tool_call_id: call.id.clone(),
-                        result: tool_result.clone(),
+                        result: result.clone(),
                         ts: now_ms(),
                     })?;
-                    messages.push(tool_provider_message(&call, &tool_result));
+                    messages.push(tool_provider_message(&call, &result));
                     continue;
                 }
-            }
+            };
 
             let ctx = ToolCtx {
                 app: &app,
@@ -1873,19 +1671,7 @@ async fn run_agent_loop(
             })?;
             messages.push(tool_provider_message(&call, &tool_result));
 
-            if call.name == "clean_context" {
-                let ids: Vec<String> = call
-                    .input
-                    .get("ids")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                clean_context_ids(&ids, &mut messages);
-            }
+            apply_clean_context_if_requested(&call, &mut messages);
         }
     }
 
@@ -2298,7 +2084,7 @@ mod replay_tests {
     //! blocks, malformed tool calls).
 
     use super::*;
-    use crate::agent::types::AgentContentBlock;
+    use crate::agent::types::{AgentContentBlock, AgentMode};
 
     fn user_msg(text: &str) -> AgentEvent {
         AgentEvent::UserMessage {

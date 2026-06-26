@@ -1420,6 +1420,13 @@ select.klide-field {
   }
 }
 
+/* Thought-process disclosure: the chevron flips up when the reasoning is
+   expanded. The block itself is borderless (a hairline left-rule carries the
+   body) so a long run reads as a calm timeline, not a stack of cards. */
+.klide-think[open] > summary .klide-think-chev {
+  transform: rotate(180deg);
+}
+
 /* Slow clockwise rotation for in-flight row actions (Save Memory while
    the model is summarising, Review Diff while the file list is fetching).
    Matches the pacing of the other "still working" affordances. */

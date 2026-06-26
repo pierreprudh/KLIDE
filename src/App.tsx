@@ -55,7 +55,7 @@ import { readWorkspaceTextFile } from "./workspaceFs";
 import "./styles/tokens.css";
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
-type ActivityPanel = Panel | "orchestrator";
+type ActivityPanel = Panel | "orchestrator" | "home";
 export type HarnessSettings = {
   chatPrompt?: string;
   planPrompt?: string;
@@ -350,6 +350,7 @@ function App() {
       : null;
   const effectiveGitReviewRoot = gitReviewRoot ?? workspaceRoot;
   const activityState: Record<ActivityPanel, boolean> = {
+    home: view === "workbench",
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
     git: view === "git-review",
     memory: view === "workbench" && memoryVisible,

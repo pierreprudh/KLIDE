@@ -37,11 +37,48 @@ impl Workspace {
         &self.root
     }
 
+    /// Normalize a model-supplied path into a workspace-relative string.
+    ///
+    /// Models arrive with messy paths: surrounding whitespace, a leading "/"
+    /// meaning "workspace root", empty meaning ".", or — very commonly with
+    /// small local models, since the system prompt shows them the root as an
+    /// absolute path — the *absolute* workspace root or a child of it. Rebase
+    /// any absolute path that lands inside the root to relative so it doesn't
+    /// get doubled onto the root by the join in `resolve_existing`/`resolve_new`
+    /// (`/ws` → join → `/ws/ws`, which fails to resolve). Paths that don't sit
+    /// under the root fall through unchanged; the caller's canonicalize +
+    /// containment check still rejects them.
+    fn clean_user_path(&self, user_path: &str) -> String {
+        let trimmed = user_path.trim();
+        if trimmed.is_empty() || trimmed == "/" {
+            return ".".to_string();
+        }
+        let candidate = Path::new(trimmed);
+        if candidate.is_absolute() {
+            // Try a literal strip first (root is canonical), then a
+            // canonicalized strip so /var vs /private/var (macOS) still matches.
+            let rebased = candidate
+                .strip_prefix(&self.root)
+                .map(Path::to_path_buf)
+                .ok()
+                .or_else(|| {
+                    std::fs::canonicalize(candidate)
+                        .ok()
+                        .and_then(|c| c.strip_prefix(&self.root).map(Path::to_path_buf).ok())
+                });
+            if let Some(rel) = rebased {
+                let s = rel.to_string_lossy().to_string();
+                return if s.is_empty() { ".".to_string() } else { s };
+            }
+        }
+        trimmed.trim_start_matches('/').to_string()
+    }
+
     /// Resolve a workspace-relative path that must already exist (read_file,
     /// list_dir, grep…). Follows symlinks: the canonical target must stay
     /// inside the root.
     pub fn resolve_existing(&self, user_path: &str) -> Result<PathBuf, String> {
-        let cleaned = clean_user_path(user_path);
+        let cleaned = self.clean_user_path(user_path);
         let candidate = if cleaned == "." {
             self.root.clone()
         } else {
@@ -62,7 +99,7 @@ impl Workspace {
     /// deepest existing ancestor so a symlinked directory can't smuggle the
     /// write outside the root.
     pub fn resolve_new(&self, user_path: &str) -> Result<PathBuf, String> {
-        let cleaned = clean_user_path(user_path);
+        let cleaned = self.clean_user_path(user_path);
         let rel = Path::new(&cleaned);
         if rel
             .components()
@@ -171,17 +208,6 @@ impl Workspace {
     }
 }
 
-/// Model-supplied paths arrive messy: surrounding whitespace, a leading "/"
-/// meaning "workspace root", or empty meaning ".".
-fn clean_user_path(user_path: &str) -> String {
-    let trimmed = user_path.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        ".".to_string()
-    } else {
-        trimmed.trim_start_matches('/').to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +236,27 @@ mod tests {
         assert!(ws.resolve_existing("../").is_err());
         assert!(ws.resolve_existing("../../etc/passwd").is_err());
         assert!(ws.resolve_existing("missing.txt").is_err());
+    }
+
+    #[test]
+    fn resolve_existing_rebases_absolute_paths_inside_root() {
+        let (dir, ws) = temp_workspace("abs-rebase");
+        // canonicalize so the literal == the workspace root (macOS /var symlink).
+        let dir = dir.canonicalize().unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.txt"), "hi").unwrap();
+        // A model that hands the absolute workspace root must resolve to root,
+        // not get doubled into <root>/<root> (the "Unable to resolve path" bug).
+        let root_abs = ws.root().to_str().unwrap();
+        assert_eq!(ws.resolve_existing(root_abs).unwrap(), *ws.root());
+        // An absolute child path rebases to its relative form.
+        let child_abs = ws.root().join("src").to_str().unwrap().to_string();
+        assert_eq!(
+            ws.resolve_existing(&child_abs).unwrap(),
+            ws.root().join("src")
+        );
+        // An absolute path outside the workspace is still rejected.
+        assert!(ws.resolve_existing("/etc").is_err());
     }
 
     #[cfg(unix)]
