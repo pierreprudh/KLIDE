@@ -10,9 +10,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
 import { MissionControl } from "./components/MissionControl";
-// OrchestratorPreview is the fixture dashboard; temporarily replaced by the
-// console prototype on the orchestrator view (see render below).
-import { OrchestratorConsolePrototype } from "./components/OrchestratorConsolePrototype";
+// The real tier-board console (built from the prototype's winning variant C).
+import { OrchestratorConsole } from "./components/OrchestratorConsole";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea } from "./components/EditorArea";
@@ -1416,11 +1415,9 @@ function App() {
                 onBack={() => setView("workbench")}
               />
             ) : view === "orchestrator" ? (
-              // PROTOTYPE: evaluating v0.5 orchestrator-console layouts. Swap
-              // back to <OrchestratorPreview /> once a variant is chosen.
-              // workspaceRoot lets variant C dispatch a card as a REAL harness
-              // run (the slice-1 dispatcher-seam proof), not the fake timer.
-              <OrchestratorConsolePrototype workspaceRoot={workspaceRoot} />
+              // Real tier-board console. workspaceRoot enables real plan-mode
+              // dispatch through the slice-1 dispatcher seam.
+              <OrchestratorConsole workspaceRoot={workspaceRoot} />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : null}
