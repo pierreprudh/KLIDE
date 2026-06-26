@@ -363,6 +363,14 @@ function App() {
   };
 
   function togglePanel(panel: ActivityPanel, meta?: boolean) {
+    if (panel === "home") {
+      // Plain "go back to the editor" — returns to the workbench without
+      // touching any sidebar/AI panel visibility, so whatever was open
+      // before a full-window view (Git Review, Mission Control,
+      // Orchestrator) is restored exactly as it was.
+      setView("workbench");
+      return;
+    }
     if (panel === "settings") {
       setSettingsInitial(null);
       setView("settings");

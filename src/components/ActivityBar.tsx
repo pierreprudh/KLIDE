@@ -1,7 +1,25 @@
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 
-type View = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "orchestrator" | "settings" | "profile";
+type View = "home" | "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "orchestrator" | "settings" | "profile";
 type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
+
+function HomeIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 10.5 12 4l8 6.5" />
+      <path d="M5.5 9.5V19a1 1 0 0 0 1 1H17.5a1 1 0 0 0 1-1V9.5" />
+    </svg>
+  );
+}
 
 function FolderIcon() {
   return (
@@ -244,6 +262,40 @@ export function ActivityBar({ active, onToggle }: Props) {
           alignItems: "stretch",
         }}
       >
+        {/* Home — returns to the editor workbench from any full-window
+            view. Sits above the tool switcher and outside the FLIP track:
+            it's a destination ("take me back"), not one of the tools the
+            indicator rides between. */}
+        <button
+          onClick={() => onToggle("home")}
+          title="Home"
+          aria-label="Home"
+          aria-pressed={active.home}
+          data-active={active.home}
+          className="klide-activity-bar-item"
+          style={{
+            width: 32,
+            height: 32,
+            margin: "0 auto 6px",
+            borderRadius: "var(--radius-md)",
+            display: "grid",
+            placeItems: "center",
+            color: active.home ? "var(--fg-strong)" : "var(--fg-subtle)",
+          }}
+          onMouseEnter={(e) => {
+            if (!active.home) e.currentTarget.style.color = "var(--fg-strong)";
+          }}
+          onMouseLeave={(e) => {
+            if (!active.home) e.currentTarget.style.color = "var(--fg-subtle)";
+          }}
+        >
+          <HomeIcon />
+        </button>
+        {/* Hairline notch separating Home from the tool switcher. */}
+        <div
+          aria-hidden
+          style={{ height: 1, margin: "0 auto 6px", width: 18, background: "var(--border)" }}
+        />
         <div
           ref={flip.trackRef}
           data-flip={flip.flip}
