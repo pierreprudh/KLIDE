@@ -413,8 +413,14 @@ function App() {
         if (sidebarSlot2 === panel) setSidebarSlot2(null);
         if (panel !== "explorer" && explorerVisible) setExplorerVisible(false);
         if (panel !== "skills" && skillsVisible) setSkillsVisible(false);
+        // Coming back from a non-workbench view (Mission Control,
+        // Orchestrator, Git Review) the icon should always *show* the
+        // panel — its visibility state still reads `true` from before the
+        // user left, so a plain toggle would hide it and they'd have to
+        // click twice to get back. Mirrors the AI-panel behaviour above.
+        const cameFromOtherView = view !== "workbench";
         if (panel === "explorer") {
-          const willShow = !explorerVisible;
+          const willShow = cameFromOtherView ? true : !explorerVisible;
           setExplorerVisible(willShow);
           // In free mode the explorer is a FloatingPanel sharing the
           // z-stack with the AI/terminal panels. Opening it must raise it
@@ -422,7 +428,7 @@ function App() {
           // panel that happens to overlap its position.
           if (willShow) focusPanel("explorer");
         } else {
-          setSkillsVisible((cur) => !cur);
+          setSkillsVisible((cur) => cameFromOtherView ? true : !cur);
         }
       }
       return;
@@ -1412,7 +1418,9 @@ function App() {
             ) : view === "orchestrator" ? (
               // PROTOTYPE: evaluating v0.5 orchestrator-console layouts. Swap
               // back to <OrchestratorPreview /> once a variant is chosen.
-              <OrchestratorConsolePrototype />
+              // workspaceRoot lets variant C dispatch a card as a REAL harness
+              // run (the slice-1 dispatcher-seam proof), not the fake timer.
+              <OrchestratorConsolePrototype workspaceRoot={workspaceRoot} />
             ) : activeGrid ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : null}
