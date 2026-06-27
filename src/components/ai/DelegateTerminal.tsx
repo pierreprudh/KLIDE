@@ -100,21 +100,69 @@ export function DelegateTerminalSurface({
       void invoke("delegate_pty_resize", { sessionId, rows: term.rows, cols: term.cols });
     };
 
-    void invoke("delegate_pty_spawn", {
-      sessionId,
-      provider: providerId,
-      workspaceRoot,
-      parentRunId,
-      resumeSessionId: resumeSessionId ?? null,
-      task: task ?? null,
-    })
-      .then(() => { syncSize(); })
-      .catch((err) => {
+    // Replay-on-reattach: a delegate session keeps running in Rust even after
+    // this surface unmounts (panel switch, layout change). On (re)mount we must
+    // repaint the history it produced while we were gone instead of coming back
+    // blank. Ordering matters to avoid dropping or duplicating output:
+    //   1. subscribe FIRST, buffering live chunks (don't write yet)
+    //   2. spawn (a no-op that returns the existing session if already live)
+    //   3. fetch the snapshot (history bytes + high-water seq)
+    //   4. paint history, then flush buffered chunks with seq > snapshot seq
+    //   5. go live, dropping any chunk already covered (seq <= writtenThrough)
+    let cancelled = false;
+    let applied = false;
+    let writtenThrough = -1;
+    const pending: { seq: number; data: string }[] = [];
+
+    const unlisten = listen<{ sessionId: string; data: string; seq: number }>(
+      "delegate-pty:data",
+      (e) => {
+        if (e.payload.sessionId !== sessionId) return;
+        if (!applied) { pending.push(e.payload); return; }
+        if (e.payload.seq > writtenThrough) {
+          term.write(e.payload.data);
+          writtenThrough = e.payload.seq;
+        }
+      },
+    );
+
+    const start = async () => {
+      // Make sure the listener is registered before we spawn/snapshot, so no
+      // live chunk slips through the gap.
+      await unlisten;
+      if (cancelled) return;
+      try {
+        await invoke("delegate_pty_spawn", {
+          sessionId,
+          provider: providerId,
+          workspaceRoot,
+          parentRunId,
+          resumeSessionId: resumeSessionId ?? null,
+          task: task ?? null,
+        });
+        if (cancelled) return;
+        const snap = await invoke<{ data: string; seq: number; live: boolean }>(
+          "delegate_pty_snapshot",
+          { sessionId },
+        );
+        if (cancelled) return;
+        if (snap.data) term.write(snap.data);
+        writtenThrough = snap.seq;
+        for (const p of pending) {
+          if (p.seq > writtenThrough) {
+            term.write(p.data);
+            writtenThrough = p.seq;
+          }
+        }
+        pending.length = 0;
+        applied = true;
+        syncSize();
+      } catch (err) {
         term.writeln(`Failed to start ${provider}: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    const unlisten = listen<{ sessionId: string; data: string }>("delegate-pty:data", (e) => {
-      if (e.payload.sessionId === sessionId) term.write(e.payload.data);
-    });
+      }
+    };
+    void start();
+
     term.onData((data) => { void invoke("delegate_pty_write", { sessionId, data }); });
 
     const resize = new ResizeObserver(syncSize);
@@ -122,6 +170,7 @@ export function DelegateTerminalSurface({
     requestAnimationFrame(syncSize);
 
     return () => {
+      cancelled = true;
       unlisten.then((u) => u());
       resize.disconnect();
       term.dispose();

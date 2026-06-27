@@ -204,6 +204,12 @@ type Props = {
    *  "Resume in {CLI}" / "Open in {CLI}" handoffs to land the user in a
    *  TUI surface that's the natural home for an agent session. */
   initialProvider?: ProviderId;
+  /** Bind this panel to an existing conversation id instead of minting a fresh
+   *  one. Used by Mission Control's "Reattach" on a *live* delegate session: it
+   *  makes `DelegateTerminalSurface`'s `sessionId` (`{convoId}:{provider}`)
+   *  match the still-running PTY, so `delegate_pty_spawn` no-ops and the
+   *  scrollback replays — a true reconnect, not a fresh `--resume`. */
+  initialConversationId?: string | null;
   /** Pass-through to DelegateTerminalSurface so the TUI continues the
    *  named session instead of starting a fresh one. */
   initialResumeSessionId?: string | null;
@@ -366,6 +372,7 @@ export function AiPanel({
   resumeConversation,
   onResumeConsumed,
   initialProvider,
+  initialConversationId,
   initialResumeSessionId,
   initialTask,
   onInitialConsumed,
@@ -390,6 +397,9 @@ export function AiPanel({
     // and persists the new one via savePanelSession), so re-attaching shows
     // the *current* thread rather than piling every chat into one. Panel
     // identity (provider/model prefs) still lives under `panelId` separately.
+    // Reattach to a live delegate session takes precedence: binding to its
+    // convo id makes the rebuilt terminal land on the same PTY session.
+    if (initialConversationId) return initialConversationId;
     const prior = panelId ? loadPanelSession(panelId) : null;
     return prior ? prior.convoId : genId();
   });

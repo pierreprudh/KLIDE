@@ -1,9 +1,37 @@
 use crate::delegate::{self, shell_quote};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, State};
+
+/// Max bytes of TUI output we retain per delegate session for replay on
+/// reattach. 256 KB comfortably holds a full screen plus scrollback for any
+/// CLI agent; older bytes are dropped from the front.
+const SCROLLBACK_CAP: usize = 256 * 1024;
+
+/// Per-session replay state: the retained bytes and the count of chunks they
+/// represent, mutated together under one lock so a snapshot can read both
+/// atomically. `seq` is the high-water mark stamped on each emitted chunk.
+#[derive(Default)]
+struct Scrollback {
+    buf: VecDeque<u8>,
+    seq: u64,
+}
+
+impl Scrollback {
+    /// Append a chunk, trim to the cap, advance the sequence, and return the
+    /// new chunk's seq for stamping the live event.
+    fn push(&mut self, bytes: &[u8]) -> u64 {
+        self.buf.extend(bytes);
+        let overflow = self.buf.len().saturating_sub(SCROLLBACK_CAP);
+        if overflow > 0 {
+            self.buf.drain(..overflow);
+        }
+        self.seq += 1;
+        self.seq
+    }
+}
 
 pub struct PtyState {
     pub writer: Mutex<Option<Box<dyn Write + Send>>>,
@@ -15,6 +43,18 @@ pub struct DelegatePtySession {
     master: Box<dyn MasterPty + Send>,
     cwd: Option<String>,
     provider: String,
+    /// Capped replay buffer + chunk sequence, shared with the reader thread.
+    /// Lets a remounting (or freshly opened) terminal repaint history instead
+    /// of coming back blank, and lets it drop live chunks already in the
+    /// snapshot. See [`Scrollback`].
+    scrollback: Arc<Mutex<Scrollback>>,
+    /// The CLI's first prompt, kept for auto-titling the live-session list in
+    /// Mission Control (à la Unpeel). `None` for a bare resume with no task.
+    task: Option<String>,
+    /// Model the delegate was launched with, for the live-session list.
+    model: Option<String>,
+    /// When this session was spawned (epoch ms), for "running for N min".
+    started_ms: i64,
 }
 
 pub struct DelegatePtyState {
@@ -185,6 +225,11 @@ pub fn delegate_pty_spawn(
     let master = pair.master;
     let mut reader = master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = master.take_writer().map_err(|e| e.to_string())?;
+    let scrollback: Arc<Mutex<Scrollback>> = Arc::new(Mutex::new(Scrollback::default()));
+    let started_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
     state.sessions.lock().unwrap().insert(
         session_id.clone(),
         DelegatePtySession {
@@ -192,6 +237,10 @@ pub fn delegate_pty_spawn(
             master,
             cwd,
             provider: provider.clone(),
+            scrollback: scrollback.clone(),
+            task: task.clone(),
+            model: model.clone(),
+            started_ms,
         },
     );
 
@@ -217,11 +266,16 @@ pub fn delegate_pty_spawn(
                     matched_external_id = true;
                 }
             }
+            // Append to the replay buffer and stamp this chunk's sequence
+            // number atomically, so a reattaching terminal can paint history
+            // then drop any live chunk it already saw.
+            let chunk_seq = scrollback.lock().unwrap().push(chunk.as_bytes());
             let _ = app.emit(
                 "delegate-pty:data",
                 DelegatePtyChunk {
                     session_id: session_id.clone(),
                     data: chunk,
+                    seq: chunk_seq,
                 },
             );
             std::thread::sleep(std::time::Duration::from_millis(15));
@@ -253,6 +307,94 @@ pub fn delegate_pty_write(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Replay buffer for a delegate session: the retained TUI bytes plus the
+/// sequence number of the last chunk they include. The frontend paints `data`,
+/// then drops any live `delegate-pty:data` event whose `seq <= seq` here.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegatePtySnapshot {
+    data: String,
+    seq: u64,
+    /// False when no session by this ID is live (nothing to replay).
+    live: bool,
+}
+
+#[tauri::command]
+pub fn delegate_pty_snapshot(
+    state: State<DelegatePtyState>,
+    session_id: String,
+) -> DelegatePtySnapshot {
+    if let Some(session) = state.sessions.lock().unwrap().get(&session_id) {
+        // Read bytes and seq under one lock so they always agree: every byte in
+        // `data` is accounted for by `seq`, and the next live chunk gets seq+1.
+        let sb = session.scrollback.lock().unwrap();
+        let bytes: Vec<u8> = sb.buf.iter().copied().collect();
+        DelegatePtySnapshot {
+            data: String::from_utf8_lossy(&bytes).to_string(),
+            seq: sb.seq,
+            live: true,
+        }
+    } else {
+        DelegatePtySnapshot {
+            data: String::new(),
+            seq: 0,
+            live: false,
+        }
+    }
+}
+
+/// One live delegate session, for Mission Control's "reattach" surface. These
+/// are the sessions Klide can rejoin in-process and replay (via the scrollback
+/// buffer) — distinct from on-disk runs, which need a fresh `--resume` spawn.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveDelegateSession {
+    /// Full PTY session id (`{convoId}:{provider}`).
+    session_id: String,
+    /// The AI-panel conversation id — `session_id` minus the `:provider`
+    /// suffix. Reattaching opens an AI panel bound to this id so the rebuilt
+    /// `DelegateTerminalSurface` lands on the same `session_id`.
+    convo_id: String,
+    provider: String,
+    cwd: Option<String>,
+    task: Option<String>,
+    model: Option<String>,
+    started_ms: i64,
+    /// Bytes of replay buffer currently retained — a cheap "has output" signal.
+    buffered_bytes: usize,
+}
+
+#[tauri::command]
+pub fn delegate_pty_live_sessions(state: State<DelegatePtyState>) -> Vec<LiveDelegateSession> {
+    let sessions = state.sessions.lock().unwrap();
+    let mut out: Vec<LiveDelegateSession> = sessions
+        .iter()
+        .map(|(session_id, s)| {
+            // `session_id` is `{convoId}:{provider}`; strip the known provider
+            // suffix to recover the conversation id. Fall back to the whole id
+            // if the shape is unexpected.
+            let suffix = format!(":{}", s.provider);
+            let convo_id = session_id
+                .strip_suffix(&suffix)
+                .unwrap_or(session_id)
+                .to_string();
+            LiveDelegateSession {
+                session_id: session_id.clone(),
+                convo_id,
+                provider: s.provider.clone(),
+                cwd: s.cwd.clone(),
+                task: s.task.clone(),
+                model: s.model.clone(),
+                started_ms: s.started_ms,
+                buffered_bytes: s.scrollback.lock().unwrap().buf.len(),
+            }
+        })
+        .collect();
+    // Newest first, so the freshest agent is at the top of the list.
+    out.sort_by(|a, b| b.started_ms.cmp(&a.started_ms));
+    out
 }
 
 #[tauri::command]
@@ -292,6 +434,9 @@ pub fn delegate_pty_stop(state: State<DelegatePtyState>, session_id: String) -> 
 struct DelegatePtyChunk {
     session_id: String,
     data: String,
+    /// Monotonic per-session chunk number; lets a reattaching terminal drop
+    /// chunks already included in its snapshot.
+    seq: u64,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -419,4 +564,52 @@ pub fn get_delegate_parent(app: &tauri::AppHandle, delegate_id: &str) -> Option<
     read_delegate_sessions(app)
         .get(delegate_id)
         .map(|m| m.parent_id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bytes(sb: &Scrollback) -> String {
+        String::from_utf8_lossy(&sb.buf.iter().copied().collect::<Vec<u8>>()).to_string()
+    }
+
+    #[test]
+    fn push_returns_monotonic_seq() {
+        let mut sb = Scrollback::default();
+        assert_eq!(sb.push(b"a"), 1);
+        assert_eq!(sb.push(b"b"), 2);
+        assert_eq!(sb.push(b"c"), 3);
+        assert_eq!(sb.seq, 3);
+        assert_eq!(bytes(&sb), "abc");
+    }
+
+    #[test]
+    fn buffer_is_capped_to_scrollback_cap_dropping_oldest() {
+        let mut sb = Scrollback::default();
+        // Write 10 KB more than the cap; only the newest SCROLLBACK_CAP bytes
+        // should survive, and seq still counts every chunk.
+        let chunk = vec![b'x'; 10 * 1024];
+        let mut chunks = 0u64;
+        let mut total = 0usize;
+        while total < SCROLLBACK_CAP + 10 * 1024 {
+            sb.push(&chunk);
+            chunks += 1;
+            total += chunk.len();
+        }
+        assert_eq!(sb.seq, chunks, "seq counts every chunk, even dropped ones");
+        assert!(sb.buf.len() <= SCROLLBACK_CAP, "buffer never exceeds the cap");
+    }
+
+    #[test]
+    fn cap_keeps_the_newest_bytes() {
+        let mut sb = Scrollback::default();
+        // Fill exactly to the cap with 'a', then push one 'b' — the oldest 'a'
+        // is dropped and 'b' lands at the end.
+        sb.push(&vec![b'a'; SCROLLBACK_CAP]);
+        sb.push(b"b");
+        assert_eq!(sb.buf.len(), SCROLLBACK_CAP);
+        assert_eq!(*sb.buf.back().unwrap(), b'b');
+        assert_eq!(*sb.buf.front().unwrap(), b'a');
+    }
 }

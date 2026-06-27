@@ -79,6 +79,7 @@ import {
 import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
+import type { ProviderId } from "../agent/types";
 import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
 import { buildRunHandoff } from "../agentHandoff";
@@ -1781,7 +1782,17 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
   );
 }
 
-function CopyButton({ value, label = "Copy" }: { value: string | null; label?: string }) {
+function CopyButton({
+  value,
+  label = "Copy",
+  icon,
+}: {
+  value: string | null;
+  label?: string;
+  // When provided, renders as an icon-only square (matching IconActionButton);
+  // otherwise falls back to the original text pill.
+  icon?: React.ReactNode;
+}) {
   const [copied, setCopied] = useState(false);
   const disabled = !value;
 
@@ -1794,6 +1805,46 @@ function CopyButton({ value, label = "Copy" }: { value: string | null; label?: s
     } catch {
       setCopied(false);
     }
+  }
+
+  if (icon) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => void copy()}
+        aria-label={label}
+        title={disabled ? "Nothing to copy" : copied ? "Copied" : label}
+        style={{
+          width: 28,
+          height: 28,
+          flexShrink: 0,
+          display: "grid",
+          placeItems: "center",
+          border: "none",
+          color: disabled ? "var(--fg-dim)" : copied ? "var(--accent)" : "var(--fg-subtle)",
+          background: "transparent",
+          opacity: disabled ? 0.45 : 1,
+          cursor: disabled ? "default" : "pointer",
+          transform: "scale(1)",
+          transformOrigin: "center bottom",
+          transition:
+            "transform 220ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms var(--ease-out)",
+        }}
+        onMouseEnter={(e) => {
+          if (disabled || copied) return;
+          e.currentTarget.style.transform = "scale(1.45)";
+          e.currentTarget.style.color = "var(--fg)";
+        }}
+        onMouseLeave={(e) => {
+          if (copied) return;
+          e.currentTarget.style.transform = "scale(1)";
+          e.currentTarget.style.color = "var(--fg-subtle)";
+        }}
+      >
+        {copied ? CheckGlyph : icon}
+      </button>
+    );
   }
 
   return (
@@ -2512,8 +2563,11 @@ function ToolCard({ name, summary }: { name: string; summary?: string }) {
   );
 }
 
-// The todo box. Type a task and hit Enter — it lands in Queued. Sending an
-// agent to it happens from the task's detail pane, so adding stays instant.
+// The add-task affordance. A quiet ghost row at the top of the board — click it
+// (or just start typing) and it becomes an inline input. A new task lands in
+// Queued directly below, so creation sits where the result appears. Escape or an
+// empty blur collapses it back to the row. Sending an agent to the task happens
+// from its detail pane, so adding stays instant.
 function TaskComposer({
   workspaceRoot,
   onAdded,
@@ -2521,37 +2575,93 @@ function TaskComposer({
   workspaceRoot: string | null;
   onAdded: (id: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
 
   function add() {
     const title = text.trim();
     if (!title) return;
     const task = addTask(title, workspaceRoot);
     setText("");
+    setEditing(false);
     onAdded(task.id);
   }
 
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          width: "calc(100% - 16px)",
+          margin: "0 8px 10px",
+          padding: "8px 9px",
+          fontSize: 12.5,
+          fontFamily: "inherit",
+          textAlign: "left",
+          color: "var(--fg-subtle)",
+          background: "transparent",
+          border: "1px dashed var(--border)",
+          borderRadius: "var(--radius-md)",
+          cursor: "pointer",
+          transition:
+            "border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = "var(--border-strong)";
+          e.currentTarget.style.color = "var(--fg-strong)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = "var(--border)";
+          e.currentTarget.style.color = "var(--fg-subtle)";
+        }}
+      >
+        <span aria-hidden style={{ fontSize: 14, lineHeight: 1, marginTop: -1 }}>
+          +
+        </span>
+        Add a task
+      </button>
+    );
+  }
+
   return (
-    <div style={{ padding: "10px 16px 12px", borderBottom: "1px solid var(--border)" }}>
+    <div style={{ margin: "0 8px 10px" }}>
       <input
+        ref={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
             add();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setText("");
+            setEditing(false);
           }
+        }}
+        onBlur={() => {
+          if (!text.trim()) setEditing(false);
         }}
         placeholder="Add a task…"
         style={{
           width: "100%",
+          boxSizing: "border-box",
           fontSize: 12.5,
           lineHeight: 1.5,
           fontFamily: "inherit",
           color: "var(--fg-strong)",
           background: "var(--bg-elevated)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--accent)",
+          borderRadius: "var(--radius-md)",
           padding: "7px 9px",
           outline: "none",
         }}
@@ -3324,135 +3434,160 @@ function RunDetail({
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        {onRename && run.capabilities.canRename && (
-          <ActionButton
-            label={renaming ? "Save name" : "Rename"}
-            onClick={() => {
-              if (renaming) commitRename();
-              else setRenaming(true);
-            }}
-          />
-        )}
-        {onArchive && run.capabilities.canArchive && (
-          <ActionButton
-            label={run.archived ? "Unarchive" : "Archive"}
-            onClick={() => onArchive(run, !run.archived)}
-          />
-        )}
-        {run.capabilities.canExportTranscript && (
-          <ActionButton
-            label={
-              exportState === "copying"
-                ? "Exporting…"
-                : exportState === "copied"
-                ? "Copied transcript"
-                : exportState === "error"
-                ? "Export failed"
-                : "Export transcript"
-            }
-            disabled={exportState === "copying"}
-            onClick={() => void exportTranscript()}
-          />
-        )}
-        {onFork && run.capabilities.canFork && (
-          <ActionButton
-            label="Fork"
-            onClick={() => onFork(run, messages)}
-          />
-        )}
-        {onForkInWorktree && run.capabilities.canFork && (run.cwd || run.source === "klide") && (
-          <ActionButton
-            label="Fork in worktree"
-            onClick={() => onForkInWorktree(run, messages)}
-          />
-        )}
-        {onMergeWorktree && run.worktree && run.branch && (
-          <ActionButton
-            label="Merge worktree"
-            onClick={() => onMergeWorktree(run)}
-          />
-        )}
-        {run.worktree && run.branch && (
-          <ActionButton
-            label={
-              compareState === "loading"
-                ? "Comparing…"
-                : branchDiff
-                ? "Refresh compare"
-                : "Compare with base"
-            }
-            disabled={compareState === "loading"}
-            onClick={() => void compareBranchWithBase()}
-          />
-        )}
-        {resumable && onOpenInAiPanel && (
-          <ActionButton
-            label={`Resume in ${SOURCE_LABEL[run.source]}`}
-            primary
-            onClick={() =>
-              onOpenInAiPanel({
-                provider: run.source as TaskSource,
-                workspaceRoot: run.cwd,
-                resumeSessionId: run.id,
-              })
-            }
-          />
-        )}
-        {run.source === "klide" && run.capabilities.canResume && onResumeKlide && (
-          <ActionButton
-            label="Resume in Klide"
-            primary
-            onClick={() => onResumeKlide(run.id)}
-          />
-        )}
-        {/* "Open in {other CLI}" hands the run off to a fresh delegate TUI in
-            a new AI panel. Klide runs pass compact task state as the prompt
-            so the new session starts with context, not just the first ask. */}
-        {onOpenInAiPanel &&
-          run.capabilities.canOpenInOtherAgent &&
-          cliSources
-            .map((s) => (
-              <ActionButton
+      {/* Icon-only action bar — no chrome, just two purpose-grouped clusters
+          pushed to opposite edges. LEFT (ragged-right) = continue this run:
+          resume / hand off / fork / review. RIGHT (ragged-left) = manage it:
+          memory, export, rename, archive, copy. Every control carries a
+          tooltip + aria-label so the meaning stays one hover away. */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 20,
+          rowGap: 10,
+          marginBottom: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        {/* LEFT cluster — act on / continue the run */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          {/* Headline: resume this same agent (CLI runs reopen the delegate,
+              Klide runs reopen the AI panel) — wears the agent's own logo. */}
+          {resumable && onOpenInAiPanel && (
+            <IconActionButton
+              tone="primary"
+              label={`Resume in ${SOURCE_LABEL[run.source]}`}
+              icon={<SourceLogo source={run.source} size={16} />}
+              onClick={() =>
+                onOpenInAiPanel({
+                  provider: run.source as TaskSource,
+                  workspaceRoot: run.cwd,
+                  resumeSessionId: run.id,
+                })
+              }
+            />
+          )}
+          {run.source === "klide" && run.capabilities.canResume && onResumeKlide && (
+            <IconActionButton
+              tone="primary"
+              label="Resume in Klide"
+              icon={<KlideLogo size={16} />}
+              onClick={() => onResumeKlide(run.id)}
+            />
+          )}
+          {/* "Open in {other CLI}" hands the run off to a fresh delegate TUI in
+              a new AI panel — each wears that CLI's provider logo. Klide runs
+              pass compact task state so the session starts with context. */}
+          {onOpenInAiPanel &&
+            run.capabilities.canOpenInOtherAgent &&
+            cliSources.map((s) => (
+              <IconActionButton
                 key={s}
                 label={`Open in ${SOURCE_LABEL[s]}`}
+                icon={<SourceLogo source={s} size={16} />}
                 onClick={() =>
                   onOpenInAiPanel({
                     provider: s,
                     workspaceRoot: run.cwd,
                     initialTask:
-                      run.source === "klide" && handoffPrompt
-                        ? handoffPrompt
-                        : undefined,
+                      run.source === "klide" && handoffPrompt ? handoffPrompt : undefined,
                   })
                 }
               />
             ))}
-        {onReviewDiff && run.capabilities.canReviewDiff && (
-          <ActionButton
-            label={run.source === "klide" ? "Review diff" : "Open Git Review"}
-            onClick={() => onReviewDiff({ id: run.id, source: run.source, cwd: run.cwd })}
-          />
-        )}
-        {onSaveMemory && run.source === "klide" && run.capabilities.canSaveMemory && (
-          <ActionButton
-            label={summarizingFromRunId === run.id ? "Saving…" : "Save memory"}
-            disabled={summarizingFromRunId === run.id}
-            onClick={() =>
-              onSaveMemory({
-                id: run.id,
-                source: run.source,
-                provider: run.provider ?? null,
-                model: run.model,
-                cwd: run.cwd,
-              })
-            }
-          />
-        )}
-        {/* Copy utilities trail the bar — rare, and the paths themselves now
-            live in the "More details" disclosure rather than up top. */}
-        <CopyButton value={run.path || null} label="Copy log path" />
-        <CopyButton value={run.cwd} label="Copy cwd" />
+          {onReviewDiff && run.capabilities.canReviewDiff && (
+            <IconActionButton
+              label={run.source === "klide" ? "Review diff" : "Open Git Review"}
+              icon={DiffGlyph}
+              onClick={() => onReviewDiff({ id: run.id, source: run.source, cwd: run.cwd })}
+            />
+          )}
+          {onFork && run.capabilities.canFork && (
+            <IconActionButton label="Fork" icon={ForkGlyph} onClick={() => onFork(run, messages)} />
+          )}
+          {onForkInWorktree && run.capabilities.canFork && (run.cwd || run.source === "klide") && (
+            <IconActionButton
+              label="Fork in worktree"
+              icon={WorktreeGlyph}
+              onClick={() => onForkInWorktree(run, messages)}
+            />
+          )}
+          {onMergeWorktree && run.worktree && run.branch && (
+            <IconActionButton label="Merge worktree" icon={MergeGlyph} onClick={() => onMergeWorktree(run)} />
+          )}
+          {run.worktree && run.branch && (
+            <IconActionButton
+              label={
+                compareState === "loading"
+                  ? "Comparing…"
+                  : branchDiff
+                  ? "Refresh compare"
+                  : "Compare with base"
+              }
+              icon={CompareGlyph}
+              disabled={compareState === "loading"}
+              onClick={() => void compareBranchWithBase()}
+            />
+          )}
+        </div>
+
+        {/* RIGHT cluster — manage / meta utilities */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          {onSaveMemory && run.source === "klide" && run.capabilities.canSaveMemory && (
+            <IconActionButton
+              label={summarizingFromRunId === run.id ? "Saving memory…" : "Save memory"}
+              icon={MemoryGlyph}
+              disabled={summarizingFromRunId === run.id}
+              onClick={() =>
+                onSaveMemory({
+                  id: run.id,
+                  source: run.source,
+                  provider: run.provider ?? null,
+                  model: run.model,
+                  cwd: run.cwd,
+                })
+              }
+            />
+          )}
+          {run.capabilities.canExportTranscript && (
+            <IconActionButton
+              tone={exportState === "copied" ? "success" : "default"}
+              label={
+                exportState === "copying"
+                  ? "Exporting…"
+                  : exportState === "copied"
+                  ? "Copied transcript"
+                  : exportState === "error"
+                  ? "Export failed — try again"
+                  : "Export transcript"
+              }
+              icon={exportState === "copied" ? CheckGlyph : ExportGlyph}
+              disabled={exportState === "copying"}
+              onClick={() => void exportTranscript()}
+            />
+          )}
+          {onRename && run.capabilities.canRename && (
+            <IconActionButton
+              tone={renaming ? "success" : "default"}
+              label={renaming ? "Save name" : "Rename"}
+              icon={renaming ? CheckGlyph : PencilGlyph}
+              onClick={() => {
+                if (renaming) commitRename();
+                else setRenaming(true);
+              }}
+            />
+          )}
+          {onArchive && run.capabilities.canArchive && (
+            <IconActionButton
+              label={run.archived ? "Unarchive" : "Archive"}
+              icon={ArchiveGlyph}
+              onClick={() => onArchive(run, !run.archived)}
+            />
+          )}
+          <CopyButton value={run.path || null} label="Copy log path" icon={CopyGlyph} />
+          <CopyButton value={run.cwd} label="Copy cwd" icon={FolderGlyph} />
+        </div>
       </div>
 
       {(branchDiff || compareError) && (
@@ -3558,25 +3693,14 @@ function RunDetail({
         </div>
       )}
 
-      {!messages && (
-        <div
-          style={{
-            marginBottom: 18,
-            padding: "8px 10px",
-            borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--border)",
-            color: "var(--fg-subtle)",
-            fontSize: 12,
-            lineHeight: 1.45,
-          }}
-        >
-          {resumable
-            ? `Resume continues your last ${SOURCE_LABEL[run.source]} session in a new AI panel — prior context, model, and workspace intact. "Open in {CLI}" drops you into a fresh TUI in the same project.`
-            : run.source === "klide"
-            ? "Resume in Klide reopens the AI panel with this transcript. Open in {CLI} hands the first message off to a fresh delegate session."
-            : "Read-only inspector for the local session log."}
-        </div>
-      )}
+      <div
+        style={{
+          height: 1,
+          background: "var(--border)",
+          margin: "0 0 16px",
+        }}
+        aria-hidden="true"
+      />
 
       <dl
         style={{
@@ -3720,6 +3844,105 @@ function ActionButton({
   );
 }
 
+// Icon-only action button — the detail-pane action bar reads as a tidy row of
+// glyphs (and provider logos) rather than a wall of text buttons. The label is
+// surfaced via tooltip + aria-label so it stays accessible.
+//   tone="primary"  → accent ring + soft fill (the headline action: Resume)
+//   tone="success"  → accent border, used for transient "done" feedback
+function IconActionButton({
+  icon,
+  label,
+  tone = "default",
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  tone?: "default" | "primary" | "success";
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const accent = tone === "primary" || tone === "success";
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      style={{
+        width: 28,
+        height: 28,
+        flexShrink: 0,
+        display: "grid",
+        placeItems: "center",
+        border: "none",
+        color: accent ? "var(--accent)" : "var(--fg-subtle)",
+        background: "transparent",
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? "default" : "pointer",
+        transform: "scale(1)",
+        transformOrigin: "center bottom",
+        transition:
+          "transform 220ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms var(--ease-out)",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        e.currentTarget.style.transform = "scale(1.45)";
+        if (!accent) e.currentTarget.style.color = "var(--fg)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "scale(1)";
+        if (!accent) e.currentTarget.style.color = "var(--fg-subtle)";
+      }}
+    >
+      {icon}
+    </button>
+  );
+}
+
+// Shared svg frame for the action-bar glyphs — line icons at 24-grid, 14px.
+function Glyph({
+  children,
+  size = 14,
+  fill = false,
+  sw = 1.7,
+}: {
+  children: React.ReactNode;
+  size?: number;
+  fill?: boolean;
+  sw?: number;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={fill ? "currentColor" : "none"}
+      stroke={fill ? "none" : "currentColor"}
+      strokeWidth={sw}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+const PencilGlyph = <Glyph><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></Glyph>;
+const CheckGlyph = <Glyph sw={2}><path d="m20 6-11 11-5-5" /></Glyph>;
+const ArchiveGlyph = <Glyph><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" /><path d="M10 12h4" /></Glyph>;
+const ExportGlyph = <Glyph><path d="M12 15V3" /><path d="m8 7 4-4 4 4" /><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></Glyph>;
+const ForkGlyph = <Glyph><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="M6 8.5v1a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1" /><path d="M12 11.5v4" /></Glyph>;
+const WorktreeGlyph = <Glyph><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><path d="M6 8.5v7" /><circle cx="18" cy="9" r="2.5" /><path d="M18 11.5a6 6 0 0 1-6 6" /></Glyph>;
+const MergeGlyph = <Glyph><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="9" r="2.5" /><path d="M6 8.5v7" /><path d="M6 12a6 6 0 0 0 6-6h3.5" /></Glyph>;
+const CompareGlyph = <Glyph><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="m16 9-3-3 3-3" /><path d="M11 18H8a2 2 0 0 1-2-2V9" /><path d="m8 15 3 3-3 3" /></Glyph>;
+const DiffGlyph = <Glyph><path d="M12 4v8" /><path d="M8 8h8" /><path d="M6 20h12" /></Glyph>;
+const MemoryGlyph = <Glyph><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" /></Glyph>;
+const CopyGlyph = <Glyph><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Glyph>;
+const FolderGlyph = <Glyph><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" /></Glyph>;
+
 function RefreshIcon() {
   return (
     <svg
@@ -3836,11 +4059,143 @@ function FilterSelect({
 
 const PAGE = 20;
 
+// One live delegate PTY, mirror of Rust's `LiveDelegateSession`.
+type LiveDelegateSession = {
+  sessionId: string;
+  convoId: string;
+  provider: string;
+  cwd: string | null;
+  task: string | null;
+  model: string | null;
+  startedMs: number;
+  bufferedBytes: number;
+};
+
+// "Live now" strip — the delegate sessions still running *in this Klide
+// process*, which we can reconnect to in-process and replay (Slice 1/2,
+// inspired by Unpeel's reattachable session host). Distinct from the run board
+// below, which lists on-disk runs (live or finished) that need a fresh
+// `--resume` to rejoin. Polls every few seconds; renders nothing when idle so
+// it never adds chrome to a quiet board.
+function LiveSessionsStrip({
+  sessions,
+  workspaceRoot,
+  onReattach,
+}: {
+  sessions: LiveDelegateSession[];
+  workspaceRoot: string | null;
+  onReattach?: (opts: {
+    provider: DelegateId;
+    conversationId: string;
+    workspaceRoot: string | null;
+  }) => void;
+}) {
+  if (sessions.length === 0) return null;
+
+  // Show ~5 flat rows, scroll past that. ~30px per row.
+  const maxVisible = 5;
+  const scrolls = sessions.length > maxVisible;
+
+  return (
+    <div style={{ padding: "14px 8px 12px 16px", borderBottom: "1px solid var(--border)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          marginBottom: 6,
+          paddingRight: 8,
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "var(--fg-subtle)",
+        }}
+      >
+        <span>Live</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500, letterSpacing: 0, color: "var(--fg-dim)" }}>
+          {sessions.length}
+        </span>
+      </div>
+      <div
+        className={scrolls ? "live-scroll" : undefined}
+        style={{
+          maxHeight: scrolls ? maxVisible * 30 : undefined,
+          paddingRight: scrolls ? 4 : 8,
+        }}
+      >
+        {sessions.map((s) => {
+          const title = s.task?.trim() || `${SOURCE_LABEL[s.provider as DelegateId] ?? s.provider} session`;
+          const canReattach = isDelegateId(s.provider) && !!onReattach;
+          const reattach = () =>
+            canReattach &&
+            onReattach!({
+              provider: s.provider as DelegateId,
+              conversationId: s.convoId,
+              workspaceRoot: s.cwd ?? workspaceRoot,
+            });
+          return (
+            <button
+              key={s.sessionId}
+              type="button"
+              onClick={reattach}
+              disabled={!canReattach}
+              title={canReattach ? `Reattach · ${title}` : title}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 9,
+                width: "100%",
+                textAlign: "left",
+                height: 30,
+                padding: "0 8px",
+                margin: "0 -8px",
+                borderRadius: "var(--radius-sm)",
+                border: "none",
+                background: "transparent",
+                cursor: canReattach ? "pointer" : "default",
+                font: "inherit",
+                transition: "background var(--motion-fast) var(--ease-out)",
+              }}
+              onMouseEnter={(e) => {
+                if (canReattach) e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <span style={{ flexShrink: 0, display: "grid", placeItems: "center", opacity: 0.9 }}>
+                <ProviderLogo id={s.provider as ProviderId} size={13} />
+              </span>
+              <span
+                style={{
+                  flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--fg-strong)",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }}
+              >
+                {title}
+              </span>
+              <span
+                style={{
+                  flexShrink: 0, fontSize: 11, color: "var(--fg-dim)", fontFamily: "var(--font-mono)",
+                }}
+              >
+                {relativeTime(s.startedMs)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function MissionControl({
   workspaceRoot,
   theme,
   onResumeKlideRun,
   onOpenInAiPanel,
+  onReattachLiveSession,
   onReviewDiff,
   onSaveMemory,
   onForkRun,
@@ -3862,6 +4217,14 @@ export function MissionControl({
     workspaceRoot: string | null;
     resumeSessionId?: string;
     initialTask?: string;
+  }) => void;
+  /** "Reattach" — reconnect to a delegate PTY still running in this Klide
+   *  process. Opens an AI panel bound to the session's conversation id so its
+   *  terminal lands on the same PTY and replays its scrollback. */
+  onReattachLiveSession?: (opts: {
+    provider: DelegateId;
+    conversationId: string;
+    workspaceRoot: string | null;
   }) => void;
   /** "Review Diff" — for Klide runs, scroll the detail pane's
    *  CheckpointPanel into view. For CLI runs, switch to the git-review
@@ -3904,6 +4267,32 @@ export function MissionControl({
   );
   const [sessionQuery, setSessionQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  // Delegate PTYs still live in this process — drives the "Live now" strip and
+  // dedupes the board (a live session shown in the strip is hidden from the
+  // sections below, so it doesn't appear twice). Polled here, not in the strip,
+  // so both consumers share one source.
+  const [liveSessions, setLiveSessions] = useState<LiveDelegateSession[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const live = await invoke<LiveDelegateSession[]>("delegate_pty_live_sessions");
+        if (!cancelled) setLiveSessions(live);
+      } catch {
+        if (!cancelled) setLiveSessions([]); // outside Tauri / command missing
+      }
+    };
+    void poll();
+    const t = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+  const liveConvoIds = useMemo(
+    () => new Set(liveSessions.map((s) => s.convoId)),
+    [liveSessions]
+  );
   const [ledgerMetadata, setLedgerMetadata] = useState<RunLedgerMetadataStore>(() => readRunLedgerMetadata());
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [expandedSubagentParents, setExpandedSubagentParents] = useState<Set<string>>(new Set());
@@ -4031,11 +4420,14 @@ export function MissionControl({
   const filtered = useMemo(() => {
     return linkedRuns.filter(
       (r) =>
+        // A live, in-process session is shown in the "Live now" strip — don't
+        // also list it in the board sections below.
+        !liveConvoIds.has(r.id) &&
         sourceMatchesFilter(r, sourceFilter) &&
         projectMatchesFilter(r, projectFilter) &&
         runMatchesLedgerQuery(r, sessionQuery)
     );
-  }, [linkedRuns, sourceFilter, projectFilter, sessionQuery]);
+  }, [linkedRuns, liveConvoIds, sourceFilter, projectFilter, sessionQuery]);
 
   const grouped = useMemo(() => {
     const by: Record<RunBoardSection, RunLedgerEntry[]> = {
@@ -4415,9 +4807,10 @@ export function MissionControl({
           </div>
         </header>
 
-        <TaskComposer
+        <LiveSessionsStrip
+          sessions={liveSessions}
           workspaceRoot={workspaceRoot}
-          onAdded={(id) => setSelectedId(id)}
+          onReattach={onReattachLiveSession}
         />
 
         <AttentionQueue
@@ -4429,6 +4822,10 @@ export function MissionControl({
         />
 
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
+          <TaskComposer
+            workspaceRoot={workspaceRoot}
+            onAdded={(id) => setSelectedId(id)}
+          />
           {!loading && filtered.length === 0 && (
             <div style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
               <div style={{ color: "var(--fg-strong)", marginBottom: 5 }}>

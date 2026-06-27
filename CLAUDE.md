@@ -153,6 +153,20 @@ AiPanel (view) → startAgentRun() → Rust run_agent_loop()
 
 Mission Control rows for CLI runs (claude-code / codex / opencode) carry a "Resume" / "Open in {CLI}" action that doesn't open a separate terminal — it asks the parent (`App.tsx`) to spawn a fresh AI panel pinned to the chosen delegate. The AI panel's `initialProvider` / `initialResumeSessionId` / `initialTask` props land the TUI in the right state on mount. The detail pane is transcript + metadata only; the TUI lives in the AI panel.
 
+### Delegate session replay (scrollback + reattach)
+
+Delegate PTYs (Claude Code / Codex / OpenCode / Oh My Pi) keep running in Rust
+after their `DelegateTerminalSurface` unmounts. Each session holds a capped
+256 KB `Scrollback` ring buffer + a monotonic chunk `seq` (`pty.rs`); every
+`delegate-pty:data` event carries its `seq`. On (re)mount the terminal calls
+`delegate_pty_snapshot` to repaint history, then dedupes live chunks by `seq` —
+so a panel switch no longer returns a blank terminal. Mission Control shows a
+**Live now** strip (`delegate_pty_live_sessions`) with a **Reattach** action that
+opens an AI panel bound to the session's conversation id (`initialConversationId`)
+so its terminal reconnects + replays — distinct from "Resume", which `--resume`s
+an on-disk run. In-process only (does not survive app restart yet). Full design +
+roadmap: `docs/delegate-session-replay.md`.
+
 ### Project Memory (handoff notes)
 
 Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (or future you) can pick up where the last session stopped.

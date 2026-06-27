@@ -20,6 +20,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
+import { loadPanelSession } from "./components/ai/utils";
 import type { AgentEvent, ProviderId } from "./agent/types";
 import type { Conversation, Msg } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
@@ -177,6 +178,9 @@ function App() {
     provider: DelegateId;
     resumeSessionId: string | null;
     initialTask: string | null;
+    /** Set only for "Reattach" to a live session — binds the new panel to the
+     *  running PTY's conversation id so its terminal reconnects + replays. */
+    conversationId: string | null;
   } | null>(null);
   void pendingAiPanel;
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
@@ -879,6 +883,40 @@ function App() {
       provider: opts.provider,
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
+      conversationId: null,
+    });
+  }
+
+  // "Reattach" from Mission Control's live-sessions strip — reconnect to a
+  // delegate PTY that's still running in this Klide process. Unlike resume,
+  // there's no `--resume` and no fresh CLI spawn: binding the new panel to the
+  // session's conversation id makes its terminal land on the same PTY, and the
+  // scrollback buffer (Slice 1) replays everything it produced while detached.
+  function reattachLiveSession(opts: {
+    provider: DelegateId;
+    conversationId: string;
+    workspaceRoot: string | null;
+  }) {
+    setView("workbench");
+    if (!aiVisible) togglePanel("ai");
+    // Don't open a second terminal onto the same live PTY: if a panel is
+    // already bound to this conversation (the one that spawned it, or an
+    // earlier reattach), just focus it. Two surfaces sharing the sessionId
+    // would mirror each other — the "two synchronized terminals" bug.
+    const already = aiPanels.find(
+      (p) => loadPanelSession(p.id)?.convoId === opts.conversationId
+    );
+    if (already) {
+      focusPanel(already.id);
+      return;
+    }
+    const id = appendAiPanel({ provider: opts.provider, cwd: opts.workspaceRoot ?? undefined });
+    setPendingAiPanel({
+      panelId: id,
+      provider: opts.provider,
+      resumeSessionId: null,
+      initialTask: null,
+      conversationId: opts.conversationId,
     });
   }
 
@@ -1413,6 +1451,7 @@ function App() {
                 theme={theme}
                 onResumeKlideRun={resumeKlideRun}
                 onOpenInAiPanel={openRunInAiPanel}
+                onReattachLiveSession={reattachLiveSession}
                 onReviewDiff={reviewDiffFromRun}
                 onSaveMemory={saveMemoryFromRun}
                 onForkRun={forkRun}
@@ -1754,6 +1793,11 @@ function App() {
                           pendingAiPanel?.panelId === panel.id
                             ? pendingAiPanel.provider
                             : panel.provider
+                        }
+                        initialConversationId={
+                          pendingAiPanel?.panelId === panel.id
+                            ? pendingAiPanel.conversationId
+                            : undefined
                         }
                         initialResumeSessionId={
                           pendingAiPanel?.panelId === panel.id

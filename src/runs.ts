@@ -205,14 +205,14 @@ export const BOARD_SECTION_ORDER: RunBoardSection[] = [
 
 export const BOARD_SECTION_LABEL: Record<RunBoardSection, string> = {
   running: "Running",
-  blocked: "Blocked",
+  blocked: "Needs you",
   ready_for_review: "Ready for Review",
   done: "Done",
 };
 
 export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
   running: "Active or queued work",
-  blocked: "Work that failed, needs input, or has gone idle",
+  blocked: "Awaiting your answer, failed, or gone idle — needs a nudge",
   ready_for_review: "Delegated subtask output to inspect",
   done: "Finished conversations you ran",
 };
