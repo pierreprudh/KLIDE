@@ -12,7 +12,7 @@
 // slice-1 dispatcher seam and stream a live activity line; goal-mode cards wait
 // for the diff-review surface, which this view doesn't host yet.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   routeTask,
   DEFAULT_ROUTING_POLICY,
@@ -173,6 +173,97 @@ const fmtMin = (ms: number) => `${Math.round(ms / 60_000)}m`;
 const CARD_LIFT = "inset 0 1px 0 var(--panel-highlight), 0 1px 2px rgba(28, 28, 28, 0.035)";
 const INSET_TRACK = "inset 0 1px 2px rgba(28, 28, 28, 0.045)";
 
+function prefersReducedMotion() {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
+// Count-up number: tweens between the previous and next value with easeOutCubic
+// so cost/time/counts roll when the mode changes, instead of snapping. The ref
+// tracks the live displayed value, so an interrupted tween resumes from where
+// it is rather than jumping.
+function AnimatedNumber({ value, format }: { value: number; format: (n: number) => string }) {
+  const [display, setDisplay] = useState(value);
+  const current = useRef(value);
+  useEffect(() => {
+    const from = current.current;
+    const to = value;
+    if (from === to) return;
+    if (prefersReducedMotion()) { current.current = to; setDisplay(to); return; }
+    let raf = 0;
+    let start = 0;
+    const step = (t: number) => {
+      if (!start) start = t;
+      const p = Math.min(1, (t - start) / 460);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const v = from + (to - from) * eased;
+      current.current = v;
+      setDisplay(v);
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <>{format(display)}</>;
+}
+
+// Segmented control with a single pill that slides AND resizes between segments
+// (the "magic move" Linear/Stripe use). The pill is an absolutely-positioned
+// layer measured from each segment's box; segment labels ride above it.
+function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey) => void }) {
+  const keys = Object.keys(MODES) as ModeKey[];
+  const refs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = refs.current[mode];
+    if (el) setPill({ left: el.offsetLeft, width: el.offsetWidth });
+  }, [mode]);
+  return (
+    <div style={{ position: "relative", display: "inline-flex", padding: 3, gap: 2, background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: INSET_TRACK }}>
+      {pill && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 3,
+            bottom: 3,
+            left: pill.left,
+            width: pill.width,
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: 7,
+            boxShadow: "0 1px 2px rgba(28, 28, 28, 0.06)",
+            transition: "left var(--motion-med) var(--ease-spring), width var(--motion-med) var(--ease-spring)",
+          }}
+        />
+      )}
+      {keys.map((k) => {
+        const active = mode === k;
+        return (
+          <button
+            key={k}
+            ref={(el) => { refs.current[k] = el; }}
+            onClick={() => setMode(k)}
+            aria-pressed={active}
+            style={{
+              position: "relative",
+              zIndex: 1,
+              padding: "7px 13px",
+              fontSize: 12,
+              fontWeight: active ? 600 : 500,
+              borderRadius: 7,
+              background: "transparent",
+              color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
+              transition: "color var(--motion-med) var(--ease-out)",
+            }}
+          >
+            {MODES[k].label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Atoms ───────────────────────────────────────────────────────────────────
 // Status: sage = live, amber = needs you, brick = failed, muted = idle/done.
 // "done" recedes to a quiet muted check so the live work stays the focus.
@@ -204,12 +295,14 @@ function TierMeter({ level }: { level: 1 | 2 | 3 | 4 }) {
       {[1, 2, 3, 4].map((i) => (
         <span
           key={i}
+          className="klide-tier-bar"
           style={{
             width: 3,
             height: 3 + i * 2,
             borderRadius: 1,
             background: i <= level ? "var(--fg-strong)" : "var(--border-strong)",
             opacity: i <= level ? 0.78 : 0.34,
+            animationDelay: `${i * 70}ms`,
           }}
         />
       ))}
@@ -253,42 +346,19 @@ function GoalBar({ goal, setGoal, mode, setMode }: { goal: string; setGoal: (v: 
         className="klide-field"
         style={{ flex: 1, minWidth: 240, height: 38, padding: "0 14px", fontSize: "var(--fs-base)" }}
       />
-      {/* Segmented control — recessed track, the active segment lifts to an
-          elevated chip. Lighter and more precise than a full dark fill. */}
-      <div style={{ display: "inline-flex", padding: 3, gap: 2, background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: INSET_TRACK }}>
-        {(Object.keys(MODES) as ModeKey[]).map((k) => {
-          const active = mode === k;
-          return (
-            <button
-              key={k}
-              onClick={() => setMode(k)}
-              aria-pressed={active}
-              style={{
-                padding: "6px 13px",
-                fontSize: 12,
-                fontWeight: active ? 600 : 500,
-                borderRadius: 7,
-                color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                background: active ? "var(--bg-elevated)" : "transparent",
-                border: active ? "1px solid var(--border)" : "1px solid transparent",
-                boxShadow: active ? "0 1px 2px rgba(28, 28, 28, 0.06)" : "none",
-                transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
-              }}
-            >
-              {MODES[k].label}
-            </button>
-          );
-        })}
-      </div>
+      {/* Segmented control — a single pill slides + resizes between segments. */}
+      <SegmentedModes mode={mode} setMode={setMode} />
     </div>
   );
 }
 
-// Dashboard metric: number stacked over a quiet label (Stripe/Linear idiom).
-function CrewStat({ n, label }: { n: string | number; label: string }) {
+// Dashboard metric: a count-up number stacked over a quiet label.
+function CrewStat({ value, format, label }: { value: number; format: (n: number) => string; label: string }) {
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
-      <span style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{n}</span>
+      <span style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>
+        <AnimatedNumber value={value} format={format} />
+      </span>
       <span style={{ fontSize: 11, color: "var(--fg-subtle)", letterSpacing: "0.01em" }}>{label}</span>
     </span>
   );
@@ -357,13 +427,33 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             0 6px 18px rgba(28, 28, 28, 0.08) !important;
         }
         /* Live card: a sage left-rail + faint wash so running work is the one
-           thing the eye lands on. Set inline via data-live. */
+           thing the eye lands on. The glow breathes so the card feels alive. */
         .klide-orch-card[data-live="running"] {
           border-color: color-mix(in srgb, var(--accent) 42%, var(--border)) !important;
-          box-shadow:
-            inset 2px 0 0 var(--accent),
-            inset 0 1px 0 var(--panel-highlight),
-            0 2px 10px color-mix(in srgb, var(--accent) 12%, transparent) !important;
+          animation: klide-orch-live 2.4s var(--ease-soft) infinite;
+        }
+        @keyframes klide-orch-live {
+          0%, 100% {
+            box-shadow:
+              inset 2px 0 0 var(--accent),
+              inset 0 1px 0 var(--panel-highlight),
+              0 2px 9px color-mix(in srgb, var(--accent) 10%, transparent);
+          }
+          50% {
+            box-shadow:
+              inset 2px 0 0 var(--accent),
+              inset 0 1px 0 var(--panel-highlight),
+              0 5px 18px color-mix(in srgb, var(--accent) 22%, transparent);
+          }
+        }
+        /* Tier-strength bars grow up from their baseline on mount. */
+        .klide-tier-bar {
+          transform-origin: bottom;
+          animation: klide-tier-grow 420ms var(--ease-spring) backwards;
+        }
+        @keyframes klide-tier-grow {
+          from { transform: scaleY(0.2); opacity: 0; }
+          to   { transform: scaleY(1);   opacity: inherit; }
         }
         .klide-orch-card[data-live="error"] {
           box-shadow: inset 2px 0 0 var(--danger), inset 0 1px 0 var(--panel-highlight) !important;
@@ -374,7 +464,8 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
         }
         .klide-orch-run:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)) !important; color: var(--accent) !important; background: var(--accent-soft) !important; }
         @media (prefers-reduced-motion: reduce) {
-          .klide-orch-card, .klide-orch-activity { animation: none; }
+          .klide-orch-card, .klide-orch-activity, .klide-tier-bar,
+          .klide-orch-card[data-live="running"] { animation: none; }
           .klide-orch-card:hover { transform: none; }
         }
       `}</style>
@@ -410,13 +501,13 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             gap: "12px 0",
           }}
         >
-          <CrewStat n={routed.length} label="tasks planned" />
+          <CrewStat value={routed.length} format={(n) => String(Math.round(n))} label="tasks planned" />
           <StatDivider />
-          <CrewStat n={readyCount} label="ready" />
+          <CrewStat value={readyCount} format={(n) => String(Math.round(n))} label="ready" />
           <StatDivider />
-          <CrewStat n={fmtUsd(totalCost)} label="est. cost" />
+          <CrewStat value={totalCost} format={fmtUsd} label="est. cost" />
           <StatDivider />
-          <CrewStat n={fmtMin(totalMs)} label="est. time" />
+          <CrewStat value={totalMs} format={fmtMin} label="est. time" />
           <span style={{ fontSize: 12, color: "var(--fg-subtle)", marginLeft: "auto", paddingLeft: 20, lineHeight: 1.5 }}>{MODES[mode].blurb}</span>
         </div>
 
@@ -545,7 +636,24 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                         </div>
                       );
                     })}
-                    {items.length === 0 && <div style={{ fontSize: 11, color: "var(--fg-dim)", textAlign: "center", paddingTop: 16 }}>idle</div>}
+                    {items.length === 0 && (
+                      <div
+                        style={{
+                          flex: 1,
+                          minHeight: 72,
+                          display: "grid",
+                          placeItems: "center",
+                          border: "1px dashed color-mix(in srgb, var(--border-strong) 45%, transparent)",
+                          borderRadius: "var(--radius-md)",
+                          color: "var(--fg-dim)",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                          letterSpacing: "0.04em",
+                        }}
+                      >
+                        no tasks
+                      </div>
+                    )}
                   </div>
                 </div>
               );
