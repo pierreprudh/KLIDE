@@ -334,6 +334,19 @@ input:focus-visible {
   outline-offset: 1px;
 }
 
+/* Custom interactive controls built from non-button elements (div/span with
+   role="button" or a tabindex) get the same keyboard-focus ring — they have
+   no native focus-visible affordance otherwise. outline (not box-shadow) so
+   the ring isn't clipped by overflow:hidden ancestors. */
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="option"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
 .klide-button {
   display: inline-flex;
   align-items: center;
