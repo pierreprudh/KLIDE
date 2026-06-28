@@ -129,7 +129,7 @@ export function StatusBar({
         </span>
       )}
       {language && (
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>{language}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-subtle)" }}>{language}</span>
       )}
       {gitStatus && (
         <span
@@ -228,8 +228,8 @@ export function StatusBar({
         Reset
       </button>
       </Tooltip>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>UTF-8</span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-dim)" }}>LF</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-subtle)" }}>UTF-8</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-subtle)" }}>LF</span>
     </footer>
   );
 }
