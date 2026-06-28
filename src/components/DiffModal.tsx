@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { diffLines, Change } from "diff";
 import { Z } from "../zLayers";
 
@@ -33,6 +33,21 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
     },
     { added: 0, removed: 0 }
   );
+
+  // Keyboard affordances: Escape rejects (matches the other modals), and the
+  // primary action takes initial focus so a keyboard user has a clear start.
+  const applyRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    applyRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onReject();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onReject]);
 
   return (
     <div
@@ -198,6 +213,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
             Reject
           </button>
           <button
+            ref={applyRef}
             onClick={onApply}
             style={{
               padding: "6px 16px",
