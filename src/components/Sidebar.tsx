@@ -1033,6 +1033,7 @@ export function Sidebar({
             <button
               onClick={pickFolder}
               title="Open folder…"
+              aria-label="Open folder"
               className="klide-explorer-action"
             >
               <FolderOpenSmall />
