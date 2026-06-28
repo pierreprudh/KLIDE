@@ -11,6 +11,14 @@ import type { DelegateId } from "./delegates";
 
 export type RunSource = DelegateId | "klide";
 export type RunStatus = "running" | "waiting" | "queued" | "done" | "cancelled" | "error";
+export type RunLifecycleStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "needs_review"
+  | "done"
+  | "failed"
+  | "cancelled";
 export type RunBoardSection = "running" | "blocked" | "ready_for_review" | "done";
 
 /** Why a run landed in the Mission Control attention queue. Discriminated by
@@ -196,6 +204,26 @@ export const STATUS_LABEL: Record<RunStatus, string> = {
   error: "Failed",
 };
 
+export const LIFECYCLE_ORDER: RunLifecycleStatus[] = [
+  "queued",
+  "running",
+  "waiting",
+  "needs_review",
+  "done",
+  "failed",
+  "cancelled",
+];
+
+export const LIFECYCLE_LABEL: Record<RunLifecycleStatus, string> = {
+  queued: "Queued",
+  running: "Running",
+  waiting: "Needs you",
+  needs_review: "Needs review",
+  done: "Done",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
 export const BOARD_SECTION_ORDER: RunBoardSection[] = [
   "running",
   "blocked",
@@ -217,18 +245,39 @@ export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
   done: "Finished conversations you ran",
 };
 
+export function runLifecycleStatus(run: Pick<Run, "status" | "kind" | "parentId">): RunLifecycleStatus {
+  switch (run.status) {
+    case "queued":
+      return "queued";
+    case "running":
+      return "running";
+    case "waiting":
+      return "waiting";
+    case "error":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "done":
+      return run.kind === "task" || !!run.parentId ? "needs_review" : "done";
+    default:
+      return "done";
+  }
+}
+
 export function boardSectionForRun(run: Pick<Run, "status" | "kind" | "parentId" | "updatedMs">): RunBoardSection {
-  if (run.status === "error" || run.status === "waiting") return "blocked";
-  if (run.status === "running") {
+  const lifecycle = runLifecycleStatus(run);
+  if (lifecycle === "failed" || lifecycle === "waiting") return "blocked";
+  if (lifecycle === "running") {
     const idle = Date.now() - run.updatedMs;
     return idle >= STALE_RUNNING_MS ? "blocked" : "running";
   }
-  if (run.status === "queued") {
+  if (lifecycle === "queued") {
     return "running";
   }
-  if (run.status === "cancelled") {
+  if (lifecycle === "cancelled") {
     return run.kind === "task" ? "ready_for_review" : "done";
   }
+  if (lifecycle === "needs_review") return "ready_for_review";
   // "Ready for Review" is for delegated work an agent produced on your behalf:
   // Mission Control todos are explicit assignments you created and may want
   // to inspect. Subagents with parentId stay nested under their parent instead
@@ -249,13 +298,16 @@ const STALE_RUNNING_MS = 5 * 60_000;
 export function runAttentionReason(
   run: Pick<Run, "status" | "kind" | "parentId" | "source" | "updatedMs">
 ): RunAttention | null {
-  if (run.status === "error") {
+  const lifecycle = runLifecycleStatus(run);
+  if (lifecycle === "failed") {
     return { kind: "failed", agentLabel: SOURCE_LABEL[run.source] };
   }
-  if (run.status === "waiting") {
+  if (lifecycle === "waiting") {
     return { kind: "awaiting_input" };
   }
-  if (run.status === "running") {
+  if (lifecycle === "running") {
+    const idleMs = Date.now() - run.updatedMs;
+    if (idleMs >= STALE_RUNNING_MS) return { kind: "idle", idleMs };
     return null;
   }
   // Completed work stays in the board sections/history. The top Attention
@@ -301,7 +353,7 @@ export function runBoardReason(
     }
   }
 
-  switch (run.status) {
+  switch (runLifecycleStatus(run)) {
     case "running":
       return {
         label: "Active",
@@ -332,11 +384,19 @@ export function runBoardReason(
         detail: `${SOURCE_LABEL[run.source]} is waiting for input or approval.`,
         tone: "warn",
       };
-    case "error":
+    case "failed":
       return {
         label: "Failed",
         detail: `${SOURCE_LABEL[run.source]} failed. Resume the run or inspect the transcript.`,
         tone: "danger",
+      };
+    case "needs_review":
+      return {
+        label: "Review",
+        detail: run.parentId || run.kind === "task"
+          ? `${SOURCE_LABEL[run.source]} finished delegated work. Review the output before calling it done.`
+          : "Finished work is ready to inspect.",
+        tone: "accent",
       };
   }
 }
@@ -365,11 +425,21 @@ export function runRoutineInfo(run: Pick<Run, "title">): RunRoutineInfo | null {
 // reuses the existing token; success is a restrained desaturated green.
 export const STATUS_COLOR: Record<RunStatus, string> = {
   running: "var(--accent)",
-  waiting: "#A15C00",
+  waiting: "var(--warning)",
   queued: "var(--fg-subtle)",
-  done: "#3E7C5A",
+  done: "var(--success)",
   cancelled: "var(--fg-subtle)",
-  error: "var(--danger, #B42318)",
+  error: "var(--danger)",
+};
+
+export const LIFECYCLE_COLOR: Record<RunLifecycleStatus, string> = {
+  queued: "var(--fg-subtle)",
+  running: "var(--accent)",
+  waiting: "var(--warning)",
+  needs_review: "var(--accent)",
+  done: "var(--success)",
+  failed: "var(--danger)",
+  cancelled: "var(--fg-subtle)",
 };
 
 export const SOURCE_LABEL: Record<RunSource, string> = {
@@ -384,10 +454,10 @@ export const SOURCE_LABEL: Record<RunSource, string> = {
 export const SOURCE_COLOR: Record<RunSource, string> = {
   "claude-code": "#D97757",
   codex: "var(--fg-strong)",
-  // Matches the opencode brand mark's neutral graphite (the logo uses
-  // #211E1E on the outer square). Quieter than Claude/Codex so the paid
-  // `opencode-go/*` runs don't shout on the board.
-  opencode: "#3A3A3A",
+  // opencode's brand mark is a neutral graphite; a fixed near-black vanished
+  // on dark surfaces, so use the theme-aware quiet neutral. Reads as quieter
+  // than Codex's --fg-strong, keeping the paid `opencode-go/*` runs calm.
+  opencode: "var(--fg-subtle)",
   // Oh My Pi's mark is a warm violet (the ⌥ glyph); a muted version keeps it
   // distinct from the others without shouting.
   omp: "#7C6BAE",
@@ -404,6 +474,9 @@ function toSource(raw: string): RunSource {
 }
 
 function toStatus(raw: string): RunStatus {
+  if (raw === "waiting_for_permission" || raw === "waiting_for_diff" || raw === "paused") {
+    return "waiting";
+  }
   return STATUS_ORDER.includes(raw as RunStatus) ? (raw as RunStatus) : "done";
 }
 

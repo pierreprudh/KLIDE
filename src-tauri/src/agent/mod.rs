@@ -1,8 +1,8 @@
 mod command_allowlist;
-mod permission;
 #[cfg(test)]
 mod eval;
 mod network_allowlist;
+mod permission;
 mod run_core;
 pub mod todo;
 pub mod tools;
@@ -147,6 +147,19 @@ fn set_run_status(app: &tauri::AppHandle, run_id: &str, status: AgentRunStatus) 
     };
     if let Some(handle) = runs.get_mut(run_id) {
         handle.status = status;
+    }
+}
+
+fn run_status_wire(status: &AgentRunStatus) -> &'static str {
+    match status {
+        AgentRunStatus::Queued => "queued",
+        AgentRunStatus::Running => "running",
+        AgentRunStatus::WaitingForPermission => "waiting_for_permission",
+        AgentRunStatus::WaitingForDiff => "waiting_for_diff",
+        AgentRunStatus::Paused => "paused",
+        AgentRunStatus::Done => "done",
+        AgentRunStatus::Error => "error",
+        AgentRunStatus::Cancelled => "cancelled",
     }
 }
 
@@ -813,7 +826,12 @@ where
         .map(|rule| rule.exact || preflight.external_paths.is_empty())
         .unwrap_or(false);
 
-    match permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok) {
+    match permission::precheck(
+        ctx,
+        permission::Capability::Command,
+        &approval_key,
+        project_ok,
+    ) {
         permission::Precheck::Execute => {
             return Ok(ToolOutcome::Produced(
                 run_command_capture_in(root_value, &cwd, &command, timeout_secs).await,
@@ -882,7 +900,9 @@ where
         }
         _ => ToolResult {
             ok: false,
-            content: permission::Capability::Command.rejected_message().to_string(),
+            content: permission::Capability::Command
+                .rejected_message()
+                .to_string(),
             metadata: None,
         },
     };
@@ -1029,10 +1049,14 @@ where
     );
 
     let result = match decision {
-        permission::GateDecision::Approved { .. } => execute_read_only_tool(root_value, call, ctx.id),
+        permission::GateDecision::Approved { .. } => {
+            execute_read_only_tool(root_value, call, ctx.id)
+        }
         _ => ToolResult {
             ok: false,
-            content: permission::Capability::Network.rejected_message().to_string(),
+            content: permission::Capability::Network
+                .rejected_message()
+                .to_string(),
             metadata: None,
         },
     };
@@ -1886,7 +1910,7 @@ pub async fn agent_list_runs(
     offset: Option<usize>,
 ) -> Result<Vec<AgentRunSummary>, String> {
     let runs_dir = app_runs_dir(&app)?;
-    let live_run_ids = state
+    let live_statuses = state
         .runs
         .lock()
         .map_err(|_| "Agent state is unavailable".to_string())?
@@ -1901,12 +1925,22 @@ pub async fn agent_list_runs(
                     | AgentRunStatus::Paused
             )
         })
-        .map(|(id, _)| id.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .map(|(id, handle)| (id.clone(), handle.status.clone()))
+        .collect::<HashMap<_, _>>();
     let mut summaries = list_summaries(&runs_dir, limit, offset)?;
     for summary in &mut summaries {
-        if matches!(summary.status.as_str(), "running" | "queued" | "waiting")
-            && !live_run_ids.contains(&summary.id)
+        if let Some(status) = live_statuses.get(&summary.id) {
+            summary.status = run_status_wire(status).to_string();
+        }
+        if matches!(
+            summary.status.as_str(),
+            "running"
+                | "queued"
+                | "waiting"
+                | "waiting_for_permission"
+                | "waiting_for_diff"
+                | "paused"
+        ) && !live_statuses.contains_key(&summary.id)
         {
             summary.status = "cancelled".to_string();
         }

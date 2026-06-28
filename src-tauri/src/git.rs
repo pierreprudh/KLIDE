@@ -716,7 +716,10 @@ pub(crate) fn project_clone(url: String, parent_dir: String) -> Result<String, S
     if target.exists() {
         return Err(format!(
             "\"{}\" already exists here",
-            target.file_name().and_then(|n| n.to_str()).unwrap_or("repo")
+            target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("repo")
         ));
     }
     let output = Command::new("git")

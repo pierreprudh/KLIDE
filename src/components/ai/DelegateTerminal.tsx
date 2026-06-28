@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { ProviderId } from "../../agent/types";
 import { cssVar } from "./utils";
+import { notify } from "../../toast";
 
 export function DelegateConsole({
   provider,
@@ -158,7 +159,9 @@ export function DelegateTerminalSurface({
         applied = true;
         syncSize();
       } catch (err) {
-        term.writeln(`Failed to start ${provider}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        term.writeln(`\x1b[31mFailed to start ${provider}: ${msg}\x1b[0m`);
+        notify(`Couldn't start ${provider} — check it's installed and on your PATH.`, { tone: "error" });
       }
     };
     void start();

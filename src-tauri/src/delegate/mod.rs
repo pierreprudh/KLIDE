@@ -294,7 +294,10 @@ mod tests {
         );
         assert_eq!(
             OpenCode.install_paths(home),
-            vec!["/home/u/.opencode/bin/opencode", "/home/u/.local/bin/opencode"]
+            vec![
+                "/home/u/.opencode/bin/opencode",
+                "/home/u/.local/bin/opencode"
+            ]
         );
         assert!(Codex
             .install_paths(home)
@@ -311,16 +314,14 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/delegates.ts"),
         )
         .expect("read src/delegates.ts");
-        let start = ts.find("DELEGATE_IDS").expect("DELEGATE_IDS in delegates.ts");
+        let start = ts
+            .find("DELEGATE_IDS")
+            .expect("DELEGATE_IDS in delegates.ts");
         let open = ts[start..].find('[').expect("opening [") + start;
         let close = ts[open..].find(']').expect("closing ]") + open;
         // Split the array literal on quotes; the quoted contents land on the
         // odd indices ("", "claude-code", ", ", "codex", …).
-        let mut frontend: Vec<&str> = ts[open + 1..close]
-            .split('"')
-            .skip(1)
-            .step_by(2)
-            .collect();
+        let mut frontend: Vec<&str> = ts[open + 1..close].split('"').skip(1).step_by(2).collect();
         frontend.sort_unstable();
         let mut backend: Vec<&str> = ALL.iter().map(|d| d.id()).collect();
         backend.sort_unstable();

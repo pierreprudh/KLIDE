@@ -19,6 +19,8 @@ import { WelcomeScreen } from "./components/WelcomeScreen";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
+import ToastHost from "./components/ToastHost";
+import { notify } from "./toast";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
 import { loadPanelSession } from "./components/ai/utils";
 import type { AgentEvent, ProviderId } from "./agent/types";
@@ -187,7 +189,12 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [searchVisible, setSearchVisible] = useState(false);
-  const [fileNotice, setFileNotice] = useState<string | null>(null);
+  // Action results + failures route through the global toast bus (see
+  // src/toast.ts). Kept the `setFileNotice` name so the ~30 existing call sites
+  // are untouched; `null` is a no-op (used to clear the old status-bar slot).
+  const setFileNotice = useCallback((msg: string | null) => {
+    if (msg) notify(msg);
+  }, []);
   const {
     tabs,
     activeIdx,
@@ -499,7 +506,7 @@ function App() {
         return (
           <div key={key} className="editor-frame" style={{ flex: 1, minHeight: 0 }}>
             <TabBar
-              tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+              tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty, externalChanged: t.externalChanged }))}
               activeIdx={activeIdx}
               onSelect={setActiveIdx}
               onClose={closeTab}
@@ -1610,7 +1617,7 @@ function App() {
                     }}
                   >
                     <TabBar
-                      tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+                      tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty, externalChanged: t.externalChanged }))}
                       activeIdx={activeIdx}
                       onSelect={setActiveIdx}
                       onClose={closeTab}
@@ -1871,7 +1878,7 @@ function App() {
         path={active?.path ?? null}
         language={language}
         workspaceRoot={workspaceRoot}
-        fileNotice={active?.externalChanged ? "File changed on disk" : fileNotice}
+        fileNotice={active?.externalChanged ? "File changed on disk" : null}
         gitStatus={gitStatus}
         terminalVisible={terminalVisible}
         onToggleTerminal={() => setTerminalVisible((v) => !v)}
@@ -1931,6 +1938,7 @@ function App() {
           initialQuery={paletteQuery}
         />
       )}
+      <ToastHost />
     </div>
   );
 }

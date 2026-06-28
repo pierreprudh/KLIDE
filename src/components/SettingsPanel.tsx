@@ -52,6 +52,7 @@ import {
   type RegionSize,
   type ResolvedLayout,
 } from "../layouts";
+import { notify } from "../toast";
 
 type SectionId =
   | "general"
@@ -370,7 +371,7 @@ function Segmented({
         padding: 2,
         borderRadius: 999,
         border: "1px solid var(--border-strong)",
-        background: "color-mix(in srgb, var(--panel) 88%, transparent)",
+        background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
       }}
     >
       {options.map((opt) => {
@@ -783,12 +784,12 @@ function StatusPill({
   children: ReactNode;
 }) {
   const color =
-    tone === "ok" ? "var(--accent)" : tone === "warn" ? "#A15C00" : "var(--fg-subtle)";
+    tone === "ok" ? "var(--accent)" : tone === "warn" ? "var(--warning)" : "var(--fg-subtle)";
   const background =
     tone === "ok"
       ? "var(--accent-soft)"
       : tone === "warn"
-      ? "color-mix(in srgb, #A15C00 12%, var(--bg-hover))"
+      ? "color-mix(in srgb, var(--warning) 12%, var(--bg-hover))"
       : "var(--bg-hover)";
   return (
     <span
@@ -839,6 +840,36 @@ type KeyStatus = { hasKey: boolean; source: "keychain" | "env" | "reference" | "
 // One provider's key control: shows where the key comes from (keychain / env /
 // none), lets you paste a new one (saved into the keychain via Rust), and clear
 // it. The key value never lives in React state once saved — only its status.
+// At-a-glance coverage above the key rows: how many hosted providers have a key,
+// plus a gentle "start here" nudge when none are set (the new-user state).
+function ApiKeySummary() {
+  const [configured, setConfigured] = useState<number | null>(null);
+  const total = API_KEY_PROVIDERS.length;
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      let n = 0;
+      await Promise.all(
+        API_KEY_PROVIDERS.map(async (p) => {
+          try {
+            const st = await invoke<KeyStatus>("ai_provider_key_status", { provider: p.id });
+            if (st.hasKey) n += 1;
+          } catch { /* ignore */ }
+        }),
+      );
+      if (alive) setConfigured(n);
+    })();
+    return () => { alive = false; };
+  }, []);
+  if (configured === null) return null;
+  return (
+    <div style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.5 }}>
+      <b style={{ fontWeight: 600, color: "var(--fg-strong)" }}>{configured} of {total}</b> providers configured.
+      {configured === 0 && " Add one key below to start chatting with hosted models — or use Ollama/MLX locally with no key."}
+    </div>
+  );
+}
+
 function ApiKeyRow({
   id,
   title,
@@ -856,6 +887,10 @@ function ApiKeyRow({
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Post-save validation: "Saved" only means persisted, not that the key works.
+  // We probe the provider's model list (the cheapest authenticated call) so a
+  // bad key surfaces here, not silently at the first chat turn.
+  const [verify, setVerify] = useState<"idle" | "checking" | "ok" | "fail">("idle");
   // Two ways to supply the key: "paste" → macOS Keychain (classic), or "ref"
   // → a `${VAR}` reference resolved from .env (same as self-hosted endpoints).
   const [method, setMethod] = useState<"paste" | "ref">("paste");
@@ -891,8 +926,25 @@ function ApiKeyRow({
       setValue("");
       await refresh();
       onChange?.(id);
+      // Validate against the live provider before claiming success.
+      setVerify("checking");
+      try {
+        const models = await invoke<string[]>("ai_provider_models", { provider: id });
+        if (models.length > 0) {
+          setVerify("ok");
+          notify(`${title} key verified`, { tone: "success" });
+        } else {
+          setVerify("fail");
+          notify(`${title} key saved, but the provider returned no models — double-check it.`, { tone: "warn" });
+        }
+      } catch (e) {
+        setVerify("fail");
+        setError(`Saved, but couldn't verify: ${e instanceof Error ? e.message : String(e)}`);
+        notify(`${title} key saved, but verification failed — it may be invalid.`, { tone: "warn" });
+      }
     } catch (e) {
       setError(String(e));
+      notify(`Couldn't save ${title} key: ${e instanceof Error ? e.message : String(e)}`, { tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -900,6 +952,7 @@ function ApiKeyRow({
 
   async function clear() {
     if (busy) return;
+    if (!window.confirm(`Remove the ${title} key? You'll need to re-enter it to use ${title} again.`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -909,6 +962,7 @@ function ApiKeyRow({
           ? "ai_clear_provider_key_reference"
           : "ai_clear_provider_key";
       await invoke(cmd, { provider: id });
+      setVerify("idle");
       await refresh();
       onChange?.(id);
     } catch (e) {
@@ -919,7 +973,13 @@ function ApiKeyRow({
   }
 
   const pill =
-    status.source === "keychain" ? (
+    verify === "checking" ? (
+      <StatusPill tone="idle">Checking…</StatusPill>
+    ) : verify === "ok" ? (
+      <StatusPill tone="ok">Verified</StatusPill>
+    ) : verify === "fail" ? (
+      <StatusPill tone="warn">Unverified</StatusPill>
+    ) : status.source === "keychain" ? (
       <StatusPill tone="ok">Saved</StatusPill>
     ) : status.source === "reference" ? (
       status.hasKey ? (
@@ -1097,7 +1157,7 @@ function IconButton({
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = "var(--bg-hover)";
-        e.currentTarget.style.color = danger ? "var(--danger, #c0392b)" : "var(--fg-strong)";
+        e.currentTarget.style.color = danger ? "var(--danger)" : "var(--fg-strong)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = "transparent";
@@ -1243,7 +1303,7 @@ function CustomEndpointRow({
             {endpoint.baseUrl}
           </div>
           {error && (
-            <div style={{ fontSize: 12, color: "var(--danger, #c0392b)", wordBreak: "break-word" }}>
+            <div style={{ fontSize: 12, color: "var(--danger)", wordBreak: "break-word" }}>
               {error}
             </div>
           )}
@@ -1612,7 +1672,7 @@ function CustomEndpointsBlock({
                 in a Modelfile), or the model's default is used.
               </div>
               {error && (
-                <div style={{ fontSize: 12, color: "var(--danger, #c0392b)" }}>{error}</div>
+                <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>
               )}
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                 <GhostButton onClick={resetForm}>Cancel</GhostButton>
@@ -1697,7 +1757,7 @@ function LocalServerRow({
               borderRadius: "var(--radius-sm)",
               border: "1px solid var(--border-strong)",
               background: running ? "var(--bg-hover)" : "var(--accent)",
-              color: running ? "var(--fg-strong)" : "#FFFFFF",
+              color: running ? "var(--fg-strong)" : "var(--control-primary-fg)",
               fontSize: 12,
               fontWeight: 600,
               cursor: starting ? "default" : "pointer",
@@ -1999,7 +2059,7 @@ function AccountControl({
             )}
 
             {err && (
-              <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--danger, #e5484d)", lineHeight: 1.4 }}>
+              <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>
                 {err}
               </div>
             )}
@@ -3198,6 +3258,7 @@ export function SettingsPanel({
 
           <Section id="api" active={activeSection} mounted={visitedSections.has("api")}>
               <SettingBlock title="API Keys">
+                <ApiKeySummary />
                 <Panel>
                   {API_KEY_PROVIDERS.map((provider) => (
                     <ApiKeyRow
@@ -3438,8 +3499,8 @@ type StatsMetric = "conversations" | "tokens";
 // so color-mix can fade them against the panel background.
 const STATS_SOURCE_COLOR: Record<RunSource, string> = {
   "claude-code": "#D97757",
-  codex: "#7A7A7A",
-  opencode: "#3A3A3A",
+  codex: "var(--fg-strong)",
+  opencode: "var(--fg-subtle)",
   omp: "#7C6BAE",
   klide: "var(--accent)",
 };

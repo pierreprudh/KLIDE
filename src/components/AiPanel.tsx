@@ -70,10 +70,12 @@ import {
   saveConversations,
   loadPanelSession,
   savePanelSession,
+  latestRestorableConversationId,
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
 import { Z } from "../zLayers";
+import { notify } from "../toast";
 
 function LocalServerStartingRow({ providerLabel, centered = false }: { providerLabel: string; centered?: boolean }) {
   const hairline = (
@@ -380,6 +382,14 @@ export function AiPanel({
   onOpenMemory,
   onSkillGenerated,
 }: Props) {
+  const [provider, setProvider] = useState<ProviderId>(() => {
+    if (initialProvider) return initialProvider;
+    if (panelId) {
+      const perPanel = localStorage.getItem(`klide.provider.${panelId}`) as ProviderId | null;
+      if (perPanel) return perPanel;
+    }
+    return (localStorage.getItem("klide.provider") as ProviderId) || "ollama";
+  });
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
@@ -401,7 +411,12 @@ export function AiPanel({
     // convo id makes the rebuilt terminal land on the same PTY session.
     if (initialConversationId) return initialConversationId;
     const prior = panelId ? loadPanelSession(panelId) : null;
-    return prior ? prior.convoId : genId();
+    if (prior) return prior.convoId;
+    if (!isDelegateProvider(provider)) {
+      const latest = latestRestorableConversationId(workspaceRoot, provider);
+      if (latest) return latest;
+    }
+    return genId();
   });
   const [currentForkedFrom, setCurrentForkedFrom] = useState<Conversation["forkedFrom"]>(null);
   const currentForkedFromRef = useRef<Conversation["forkedFrom"]>(null);
@@ -450,6 +465,7 @@ export function AiPanel({
     const last = lastPublishRef.current;
     const metaKey = JSON.stringify({
       id: currentId,
+      provider,
       model: model ?? null,
       cwd: workspaceRoot,
       branch: conversationGitMeta.branch,
@@ -467,6 +483,7 @@ export function AiPanel({
       // every answered chat under Mission Control's "Blocked / Needs you".
       title: (firstUser?.content.trim() || "Untitled chat").slice(0, 120),
       status: streaming ? "running" : "done",
+      provider,
       model: model ?? null,
       cwd: workspaceRoot,
       branch: conversationGitMeta.branch,
@@ -479,7 +496,7 @@ export function AiPanel({
       ),
       updatedMs: Date.now(),
     });
-  }, [msgs, streaming, model, workspaceRoot, currentId, currentForkedFrom, conversationGitMeta]);
+  }, [msgs, streaming, provider, model, workspaceRoot, currentId, currentForkedFrom, conversationGitMeta]);
 
   const [contextLimit, setContextLimit] = useState(128_000);
   // The provider's own prompt-token count from the latest finished turn — the
@@ -605,14 +622,6 @@ export function AiPanel({
   const [mentionIdx, setMentionIdx] = useState(0);
   const mentionMatches = mention !== null ? fuzzyFiles(fileList, mention.query) : [];
 
-  const [provider, setProvider] = useState<ProviderId>(() => {
-    if (initialProvider) return initialProvider;
-    if (panelId) {
-      const perPanel = localStorage.getItem(`klide.provider.${panelId}`) as ProviderId | null;
-      if (perPanel) return perPanel;
-    }
-    return (localStorage.getItem("klide.provider") as ProviderId) || "ollama";
-  });
   const providerDelegatesWork = isDelegateProvider(provider);
   const isLocalProvider = provider === "ollama" || provider === "mlx";
   const [providerOpen, setProviderOpen] = useState(false);
@@ -626,6 +635,10 @@ export function AiPanel({
     () => providerGroupsWithCustom(customProviders),
     [customProviders]
   );
+  // Hosted ("API") providers that have no key configured — badged in the picker
+  // so a missing key is visible *before* selecting + sending, not after a failed
+  // run. Populated when the menu opens.
+  const [keylessProviders, setKeylessProviders] = useState<Set<string>>(new Set());
   // Collapsible provider groups ("stacks"). Each opens via the header chevron.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   function toggleGroup(label: string) {
@@ -639,6 +652,22 @@ export function AiPanel({
   useEffect(() => {
     if (!providerOpen) return;
     void refreshCustomProviders().then(setCustomProviders).catch(() => {});
+    // Probe key status for hosted ("API") providers so we can badge the ones
+    // that aren't configured yet. Best-effort; a failed probe just isn't badged.
+    void (async () => {
+      const apiGroup = providerGroups.find((g) => g.label === "API");
+      if (!apiGroup) return;
+      const missing = new Set<string>();
+      await Promise.all(
+        apiGroup.items.map(async (it) => {
+          try {
+            const st = await invoke<{ hasKey: boolean }>("ai_provider_key_status", { provider: it.id });
+            if (!st.hasKey) missing.add(it.id);
+          } catch { /* unreachable status → leave unbadged */ }
+        }),
+      );
+      setKeylessProviders(missing);
+    })();
     // Open compact: expand only the stack holding the active provider.
     const activeGroup = providerGroups.find((g) => g.items.some((it) => it.id === provider));
     setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
@@ -1042,16 +1071,16 @@ This user request requires workspace inspection. Before answering, you MUST call
     measuredUsageTokens !== null && !streaming ? measuredUsageTokens.completion : 0;
   const contextRemaining = Math.max(0, effectiveContextLimit - contextUsed);
   const contextRatio = Math.min(1, contextUsed / effectiveContextLimit);
-  const contextTone = contextRatio > 0.85 ? "var(--danger, #B42318)" : contextRatio > 0.65 ? "#A15C00" : "var(--accent)";
+  const contextTone = contextRatio > 0.85 ? "var(--danger)" : contextRatio > 0.65 ? "var(--warning)" : "var(--accent)";
   const rawContextRows: ContextBreakdownRow[] = [
-    { id: "messages", label: "Messages", tokens: messageTokens, color: "var(--accent)" },
-    { id: "tools", label: "System tools", tokens: toolSchemaTokens, color: "#7AA2F7" },
-    { id: "system", label: "System prompt", tokens: systemPromptTokens, color: "#9DBCF9" },
-    { id: "skills", label: "Skills", tokens: skillsTokens, color: "#B7D0FF" },
-    { id: "rules", label: "Project rules", tokens: projectRulesTokens, color: "#C9DAF8" },
-    { id: "lens", label: "Context lens", tokens: contextLensTokens, color: "#D7E6FF" },
-    { id: "draft", label: "Draft input", tokens: draftTokens, color: "#E5EEFF" },
-    { id: "reply", label: "Last reply", tokens: replyContextUsed, color: "#A6C8FF" },
+    { id: "messages", label: "Messages", tokens: messageTokens, color: "var(--chart-1)" },
+    { id: "tools", label: "System tools", tokens: toolSchemaTokens, color: "var(--chart-2)" },
+    { id: "system", label: "System prompt", tokens: systemPromptTokens, color: "var(--chart-3)" },
+    { id: "skills", label: "Skills", tokens: skillsTokens, color: "var(--chart-4)" },
+    { id: "rules", label: "Project rules", tokens: projectRulesTokens, color: "var(--chart-5)" },
+    { id: "lens", label: "Context lens", tokens: contextLensTokens, color: "var(--chart-6)" },
+    { id: "draft", label: "Draft input", tokens: draftTokens, color: "var(--chart-7)" },
+    { id: "reply", label: "Last reply", tokens: replyContextUsed, color: "var(--chart-2)" },
   ];
   const contextRows = rawContextRows.filter((row) => row.tokens > 0);
   const measuredDelta =
@@ -1061,7 +1090,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   const contextBreakdownRows: ContextBreakdownRow[] = [
     ...contextRows,
     ...(measuredDelta > 0
-      ? [{ id: "measured-extra", label: "Provider overhead", tokens: measuredDelta, color: "#8A8A85", muted: true }]
+      ? [{ id: "measured-extra", label: "Provider overhead", tokens: measuredDelta, color: "var(--fg-dim)", muted: true }]
       : []),
     { id: "free", label: "Free space", tokens: contextRemaining, color: "var(--border-strong)", muted: true },
   ];
@@ -2449,6 +2478,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       await resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: questionAnswer });
     } catch (err) {
       console.error("Failed to submit answer:", err);
+      notify(`Couldn't send your answer: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
     }
   }
 
@@ -2460,6 +2490,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     setQuestionAnswer("");
     void resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: "(skipped)" }).catch((err) => {
       console.error("Failed to skip question:", err);
+      notify(`Couldn't skip the question: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
     });
   }
 
@@ -2471,7 +2502,10 @@ This user request requires workspace inspection. Before answering, you MUST call
       runId: snapshot.runId,
       requestId: snapshot.requestId,
       decision: pattern ? { behavior: "allow", scope, pattern } : { behavior: "allow", scope },
-    }).catch((err) => console.error("Failed to approve command:", err));
+    }).catch((err) => {
+      console.error("Failed to approve command:", err);
+      notify(`Couldn't approve the command: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
+    });
   }
 
   function rejectCommand() {
@@ -2482,7 +2516,10 @@ This user request requires workspace inspection. Before answering, you MUST call
       runId: snapshot.runId,
       requestId: snapshot.requestId,
       decision: { behavior: "deny" },
-    }).catch((err) => console.error("Failed to reject command:", err));
+    }).catch((err) => {
+      console.error("Failed to reject command:", err);
+      notify(`Couldn't reject the command: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
+    });
   }
 
   // ── RENDER ──
@@ -2531,6 +2568,12 @@ This user request requires workspace inspection. Before answering, you MUST call
                         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
                         <span style={{ display: "grid", placeItems: "center", flexShrink: 0, color: item.available ? "var(--fg-subtle)" : "var(--fg-dim)" }}><ProviderLogo id={item.id} size={15} /></span>
                         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+                        {item.available && keylessProviders.has(item.id) && !active && (
+                          <span title="No API key set — add one in Settings" style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 500, color: "var(--warning)" }}>
+                            <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--warning)" }} />
+                            key
+                          </span>
+                        )}
                         {active && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg-subtle)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
                       </button>
                     );
@@ -2691,12 +2734,38 @@ This user request requires workspace inspection. Before answering, you MUST call
         ) : (
           <>
         {msgs.length === 0 && !serverStarting && (
-          <div style={{ width: "min(260px, 80%)", textAlign: "center", color: "var(--fg-subtle)", lineHeight: 1.55, transform: "translateY(-10px)" }}>
+          <div style={{ width: "min(300px, 86%)", textAlign: "center", color: "var(--fg-subtle)", lineHeight: 1.55, transform: "translateY(-10px)" }}>
             <div style={{ width: 38, height: 38, margin: "0 auto 14px", borderRadius: "var(--radius-lg)", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)", border: "1px solid var(--panel-border)", boxShadow: "inset 0 1px 0 var(--panel-highlight)" }}>
               <span style={{ fontFamily: "var(--font-ui)", fontSize: 19, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
             </div>
             <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, marginBottom: 6 }}>{workspaceRoot ? "Ask Klide" : "Open a workspace"}</div>
             <div style={{ fontSize: 12 }}>{workspaceRoot ? (providerDelegatesWork ? `Delegate workspace tasks to ${providerName(provider)}.` : `Read, reason, and propose edits with ${providerName(provider)}.`) : "Open a folder to enable local agent mode."}</div>
+            {workspaceRoot && !providerDelegatesWork && (
+              <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  "Explain what this project does and how it's structured",
+                  "Find and fix a bug in @",
+                  "Add a test for @",
+                ].map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => {
+                      setInput(p);
+                      requestAnimationFrame(() => {
+                        const ta = taRef.current;
+                        if (ta) { ta.focus(); ta.setSelectionRange(p.length, p.length); }
+                      });
+                    }}
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg)", fontSize: 12, lineHeight: 1.4, cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.borderColor = "var(--border)"; }}
+                  >
+                    {p}
+                  </button>
+                ))}
+                <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-dim)" }}>Type <b style={{ fontWeight: 600, color: "var(--fg-subtle)" }}>@</b> to attach a file · <b style={{ fontWeight: 600, color: "var(--fg-subtle)" }}>/</b> for commands</div>
+              </div>
+            )}
           </div>
         )}
         {msgs.map((m, i) => {
@@ -3088,8 +3157,8 @@ This user request requires workspace inspection. Before answering, you MUST call
                   height: 26,
                   padding: "0 12px",
                   fontSize: 11.5,
-                  fontWeight: 560,
-                  color: "#fff",
+                  fontWeight: 600,
+                  color: "var(--control-primary-fg)",
                   background: "var(--accent)",
                   border: "1px solid var(--accent)",
                   borderRadius: "var(--radius-sm)",
@@ -3145,8 +3214,8 @@ This user request requires workspace inspection. Before answering, you MUST call
             </span>
             <button type="button" onClick={() => void revertThisRun()} disabled={reverting}
               title="Undo every file change this run made"
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--danger, #B42318)", background: "transparent", color: "var(--danger, #B42318)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: reverting ? "default" : "pointer", opacity: reverting ? 0.6 : 1, transition: "background var(--motion-fast) var(--ease-out)" }}
-              onMouseEnter={(e) => { if (!reverting) e.currentTarget.style.background = "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)"; }}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--danger)", background: "transparent", color: "var(--danger)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: reverting ? "default" : "pointer", opacity: reverting ? 0.6 : 1, transition: "background var(--motion-fast) var(--ease-out)" }}
+              onMouseEnter={(e) => { if (!reverting) e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-3" />
@@ -3216,7 +3285,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: width < 360 ? 4 : 6, minWidth: 0, flex: "0 0 auto", flexWrap: "nowrap", overflow: "hidden" }}>
               {providerDelegatesWork ? (
-                <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "color-mix(in srgb, var(--panel) 88%, transparent)", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 560, flexShrink: 0 }}>
+                <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 500, flexShrink: 0 }}>
                   <ProviderLogo id={provider} size={13} /><span>{providerName(provider)}</span>
                 </div>
               ) : (
@@ -3428,7 +3497,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               </button>
             ) : (
               <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
-                style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "#fff" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
+                style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "var(--control-primary-fg)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
                 onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
                 onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>

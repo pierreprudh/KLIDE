@@ -366,7 +366,7 @@ export function GridLayoutBuilder() {
                 gridColumn: `${candidate.x + 1} / span ${candidate.w}`,
                 gridRow: `${candidate.y + 1} / span ${candidate.h}`,
                 borderRadius: "var(--radius-sm)",
-                border: `2px solid ${candidateOk ? "var(--accent)" : "var(--danger, #c0392b)"}`,
+                border: `2px solid ${candidateOk ? "var(--accent)" : "var(--danger)"}`,
                 background: candidateOk ? "var(--accent-soft)" : "rgba(192,57,43,0.14)",
               }}
             />
@@ -456,7 +456,7 @@ export function GridLayoutBuilder() {
             borderRadius: "var(--radius-sm)",
             border: "1px solid var(--accent)",
             background: areas.length ? "var(--accent)" : "var(--bg-hover)",
-            color: areas.length ? "#FFFFFF" : "var(--fg-subtle)",
+            color: areas.length ? "var(--control-primary-fg)" : "var(--fg-subtle)",
             fontSize: 13,
             cursor: areas.length ? "pointer" : "not-allowed",
           }}

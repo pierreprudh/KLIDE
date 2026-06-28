@@ -47,10 +47,15 @@ impl Delegate for Codex {
     }
 
     fn login_commands(&self) -> Vec<String> {
-        ["", " --device-auth", " --with-api-key", " --with-access-token"]
-            .iter()
-            .map(|tail| format!("codex login{tail}"))
-            .collect()
+        [
+            "",
+            " --device-auth",
+            " --with-api-key",
+            " --with-access-token",
+        ]
+        .iter()
+        .map(|tail| format!("codex login{tail}"))
+        .collect()
     }
 
     /// `codex login status` prints plain text; "logged in" anywhere in a

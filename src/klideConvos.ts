@@ -11,6 +11,7 @@ export type KlideConvo = {
   id: string;
   title: string;
   status: RunStatus;
+  provider?: Conversation["provider"] | null;
   model: string | null;
   cwd: string | null;
   branch: string | null;
@@ -63,6 +64,7 @@ function conversationToConvo(c: Conversation): KlideConvo | null {
     id: c.id,
     title: c.title || deriveTitle(c.msgs),
     status: "done",
+    provider: c.provider ?? null,
     model: c.model ?? null,
     cwd: c.cwd ?? null,
     branch: c.branch ?? null,
@@ -89,6 +91,7 @@ function readStoredConvos(): KlideConvo[] {
       .map((c) => ({
         ...c,
         status: safeStatus(c.status),
+        provider: typeof c.provider === "string" ? c.provider as Conversation["provider"] : null,
         branch: typeof c.branch === "string" ? c.branch : null,
         worktree: typeof c.worktree === "string" ? c.worktree : null,
         forkedFrom: safeForkedFrom(c.forkedFrom),

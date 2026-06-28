@@ -1,5 +1,5 @@
 import type { KlideConvo } from "./klideConvos";
-import type { Run, RunSource } from "./runs";
+import { runLifecycleStatus, type Run, type RunLifecycleStatus, type RunSource } from "./runs";
 import type { TaskSession, TaskSource } from "./tasks";
 import { DELEGATE_IDS, isDelegateId } from "./delegates";
 
@@ -7,6 +7,7 @@ export type RunLedgerOrigin = "task" | "klide-convo" | "transcript";
 
 export type RunLedgerEntry = Run & {
   origin: RunLedgerOrigin;
+  lifecycle: RunLifecycleStatus;
   capabilities: RunCapabilities;
   archived: boolean;
   originalTitle: string;
@@ -88,20 +89,21 @@ export function projectName(cwd: string | null): string | null {
   return cwd ? cwd.split("/").filter(Boolean).pop() ?? null : null;
 }
 
-function capabilitiesFor(run: Run, origin: RunLedgerOrigin): RunCapabilities {
+function capabilitiesFor(run: Run, origin: RunLedgerOrigin, lifecycle = runLifecycleStatus(run)): RunCapabilities {
   const delegate = isDelegateId(run.source);
   const hasContent = run.kind === "convo" || run.kind === "run";
   const hasWorkspace = !!run.cwd;
+  const active = lifecycle === "running" || lifecycle === "waiting";
   return {
     ...NO_CAPABILITIES,
-    canRename: run.status !== "running" && run.status !== "waiting",
+    canRename: !active,
     canResume: delegate || run.source === "klide",
     canOpenTerminal: delegate || origin === "task",
     canOpenInOtherAgent: run.source === "klide" || delegate,
-    canReviewDiff: hasWorkspace && run.status !== "queued",
+    canReviewDiff: hasWorkspace && lifecycle !== "queued",
     canSaveMemory: hasContent,
     canFork: hasContent,
-    canArchive: run.status !== "running" && run.status !== "waiting",
+    canArchive: !active,
     canExportTranscript: hasContent,
   };
 }
@@ -113,13 +115,15 @@ function withCapabilities(
 ): RunLedgerEntry {
   const meta = metadata[runLedgerKey(run)];
   const title = meta?.title?.trim() || run.title;
+  const lifecycle = runLifecycleStatus(run);
   return {
     ...run,
     title,
+    lifecycle,
     originalTitle: run.title,
     origin,
     archived: meta?.archived === true,
-    capabilities: capabilitiesFor(run, origin),
+    capabilities: capabilitiesFor(run, origin, lifecycle),
   };
 }
 
@@ -170,6 +174,7 @@ export function convoToLedgerEntry(
     source: "klide",
     title: c.title,
     status: c.status,
+    provider: c.provider ?? null,
     model: c.model,
     project: projectName(c.cwd),
     cwd: c.cwd,
@@ -267,6 +272,7 @@ export function runMatchesLedgerQuery(run: RunLedgerEntry, query: string): boole
     run.source,
     run.origin,
     run.status,
+    run.lifecycle,
     run.kind,
     run.model,
     run.provider,

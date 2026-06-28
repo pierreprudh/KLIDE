@@ -121,11 +121,11 @@ function statusLabel(status: string): string {
 }
 
 function statusColor(label: string): string {
-  if (label === "M") return "#D99A2B";
-  if (label === "A") return "#2F9E44";
-  if (label === "D") return "#D64545";
+  if (label === "M") return "var(--warning)";
+  if (label === "A") return "var(--success)";
+  if (label === "D") return "var(--danger)";
   if (label === "U") return "var(--accent)";
-  if (label === "R") return "#9B7DFF";
+  if (label === "R") return "var(--accent)";
   return "var(--fg-subtle)";
 }
 
@@ -151,10 +151,10 @@ function DiffLine({ line, index }: { line: string; index: number }) {
   const isMeta = line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("@@") || line.startsWith("new file") || line.startsWith("deleted file");
   const isAdded = line.startsWith("+") && !line.startsWith("+++");
   const isRemoved = line.startsWith("-") && !line.startsWith("---");
-  const bg = isAdded ? "color-mix(in srgb, #2F9E44 12%, transparent)"
-    : isRemoved ? "color-mix(in srgb, #D64545 12%, transparent)"
+  const bg = isAdded ? "color-mix(in srgb, var(--success) 12%, transparent)"
+    : isRemoved ? "color-mix(in srgb, var(--danger) 12%, transparent)"
     : "transparent";
-  const fg = isMeta ? "var(--accent)" : isAdded ? "#2F9E44" : isRemoved ? "#D64545" : "var(--fg)";
+  const fg = isMeta ? "var(--accent)" : isAdded ? "var(--success)" : isRemoved ? "var(--danger)" : "var(--fg)";
   return (
     <div style={{ display: "grid", gridTemplateColumns: "44px 1fr", minHeight: 19, background: bg, color: fg, fontSize: 12, lineHeight: 1.55 }}>
       <span style={{ color: "var(--fg-dim)", textAlign: "right", paddingRight: 12, userSelect: "none", fontSize: 11 }}>
@@ -244,8 +244,8 @@ function BranchPill({ branch, ahead, behind }: { branch: string; ahead: number; 
     <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600 }}>
       <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }} />
       <span style={{ fontFamily: "var(--font-mono)" }}>{branch}</span>
-      {ahead > 0 && <span style={{ color: "#2F9E44", fontFamily: "var(--font-mono)", fontSize: 11 }}>↑{ahead}</span>}
-      {behind > 0 && <span style={{ color: "#D99A2B", fontFamily: "var(--font-mono)", fontSize: 11 }}>↓{behind}</span>}
+      {ahead > 0 && <span style={{ color: "var(--success)", fontFamily: "var(--font-mono)", fontSize: 11 }}>↑{ahead}</span>}
+      {behind > 0 && <span style={{ color: "var(--warning)", fontFamily: "var(--font-mono)", fontSize: 11 }}>↓{behind}</span>}
     </div>
   );
 }
@@ -422,9 +422,9 @@ function SectionHeader({ title, count, onAction, actionLabel }: {
 type PRBadgeProps = { badge: PullRequest["badge"] };
 function PRBadge({ badge }: PRBadgeProps) {
   const map: Record<PullRequest["badge"], { color: string; bg: string; label: string }> = {
-    open: { color: "#2F9E44", bg: "color-mix(in srgb, #2F9E44 18%, transparent)", label: "Open" },
-    merged: { color: "#9B7DFF", bg: "color-mix(in srgb, #9B7DFF 18%, transparent)", label: "Merged" },
-    closed: { color: "#D64545", bg: "color-mix(in srgb, #D64545 18%, transparent)", label: "Closed" },
+    open: { color: "var(--success)", bg: "color-mix(in srgb, var(--success) 18%, transparent)", label: "Open" },
+    merged: { color: "var(--accent)", bg: "color-mix(in srgb, var(--accent) 18%, transparent)", label: "Merged" },
+    closed: { color: "var(--danger)", bg: "color-mix(in srgb, var(--danger) 18%, transparent)", label: "Closed" },
     draft: { color: "var(--fg-subtle)", bg: "var(--bg-hover)", label: "Draft" },
   };
   const m = map[badge];
@@ -473,8 +473,8 @@ function PRCard({ pr, selected, onSelect, onOpen, onCheckout, onMerge }: {
         {pr.headRef} <span style={{ color: "var(--fg-subtle)" }}>→</span> {pr.baseRef} · {pr.author}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        <span style={{ color: "#2F9E44" }}>+{pr.additions}</span>
-        <span style={{ color: "#D64545" }}>−{pr.deletions}</span>
+        <span style={{ color: "var(--success)" }}>+{pr.additions}</span>
+        <span style={{ color: "var(--danger)" }}>−{pr.deletions}</span>
         <span style={{ color: "var(--fg-dim)" }}>{pr.changedFiles} files</span>
         <span style={{ flex: 1 }} />
         <button onClick={(e) => { e.stopPropagation(); onOpen(pr.number); }} style={iconButtonStyle} title="Open in browser">↗</button>
@@ -508,8 +508,8 @@ function PRDetail({ pr, onClose, onOpen, onCheckout, onMerge }: {
         {pr.headRef} <span style={{ color: "var(--fg-subtle)" }}>→</span> {pr.baseRef} · {pr.author}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        <span style={{ color: "#2F9E44" }}>+{pr.additions}</span>
-        <span style={{ color: "#D64545" }}>−{pr.deletions}</span>
+        <span style={{ color: "var(--success)" }}>+{pr.additions}</span>
+        <span style={{ color: "var(--danger)" }}>−{pr.deletions}</span>
         <span style={{ color: "var(--fg-dim)" }}>{pr.changedFiles} files</span>
         <span style={{ color: "var(--fg-dim)" }}>·</span>
         <span style={{ color: "var(--fg-dim)" }}>{pr.mergeable === "MERGEABLE" ? "No conflicts" : pr.mergeable}</span>
@@ -601,8 +601,8 @@ function BranchMenu({ branches, current, onSelect, onClose }: {
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, fontSize: 11, fontFamily: "var(--font-mono)" }}>
-              {b.ahead > 0 && <span style={{ color: "#2F9E44" }}>↑{b.ahead}</span>}
-              {b.behind > 0 && <span style={{ color: "#D99A2B" }}>↓{b.behind}</span>}
+              {b.ahead > 0 && <span style={{ color: "var(--success)" }}>↑{b.ahead}</span>}
+              {b.behind > 0 && <span style={{ color: "var(--warning)" }}>↓{b.behind}</span>}
             </div>
           </button>
         ))}
@@ -1069,17 +1069,17 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           style={{
             padding: "9px 16px", fontSize: 12, fontWeight: 500,
             display: "flex", alignItems: "center", gap: 8,
-            color: actionMessage.kind === "ok" ? "var(--fg-strong)" : "#A8514A",
+            color: actionMessage.kind === "ok" ? "var(--fg-strong)" : "var(--danger)",
           }}
         >
           <span
             aria-hidden
             style={{
               width: 6, height: 6, borderRadius: "50%",
-              background: actionMessage.kind === "ok" ? "#2F9E44" : "#D64545",
+              background: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)",
               boxShadow: actionMessage.kind === "ok"
-                ? "0 0 0 3px color-mix(in srgb, #2F9E44 18%, transparent)"
-                : "0 0 0 3px color-mix(in srgb, #D64545 18%, transparent)",
+                ? "0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent)"
+                : "0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent)",
               flexShrink: 0,
             }}
           />
@@ -1185,7 +1185,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
             <div style={{ padding: "8px 14px", color: "var(--fg-subtle)", fontSize: 11 }}>Loading PR…</div>
           )}
           {prError && (
-            <div style={{ padding: "10px 14px", color: "#D64545", fontSize: 12, lineHeight: 1.4 }}>
+            <div style={{ padding: "10px 14px", color: "var(--danger)", fontSize: 12, lineHeight: 1.4 }}>
               <div style={{ fontWeight: 600, marginBottom: 2 }}>gh unavailable</div>
               <div>{prError}</div>
             </div>

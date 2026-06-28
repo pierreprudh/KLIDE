@@ -309,46 +309,56 @@ export function WelcomeScreen({
             <h1 className="klide-welcome-title">Welcome back</h1>
           </div>
 
-          {/* Actions — one clear primary, then quieter options */}
+          {/* Actions — one clear primary, then quieter options; even 2×2 grid */}
           <div
             className="klide-welcome-rise"
-            style={{ ...rise(120), display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginTop: 28 }}
+            style={{
+              ...rise(120),
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 10,
+              marginTop: 28,
+            }}
           >
             <button
               type="button"
               onClick={onOpenFolder}
               className="klide-welcome-glass-btn"
               data-primary="true"
+              style={{ width: "100%", justifyContent: "flex-start" }}
             >
               <FolderIcon />
               Open folder
-              <kbd className="klide-welcome-kbd">⌘O</kbd>
+              <kbd className="klide-welcome-kbd" style={{ marginLeft: "auto" }}>⌘O</kbd>
             </button>
             <button
               type="button"
               onClick={() => openComposer("new")}
               className="klide-welcome-glass-btn"
               data-active={composer === "new" ? "true" : undefined}
+              style={{ width: "100%", justifyContent: "flex-start" }}
             >
               <PlusIcon />
               New project
-              <kbd className="klide-welcome-kbd">⌘N</kbd>
+              <kbd className="klide-welcome-kbd" style={{ marginLeft: "auto" }}>⌘N</kbd>
             </button>
             <button
               type="button"
               onClick={() => openComposer("clone")}
               className="klide-welcome-glass-btn"
               data-active={composer === "clone" ? "true" : undefined}
+              style={{ width: "100%", justifyContent: "flex-start" }}
             >
               <GitIcon />
               Clone
-              <kbd className="klide-welcome-kbd">⌘⇧N</kbd>
+              <kbd className="klide-welcome-kbd" style={{ marginLeft: "auto" }}>⌘⇧N</kbd>
             </button>
             <button
               type="button"
               onClick={onOpenSettings}
               className="klide-welcome-glass-btn"
               data-quiet="true"
+              style={{ width: "100%", justifyContent: "flex-start" }}
             >
               <SettingsIcon />
               Settings
@@ -493,7 +503,7 @@ export function WelcomeScreen({
                 marginTop: 14,
                 fontFamily: "var(--font-mono)",
                 fontSize: 11,
-                color: "#7fd0ff",
+                color: "var(--w-dim)",
                 wordBreak: "break-all",
               }}
             >
@@ -552,9 +562,16 @@ function GitIcon() {
 
 function SettingsIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="2.6" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 6h10" />
+      <path d="M18 6h2" />
+      <path d="M16 4v4" />
+      <path d="M4 12h3" />
+      <path d="M11 12h9" />
+      <path d="M9 10v4" />
+      <path d="M4 18h11" />
+      <path d="M19 18h1" />
+      <path d="M17 16v4" />
     </svg>
   );
 }

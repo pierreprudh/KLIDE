@@ -102,7 +102,7 @@ function FolderOpenSmall() {
 
 function FolderRow({ open }: { open: boolean }) {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D9A441" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--fg-subtle)" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round">
       <path
         fill="none"
         d="M3 7.5C3 6.4 3.9 5.5 5 5.5h3.5l2 2H19c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-9z"
@@ -214,20 +214,22 @@ function gitLabel(status: string): string {
 
 function gitDecorationForLabel(label: string): GitDecoration | null {
   if (label === "M") {
-    return { label, color: "#D99A2B", title: "Modified" };
+    return { label, color: "var(--warning)", title: "Modified" };
   }
   if (label === "A" || label === "U") {
     return {
       label,
-      color: "#2F9E44",
+      color: "var(--success)",
       title: label === "U" ? "Untracked" : "Added",
     };
   }
   if (label === "D") {
-    return { label, color: "#D64545", title: "Deleted" };
+    return { label, color: "var(--danger)", title: "Deleted" };
   }
   if (label === "R") {
-    return { label, color: "#9B7DFF", title: "Renamed" };
+    // No dedicated semantic token for "renamed"; the "R" letter carries the
+    // meaning, so the accent keeps it theme-aware and distinct from D/M.
+    return { label, color: "var(--accent)", title: "Renamed" };
   }
   return null;
 }

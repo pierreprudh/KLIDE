@@ -26,6 +26,59 @@ type TodoStore = {
   next_event_id?: number;
 };
 
+const DISMISSED_TODOS_KEY = "klide.todoStrip.dismissedCompleted";
+
+function readDismissedTodoStrips(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_TODOS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDismissedTodoStrips(map: Record<string, string>) {
+  try {
+    const entries = Object.entries(map).slice(-200);
+    localStorage.setItem(DISMISSED_TODOS_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    /* localStorage is convenience only */
+  }
+}
+
+function dismissalKey(workspaceRoot: string | null, conversationId: string): string {
+  return `${workspaceRoot ?? "no-workspace"}::${conversationId}`;
+}
+
+function completionSignature(items: TodoItem[], events: TodoEvent[]): string {
+  const itemState = items
+    .map((item) => `${item.id}:${item.done ? 1 : 0}:${item.updated_at ?? item.created_at}`)
+    .join("|");
+  const latestEvent = events.reduce((max, event) => Math.max(max, event.seq), 0);
+  return `${items.length}:${latestEvent}:${itemState}`;
+}
+
+function completedTodosWereDismissed(
+  workspaceRoot: string | null,
+  conversationId: string,
+  signature: string
+): boolean {
+  return readDismissedTodoStrips()[dismissalKey(workspaceRoot, conversationId)] === signature;
+}
+
+function rememberCompletedTodosDismissed(
+  workspaceRoot: string | null,
+  conversationId: string,
+  signature: string
+) {
+  const map = readDismissedTodoStrips();
+  map[dismissalKey(workspaceRoot, conversationId)] = signature;
+  writeDismissedTodoStrips(map);
+}
+
 function CheckIcon() {
   return (
     <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round">
@@ -180,6 +233,12 @@ export function TodoStrip({
   const goal = goalProp?.replace(/\s+/g, " ").trim() || items[0]?.text || recentEvents[0]?.text || "Working through the plan";
 
   const allDone = total > 0 && done === total;
+  const doneSignature = completionSignature(items, events);
+
+  function dismissCompletedTodos() {
+    if (allDone) rememberCompletedTodosDismissed(workspaceRoot, conversationId, doneSignature);
+    setDismissed(true);
+  }
 
   // When the plan finishes, collapse to the slim pill so the agent's final
   // output stays visible (a tall card would sit over it like a dark box). If
@@ -188,6 +247,13 @@ export function TodoStrip({
     if (allDone) setOpen(false);
     else setDismissed(false);
   }, [allDone]);
+
+  useEffect(() => {
+    if (!allDone) return;
+    if (completedTodosWereDismissed(workspaceRoot, conversationId, doneSignature)) {
+      setDismissed(true);
+    }
+  }, [allDone, workspaceRoot, conversationId, doneSignature]);
 
   const visible = !dismissed && !(total === 0 && recentEvents.length === 0);
 
@@ -242,8 +308,8 @@ export function TodoStrip({
                 role="button"
                 tabIndex={0}
                 aria-label="Dismiss completed todo panel"
-                onClick={(e) => { e.stopPropagation(); setDismissed(true); }}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setDismissed(true); } }}
+                onClick={(e) => { e.stopPropagation(); dismissCompletedTodos(); }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); dismissCompletedTodos(); } }}
                 style={{ width: 18, height: 18, display: "grid", placeItems: "center", cursor: "pointer" }}
               >
                 <CloseIcon />
@@ -315,7 +381,7 @@ export function TodoStrip({
             </button>
             {allDone && (
               <button
-                onClick={() => setDismissed(true)}
+                onClick={dismissCompletedTodos}
                 aria-label="Dismiss completed todo panel"
                 style={{
                   width: 18,

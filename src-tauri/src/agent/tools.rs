@@ -931,7 +931,11 @@ fn json_action_call(slice: &str) -> Option<(String, serde_json::Value)> {
             // tokens — only treat `name` as the tool when args accompany it,
             // so plain prose objects with a "name" field aren't hijacked.
             (obj.contains_key("arguments") || obj.contains_key("parameters"))
-                .then(|| obj.get("name").and_then(|v| v.as_str()).map(|s| ("name", s)))
+                .then(|| {
+                    obj.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| ("name", s))
+                })
                 .flatten()
         })?;
     if name.is_empty() {
@@ -2998,7 +3002,9 @@ mod tests {
         // A relative `..` chain that climbs out of the workspace.
         let rel = preflight_command(&root, &root, "cat ../../../etc/klide-escape");
         assert!(
-            rel.external_paths.iter().any(|p| p.ends_with("/klide-escape")),
+            rel.external_paths
+                .iter()
+                .any(|p| p.ends_with("/klide-escape")),
             "relative escape must be flagged: {:?}",
             rel.external_paths
         );

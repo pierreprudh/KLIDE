@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 import { Z } from "../zLayers";
 import { invoke } from "@tauri-apps/api/core";
+import { notify } from "../toast";
 import {
   type Skill,
   genSkillId,
@@ -512,6 +513,13 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                 onInstall={async () => {
                   const trimmed = installPkg.trim();
                   if (!trimmed || installBusy) return;
+                  // Pre-validate the format so a typo fails instantly with a
+                  // clear message instead of a cryptic shell error 20s later.
+                  const formatError = validateSkillPackage(trimmed);
+                  if (formatError) {
+                    setInstallError(formatError);
+                    return;
+                  }
                   setInstallBusy(true);
                   setInstallError(null);
                   setInstallOk(null);
@@ -519,15 +527,19 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                     type R = { ok: boolean; exitCode: number | null; stdout: string; stderr: string };
                     const r = (await invoke("install_skill", { package: trimmed })) as R;
                     if (!r.ok) {
-                      const msg = (r.stderr || r.stdout || `Exit ${r.exitCode ?? "?"}`).trim();
-                      setInstallError(msg || "Install failed.");
+                      const msg = interpretInstallError(r.stderr || r.stdout || `Exit ${r.exitCode ?? "?"}`);
+                      setInstallError(msg);
+                      notify(`Couldn't install ${trimmed}: ${msg}`, { tone: "error" });
                     } else {
                       setInstallOk(r.stdout.trim() || "Installed.");
                       setInstallPkg("");
                       await onReloadFilesystemSkills();
+                      notify(`Installed ${trimmed}`, { tone: "success" });
                     }
                   } catch (e) {
-                    setInstallError(String(e));
+                    const msg = interpretInstallError(String(e));
+                    setInstallError(msg);
+                    notify(`Couldn't install ${trimmed}: ${msg}`, { tone: "error" });
                   } finally {
                     setInstallBusy(false);
                   }
@@ -540,10 +552,14 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                   try {
                     type R = { ok: boolean; exitCode: number | null; stdout: string; stderr: string };
                     const r = (await invoke("uninstall_skill", { name })) as R;
-                    if (!r.ok) setInstallError((r.stderr || r.stdout || "Uninstall failed.").trim());
-                    else {
+                    if (!r.ok) {
+                      const msg = interpretInstallError(r.stderr || r.stdout || "Uninstall failed.");
+                      setInstallError(msg);
+                      notify(`Couldn't uninstall ${name}: ${msg}`, { tone: "error" });
+                    } else {
                       setInstallOk(r.stdout.trim() || "Uninstalled.");
                       await onReloadFilesystemSkills();
+                      notify(`Uninstalled ${name}`, { tone: "success" });
                     }
                   } catch (e) {
                     setInstallError(String(e));
@@ -736,7 +752,7 @@ function SkillDetail({
         </button>
         {!skill.builtin && (
           <button onClick={onDelete} aria-label="Delete skill" title="Delete skill" className="klide-button klide-button-ghost" style={{ minHeight: 30, padding: "0 8px", color: "var(--fg-subtle)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "#A8514A"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--danger)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
             <TrashIcon />
           </button>
@@ -1112,6 +1128,35 @@ function groupedInstalled(skills: Skill[]): { group: string; items: Skill[] }[] 
   return entries;
 }
 
+// Accept `owner/repo` or `owner/repo/nested/skill-path`. Returns an error
+// string when malformed so we never fire a doomed `npx` shell call.
+function validateSkillPackage(pkg: string): string | null {
+  if (!/^[\w.-]+\/[\w.-]+(\/[\w.-]+)*$/.test(pkg)) {
+    return "Use the form owner/repo or owner/repo/skill-name (letters, numbers, dots and dashes only).";
+  }
+  return null;
+}
+
+// Turn raw npx/git stderr into one human sentence. Falls back to the raw text
+// (trimmed) so we never hide detail we couldn't classify.
+function interpretInstallError(raw: string): string {
+  const m = raw.toLowerCase();
+  if (/(npx|npm).*(not found|enoent)|command not found/.test(m) && /npx|npm/.test(m)) {
+    return "npx isn't available — install Node.js (it includes npx), then try again.";
+  }
+  if (/git.*(not found|enoent)/.test(m)) {
+    return "git isn't available — install git, then try again.";
+  }
+  if (/(404|not found|could not resolve|repository not found|does not exist)/.test(m)) {
+    return "Couldn't find that package — check the owner/repo is spelled correctly and the repo is public.";
+  }
+  if (/(etimedout|enotfound|getaddrinfo|network|econnrefused|socket hang up)/.test(m)) {
+    return "Network error — check your connection and try again.";
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 400 ? trimmed.slice(0, 400) + "…" : trimmed || "Install failed.";
+}
+
 function InstallView({
   skills, pkg, setPkg, busy, error, ok, onInstall, onUninstall,
 }: {
@@ -1156,6 +1201,12 @@ function InstallView({
           </button>
         </div>
 
+        {busy && (
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, color: "var(--fg-subtle)" }}>
+            <span className="ai-assistant-placeholder-loader" aria-hidden><span /><span /><span /></span>
+            Fetching from GitHub and installing — this can take up to a minute.
+          </div>
+        )}
         {error && (
           <div className="klide-paper" style={{ marginTop: 14, padding: "12px 14px", borderColor: "color-mix(in srgb, var(--danger) 35%, var(--border))" }}>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--danger)", fontSize: 12, fontFamily: "var(--font-mono)", lineHeight: 1.55 }}>{error}</pre>

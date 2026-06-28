@@ -29,6 +29,10 @@ export const Z = {
   /** A dialog opened on top of another modal — e.g. the add-endpoint sheet
    *  over the Settings view. */
   modalRaised: 210_000,
+  /** Action-result toasts — float above panels/modals/menus so an outcome is
+   *  never hidden behind the surface that triggered it. Below context menus and
+   *  tooltips, which are even more transient. */
+  toast: 880_000,
   /** Right-click menus and transient top-level pickers — above everything. */
   contextMenu: 900_000,
   /** Hover/focus tooltips. The most ephemeral hint — sits above all of the

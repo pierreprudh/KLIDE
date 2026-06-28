@@ -47,6 +47,8 @@ import {
   ATTENTION_TONE,
   SOURCE_COLOR,
   SOURCE_LABEL,
+  LIFECYCLE_COLOR,
+  LIFECYCLE_LABEL,
   STATUS_COLOR,
   STATUS_LABEL,
   type Run,
@@ -83,6 +85,7 @@ import type { ProviderId } from "../agent/types";
 import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
 import { buildRunHandoff } from "../agentHandoff";
+import { notify } from "../toast";
 
 type GitBranchDiffSummary = {
   baseBranch: string;
@@ -172,7 +175,7 @@ function boardReasonChipStyle(tone: RunBoardReasonTone): React.CSSProperties {
 }
 
 function reasonToneColor(tone: RunBoardReasonTone): string {
-  return tone === "danger" ? "var(--danger, #B42318)" : "var(--fg-subtle)";
+  return tone === "danger" ? "var(--danger)" : "var(--fg-subtle)";
 }
 
 function RunReasonChip({ run }: { run: Run }) {
@@ -442,6 +445,56 @@ function ModelBadge({ model, size = 13 }: { model: string; size?: number }) {
   return resolveModelLogo(model, size);
 }
 
+const PROVIDER_LABEL: Partial<Record<ProviderId, string>> = {
+  ollama: "Ollama",
+  mlx: "MLX",
+  lmstudio: "LM Studio",
+  llamacpp: "llama.cpp",
+  vllm: "vLLM",
+  "claude-code": SOURCE_LABEL["claude-code"],
+  codex: SOURCE_LABEL.codex,
+  opencode: SOURCE_LABEL.opencode,
+  omp: SOURCE_LABEL.omp,
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  mistral: "Mistral",
+  xai: "xAI",
+  openrouter: "OpenRouter",
+};
+
+const PROVIDER_ACCENT: Partial<Record<ProviderId, string>> = {
+  "claude-code": "#D97757",
+  anthropic: "#D97757",
+  openrouter: "#4A6CF7",
+  omp: "#7C6BAE",
+  codex: "var(--fg-strong)",
+  opencode: "var(--fg-strong)",
+  openai: "var(--fg-strong)",
+};
+
+function providerLabel(provider: string | null | undefined): string | null {
+  if (!provider) return null;
+  if (provider.startsWith("custom:")) return provider.slice("custom:".length) || "Custom";
+  return PROVIDER_LABEL[provider as ProviderId] ?? provider;
+}
+
+function runAgentLabel(run: Pick<Run, "source" | "provider">): string {
+  return run.source === "klide" && run.provider
+    ? providerLabel(run.provider) ?? SOURCE_LABEL.klide
+    : SOURCE_LABEL[run.source];
+}
+
+function runAgentColor(run: Pick<Run, "source" | "provider">): string {
+  return run.source === "klide" && run.provider
+    ? PROVIDER_ACCENT[run.provider as ProviderId] ?? SOURCE_COLOR.klide
+    : SOURCE_COLOR[run.source];
+}
+
+function providerMark(provider: string | null | undefined, size: number): React.ReactElement | null {
+  return provider ? <ProviderLogo id={provider as ProviderId} size={size} /> : null;
+}
+
 // Company marks for the main run avatar (Simple Icons, single-path,
 // currentColor): the avatar wears the company (Anthropic, OpenAI), while the
 // model badge in the subtitle wears the tool (Claude Code, Codex).
@@ -485,6 +538,20 @@ function SourceLogo({
       </svg>
     );
   }
+  // Klide AI-panel conversations still have a concrete provider/harness
+  // (Claude Code, Codex, Ollama, OpenAI, OpenRouter, custom:*). Preserve that
+  // identity in Mission Control instead of collapsing every convo to the
+  // generic Klide spark.
+  if (source === "klide") {
+    const mark = providerMark(provider, size);
+    if (mark) {
+      return (
+        <span style={{ width: size, height: size, display: "grid", placeItems: "center", flexShrink: 0 }}>
+          {mark}
+        </span>
+      );
+    }
+  }
   if (source === "codex") {
     return <CodexLogo size={size} />;
   }
@@ -525,16 +592,6 @@ function SourceLogo({
       >
         <img className="opencode-logo-light" src="/opencode-logo-light.svg" alt="" />
         <img className="opencode-logo-dark" src="/opencode-logo-dark.svg" alt="" />
-      </span>
-    );
-  }
-  // Klide-harness runs routed through OpenRouter wear the Klide mark: it's our
-  // own harness calling the OpenRouter API, and the model behind the proxy
-  // could be anything, so the run belongs to Klide rather than any one maker.
-  if (source === "klide" && provider === "openrouter") {
-    return (
-      <span style={{ width: size, height: size, display: "grid", placeItems: "center", flexShrink: 0 }}>
-        <KlideLogo size={size} />
       </span>
     );
   }
@@ -586,6 +643,16 @@ function RunAvatar({
   return (
     <SourceLogo source={source} kind={kind} model={model} provider={provider} size={size} />
   );
+}
+
+function RunSubtitleMark({ run, compact }: { run: RunLedgerEntry; compact?: boolean }) {
+  if (run.source === "klide" && run.provider) return providerMark(run.provider, 11);
+  if (run.source === "klide" && !compact && run.model) return <ModelBadge model={run.model} size={13} />;
+  if (run.source === "klide" && !compact) return null;
+  if (run.source === "claude-code") return null;
+  if (run.model) return <ModelBadge model={run.model} size={13} />;
+  if (run.source === "codex") return <CodexLogo size={13} />;
+  return <ProviderLogo id={run.source as ProviderId} size={11} />;
 }
 
 function RunRow({
@@ -802,16 +869,35 @@ function RunRow({
             <span
               title={run.lastEvent}
               style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
                 fontSize: 11.5,
-                color: "var(--fg-muted)",
+                // For a live run the last event IS the current activity — colour
+                // it accent and pair it with a pulse so it reads as "now", not
+                // "last did". Finished runs keep the quiet muted treatment.
+                color: run.status === "running" ? "var(--accent)" : "var(--fg-muted)",
                 lineHeight: 1.3,
                 overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
                 minWidth: 0,
               }}
             >
-              {run.lastEvent}
+              {run.status === "running" && (
+                <span
+                  aria-hidden
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    background: "var(--accent)",
+                    animation: "klide-pulse 1.6s var(--ease-soft) infinite",
+                  }}
+                />
+              )}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                {run.lastEvent}
+              </span>
             </span>
           ) : null}
           <span
@@ -827,20 +913,11 @@ function RunRow({
               gap: 5,
             }}
           >
-            {/* Klide rows carry the model logo on the avatar already, so the
-                subtitle badge would just repeat it — skip it there (except in
-                compact rows, which have no avatar). External runs keep their
-                product/model mark inline. */}
+            {/* Provider-backed Klide rows keep their provider/harness mark;
+                model-backed rows keep the model mark. External runs keep
+                their product/model mark inline. */}
             <RunReasonChip run={run} />
-            {run.source === "klide" && !compact ? null : run.source === "claude-code" ? null : run.source === "klide" && run.provider === "openrouter" ? (
-              <KlideLogo size={13} />
-            ) : run.model ? (
-              <ModelBadge model={run.model} size={13} />
-            ) : run.source === "codex" ? (
-              <CodexLogo size={13} />
-            ) : (
-              <ProviderLogo id={run.source as any} size={11} />
-            )}
+            <RunSubtitleMark run={run} compact={compact} />
             {run.source === "opencode" && run.model ? (
               <>
                 {modelProvider(run.model)} . {modelShortName(run.model)}
@@ -849,6 +926,11 @@ function RunRow({
               <>
                 <AnthropicMark size={11} />
                 {SOURCE_LABEL[run.source]}
+                {run.model ? <> · {run.model}</> : null}
+              </>
+            ) : run.source === "klide" && run.provider ? (
+              <>
+                {runAgentLabel(run)}
                 {run.model ? <> · {run.model}</> : null}
               </>
             ) : (
@@ -921,9 +1003,9 @@ function RunRow({
           border: "none",
           borderRadius: "var(--radius-sm)",
           background: dismissAction.danger
-            ? "linear-gradient(135deg, color-mix(in srgb, var(--danger, #B42318) 24%, var(--bg-elevated)), color-mix(in srgb, var(--danger, #B42318) 14%, var(--bg)))"
+            ? "linear-gradient(135deg, color-mix(in srgb, var(--danger) 24%, var(--bg-elevated)), color-mix(in srgb, var(--danger) 14%, var(--bg)))"
             : "linear-gradient(135deg, color-mix(in srgb, var(--fg-subtle) 13%, var(--bg-elevated)), var(--bg-hover))",
-          color: dismissAction.danger ? "var(--danger, #B42318)" : "var(--fg-muted)",
+          color: dismissAction.danger ? "var(--danger)" : "var(--fg-muted)",
           fontSize: 9,
           fontFamily: "var(--font-mono)",
           textTransform: "uppercase",
@@ -1031,7 +1113,7 @@ function attentionSubtitle(reason: RunAttention, source: RunSource): string {
 // stay compact while still differentiating severity at a glance.
 function attentionPillStyle(kind: RunAttention["kind"]): React.CSSProperties {
   const tone = ATTENTION_TONE[kind];
-  const fg = tone === "danger" ? "var(--danger, #B42318)" : "var(--fg-subtle)";
+  const fg = tone === "danger" ? "var(--danger)" : "var(--fg-subtle)";
   return {
     display: "inline-flex",
     alignItems: "center",
@@ -1548,9 +1630,11 @@ function QuickSend({ taskId, onSent }: { taskId: string; onSent: () => void }) {
       onClick={(e) => {
         e.stopPropagation();
         onSent();
-        void dispatchTask(taskId, agent).catch(() => {
+        void dispatchTask(taskId, agent).catch((err) => {
           // Failure flips the task to error in the store; the detail pane
-          // (now selected) shows the message and re-send controls.
+          // (now selected) shows the message and re-send controls. A toast makes
+          // the failure unmissable even if the user looks away from the row.
+          notify(`Couldn't dispatch to ${SOURCE_LABEL[agent]}: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
         });
       }}
       style={{
@@ -1731,7 +1815,7 @@ function RunEvidenceStrip({ run, hasMemory }: { run: Run; hasMemory?: boolean })
           style={{
             width: 72,
             flexShrink: 0,
-            color: reason.tone === "danger" ? "var(--danger, #B42318)" : "var(--fg-subtle)",
+            color: reason.tone === "danger" ? "var(--danger)" : "var(--fg-subtle)",
             fontFamily: "var(--font-mono)",
             fontSize: 10,
             letterSpacing: "0.06em",
@@ -1868,11 +1952,15 @@ function CopyButton({
   );
 }
 
-function runMessagesToMarkdown(run: Pick<Run, "source" | "title" | "id" | "model" | "cwd" | "branch" | "worktree">, messages: RunMessage[]): string {
+function runMessagesToMarkdown(
+  run: Pick<Run, "source" | "provider" | "title" | "id" | "model" | "cwd" | "branch" | "worktree">,
+  messages: RunMessage[],
+): string {
+  const agentLabel = runAgentLabel(run);
   const header = [
     `# ${run.title}`,
     "",
-    `- Source: ${SOURCE_LABEL[run.source]}`,
+    `- Source: ${agentLabel}`,
     `- Run: \`${run.id}\``,
     run.model ? `- Model: \`${run.model}\`` : null,
     run.cwd ? `- Workspace: \`${run.cwd}\`` : null,
@@ -1880,7 +1968,7 @@ function runMessagesToMarkdown(run: Pick<Run, "source" | "title" | "id" | "model
     run.worktree ? `- Worktree: \`${run.worktree}\`` : null,
   ].filter((line): line is string => line !== null);
   const turns = messages.map((m) => {
-    const role = m.role === "user" ? "User" : SOURCE_LABEL[run.source];
+    const role = m.role === "user" ? "User" : agentLabel;
     const tools = (m.tools ?? [])
       .map((tool) => {
         const result = tool.result ? `\n\nResult:\n\n\`\`\`text\n${tool.result}\n\`\`\`` : "";
@@ -1986,7 +2074,7 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
 
   function copyAsMarkdown() {
     const parts = messages.map((m) => {
-      const role = m.role === "user" ? "**You**" : `**${SOURCE_LABEL[run.source]}**`;
+      const role = m.role === "user" ? "**You**" : `**${runAgentLabel(run)}**`;
       return `${role}\n\n${m.text}`;
     });
     navigator.clipboard.writeText(parts.join("\n\n---\n\n")).catch(() => {});
@@ -2046,7 +2134,12 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
               }}
             >
               {!isUser && (
-                <ConversationAvatar source={run.source} label={SOURCE_LABEL[run.source]} model={run.model} />
+                <ConversationAvatar
+                  source={run.source}
+                  provider={run.provider}
+                  label={runAgentLabel(run)}
+                  model={run.model}
+                />
               )}
               <div
                 style={{
@@ -2282,11 +2375,13 @@ function ProcessNoteStack({ notes }: { notes: string[] }) {
 
 function ConversationAvatar({
   source,
+  provider,
   label,
   model,
   user,
 }: {
   source: RunSource;
+  provider?: string | null;
   label: string;
   model?: string | null;
   user?: boolean;
@@ -2299,7 +2394,9 @@ function ConversationAvatar({
       : null;
   const ModelLogo = modelLogoRule?.Comp;
   const logo =
-    source === "claude-code" ? (
+    source === "klide" && provider ? (
+      <SourceLogo source={source} provider={provider} model={model} size={21} />
+    ) : source === "claude-code" ? (
       <ClaudeCodeLogo size={21} />
     ) : source === "codex" ? (
       <CodexLogo size={21} />
@@ -2318,7 +2415,7 @@ function ConversationAvatar({
         background: user
           ? `linear-gradient(140deg, oklch(0.78 0.10 ${hue}), oklch(0.62 0.12 ${(hue + 40) % 360}))`
           : "transparent",
-        color: user ? "var(--bg-elevated)" : SOURCE_COLOR[source],
+        color: user ? "var(--bg-elevated)" : runAgentColor({ source, provider }),
         display: "grid",
         placeItems: "center",
         fontSize: user ? 12 : undefined,
@@ -3125,7 +3222,7 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
             prompt. You can watch it live here, type to take over, or stop it.
           </div>
           {failure && (
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--danger, #B42318)" }}>
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--danger)" }}>
               {failure}
             </div>
           )}
@@ -3260,12 +3357,12 @@ function RunDetail({
   return (
     <div style={{ padding: "20px 24px", overflowY: "auto", height: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <RunAvatar source={run.source} provider={run.provider} size={30} />
+        <RunAvatar source={run.source} kind={run.kind} model={run.model} provider={run.provider} size={30} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span
             style={{ fontSize: 12, color: "var(--fg-strong)", fontFamily: "var(--font-mono)" }}
           >
-            {SOURCE_LABEL[run.source]}
+            {runAgentLabel(run)}
           </span>
           <span
             style={{
@@ -3275,12 +3372,12 @@ function RunDetail({
               fontSize: 11,
               letterSpacing: "0.04em",
               textTransform: "uppercase",
-              color: STATUS_COLOR[run.status],
+              color: LIFECYCLE_COLOR[run.lifecycle],
               fontFamily: "var(--font-mono)",
             }}
           >
             <StatusDot status={run.status} size={6} />
-            {STATUS_LABEL[run.status]}
+            {LIFECYCLE_LABEL[run.lifecycle]}
           </span>
         </div>
       </div>
@@ -3618,8 +3715,8 @@ function RunDetail({
                   {branchDiff.baseBranch}...{branchDiff.branch}
                 </span>
                 <span style={{ flex: 1 }} />
-                <span style={{ color: "#2F9E44", fontFamily: "var(--font-mono)" }}>+{branchDiff.additions}</span>
-                <span style={{ color: "#D64545", fontFamily: "var(--font-mono)" }}>-{branchDiff.deletions}</span>
+                <span style={{ color: "var(--success)", fontFamily: "var(--font-mono)" }}>+{branchDiff.additions}</span>
+                <span style={{ color: "var(--danger)", fontFamily: "var(--font-mono)" }}>-{branchDiff.deletions}</span>
               </div>
               <div style={{ maxHeight: 180, overflow: "auto", padding: "4px 0" }}>
                 {branchDiff.files.length === 0 ? (
@@ -3655,8 +3752,8 @@ function RunDetail({
                         {file.path}
                       </span>
                       <span style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>
-                        <span style={{ color: "#2F9E44" }}>+{file.additions}</span>{" "}
-                        <span style={{ color: "#D64545" }}>-{file.deletions}</span>
+                        <span style={{ color: "var(--success)" }}>+{file.additions}</span>{" "}
+                        <span style={{ color: "var(--danger)" }}>-{file.deletions}</span>
                       </span>
                     </div>
                   ))
@@ -3686,7 +3783,7 @@ function RunDetail({
               )}
             </>
           ) : (
-            <div style={{ padding: "9px 10px", color: "var(--danger, #B42318)", fontSize: 12 }}>
+            <div style={{ padding: "9px 10px", color: "var(--danger)", fontSize: 12 }}>
               {compareError}
             </div>
           )}
@@ -3731,8 +3828,8 @@ function RunDetail({
             <>
               {/* Klide rows show the model's own provider logo; external
                   product runs (claude-code/codex) keep their product mark. */}
-              {run.source === "klide" && run.provider === "openrouter"
-                ? <KlideLogo size={13} />
+              {run.source === "klide" && run.provider
+                ? providerMark(run.provider, 13)
                 : run.source === "klide"
                 ? resolveModelLogo(run.model, 13) ?? <ProviderLogo id={run.source as any} size={13} />
                 : <ProviderLogo id={run.source as any} size={13} />}
@@ -4068,6 +4165,8 @@ type LiveDelegateSession = {
   task: string | null;
   model: string | null;
   startedMs: number;
+  updatedMs: number;
+  status: "running" | "idle";
   bufferedBytes: number;
 };
 
@@ -4127,6 +4226,9 @@ function LiveSessionsStrip({
         {sessions.map((s) => {
           const title = s.task?.trim() || `${SOURCE_LABEL[s.provider as DelegateId] ?? s.provider} session`;
           const canReattach = isDelegateId(s.provider) && !!onReattach;
+          const idle = s.status === "idle";
+          const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : "Active";
+          const statusColor = idle ? "var(--warning)" : "var(--accent)";
           const reattach = () =>
             canReattach &&
             onReattach!({
@@ -4140,7 +4242,7 @@ function LiveSessionsStrip({
               type="button"
               onClick={reattach}
               disabled={!canReattach}
-              title={canReattach ? `Reattach · ${title}` : title}
+              title={canReattach ? `Reattach · ${title} · ${statusText}` : `${title} · ${statusText}`}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -4174,6 +4276,33 @@ function LiveSessionsStrip({
                 }}
               >
                 {title}
+              </span>
+              <span
+                style={{
+                  flexShrink: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  maxWidth: 88,
+                  fontSize: 11,
+                  color: idle ? "var(--warning)" : "var(--fg-dim)",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: statusColor,
+                    boxShadow: idle ? "none" : "0 0 10px color-mix(in srgb, var(--accent) 60%, transparent)",
+                    flexShrink: 0,
+                  }}
+                />
+                {idle ? "Idle" : "Active"}
               </span>
               <span
                 style={{
@@ -4513,7 +4642,7 @@ export function MissionControl({
         if (cancelled) return;
         const handoff = buildRunHandoff({
           title: selected.title,
-          sourceLabel: SOURCE_LABEL[selected.source],
+          sourceLabel: runAgentLabel(selected),
           cwd: selected.cwd,
           model: selected.model,
           messages: msgs.map((m) => ({ role: m.role, text: m.text })),
@@ -5203,7 +5332,7 @@ export function MissionControl({
             messages={selectedConvo.messages}
             handoffPrompt={buildRunHandoff({
               title: selectedConvo.title,
-              sourceLabel: "Klide",
+              sourceLabel: runAgentLabel(selectedConvoRun),
               cwd: selectedConvo.cwd,
               model: selectedConvo.model,
               messages: selectedConvo.messages.map((m) => ({ role: m.role, text: m.text })),

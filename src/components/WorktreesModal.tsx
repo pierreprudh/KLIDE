@@ -187,7 +187,7 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
                   <>
                     <button disabled={busy} style={btn} onClick={() => { onOpenWorktree(w.path); onClose(); }}>Open</button>
                     <button disabled={busy || !w.branch} style={btn} title="Merge this branch into the main checkout's current branch" onClick={() => void merge(w.branch, w.path)}>Merge</button>
-                    <button disabled={busy} style={{ ...btn, color: "var(--danger, #b4493b)" }} title="Remove this worktree (fails if it has uncommitted changes)" onClick={() => void remove(w.path)}>Remove</button>
+                    <button disabled={busy} style={{ ...btn, color: "var(--danger)" }} title="Remove this worktree (fails if it has uncommitted changes)" onClick={() => void remove(w.path)}>Remove</button>
                   </>
                 )}
               </div>

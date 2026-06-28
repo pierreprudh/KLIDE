@@ -74,7 +74,11 @@ impl Delegate for ClaudeCode {
         Ok((
             logged_in,
             if logged_in {
-                format!("Logged in via {} ({})", field("authMethod"), field("apiProvider"))
+                format!(
+                    "Logged in via {} ({})",
+                    field("authMethod"),
+                    field("apiProvider")
+                )
             } else {
                 "Not logged in".to_string()
             },

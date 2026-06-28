@@ -35,6 +35,28 @@
   --warning:      #B5832E;
   --danger:       #A8514A;
 
+  /* Diff add/remove — theme-aware semantic green/red for inline + modal diffs.
+     Line/hunk backgrounds are derived at call sites via
+     color-mix(in srgb, var(--diff-*) 12%, transparent). Dark themes override
+     with lighter variants for contrast on dark surfaces. */
+  --diff-add:     #3E7C5A;
+  --diff-remove:  #A8514A;
+
+  /* Modal scrim — warm charcoal veil behind centered overlays (replaces
+     per-modal hardcoded rgba blacks). Dark themes deepen it. */
+  --modal-scrim:  rgba(28, 28, 28, 0.32);
+
+  /* Context-breakdown chart ramp — a single monochrome ramp of the active
+     accent (sage in light). Derived from --accent + --bg so it follows every
+     theme automatically; replaces the old hardcoded blue ramp (off-brand). */
+  --chart-1: var(--accent);
+  --chart-2: color-mix(in srgb, var(--accent) 82%, var(--bg));
+  --chart-3: color-mix(in srgb, var(--accent) 66%, var(--bg));
+  --chart-4: color-mix(in srgb, var(--accent) 50%, var(--bg));
+  --chart-5: color-mix(in srgb, var(--accent) 38%, var(--bg));
+  --chart-6: color-mix(in srgb, var(--accent) 28%, var(--bg));
+  --chart-7: color-mix(in srgb, var(--accent) 20%, var(--bg));
+
   /* Code syntax (theme-agnostic mid-tones; block surface uses --bg-elevated) */
   --code-keyword: #7A5AF5;
   --code-string:  #2F9E64;
@@ -122,6 +144,10 @@
   --accent:       #8EA2FF;
   --accent-soft:  #242B45;
 
+  --diff-add:     #6FBF8F;
+  --diff-remove:  #D98C84;
+  --modal-scrim:  rgba(0, 0, 0, 0.55);
+
   --control-primary-bg: #F0EFE9;
   --control-primary-fg: #11110F;
 
@@ -158,6 +184,10 @@
 
   --accent:       #007ACC;
   --accent-soft:  #04395E;
+
+  --diff-add:     #6FBF8F;
+  --diff-remove:  #D98C84;
+  --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #FFFFFF;
   --control-primary-fg: #1E1E1E;
@@ -232,6 +262,10 @@
 
   --accent:       #B58900;
   --accent-soft:  #2E4C3B;
+
+  --diff-add:     #6FBF8F;
+  --diff-remove:  #D98C84;
+  --modal-scrim:  rgba(0, 0, 0, 0.55);
 
   --control-primary-bg: #FDF6E3;
   --control-primary-fg: #002B36;

@@ -308,9 +308,7 @@ pub(crate) struct ModelMetaWire {
 /// `/models` listing doesn't expose the richer fields (plain OpenAI), or when
 /// no key is set — the picker simply renders no badges then.
 #[tauri::command]
-pub(crate) async fn ai_provider_model_meta(
-    provider: String,
-) -> Result<Vec<ModelMetaWire>, String> {
+pub(crate) async fn ai_provider_model_meta(provider: String) -> Result<Vec<ModelMetaWire>, String> {
     let meta = openai_model_meta(&provider).await;
     Ok(meta
         .into_iter()
@@ -826,7 +824,10 @@ pub(crate) async fn ai_count_tokens(
     text: String,
 ) -> Result<TokenCount, String> {
     if text.trim().is_empty() {
-        return Ok(TokenCount { tokens: 0, exact: true });
+        return Ok(TokenCount {
+            tokens: 0,
+            exact: true,
+        });
     }
 
     // Ollama exposes a local, free, instant tokenizer for the loaded model.
@@ -842,12 +843,18 @@ pub(crate) async fn ai_count_tokens(
             if res.status().is_success() {
                 if let Ok(value) = res.json::<serde_json::Value>().await {
                     if let Some(tokens) = value.get("tokens").and_then(|t| t.as_array()) {
-                        return Ok(TokenCount { tokens: tokens.len() as u64, exact: true });
+                        return Ok(TokenCount {
+                            tokens: tokens.len() as u64,
+                            exact: true,
+                        });
                     }
                 }
             }
         }
-        return Ok(TokenCount { tokens: estimate_tokens(&text), exact: false });
+        return Ok(TokenCount {
+            tokens: estimate_tokens(&text),
+            exact: false,
+        });
     }
 
     // Anthropic's count_tokens endpoint is exact for Claude.
@@ -867,18 +874,27 @@ pub(crate) async fn ai_count_tokens(
             if res.status().is_success() {
                 if let Ok(value) = res.json::<serde_json::Value>().await {
                     if let Some(n) = value.get("input_tokens").and_then(|v| v.as_u64()) {
-                        return Ok(TokenCount { tokens: n, exact: true });
+                        return Ok(TokenCount {
+                            tokens: n,
+                            exact: true,
+                        });
                     }
                 }
             }
         }
-        return Ok(TokenCount { tokens: estimate_tokens(&text), exact: false });
+        return Ok(TokenCount {
+            tokens: estimate_tokens(&text),
+            exact: false,
+        });
     }
 
     // OpenAI-wire providers (openai/mistral/xai/mlx/self-hosted) expose no
     // count endpoint — exact counting would need a bundled per-model
     // tokenizer. Best-effort estimate, marked approximate.
-    Ok(TokenCount { tokens: estimate_tokens(&text), exact: false })
+    Ok(TokenCount {
+        tokens: estimate_tokens(&text),
+        exact: false,
+    })
 }
 
 #[cfg(test)]
@@ -992,11 +1008,17 @@ mod tests {
             ]
         });
         let meta = parse_openai_models_meta(&value);
-        assert_eq!(meta["google/gemini-3.5-flash"].context_length, Some(1_048_576));
+        assert_eq!(
+            meta["google/gemini-3.5-flash"].context_length,
+            Some(1_048_576)
+        );
         assert_eq!(meta["google/gemini-3.5-flash"].supports_tools, Some(true));
         // String prices scale per-token → per-million: 0.0000015 → 1.5.
         assert_eq!(meta["google/gemini-3.5-flash"].input_per_million, Some(1.5));
-        assert_eq!(meta["google/gemini-3.5-flash"].output_per_million, Some(9.0));
+        assert_eq!(
+            meta["google/gemini-3.5-flash"].output_per_million,
+            Some(9.0)
+        );
         // No pricing block → None, never 0.
         assert_eq!(meta["vendor/quiet"].input_per_million, None);
         assert_eq!(meta["some/base-model"].supports_tools, Some(false));

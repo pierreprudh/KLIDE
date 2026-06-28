@@ -139,9 +139,10 @@ export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRo
             : t
         )
       );
-      notify(`Saved ${filename(active.path)}`);
+      // Routine save success isn't toasted on purpose: the dirty dot clearing
+      // is the confirmation, and a toast on every ⌘S is noise. Failures and
+      // disk conflicts (below / in the watcher) still surface loudly.
     } catch (e) {
-      // Surface the failure in the status notice instead of dying silently.
       console.error("Save failed:", e);
       notify(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
     }

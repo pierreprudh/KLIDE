@@ -158,7 +158,7 @@ function TaskRow({
         </div>
       </div>
       <div style={validationStyle}>
-        <span style={{ color: validation?.blockingFailures.length ? "var(--danger, #B42318)" : "var(--fg-strong)" }}>
+        <span style={{ color: validation?.blockingFailures.length ? "var(--danger)" : "var(--fg-strong)" }}>
           {validation ? `${validation.passed}/${validation.total}` : "0/0"}
         </span>
         <span style={{ color: "var(--fg-dim)" }}>checks</span>
@@ -209,9 +209,9 @@ function Badge({ label, tone }: { label: string; tone: "accent" | "danger" | "wa
     tone === "accent"
       ? "var(--accent)"
       : tone === "danger"
-        ? "var(--danger, #B42318)"
+        ? "var(--danger)"
         : tone === "warn"
-          ? "#A15C00"
+          ? "var(--warning)"
           : "var(--fg-subtle)";
   return (
     <span
@@ -326,7 +326,7 @@ function GoalLoopSection({ demo }: { demo: GoalLoopDemo }) {
 function VerdictDot({ verdict }: { verdict: GoalLoopGateVerdict | null }) {
   const map: Record<GoalLoopGateVerdict, { ch: string; color: string }> = {
     pass: { ch: "✓", color: "var(--accent)" },
-    fail: { ch: "✗", color: "var(--danger, #B42318)" },
+    fail: { ch: "✗", color: "var(--danger)" },
     waive: { ch: "~", color: "var(--fg-subtle)" },
   };
   const v = verdict ? map[verdict] : { ch: "·", color: "var(--fg-dim)" };

@@ -95,7 +95,7 @@ function BareAction({
   onClick: () => void;
   children: ReactNode;
 }) {
-  const hoverFg = tone === "danger" ? "#b8323a" : tone === "accent" ? "var(--accent)" : "var(--fg-strong)";
+  const hoverFg = tone === "danger" ? "var(--diff-remove)" : tone === "accent" ? "var(--accent)" : "var(--fg-strong)";
   return (
     <button
       type="button"
@@ -200,8 +200,8 @@ export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Pro
           {edit.path}
         </button>
         <span style={{ flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 600, display: "flex", gap: 6 }}>
-          <span style={{ color: "#1f8a3b" }}>+{added}</span>
-          <span style={{ color: "#b8323a" }}>−{removed}</span>
+          <span style={{ color: "var(--diff-add)" }}>+{added}</span>
+          <span style={{ color: "var(--diff-remove)" }}>−{removed}</span>
         </span>
         <span style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, marginLeft: 2 }}>
           <BareAction label="Cancel" tone="danger" onClick={onReject}>
@@ -238,12 +238,12 @@ export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Pro
           <span>
             {edit.isCreate ? (
               <>
-                New file, <span style={{ color: "#1f8a3b", fontWeight: 600 }}>{added}</span> line{plural(added)}
+                New file, <span style={{ color: "var(--diff-add)", fontWeight: 600 }}>{added}</span> line{plural(added)}
               </>
             ) : (
               <>
-                Added <span style={{ color: "#1f8a3b", fontWeight: 600 }}>{added}</span> line{plural(added)}, removed{" "}
-                <span style={{ color: "#b8323a", fontWeight: 600 }}>{removed}</span> line{plural(removed)}
+                Added <span style={{ color: "var(--diff-add)", fontWeight: 600 }}>{added}</span> line{plural(added)}, removed{" "}
+                <span style={{ color: "var(--diff-remove)", fontWeight: 600 }}>{removed}</span> line{plural(removed)}
               </>
             )}
           </span>
@@ -255,7 +255,7 @@ export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Pro
           style={{
             padding: "7px 9px",
             borderRadius: "var(--radius-sm)",
-            background: "rgba(184, 130, 40, 0.12)",
+            background: "color-mix(in srgb, var(--warning) 13%, transparent)",
             color: "var(--fg-strong)",
             fontSize: 11.5,
             lineHeight: 1.4,
@@ -287,9 +287,9 @@ export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Pro
                 </div>
               );
             }
-            const bg = r.kind === "add" ? "rgba(31, 138, 59, 0.13)" : r.kind === "del" ? "rgba(184, 50, 58, 0.13)" : "transparent";
+            const bg = r.kind === "add" ? "color-mix(in srgb, var(--diff-add) 13%, transparent)" : r.kind === "del" ? "color-mix(in srgb, var(--diff-remove) 13%, transparent)" : "transparent";
             const marker = r.kind === "add" ? "+" : r.kind === "del" ? "−" : " ";
-            const markerColor = r.kind === "add" ? "#1f8a3b" : r.kind === "del" ? "#b8323a" : "var(--fg-dim)";
+            const markerColor = r.kind === "add" ? "var(--diff-add)" : r.kind === "del" ? "var(--diff-remove)" : "var(--fg-dim)";
             return (
               <div key={i} style={{ display: "flex", background: bg, whiteSpace: "pre" }}>
                 <span

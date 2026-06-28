@@ -570,7 +570,7 @@ export function MemoryPanel({
               <div
                 style={{
                   padding: "10px 8px",
-                  color: "var(--danger, #B42318)",
+                  color: "var(--danger)",
                   fontSize: 12,
                 }}
               >

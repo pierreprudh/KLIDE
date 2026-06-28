@@ -2,6 +2,7 @@ use crate::delegate::{self, shell_quote};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, State};
 
@@ -9,6 +10,14 @@ use tauri::{Emitter, Manager, State};
 /// reattach. 256 KB comfortably holds a full screen plus scrollback for any
 /// CLI agent; older bytes are dropped from the front.
 const SCROLLBACK_CAP: usize = 256 * 1024;
+const IDLE_SESSION_MS: i64 = 60_000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 /// Per-session replay state: the retained bytes and the count of chunks they
 /// represent, mutated together under one lock so a snapshot can read both
@@ -55,6 +64,9 @@ pub struct DelegatePtySession {
     model: Option<String>,
     /// When this session was spawned (epoch ms), for "running for N min".
     started_ms: i64,
+    /// Last observed PTY activity (input or output), used by Mission Control
+    /// to distinguish active streaming sessions from quiet live sessions.
+    updated_ms: Arc<AtomicI64>,
 }
 
 pub struct DelegatePtyState {
@@ -226,10 +238,8 @@ pub fn delegate_pty_spawn(
     let mut reader = master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = master.take_writer().map_err(|e| e.to_string())?;
     let scrollback: Arc<Mutex<Scrollback>> = Arc::new(Mutex::new(Scrollback::default()));
-    let started_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    let started_ms = now_ms();
+    let updated_ms = Arc::new(AtomicI64::new(started_ms));
     state.sessions.lock().unwrap().insert(
         session_id.clone(),
         DelegatePtySession {
@@ -241,6 +251,7 @@ pub fn delegate_pty_spawn(
             task: task.clone(),
             model: model.clone(),
             started_ms,
+            updated_ms: updated_ms.clone(),
         },
     );
 
@@ -257,6 +268,7 @@ pub fn delegate_pty_spawn(
             if n == 0 {
                 break;
             }
+            updated_ms.store(now_ms(), Ordering::Relaxed);
             let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
             // Try to detect the CLI's own session ID from startup output
             // (only OpenCode announces one today).
@@ -305,6 +317,7 @@ pub fn delegate_pty_write(
             .writer
             .write_all(data.as_bytes())
             .map_err(|e| e.to_string())?;
+        session.updated_ms.store(now_ms(), Ordering::Relaxed);
     }
     Ok(())
 }
@@ -362,6 +375,10 @@ pub struct LiveDelegateSession {
     task: Option<String>,
     model: Option<String>,
     started_ms: i64,
+    updated_ms: i64,
+    /// `"running"` while output/input is fresh, `"idle"` when the PTY is still
+    /// live but has been quiet long enough that it needs human attention.
+    status: String,
     /// Bytes of replay buffer currently retained — a cheap "has output" signal.
     buffered_bytes: usize,
 }
@@ -369,6 +386,7 @@ pub struct LiveDelegateSession {
 #[tauri::command]
 pub fn delegate_pty_live_sessions(state: State<DelegatePtyState>) -> Vec<LiveDelegateSession> {
     let sessions = state.sessions.lock().unwrap();
+    let now = now_ms();
     let mut out: Vec<LiveDelegateSession> = sessions
         .iter()
         .map(|(session_id, s)| {
@@ -380,6 +398,7 @@ pub fn delegate_pty_live_sessions(state: State<DelegatePtyState>) -> Vec<LiveDel
                 .strip_suffix(&suffix)
                 .unwrap_or(session_id)
                 .to_string();
+            let updated_ms = s.updated_ms.load(Ordering::Relaxed);
             LiveDelegateSession {
                 session_id: session_id.clone(),
                 convo_id,
@@ -388,12 +407,18 @@ pub fn delegate_pty_live_sessions(state: State<DelegatePtyState>) -> Vec<LiveDel
                 task: s.task.clone(),
                 model: s.model.clone(),
                 started_ms: s.started_ms,
+                updated_ms,
+                status: if now - updated_ms >= IDLE_SESSION_MS {
+                    "idle".to_string()
+                } else {
+                    "running".to_string()
+                },
                 buffered_bytes: s.scrollback.lock().unwrap().buf.len(),
             }
         })
         .collect();
-    // Newest first, so the freshest agent is at the top of the list.
-    out.sort_by(|a, b| b.started_ms.cmp(&a.started_ms));
+    // Most recently active first, so the freshest agent is at the top.
+    out.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
     out
 }
 
@@ -598,7 +623,10 @@ mod tests {
             total += chunk.len();
         }
         assert_eq!(sb.seq, chunks, "seq counts every chunk, even dropped ones");
-        assert!(sb.buf.len() <= SCROLLBACK_CAP, "buffer never exceeds the cap");
+        assert!(
+            sb.buf.len() <= SCROLLBACK_CAP,
+            "buffer never exceeds the cap"
+        );
     }
 
     #[test]

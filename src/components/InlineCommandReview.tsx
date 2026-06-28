@@ -29,7 +29,7 @@ function BareAction({
   onClick: () => void;
   children: ReactNode;
 }) {
-  const hoverFg = tone === "danger" ? "#b8323a" : tone === "accent" ? "var(--accent)" : "var(--fg-strong)";
+  const hoverFg = tone === "danger" ? "var(--diff-remove)" : tone === "accent" ? "var(--accent)" : "var(--fg-strong)";
   return (
     <button
       type="button"

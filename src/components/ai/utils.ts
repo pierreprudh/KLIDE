@@ -115,7 +115,22 @@ export function loadConversations<T>(key?: string): T[] {
   try {
     const raw = localStorage.getItem(key ?? CONVOS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // Heal malformed records on read. Every consumer assumes `msgs` is an
+    // array of message objects and dereferences `m.role` (e.g. deriveTitle's
+    // `msgs.find((m) => m.role === "user")`). A partially-written record — a
+    // missing `msgs`, or a `null`/non-object slot inside it — would throw at
+    // the call site, and since these run during render/mount, blank the whole
+    // app (white screen). So we drop entries without a `msgs` array and strip
+    // any null/non-object messages from the arrays we keep.
+    return parsed
+      .filter((c) => c && typeof c === "object" && Array.isArray((c as { msgs?: unknown }).msgs))
+      .map((c) => ({
+        ...(c as object),
+        msgs: ((c as { msgs: unknown[] }).msgs).filter(
+          (m) => m && typeof m === "object"
+        ),
+      })) as T[];
   } catch {
     return [];
   }
@@ -144,6 +159,33 @@ export function persistConversation(
   const next = upsertConversation(conv, existing);
   saveConversations(next);
   return next;
+}
+
+const DELEGATE_PROVIDER_IDS = new Set(["claude-code", "codex", "opencode"]);
+
+function hasRestorableMessages(conv: Conversation): boolean {
+  if (!conv || !Array.isArray(conv.msgs)) return false;
+  return conv.msgs.some((m) => {
+    if (!m || typeof m.content !== "string") return false;
+    if (m.role === "user") return m.content.trim().length > 0;
+    if (m.role === "assistant") return !m.delegateConsole && m.content.trim().length > 0;
+    return false;
+  });
+}
+
+export function latestRestorableConversationId(
+  workspaceRoot: string | null,
+  provider?: string | null,
+): string | null {
+  const conversations = loadConversations<Conversation>()
+    .filter((conv) => hasRestorableMessages(conv))
+    .filter((conv) => !conv.provider || !DELEGATE_PROVIDER_IDS.has(conv.provider))
+    .filter((conv) => !workspaceRoot || !conv.cwd || conv.cwd === workspaceRoot)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const providerMatch = provider
+    ? conversations.find((conv) => conv.provider === provider)
+    : null;
+  return (providerMatch ?? conversations[0])?.id ?? null;
 }
 
 // A panel's *conversation* identity is separate from its *panel* identity

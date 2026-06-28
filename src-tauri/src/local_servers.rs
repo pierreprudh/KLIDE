@@ -384,6 +384,9 @@ mod tests {
             mtp_drafter_for("mlx-community/gemma-4-12B-it-qat-4bit").as_deref(),
             Some("mlx-community/gemma-4-12B-it-qat-assistant-4bit")
         );
-        assert_eq!(mtp_drafter_for("mlx-community/gemma-4-E4B-it-qat-4bit"), None);
+        assert_eq!(
+            mtp_drafter_for("mlx-community/gemma-4-E4B-it-qat-4bit"),
+            None
+        );
     }
 }

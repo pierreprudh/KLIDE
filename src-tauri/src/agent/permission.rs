@@ -15,8 +15,8 @@
 use super::tools::NormalizedToolCall;
 use super::transcripts::now_ms;
 use super::types::{AgentEvent, AgentRunStatus};
-use super::{pause_for_user, with_run_handle, AgentRunHandle, PauseOutcome, ToolCtx};
 use super::{command_allowlist, network_allowlist};
+use super::{pause_for_user, with_run_handle, AgentRunHandle, PauseOutcome, ToolCtx};
 
 /// Which trust namespace a gated Tool draws on. Command- and network-capability
 /// tools keep separate run-scoped sets and separate project allowlists so trust
@@ -269,7 +269,8 @@ mod tests {
     use super::*;
 
     fn temp_workspace(name: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("klide-permission-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("klide-permission-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.to_string_lossy().to_string()
@@ -304,9 +305,17 @@ mod tests {
 
     #[test]
     fn refusal_wording_is_capability_specific() {
-        assert!(Capability::Command.rejected_message().contains("command not run"));
-        assert!(Capability::Network.rejected_message().contains("network request not run"));
-        assert!(Capability::Command.already_refused().contains("exact command"));
-        assert!(Capability::Network.already_refused().contains("exact network target"));
+        assert!(Capability::Command
+            .rejected_message()
+            .contains("command not run"));
+        assert!(Capability::Network
+            .rejected_message()
+            .contains("network request not run"));
+        assert!(Capability::Command
+            .already_refused()
+            .contains("exact command"));
+        assert!(Capability::Network
+            .already_refused()
+            .contains("exact network target"));
     }
 }

@@ -85,7 +85,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
               style={{
                 padding: "5px 10px",
                 borderRadius: "var(--radius-xs)",
-                color: item.danger ? "#D64545" : "var(--fg-strong)",
+                color: item.danger ? "var(--danger)" : "var(--fg-strong)",
                 cursor: "pointer",
                 transition: "background var(--motion-fast) var(--ease-out)",
               }}

@@ -69,7 +69,7 @@ export function FileViewerPanel({ filePath, workspaceRoot, onClose }: Props) {
         ) : loading ? (
           <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: 20 }}>Loading…</div>
         ) : error ? (
-          <div style={{ color: "#D64545", fontSize: 12, padding: 20 }}>{error}</div>
+          <div style={{ color: "var(--danger)", fontSize: 12, padding: 20 }}>{error}</div>
         ) : (
           <pre
             style={{

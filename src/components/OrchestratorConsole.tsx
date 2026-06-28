@@ -167,21 +167,29 @@ function useRealDispatch(workspaceRoot: string | null) {
 const fmtUsd = (n: number) => (n === 0 ? "$0" : `$${n.toFixed(2)}`);
 const fmtMin = (ms: number) => `${Math.round(ms / 60_000)}m`;
 
+// ── Shared surface treatments ─────────────────────────────────────────────
+// One faint lift for elevated surfaces (Stripe's whisper shadow) + an inset for
+// recessed tracks. Defined once so every card/panel/lane reads identically.
+const CARD_LIFT = "inset 0 1px 0 var(--panel-highlight), 0 1px 2px rgba(28, 28, 28, 0.035)";
+const INSET_TRACK = "inset 0 1px 2px rgba(28, 28, 28, 0.045)";
+
 // ── Atoms ───────────────────────────────────────────────────────────────────
 // Status: sage = live, amber = needs you, brick = failed, muted = idle/done.
 // "done" recedes to a quiet muted check so the live work stays the focus.
 function StatusBadge({ status }: { status: CardStatus }) {
-  if (status === "done") return <span style={{ fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1 }}>✓</span>;
+  if (status === "done") return <span style={{ display: "inline-flex", color: "var(--fg-subtle)" }}><IconCheck size={11} /></span>;
   const color = status === "error" ? "var(--danger)" : status === "running" ? "var(--accent)" : "var(--fg-dim)";
   return (
     <span
       aria-hidden
       style={{
-        width: 8,
-        height: 8,
+        width: 7,
+        height: 7,
         borderRadius: 999,
         background: status === "idle" ? "transparent" : color,
         border: status === "idle" ? "1.5px solid var(--fg-dim)" : "none",
+        // Soft halo on the live dot so it reads as a beacon, not just a dot.
+        boxShadow: status === "running" ? `0 0 0 3px color-mix(in srgb, ${color} 20%, transparent)` : undefined,
         display: "inline-block",
         animation: status === "running" ? "klide-pulse 1.1s ease-in-out infinite" : undefined,
       }}
@@ -209,6 +217,24 @@ function TierMeter({ level }: { level: 1 | 2 | 3 | 4 }) {
   );
 }
 
+// Crisp inline icons (inherit currentColor) — replace unicode glyphs so the
+// marks render identically across platforms and align to the type baseline.
+function IconPlay({ size = 8 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 12 12" fill="currentColor" aria-hidden style={{ display: "block" }}><path d="M3 2.1v7.8l6-3.9z" /></svg>;
+}
+function IconCheck({ size = 11 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ display: "block" }}><path d="M11.5 4l-5.5 6L2.5 7" /></svg>;
+}
+function IconX({ size = 9 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden style={{ display: "block" }}><path d="M3 3l6 6M9 3l-6 6" /></svg>;
+}
+function IconDep({ size = 11 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ display: "block", flexShrink: 0 }}><path d="M4 2.5v4.5a1.5 1.5 0 0 0 1.5 1.5H11" /><path d="M8.5 6L11 8.5 8.5 11" /></svg>;
+}
+function IconChevron({ size = 9 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ display: "block", flexShrink: 0 }}><path d="M4.5 3l4 3-4 3" /></svg>;
+}
+
 const eyebrow: React.CSSProperties = {
   fontSize: 11,
   fontFamily: "var(--font-mono)",
@@ -225,37 +251,52 @@ function GoalBar({ goal, setGoal, mode, setMode }: { goal: string; setGoal: (v: 
         onChange={(e) => setGoal(e.target.value)}
         placeholder="Describe the goal — e.g. add rate limiting to the API"
         className="klide-field"
-        style={{ flex: 1, minWidth: 240, height: 36, padding: "0 12px", fontSize: "var(--fs-base)" }}
+        style={{ flex: 1, minWidth: 240, height: 38, padding: "0 14px", fontSize: "var(--fs-base)" }}
       />
-      <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 999, overflow: "hidden" }}>
-        {(Object.keys(MODES) as ModeKey[]).map((k) => (
-          <button
-            key={k}
-            onClick={() => setMode(k)}
-            style={{
-              padding: "7px 14px",
-              fontSize: 12,
-              borderRadius: 0,
-              color: mode === k ? "var(--control-primary-fg)" : "var(--fg-subtle)",
-              background: mode === k ? "var(--control-primary-bg)" : "transparent",
-              transition: "background var(--motion-fast), color var(--motion-fast)",
-            }}
-          >
-            {MODES[k].label}
-          </button>
-        ))}
+      {/* Segmented control — recessed track, the active segment lifts to an
+          elevated chip. Lighter and more precise than a full dark fill. */}
+      <div style={{ display: "inline-flex", padding: 3, gap: 2, background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: INSET_TRACK }}>
+        {(Object.keys(MODES) as ModeKey[]).map((k) => {
+          const active = mode === k;
+          return (
+            <button
+              key={k}
+              onClick={() => setMode(k)}
+              aria-pressed={active}
+              style={{
+                padding: "6px 13px",
+                fontSize: 12,
+                fontWeight: active ? 600 : 500,
+                borderRadius: 7,
+                color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
+                background: active ? "var(--bg-elevated)" : "transparent",
+                border: active ? "1px solid var(--border)" : "1px solid transparent",
+                boxShadow: active ? "0 1px 2px rgba(28, 28, 28, 0.06)" : "none",
+                transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
+              }}
+            >
+              {MODES[k].label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
+// Dashboard metric: number stacked over a quiet label (Stripe/Linear idiom).
 function CrewStat({ n, label }: { n: string | number; label: string }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-      <span style={{ fontSize: 15, fontWeight: 600, color: "var(--fg-strong)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{n}</span>
-      <span style={{ color: "var(--fg-subtle)" }}>{label}</span>
+    <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{n}</span>
+      <span style={{ fontSize: 11, color: "var(--fg-subtle)", letterSpacing: "0.01em" }}>{label}</span>
     </span>
   );
+}
+
+// Thin vertical hairline separating metrics in the summary row.
+function StatDivider() {
+  return <span aria-hidden style={{ alignSelf: "stretch", width: 1, background: "var(--border)", margin: "0 20px" }} />;
 }
 
 function BudgetMeter({ spent, max }: { spent: number; max: number | null }) {
@@ -269,7 +310,7 @@ function BudgetMeter({ spent, max }: { spent: number; max: number | null }) {
           {fmtUsd(spent)} {max != null ? `/ ${fmtUsd(max)}` : ""}
         </span>
       </div>
-      <div style={{ height: 6, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden" }}>
+      <div style={{ height: 6, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", boxShadow: INSET_TRACK }}>
         <div style={{ width: `${pct}%`, height: "100%", background: over ? "var(--danger)" : "var(--accent)", transition: "width 220ms var(--ease-out)" }} />
       </div>
     </div>
@@ -303,49 +344,80 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
           animation: klide-orch-in 460ms var(--ease-spring) backwards;
           transition:
             transform var(--motion-fast) var(--ease-out),
-            border-color var(--motion-fast) var(--ease-out);
+            border-color var(--motion-fast) var(--ease-out),
+            box-shadow var(--motion-med) var(--ease-out);
         }
+        /* Hover lifts AND deepens the shadow — the parallax that reads as
+           physical depth on Linear/Stripe, not just a colour change. */
         .klide-orch-card:hover {
-          transform: translateY(-1px);
+          transform: translateY(-2px);
           border-color: var(--border-strong) !important;
+          box-shadow:
+            inset 0 1px 0 var(--panel-highlight),
+            0 6px 18px rgba(28, 28, 28, 0.08) !important;
+        }
+        /* Live card: a sage left-rail + faint wash so running work is the one
+           thing the eye lands on. Set inline via data-live. */
+        .klide-orch-card[data-live="running"] {
+          border-color: color-mix(in srgb, var(--accent) 42%, var(--border)) !important;
+          box-shadow:
+            inset 2px 0 0 var(--accent),
+            inset 0 1px 0 var(--panel-highlight),
+            0 2px 10px color-mix(in srgb, var(--accent) 12%, transparent) !important;
+        }
+        .klide-orch-card[data-live="error"] {
+          box-shadow: inset 2px 0 0 var(--danger), inset 0 1px 0 var(--panel-highlight) !important;
         }
         .klide-orch-activity { animation: klide-orch-fade var(--motion-med) var(--ease-soft) backwards; }
-        .klide-orch-run { transition: border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
-        .klide-orch-run:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
+        .klide-orch-run {
+          transition: border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out);
+        }
+        .klide-orch-run:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)) !important; color: var(--accent) !important; background: var(--accent-soft) !important; }
         @media (prefers-reduced-motion: reduce) {
           .klide-orch-card, .klide-orch-activity { animation: none; }
           .klide-orch-card:hover { transform: none; }
         }
       `}</style>
-      <div style={{ padding: "24px 28px 64px", display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-        <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600, color: "var(--fg-strong)", margin: "0 0 16px", letterSpacing: "-0.01em" }}>
-          Orchestrator
-        </h2>
+      <div style={{ padding: "28px 32px 64px", display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+        {/* Page header — title + one-line orientation, then a hairline rule. */}
+        <div style={{ marginBottom: 18 }}>
+          <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600, color: "var(--fg-strong)", margin: 0, letterSpacing: "-0.02em" }}>
+            Orchestrator
+          </h2>
+          <p style={{ margin: "5px 0 0", fontSize: "var(--fs-base)", color: "var(--fg-subtle)", lineHeight: 1.5 }}>
+            Plan a goal into tasks, then route each to the cheapest capable model.
+          </p>
+        </div>
+        <div style={{ height: 1, background: "var(--border)", marginBottom: 20 }} />
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 20 }}>
           <GoalBar goal={goal} setGoal={setGoal} mode={mode} setMode={setMode} />
         </div>
 
-        {/* crew summary strip */}
+        {/* Summary metric row — neutral surface, hairline-separated stats. Colour
+            stays out so sage reads only on live work / budget / the CTA. */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 24,
-            padding: "10px 16px",
-            marginBottom: 16,
+            padding: "14px 20px",
+            marginBottom: 20,
             borderRadius: "var(--radius-lg)",
-            background: "var(--accent-soft)",
-            border: "1px solid color-mix(in srgb, var(--accent) 18%, var(--border))",
-            fontSize: 12,
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            boxShadow: CARD_LIFT,
             flexWrap: "wrap",
+            gap: "12px 0",
           }}
         >
           <CrewStat n={routed.length} label="tasks planned" />
-          <CrewStat n={readyCount} label="ready to start" />
+          <StatDivider />
+          <CrewStat n={readyCount} label="ready" />
+          <StatDivider />
           <CrewStat n={fmtUsd(totalCost)} label="est. cost" />
+          <StatDivider />
           <CrewStat n={fmtMin(totalMs)} label="est. time" />
-          <span style={{ color: "var(--fg-subtle)", marginLeft: "auto" }}>{MODES[mode].blurb}</span>
+          <span style={{ fontSize: 12, color: "var(--fg-subtle)", marginLeft: "auto", paddingLeft: 20, lineHeight: 1.5 }}>{MODES[mode].blurb}</span>
         </div>
 
         <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0 }}>
@@ -357,27 +429,28 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
               const colCost = items.reduce((s, r) => s + (r.assignment.estimatedCostUsd ?? 0), 0);
               return (
                 <div key={tier} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-                  <div style={{ marginBottom: 8 }}>
+                  <div style={{ marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <TierMeter level={m.level} />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-strong)" }}>{m.label}</span>
-                      <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>{items.length}</span>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.005em" }}>{m.label}</span>
+                      <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-subtle)", background: "var(--bg-hover)", borderRadius: 999, padding: "1px 7px", lineHeight: 1.6 }}>{items.length}</span>
                       <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-subtle)" }}>
                         {fmtUsd(colCost)}
                       </span>
                     </div>
-                    <div style={{ fontSize: 10.5, color: "var(--fg-dim)", marginLeft: 22, marginTop: 1 }}>{m.role}</div>
+                    <div style={{ fontSize: 10.5, color: "var(--fg-dim)", marginLeft: 22, marginTop: 3, lineHeight: 1.4 }}>{m.role}</div>
                   </div>
                   <div
                     style={{
                       flex: 1,
                       display: "flex",
                       flexDirection: "column",
-                      gap: 8,
-                      padding: 12,
+                      gap: 10,
+                      padding: 10,
                       borderRadius: "var(--radius-lg)",
                       background: "var(--bg-hover)",
                       border: "1px solid var(--border)",
+                      boxShadow: INSET_TRACK,
                       overflow: "auto",
                     }}
                   >
@@ -394,15 +467,17 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                           // routing visibly redistributing across the lanes.
                           key={`${t.taskId}-${mode}`}
                           className="klide-orch-card"
+                          data-live={status === "running" ? "running" : status === "error" ? "error" : undefined}
                           style={{
-                            padding: 12,
+                            padding: 14,
                             borderRadius: "var(--radius-md)",
-                            background: "var(--bg-elevated)",
+                            background: status === "running" ? "color-mix(in srgb, var(--accent-soft) 45%, var(--bg-elevated))" : "var(--bg-elevated)",
                             border: "1px solid var(--border)",
+                            boxShadow: CARD_LIFT,
                             animationDelay: `${i * 55}ms`,
                           }}
                         >
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
                             <span style={eyebrow}>{t.phase}</span>
                             <span style={{ ...eyebrow, color: t.risk === "high" ? "var(--danger)" : t.risk === "medium" ? "var(--warning)" : "var(--fg-dim)" }}>
                               ·{RISK_LABEL[t.risk]}
@@ -411,30 +486,35 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                               <StatusBadge status={status} />
                             </span>
                           </div>
-                          <div style={{ fontSize: "var(--fs-base)", color: "var(--fg-strong)", lineHeight: 1.3, marginBottom: 6 }}>{t.title}</div>
+                          <div style={{ fontSize: "var(--fs-base)", color: "var(--fg-strong)", lineHeight: 1.4, marginBottom: 8, letterSpacing: "-0.003em" }}>{t.title}</div>
                           {dep && (
-                            <div style={{ fontSize: 10.5, color: "var(--fg-dim)", marginBottom: 6 }}>
-                              ↳ after {(titleById[dep] ?? dep).slice(0, 24)}
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "var(--fg-dim)", marginBottom: 8 }}>
+                              <IconDep size={11} />
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>after {(titleById[dep] ?? dep).slice(0, 24)}</span>
                             </div>
                           )}
                           {liveCard && (
                             <div
                               className="klide-orch-activity"
                               style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 5,
                                 fontSize: 11,
                                 fontFamily: "var(--font-mono)",
                                 color: liveCard.status === "error" ? "var(--danger)" : liveCard.status === "done" ? "var(--fg-subtle)" : "var(--accent)",
-                                marginBottom: 6,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
+                                marginBottom: 8,
                               }}
                             >
-                              {liveCard.status === "running" ? "▸ " : liveCard.status === "done" ? "✓ " : "✗ "}
-                              {liveCard.activity}
+                              <span style={{ display: "inline-flex", flexShrink: 0 }}>
+                                {liveCard.status === "running" ? <IconChevron size={9} /> : liveCard.status === "done" ? <IconCheck size={10} /> : <IconX size={9} />}
+                              </span>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{liveCard.activity}</span>
                             </div>
                           )}
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          {/* Footer — meta on a hairline shelf so the card reads
+                              title-first, details-second. */}
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)" }}>
                             <span style={{ fontSize: 11, color: "var(--fg-subtle)" }}>{WORKER_LABEL[r.assignment.workerKind]}</span>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               {canRunReal && (
@@ -443,14 +523,18 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                                   title="Dispatch this plan-mode task as a real Klide harness run"
                                   className="klide-orch-run"
                                   style={{
-                                    fontSize: 10,
-                                    padding: "1px 8px",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 5,
+                                    fontSize: 10.5,
+                                    fontWeight: 500,
+                                    padding: "3px 10px 3px 9px",
                                     borderRadius: 999,
                                     border: "1px solid var(--border-strong)",
                                     color: "var(--fg-subtle)",
                                   }}
                                 >
-                                  ▶ run
+                                  <IconPlay size={8} /> run
                                 </button>
                               )}
                               <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontVariantNumeric: "tabular-nums", color: "var(--fg-subtle)" }}>
@@ -469,17 +553,19 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
           </div>
 
           {/* right rail */}
-          <div style={{ width: 220, display: "flex", flexDirection: "column", gap: 16, flex: "0 0 220px" }}>
-            <div className="klide-surface" style={{ padding: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-strong)", marginBottom: 10 }}>Budget</div>
+          <div style={{ width: 240, display: "flex", flexDirection: "column", gap: 14, flex: "0 0 240px" }}>
+            <div className="klide-surface" style={{ padding: 18 }}>
+              <div style={{ ...eyebrow, marginBottom: 12 }}>Budget</div>
               <BudgetMeter spent={totalCost} max={envelope.maxCostUsd} />
-              <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 10 }}>Est. time {fmtMin(totalMs)}</div>
+              <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 12 }}>
+                Est. time <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg)" }}>{fmtMin(totalMs)}</span>
+              </div>
             </div>
             <button className="klide-button klide-button-primary" onClick={dispatchAllPlan} disabled={!workspaceRoot}>
               {workspaceRoot ? "Dispatch ready" : "Open a workspace"}
             </button>
-            <div className="klide-surface" style={{ padding: 16, fontSize: 12, color: "var(--fg-subtle)" }}>
-              <div style={{ fontWeight: 600, color: "var(--fg-strong)", marginBottom: 6 }}>Note</div>
+            <div className="klide-surface" style={{ padding: 18, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
+              <div style={{ ...eyebrow, marginBottom: 8 }}>Note</div>
               Plan-mode (read-only) tasks dispatch for real now. Goal-mode writes wait for the diff-review surface.
             </div>
           </div>

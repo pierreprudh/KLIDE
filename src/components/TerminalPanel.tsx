@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import type { ThemeId } from "../theme";
+import { notify } from "../toast";
 
 type Props = {
   visible: boolean;
@@ -68,7 +69,21 @@ export function TerminalPanel({
     term.open(ref.current);
     fit.fit();
 
-    invoke("pty_spawn", { workspaceRoot });
+    let disposed = false;
+    const spawn = () => {
+      invoke("pty_spawn", { workspaceRoot }).catch((e) => {
+        if (disposed) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        // Surface inline in the panel itself (red), not just a toast — a blank
+        // terminal that silently failed to start reads as a frozen app.
+        term.writeln(`\x1b[31mShell failed to start: ${msg}\x1b[0m`);
+        notify(`Terminal failed to start: ${msg}`, {
+          tone: "error",
+          action: { label: "Retry", run: spawn },
+        });
+      });
+    };
+    spawn();
     const unlisten = listen<string>("pty:data", (e) => term.write(e.payload));
     term.onData((data) => invoke("pty_write", { data }));
 
@@ -76,6 +91,7 @@ export function TerminalPanel({
     resize.observe(ref.current);
 
     return () => {
+      disposed = true;
       unlisten.then((u) => u());
       resize.disconnect();
       term.dispose();

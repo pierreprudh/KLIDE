@@ -42,7 +42,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(40,40,40,0.35)",
+        background: "var(--modal-scrim)",
         backdropFilter: "blur(2px)",
         display: "flex",
         alignItems: "center",
@@ -58,7 +58,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
           background: "var(--bg)",
           border: "1px solid var(--border-strong)",
           borderRadius: "var(--radius-lg)",
-          boxShadow: "0 18px 60px rgba(0,0,0,0.14)",
+          boxShadow: "var(--panel-shadow)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -103,8 +103,8 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
               gap: 10,
             }}
           >
-            <span style={{ color: "#1f8a3b" }}>+{stats.added}</span>
-            <span style={{ color: "#b8323a" }}>−{stats.removed}</span>
+            <span style={{ color: "var(--diff-add)" }}>+{stats.added}</span>
+            <span style={{ color: "var(--diff-remove)" }}>−{stats.removed}</span>
           </div>
         </header>
 
@@ -113,7 +113,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
             style={{
               padding: "9px 18px",
               borderBottom: "1px solid var(--border)",
-              background: "rgba(184, 130, 40, 0.10)",
+              background: "color-mix(in srgb, var(--warning) 12%, transparent)",
               color: "var(--fg-strong)",
               fontSize: 12,
               lineHeight: 1.45,
@@ -137,11 +137,11 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
           {changes.map((c, ci) => {
             const sign = c.added ? "+" : c.removed ? "−" : " ";
             const bg = c.added
-              ? "rgba(31, 138, 59, 0.10)"
+              ? "color-mix(in srgb, var(--diff-add) 12%, transparent)"
               : c.removed
-              ? "rgba(184, 50, 58, 0.10)"
+              ? "color-mix(in srgb, var(--diff-remove) 12%, transparent)"
               : "transparent";
-            const fg = c.added ? "#1f8a3b" : c.removed ? "#b8323a" : "var(--fg-strong)";
+            const fg = c.added ? "var(--diff-add)" : c.removed ? "var(--diff-remove)" : "var(--fg-strong)";
             const lines = c.value.split("\n");
             if (lines[lines.length - 1] === "") lines.pop();
             return lines.map((line, li) => (
@@ -204,7 +204,7 @@ export function DiffModal({ edit, onApply, onReject }: Props) {
               border: "1px solid var(--accent)",
               borderRadius: "var(--radius-sm)",
               background: "var(--accent)",
-              color: "#FFFFFF",
+              color: "var(--control-primary-fg)",
               fontWeight: 500,
               fontSize: 13,
               transition: "filter var(--motion-med) var(--ease-out)",

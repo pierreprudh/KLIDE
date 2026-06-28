@@ -176,7 +176,7 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
           border: "1px solid var(--border-strong)",
           borderRadius: "var(--radius-lg)",
           background: "var(--bg-elevated)",
-          boxShadow: "0 16px 48px rgba(38, 38, 32, 0.22)",
+          boxShadow: "var(--panel-shadow)",
           overflow: "hidden",
         }}
       >

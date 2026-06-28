@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listCheckpoints, revertCheckpoint, revertRunCheckpoints } from "../agent/client";
 import type { CheckpointEntry } from "../agent/types";
 import { DiffModal, type PendingEdit } from "./DiffModal";
+import { notify } from "../toast";
 
 function relativeTime(ts: number): string {
   const min = Math.floor((Date.now() - ts) / 60000);
@@ -63,12 +64,17 @@ export function CheckpointPanel({ runId }: Props) {
   }, [load]);
 
   async function handleRevert(entry: CheckpointEntry) {
+    // Match the bulk/turn paths: confirm before an overwrite that can't be
+    // undone. Single-file revert was the one destructive path without a guard.
+    if (!window.confirm(`Revert ${entry.path} to its checkpoint? This overwrites the current file and can't be undone.`)) return;
     setReverting(entry.toolCallId);
     try {
       await revertCheckpoint(runId, entry.toolCallId);
       setEntries((prev) => prev.filter((e) => e.toolCallId !== entry.toolCallId));
+      notify(`Reverted ${entry.path}`, { tone: "success" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      notify(`Revert failed: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
     } finally {
       setReverting(null);
     }
@@ -81,8 +87,10 @@ export function CheckpointPanel({ runId }: Props) {
     try {
       await revertRunCheckpoints(runId);
       setEntries([]);
+      notify("Reverted all file changes for this run", { tone: "success" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      notify(`Revert failed: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
       await load();
     } finally {
       setRevertingAll(false);
@@ -99,8 +107,10 @@ export function CheckpointPanel({ runId }: Props) {
       }
       const revertedIds = new Set(group.map((entry) => entry.toolCallId));
       setEntries((prev) => prev.filter((entry) => !revertedIds.has(entry.toolCallId)));
+      notify(`Reverted ${group.length} file change${group.length === 1 ? "" : "s"} from turn ${turn}`, { tone: "success" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      notify(`Revert failed: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
       await load();
     } finally {
       setRevertingTurn(null);
@@ -112,7 +122,7 @@ export function CheckpointPanel({ runId }: Props) {
   const muted = { fontSize: 12, color: "var(--fg-subtle)" } as const;
 
   if (loading) return <div style={muted}>Loading checkpoints…</div>;
-  if (error) return <div style={{ ...muted, color: "var(--danger, #B42318)" }}>{error}</div>;
+  if (error) return <div style={{ ...muted, color: "var(--danger)" }}>{error}</div>;
   if (entries.length === 0) return <div style={muted}>No file changes to revert.</div>;
 
   return (
@@ -125,17 +135,17 @@ export function CheckpointPanel({ runId }: Props) {
             fontSize: 11,
             padding: "3px 8px",
             borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--danger, #B42318)",
-            color: "var(--danger, #B42318)",
+            border: "1px solid var(--danger)",
+            color: "var(--danger)",
             background: revertingAll
-              ? "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)"
+              ? "color-mix(in srgb, var(--danger) 12%, transparent)"
               : "transparent",
             cursor: revertingAll || !!reverting ? "default" : "pointer",
             opacity: revertingAll || !!reverting ? 0.6 : 1,
           }}
           onMouseEnter={(e) => {
             if (!revertingAll && !reverting)
-              e.currentTarget.style.background = "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)";
+              e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)";
           }}
           onMouseLeave={(e) => {
             if (!revertingAll && !reverting) e.currentTarget.style.background = "transparent";
@@ -213,9 +223,9 @@ export function CheckpointPanel({ runId }: Props) {
                     letterSpacing: "0.08em",
                     textTransform: "uppercase",
                     fontFamily: "var(--font-mono)",
-                    color: entry.isCreate ? "#3E7C5A" : "var(--accent)",
+                    color: entry.isCreate ? "var(--diff-add)" : "var(--accent)",
                     background: entry.isCreate
-                      ? "color-mix(in srgb, #3E7C5A 12%, transparent)"
+                      ? "color-mix(in srgb, var(--diff-add) 12%, transparent)"
                       : "var(--accent-soft)",
                     padding: "1px 5px",
                     borderRadius: 3,
@@ -265,10 +275,10 @@ export function CheckpointPanel({ runId }: Props) {
                     fontSize: 10,
                     padding: "2px 6px",
                     borderRadius: "var(--radius-sm)",
-                    border: "1px solid var(--danger, #B42318)",
-                    color: "var(--danger, #B42318)",
+                    border: "1px solid var(--danger)",
+                    color: "var(--danger)",
                     background: reverting === entry.toolCallId
-                      ? "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)"
+                      ? "color-mix(in srgb, var(--danger) 12%, transparent)"
                       : "transparent",
                     cursor: reverting === entry.toolCallId ? "default" : "pointer",
                     opacity: reverting === entry.toolCallId ? 0.6 : 1,
@@ -276,7 +286,7 @@ export function CheckpointPanel({ runId }: Props) {
                   }}
                   onMouseEnter={(e) => {
                     if (reverting !== entry.toolCallId)
-                      e.currentTarget.style.background = "color-mix(in srgb, var(--danger, #B42318) 12%, transparent)";
+                      e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)";
                   }}
                   onMouseLeave={(e) => {
                     if (reverting !== entry.toolCallId)
