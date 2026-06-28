@@ -3381,7 +3381,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 	                      boxShadow: "none",
                       color: !modelSupportsReflection ? "var(--fg-dim)" : reflectionOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
                       fontSize: 11,
-                      fontWeight: 560,
+                      fontWeight: 500,
                       letterSpacing: 0,
                       cursor: streaming || !modelSupportsReflection ? "default" : "pointer",
 	                      transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
@@ -3407,7 +3407,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 		                            <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
 	                              <ReflectionBars level={option.level} size="menu" />
 	                              <span style={{ display: "grid", gap: 1, minWidth: 0 }}>
-	                              <span style={{ fontSize: 12, fontWeight: 560 }}>{option.label}</span>
+	                              <span style={{ fontSize: 12, fontWeight: 500 }}>{option.label}</span>
 	                              {option.value === undefined && (
 	                                <span style={{ fontSize: 10.5, color: "var(--fg-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{option.desc}</span>
 	                              )}
@@ -3435,7 +3435,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                 {contextHover && contextTooltipPos && createPortal(
                   <div role="tooltip" className="popover-enter" style={{ position: "fixed", left: contextTooltipPos.left, bottom: contextTooltipPos.bottom, width: contextTooltipPos.width, maxWidth: "calc(100vw - 16px)", padding: contextTooltipPos.compact ? "10px 10px 9px" : "12px 12px 11px", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)", boxShadow: "0 14px 38px rgba(38, 38, 32, 0.18)", color: "var(--fg)", textAlign: "left", pointerEvents: "none", zIndex: Z.tooltip }}>
                     <div style={{ display: "flex", alignItems: contextTooltipPos.compact ? "start" : "baseline", justifyContent: "space-between", gap: 12, marginBottom: 9 }}>
-                      <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 620 }}>Context window</span>
+                      <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Context window</span>
                       <span style={{ color: "var(--fg-subtle)", fontSize: contextTooltipPos.compact ? 11.5 : 13, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", textAlign: "right", lineHeight: 1.25 }}>{formatContextTokens(contextUsed)} / {formatContextTokens(effectiveContextLimit)} ({Math.round(contextRatio * 100)}%)</span>
                     </div>
                     <div style={{ height: 7, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", marginBottom: 11, display: "flex", gap: 1 }}>
