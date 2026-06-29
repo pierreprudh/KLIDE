@@ -322,15 +322,22 @@ button:active {
   transform: scale(0.96);
 }
 
+/* Keyboard focus ring. `!important` so a component's inline `outline: none`
+   (used on "seamless" borderless inputs for looks) can't silently strip the
+   keyboard-focus indicator — a WCAG 2.4.7 requirement. :focus-visible keeps it
+   keyboard-only for buttons; text inputs also show it on click, matching how
+   .klide-field already rings on focus. The textarea rule excludes Monaco's
+   (.inputarea) and xterm's (.xterm-helper-textarea) hidden editing surfaces,
+   which focus constantly and manage their own (ringless) appearance. */
 button:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--accent-soft);
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent-soft) !important;
   outline-offset: 1px;
 }
 
-select:focus-visible,
-input:focus-visible {
-  outline: 2px solid var(--accent-soft);
+textarea:focus-visible:not(.inputarea):not(.xterm-helper-textarea) {
+  outline: 2px solid var(--accent-soft) !important;
   outline-offset: 1px;
 }
 
