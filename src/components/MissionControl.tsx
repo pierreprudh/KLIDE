@@ -3735,12 +3735,13 @@ function ProjectSwitcher({
         onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = "transparent"; }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ opacity: 0.55, flexShrink: 0 }}><path d="M3 4.5l3 3 3-3" /></svg>
       </button>
       {open && (
         <div
           role="menu"
           style={{
-            position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 50,
+            position: "absolute", top: "calc(100% + 5px)", right: 0, zIndex: 50,
             minWidth: 180, maxHeight: "min(50vh, 320px)", overflowY: "auto",
             background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
             borderRadius: 8, boxShadow: "0 1px 1px rgba(28,28,28,0.04), 0 12px 32px rgba(28,28,28,0.12)", padding: 4,
@@ -4456,23 +4457,21 @@ export function MissionControl({
                 </svg>
               </button>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flex: "0 1 auto" }}>
-              <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
-                Mission Control
-              </h1>
-              {projectOptions.length > 0 && (
-                <>
-                  <svg width="7" height="7" viewBox="0 0 12 12" fill="none" stroke="var(--fg-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flexShrink: 0 }}><path d="M4.5 3l4 3-4 3" /></svg>
-                  <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
-                </>
-              )}
-            </div>
+            <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
+              Mission Control
+            </h1>
             {loading && (
-              <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>loading…</span>
+              <span style={{ fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>loading…</span>
             )}
-            <button onClick={() => void load()} title="Refresh" aria-label="Refresh runs" className="mc-iconbtn" style={{ marginLeft: loading ? 0 : "auto" }}>
-              <RefreshIcon />
-            </button>
+            {/* Project switcher + refresh ride together on the right. */}
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+              {projectOptions.length > 0 && (
+                <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
+              )}
+              <button onClick={() => void load()} title="Refresh" aria-label="Refresh runs" className="mc-iconbtn">
+                <RefreshIcon />
+              </button>
+            </div>
           </div>
 
           {/* Row 2 — source filter (agent logos) · search · archived.

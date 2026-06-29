@@ -15,12 +15,12 @@ function normalizeThinking(text: string): string {
 
 function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }) {
   return (
-    <details open={streaming} className="klide-think" style={{ margin: "2px 0 6px" }}>
+    <details open={streaming} className={`klide-think${streaming ? " is-streaming" : ""}`} style={{ margin: "2px 0 6px" }}>
       <summary
         style={{
           display: "inline-flex",
           alignItems: "center",
-          gap: 7,
+          gap: 6,
           padding: "1px 0",
           cursor: "pointer",
           listStyle: "none",
@@ -29,28 +29,13 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
         }}
       >
         <span
-          aria-hidden
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: "50%",
-            background: streaming ? "var(--accent)" : "currentColor",
-            boxShadow: streaming
-              ? "0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent)"
-              : "none",
-            animation: streaming
-              ? "klide-pulse 1.6s ease-in-out infinite"
-              : "none",
-            flexShrink: 0,
-          }}
-        />
-        <span
           style={{
             fontSize: 10,
             fontWeight: 600,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
             fontFamily: "var(--font-mono)",
+            color: streaming ? "var(--accent)" : undefined,
           }}
         >
           {streaming ? "Thinking…" : "Thought process"}

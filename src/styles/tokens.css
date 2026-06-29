@@ -1545,6 +1545,33 @@ select.klide-field {
   transform: rotate(180deg);
 }
 
+/* Reasoning is optional reading: keep the disclosure faint and out of the way,
+   reveal it on hover/focus, and let it sit a touch brighter only while it is
+   actively streaming. */
+.klide-think > summary {
+  opacity: 0.42;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-think > summary:hover,
+.klide-think > summary:focus-visible,
+.klide-think[open] > summary {
+  opacity: 0.78;
+}
+.klide-think.is-streaming > summary {
+  opacity: 0.85;
+}
+/* The reasoning body reads as secondary too — faint by default, settling to a
+   comfortably readable level on hover/while open. */
+.klide-think > div {
+  opacity: 0.6;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.klide-think:hover > div,
+.klide-think[open]:hover > div,
+.klide-think.is-streaming > div {
+  opacity: 0.82;
+}
+
 /* Slow clockwise rotation for in-flight row actions (Save Memory while
    the model is summarising, Review Diff while the file list is fetching).
    Matches the pacing of the other "still working" affordances. */
