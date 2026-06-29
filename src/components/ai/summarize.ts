@@ -168,7 +168,9 @@ function deriveTitle(msgs: Msg[]): string {
 // what made compaction silently fall back. Use `.content`.) If the reply has no
 // visible content (e.g. a reasoning model that emitted only thinking), fall
 // back to the streamed buffer, then to thinking.
-async function callModel(
+// Exported so the orchestrator planner can reuse the proven 1-shot call path
+// (authoritative reply via ai_chat's return value, stream as fallback).
+export async function callModel(
   provider: string,
   model: string,
   messages: Array<{ role: string; content: string }>
