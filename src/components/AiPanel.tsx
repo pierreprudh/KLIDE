@@ -20,7 +20,7 @@ import {
   type ProjectContextSnapshot,
 } from "../contextTray";
 import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints } from "../agent/client";
-import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents } from "../agent/subagents";
+import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
@@ -1977,6 +1977,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           if (ev.type === "assistant_message") {
             const text = ev.content.filter((b) => b.type === "text").map((b) => b.text).join("");
             if (text.trim()) report = text;
+          } else if (ev.type === "run_error") {
+            report = `Subagent error: ${ev.error.message}`;
           }
         });
         await session.done;
@@ -2533,6 +2535,56 @@ This user request requires workspace inspection. Before answering, you MUST call
     const attachments = await collectAttachments(effectiveText);
     const activeProjectContext = lensItemsForPrompt(projectContext, effectiveText, contextMode);
     enqueueTurn({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools, modelSupportsReflection, reflectionLevel, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
+    // A subagent named *inside* a larger message (not a leading directive) runs
+    // in the background, concurrent with the main answer above.
+    if (!directive) {
+      for (const call of extractInlineSubagentCalls(text)) {
+        void runBackgroundSubagent(call.subagent, call.task);
+      }
+    }
+  }
+
+  // Run a named subagent in the background alongside the main conversation: drop
+  // a pending report bubble, run a child run (parentId = conversation, so
+  // Mission Control nests it), and fill the bubble in when it finishes. Updates
+  // are keyed by runId — never by index — so they never collide with the main
+  // turn's streaming. Read-only roles report; edits auto-apply (checkpointed),
+  // since a background run has no diff-review surface.
+  async function runBackgroundSubagent(def: Subagent, task: string) {
+    const runId = `${currentId}-bg-${genId()}`;
+    const placeholder: Msg = { role: "assistant", content: "", subagent: def.label, subagentRunId: runId, subagentPending: true };
+    msgsRef.current = [...msgsRef.current, placeholder];
+    setMsgs(msgsRef.current);
+    const base = buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, def.mode, modelSupportsTools && def.mode !== "chat", projectRules, harnessSettings, model);
+    const systemPrompt = buildSubagentSystemPrompt(def, base);
+    let report = "";
+    try {
+      const session = await startAgentRun({
+        runId, parentId: currentId, workspaceRoot, mode: def.mode,
+        provider, model: def.model ?? model, text: task, attachments: [],
+        context: { workspaceRoot, attachments: [], lensItems: [], estimatedTokens: 0, omitted: [] },
+        systemPrompt,
+        requireDiffReview: false,
+        maxTurns: harnessSettings?.maxTurns && harnessSettings.maxTurns > 0 ? harnessSettings.maxTurns : undefined,
+      }, (ev) => {
+        if (ev.type === "assistant_message") {
+          const t = ev.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+          if (t.trim()) report = t;
+        } else if (ev.type === "run_error") {
+          report = `Subagent error: ${ev.error.message}`;
+        }
+      });
+      await session.done;
+    } catch (e) {
+      report = `Subagent run failed: ${(e as Error).message}`;
+    }
+    const next = msgsRef.current.map((m) =>
+      m.role === "assistant" && m.subagentRunId === runId
+        ? { ...m, content: report.trim() || "(subagent produced no output)", subagentPending: false }
+        : m
+    );
+    msgsRef.current = next;
+    setMsgs(next);
   }
 
   async function handleDiffApply() {

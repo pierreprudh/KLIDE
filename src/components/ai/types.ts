@@ -28,6 +28,12 @@ export type Msg =
       thinking?: string;
       delegateConsole?: boolean;
       delegateProvider?: string;
+      /** Set when this message is a background subagent's report (dispatched
+       *  via an embedded `@role` mention that ran concurrently with the main
+       *  answer). `subagentPending` is true while it's still working. */
+      subagent?: string;
+      subagentRunId?: string;
+      subagentPending?: boolean;
       /** Quiet per-message footer: duration, tokens, time to first token,
        *  and decode speed. `exact` is true when token/speed numbers come
        *  from the provider's own usage block rather than a length estimate. */

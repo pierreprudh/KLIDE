@@ -625,6 +625,24 @@ export function renderMessageBody(m: Msg, active = false): ReactElement {
     //      calls that chat mode doesn't honour; surfacing them as
     //      thinking + leaving the visible text empty is the honest
     //      answer.
+    // Background subagent report (dispatched via an embedded @role mention,
+    // running concurrently with the main answer): a Codex-style @role header on
+    // top, an accent-railed report below, and a quiet "working…" until it lands.
+    if (m.subagent) {
+      return (
+        <div style={{ margin: "4px 0 8px" }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
+            @{m.subagent}
+            {m.subagentPending && <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}> · working…</span>}
+          </div>
+          {m.content.trim() && (
+            <div style={{ padding: "8px 11px", fontSize: 12.5, lineHeight: 1.55, color: "var(--fg-subtle)", background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))", border: "1px solid var(--border)", borderLeft: "2px solid var(--accent)", borderRadius: "var(--radius-sm)" }}>
+              {renderMarkdown(m.content)}
+            </div>
+          )}
+        </div>
+      );
+    }
     const { thinking: inlineThinking, content: cleanedContent } =
       splitThinking(m.content);
     const { thinking: planThinking, content } =

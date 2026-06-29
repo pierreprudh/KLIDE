@@ -108,3 +108,32 @@ export function parseSubagentDirective(
   if (!subagent) return null;
   return { subagent, task: m[2].trim() };
 }
+
+/**
+ * Find `@<subagent>` mentions embedded *inside* a larger message — the
+ * concurrent case: the main assistant answers the message while each mentioned
+ * subagent runs in the background. Each call's task is the text following the
+ * mention up to the next mention (or end), with a leading "to "/"please "/":"
+ * filler trimmed. Only known subagent ids match, so `@file` mentions are
+ * ignored. Returns [] when there are none.
+ */
+export function extractInlineSubagentCalls(
+  text: string
+): { subagent: Subagent; task: string }[] {
+  const calls: { subagent: Subagent; task: string }[] = [];
+  const matches = [...text.matchAll(/@([a-z][\w-]*)/gi)];
+  for (let i = 0; i < matches.length; i += 1) {
+    const m = matches[i];
+    const subagent = resolveSubagent(m[1]);
+    if (!subagent) continue;
+    const start = (m.index ?? 0) + m[0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index ?? text.length : text.length;
+    const task = text
+      .slice(start, end)
+      .trim()
+      .replace(/^(to|please|and|:)\s+/i, "")
+      .trim();
+    calls.push({ subagent, task: task || text.trim() });
+  }
+  return calls;
+}
