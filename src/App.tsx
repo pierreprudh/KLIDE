@@ -37,6 +37,7 @@ import { DiffViewerPanel } from "./components/DiffViewerPanel";
 import { SkillsModal } from "./components/SkillsModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ProfileModal } from "./components/ProfileModal";
+import { KeyboardShortcuts } from "./components/KeyboardShortcuts";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
 import {
@@ -139,6 +140,7 @@ function App() {
   );
   const [memoryVisible, setMemoryVisible] = useState(false);
   const [worktreesVisible, setWorktreesVisible] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
@@ -1186,8 +1188,85 @@ function App() {
   }, [workspaceRoot]);
 
   useEffect(() => {
+    // Is the user currently typing? Used to keep bare "?" / ⌘/ from firing the
+    // cheatsheet (and from stealing ⌘/ comment-toggle) while in a text surface.
+    function isEditableTarget(t: EventTarget | null): boolean {
+      const el = t as HTMLElement | null;
+      if (!el || !el.tagName) return false;
+      const tag = el.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        el.isContentEditable === true ||
+        !!el.closest?.(".monaco-editor, .xterm")
+      );
+    }
+    // Region focus navigation (WAI-ARIA landmark cycling). Focus lands in the
+    // editor (Monaco), explorer (first header action), terminal (xterm input),
+    // or AI composer — whichever regions are currently open.
+    type Region = "explorer" | "editor" | "terminal" | "ai";
+    function focusRegion(region: Region): boolean {
+      let sel: string | null = null;
+      if (region === "editor") { editorRef.current?.focus(); return true; }
+      if (region === "terminal") sel = ".xterm-helper-textarea";
+      else if (region === "ai") sel = "[data-ai-composer]";
+      else if (region === "explorer") sel = ".klide-explorer-action";
+      const el = sel ? document.querySelector<HTMLElement>(sel) : null;
+      if (el) { el.focus(); return true; }
+      return false;
+    }
+    function currentRegion(): Region | null {
+      const ae = document.activeElement;
+      if (!ae) return null;
+      if (ae.closest(".monaco-editor")) return "editor";
+      if (ae.closest(".xterm")) return "terminal";
+      if (ae.closest("[data-ai-composer]")) return "ai";
+      if (ae.closest('[class*="klide-explorer"]')) return "explorer";
+      return null;
+    }
+    function cycleRegion(dir: 1 | -1) {
+      const order = (["explorer", "editor", "terminal", "ai"] as Region[]).filter((r) =>
+        r === "editor" ? true
+          : r === "explorer" ? explorerVisible
+          : r === "terminal" ? terminalVisible
+          : aiVisible
+      );
+      if (order.length === 0) return;
+      const cur = currentRegion();
+      const at = cur ? order.indexOf(cur) : -1;
+      const start = at === -1 ? (dir === 1 ? 0 : order.length - 1) : (at + dir + order.length) % order.length;
+      // Walk from the target onward so F6 never dead-ends if a region can't
+      // take focus yet (e.g. terminal still mounting).
+      for (let i = 0; i < order.length; i++) {
+        if (focusRegion(order[(start + i + order.length) % order.length])) return;
+      }
+    }
+
     function onKey(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
+
+      // Region focus cycle — workbench only. F6 is the cross-platform a11y
+      // standard (works on external keyboards / "standard function keys"); on
+      // macOS, where the laptop F-row needs Fn, ⌃Tab is the no-Fn primary. ⌃Tab
+      // must be caught BEFORE the editor-tab handler below (whose `mod` includes
+      // ctrlKey). On Windows/Linux ⌃Tab stays tab-switching (the convention),
+      // so this gates ⌃Tab to macOS; F6 covers region cycling there.
+      const isMac = /mac/i.test(navigator.platform || navigator.userAgent);
+      if (
+        view === "workbench" &&
+        (e.key === "F6" || (isMac && e.key === "Tab" && e.ctrlKey && !e.metaKey))
+      ) {
+        e.preventDefault();
+        cycleRegion(e.shiftKey ? -1 : 1);
+        return;
+      }
+      // Keyboard-shortcuts cheatsheet (⌘/ or "?"). Guarded so it doesn't fire
+      // while typing, and so Monaco keeps ⌘/ for comment-toggle in the editor.
+      if (!isEditableTarget(e.target) && ((mod && e.key === "/") || (!mod && e.key === "?"))) {
+        e.preventDefault();
+        setShortcutsOpen((v) => !v);
+        return;
+      }
 
       if (mod && !e.shiftKey && e.key === "s" && active) {
         e.preventDefault();
@@ -1260,6 +1339,7 @@ function App() {
       }
       // Escape — close palette, search, or return to workbench from a top-level view
       if (e.key === "Escape") {
+        if (shortcutsOpen) { setShortcutsOpen(false); return; }
         if (paletteOpen) { setPaletteOpen(false); return; }
         if (searchVisible) { setSearchVisible(false); return; }
         if (view === "runs" || view === "orchestrator" || view === "git-review" || view === "settings") {
@@ -1271,7 +1351,7 @@ function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible, view]);
+  }, [active, activeIdx, tabs, saveActive, paletteOpen, searchVisible, view, explorerVisible, terminalVisible, aiVisible, shortcutsOpen]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1337,6 +1417,7 @@ function App() {
     { id: "worktrees-view", label: "View: Worktrees", action: () => { setPaletteOpen(false); setWorktreesVisible(true); } },
     { id: "rollback", label: "Git: View Checkpoints", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "reload", label: "Developer: Reload Window", action: () => { window.location.reload(); } },
+    { id: "shortcuts", label: "Help: Keyboard Shortcuts", shortcut: "?", action: () => { setShortcutsOpen(true); setPaletteOpen(false); } },
   ];
   const statusTheme =
     autoTheme
@@ -1930,6 +2011,7 @@ function App() {
         workspaceRoot={workspaceRoot}
         onClose={() => setProfileVisible(false)}
       />
+      {shortcutsOpen && <KeyboardShortcuts onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && (
         <CommandPalette
           workspaceRoot={workspaceRoot}
