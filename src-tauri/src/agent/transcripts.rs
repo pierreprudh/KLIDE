@@ -74,6 +74,8 @@ pub fn append_event(
         | AgentEvent::RunError { ts, .. }
         | AgentEvent::UserQuestionRequested { ts, .. }
         | AgentEvent::UserQuestionResolved { ts, .. }
+        | AgentEvent::SubagentRequested { ts, .. }
+        | AgentEvent::SubagentResolved { ts, .. }
         | AgentEvent::ContextCompacted { ts, .. } => *ts,
     };
     let line = TranscriptLine {

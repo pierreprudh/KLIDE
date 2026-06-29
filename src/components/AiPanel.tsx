@@ -20,6 +20,7 @@ import {
   type ProjectContextSnapshot,
 } from "../contextTray";
 import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints } from "../agent/client";
+import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents } from "../agent/subagents";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
@@ -618,9 +619,13 @@ export function AiPanel({
   // in usePortalMenu, not five hand-rolled effects here.
 
   const [fileList, setFileList] = useState<string[]>([]);
-  const [mention, setMention] = useState<{ query: string } | null>(null);
+  const [mention, setMention] = useState<{ query: string; atStart: boolean } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
+  // When `@` opens the menu at the very start of the message, offer subagents
+  // (above files). Mid-message `@` stays file-only, so the two never clash.
+  const subagentMatches = mention?.atStart ? matchSubagents(mention.query) : [];
   const mentionMatches = mention !== null ? fuzzyFiles(fileList, mention.query) : [];
+  const mentionTotal = subagentMatches.length + mentionMatches.length;
 
   const providerDelegatesWork = isDelegateProvider(provider);
   const isLocalProvider = provider === "ollama" || provider === "mlx";
@@ -754,7 +759,7 @@ export function AiPanel({
     { name: "explain", desc: "Explain a file — pick one next (read-only)", run: () => {
       setInput("Explain what this file does and how it works: @");
       setNextSendMode("plan");
-      setMention({ query: "" }); setMentionIdx(0);
+      setMention({ query: "", atStart: false }); setMentionIdx(0);
       void ensureFileList();
       requestAnimationFrame(() => taRef.current?.focus());
     }},
@@ -853,7 +858,7 @@ export function AiPanel({
     else if (slash !== null) setSlash(null);
     const before = value.slice(0, caret);
     const m = before.match(/(?:^|\s)@([^\s@]*)$/);
-    if (m) { setMention({ query: m[1] }); setMentionIdx(0); void ensureFileList(); }
+    if (m) { setMention({ query: m[1], atStart: /^@[^\s@]*$/.test(before) }); setMentionIdx(0); void ensureFileList(); }
     else if (mention !== null) setMention(null);
   }
 
@@ -867,6 +872,24 @@ export function AiPanel({
     setInput(next);
     setMention(null);
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(newBefore.length, newBefore.length); });
+  }
+
+  // Insert a subagent directive at the start of the composer, preserving any
+  // text the user already typed after the `@query`.
+  function acceptSubagent(label: string) {
+    const ta = taRef.current;
+    const caret = ta ? ta.selectionStart : input.length;
+    const next = `@${label} `;
+    setInput(next + input.slice(caret));
+    setMention(null);
+    requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(next.length, next.length); });
+  }
+
+  // The menu lists subagents first, then files. Route an absolute index.
+  function acceptMentionAt(idx: number) {
+    if (idx < subagentMatches.length) { acceptSubagent(subagentMatches[idx].label); return; }
+    const path = mentionMatches[idx - subagentMatches.length];
+    if (path) acceptMention(path);
   }
 
   // "Add file" in the + menu just primes an @-mention: append " @" and let the
@@ -1928,6 +1951,41 @@ This user request requires workspace inspection. Before answering, you MUST call
       }, 50);
     };
 
+    // The main run called `spawn_subagent` and is parked on a oneshot. Run the
+    // named read-only subagent as a nested child run (Mission Control nests it
+    // by parentId), accumulate its final answer, and resolve the parent through
+    // the shared question channel — that text becomes the tool result.
+    const runSubagentChild = async (event: Extract<AgentEvent, { type: "subagent_requested" }>) => {
+      const def = resolveSubagent(event.subagent);
+      if (!def) {
+        await resolveUserQuestion({ runId: event.runId, requestId: event.requestId, answer: `Unknown subagent "${event.subagent}".` });
+        return;
+      }
+      const base = buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, def.mode, turn.modelSupportsTools && def.mode !== "chat", projectRules, harnessSettings, turn.model);
+      const systemPrompt = buildSubagentSystemPrompt(def, base);
+      let report = "";
+      try {
+        const session = await startAgentRun({
+          runId: event.requestId,
+          workspaceRoot, mode: def.mode, provider: turn.provider, model: def.model ?? turn.model,
+          text: event.task, attachments: [],
+          context: { workspaceRoot, attachments: [], lensItems: [], estimatedTokens: 0, omitted: [] },
+          systemPrompt,
+          parentId: event.runId,
+          maxTurns: harnessSettings?.maxTurns && harnessSettings.maxTurns > 0 ? harnessSettings.maxTurns : undefined,
+        }, (ev) => {
+          if (ev.type === "assistant_message") {
+            const text = ev.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+            if (text.trim()) report = text;
+          }
+        });
+        await session.done;
+      } catch (e) {
+        report = `Subagent run failed: ${(e as Error).message}`;
+      }
+      await resolveUserQuestion({ runId: event.runId, requestId: event.requestId, answer: report.trim() || "(subagent produced no output)" });
+    };
+
     const handleEvent = (event: AgentEvent) => {
       if (queueGenerationRef.current !== generation) return;
 
@@ -2057,6 +2115,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           }
           break;
         }
+        case "subagent_requested": {
+          void runSubagentChild(event);
+          break;
+        }
+        case "subagent_resolved": {
+          break;
+        }
         case "permission_requested": {
           const req = event.request as {
             id: string;
@@ -2150,6 +2215,9 @@ If the user asks about folders, files, the current directory, repository structu
 
 Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
         : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
+      // Subagent turn: append the role specialisation to the base prompt.
+      const subagentDef = turn.subagent ? resolveSubagent(turn.subagent) : undefined;
+      if (subagentDef) systemPrompt = buildSubagentSystemPrompt(subagentDef, systemPrompt);
       if (turn.mode !== "chat" && toolsAvailable && asksForWorkspaceInspection(turn.text)) {
         systemPrompt += `
 
@@ -2179,8 +2247,13 @@ This user request requires workspace inspection. Before answering, you MUST call
       // Mark this conversation in-flight so a mid-run view switch re-attaches
       // to it rather than starting fresh on remount.
       if (panelId) savePanelSession(panelId, currentId, true);
+      // A subagent turn runs as its OWN child run (parentId = the conversation
+      // run), so Mission Control nests it under the convo. Events still stream
+      // through `handleEvent`, so the delegation + any diffs render inline here.
+      const turnRunId = turn.subagent ? `${currentId}-at-${turn.clientId}` : currentId;
       const session = await startAgentRun({
-        runId: currentId,
+        runId: turnRunId,
+        parentId: turn.subagent ? currentId : undefined,
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
         text: turn.text, attachments: turn.attachments,
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
@@ -2238,7 +2311,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   function enqueueTurn(turn: QueuedTurn) {
     queueRef.current = [...queueRef.current, turn];
     setQueuedTurns(queueRef.current);
-    const queuedMessage: Msg = { role: "user", content: turn.text, attachments: turn.attachments.length ? turn.attachments : undefined, projectContext: turn.projectContext, queueState: "queued", queueId: turn.clientId };
+    const queuedMessage: Msg = { role: "user", content: turn.text, attachments: turn.attachments.length ? turn.attachments : undefined, projectContext: turn.projectContext, queueState: "queued", queueId: turn.clientId, subagent: turn.subagent };
     msgsRef.current = [...msgsRef.current, queuedMessage];
     setMsgs(msgsRef.current);
     // The user just hit send. Even if they were scrolled up reading old
@@ -2441,17 +2514,25 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (!(await ensureLocalServerReady())) return;
     // User hit Stop while the server was warming up — back out before launching.
     if (cancelledWarmupRef.current) { cancelledWarmupRef.current = false; return; }
-    const requestedMode = opts?.mode ?? nextSendMode ?? agentModeRef.current;
+    // `@<subagent> <task>` re-flavors this turn with a named subagent's role +
+    // mode. The directive's mode wins over the picker; the rest of the turn
+    // (the task text) runs through the normal harness path, badged in the chat.
+    const directive = parseSubagentDirective(text);
+    const effectiveText = directive ? directive.task : text;
+    const subagentModel = directive?.subagent.model;
+    const requestedMode = directive
+      ? directive.subagent.mode
+      : opts?.mode ?? nextSendMode ?? agentModeRef.current;
     const availableMode: AgentMode =
       !modelSupportsTools && !providerDelegatesWork && requestedMode === "goal" ? "chat" : requestedMode;
     const mode: AgentMode =
-      availableMode === "chat" && modelSupportsTools && asksForWorkspaceInspection(text)
+      availableMode === "chat" && modelSupportsTools && asksForWorkspaceInspection(effectiveText)
         ? "plan"
         : availableMode;
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
-    const attachments = await collectAttachments(text);
-    const activeProjectContext = lensItemsForPrompt(projectContext, text, contextMode);
-    enqueueTurn({ clientId: genId(), text, mode, provider, model, modelSupportsTools, modelSupportsReflection, reflectionLevel, attachments, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
+    const attachments = await collectAttachments(effectiveText);
+    const activeProjectContext = lensItemsForPrompt(projectContext, effectiveText, contextMode);
+    enqueueTurn({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools, modelSupportsReflection, reflectionLevel, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
   }
 
   async function handleDiffApply() {
@@ -2787,6 +2868,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             const isEditing = editingIdx === i;
             return (
               <div key={i} className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+                {m.subagent && (
+                  <div style={{ marginBottom: 4, paddingRight: 2, fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", userSelect: "none" }}>
+                    @{m.subagent}
+                  </div>
+                )}
                 {isEditing ? (
                   <textarea
                     autoFocus
@@ -3238,17 +3324,33 @@ This user request requires workspace inspection. Before answering, you MUST call
               ))}
             </div>
           )}
-          {mention !== null && mentionMatches.length > 0 && (
+          {mention !== null && mentionTotal > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 220, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
+              {subagentMatches.length > 0 && (
+                <div style={{ padding: "4px 8px 2px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", userSelect: "none" }}>Subagents</div>
+              )}
+              {subagentMatches.map((sub, i) => (
+                <div key={sub.id} role="option" aria-selected={i === mentionIdx}
+                  onMouseDown={(e) => { e.preventDefault(); acceptSubagent(sub.label); }}
+                  onMouseEnter={() => setMentionIdx(i)}
+                  style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: i === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
+                  <span style={{ color: "var(--fg-strong)", fontWeight: 500 }}>@{sub.label}</span>
+                  <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{sub.blurb}</span>
+                </div>
+              ))}
+              {mentionMatches.length > 0 && subagentMatches.length > 0 && (
+                <div style={{ padding: "6px 8px 2px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--fg-dim)", userSelect: "none" }}>Files</div>
+              )}
               {mentionMatches.map((path, idx) => {
+                const absIdx = subagentMatches.length + idx;
                 const slash = path.lastIndexOf("/");
                 const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
                 const base = slash >= 0 ? path.slice(slash + 1) : path;
                 return (
-                  <div key={path} role="option" aria-selected={idx === mentionIdx}
+                  <div key={path} role="option" aria-selected={absIdx === mentionIdx}
                     onMouseDown={(e) => { e.preventDefault(); acceptMention(path); }}
-                    onMouseEnter={() => setMentionIdx(idx)}
-                    style={{ display: "flex", alignItems: "baseline", gap: 2, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: idx === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
+                    onMouseEnter={() => setMentionIdx(absIdx)}
+                    style={{ display: "flex", alignItems: "baseline", gap: 2, padding: "5px 8px", borderRadius: "var(--radius-sm)", fontSize: 12, cursor: "pointer", background: absIdx === mentionIdx ? "var(--bg-hover)" : "transparent", whiteSpace: "nowrap", overflow: "hidden" }}>
                     <span style={{ color: "var(--fg-strong)" }}>{base}</span>
                     <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{dir && ` ${dir}`}</span>
                   </div>
@@ -3266,10 +3368,10 @@ This user request requires workspace inspection. Before answering, you MUST call
                 if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptSlash(slashIdx); return; }
                 if (e.key === "Escape") { e.preventDefault(); setSlash(null); return; }
               }
-              if (mention !== null && mentionMatches.length > 0) {
-                if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionMatches.length); return; }
-                if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionMatches.length) % mentionMatches.length); return; }
-                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptMention(mentionMatches[mentionIdx]); return; }
+              if (mention !== null && mentionTotal > 0) {
+                if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }
+                if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
+                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptMentionAt(mentionIdx); return; }
                 if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
               }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }

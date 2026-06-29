@@ -879,6 +879,7 @@ pub fn run() {
             read_agent_run,
             read_opencode_run,
             models::ai_provider_models,
+            models::ai_provider_credits,
             models::ai_provider_model_meta,
             ai_subscription_status,
             app_user_info,

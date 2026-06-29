@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -11,7 +12,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { THEMES, type ThemeId } from "../theme";
 import { Z } from "../zLayers";
-import { ChevronDown, ProviderLogo } from "./ai/icons";
+import { ChevronDown, DotGridLoader, ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { PROVIDER_GROUPS } from "../agent/providers";
 import {
@@ -228,6 +229,21 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "terminal", label: "Terminal", icon: <TerminalIcon /> },
   { id: "stats", label: "Stats", icon: <BarChartIcon /> },
 ];
+
+// One orienting line per section, shown under the page title. Keeps each pane
+// self-explanatory the way Linear / Vercel settings do, without a help click.
+const SECTION_SUBTITLES: Record<SectionId, string> = {
+  general: "Panel visibility and workbench-wide defaults.",
+  appearance: "Theme and how Klide follows your system light/dark setting.",
+  layout: "Panel sizes and saved workbench layout presets.",
+  ai: "How the assistant edits files, runs tools, and reasons.",
+  "local-ai": "Run models on-device with Ollama and MLX — no key needed.",
+  api: "Hosted provider keys, stored in your macOS Keychain.",
+  subscription: "Connect Claude Code, Codex, and OpenCode CLI logins.",
+  editor: "Monaco editor preferences — font, gutter, and wrapping.",
+  terminal: "The built-in shell's appearance and behaviour.",
+  stats: "Token usage and cost across your agent runs.",
+};
 
 // Searchable index for the "Look for a setting" box. Each entry points at the
 // section that holds it; typing surfaces the matching entries so you can jump
@@ -570,24 +586,163 @@ function ChoiceCards<T extends string>({
   );
 }
 
-function ThemeSwatch({ colors }: { colors: string[] }) {
+function ThemeSwatch({ colors, size = 26 }: { colors: string[]; size?: number }) {
   return (
     <span
       style={{
-        width: 26,
-        height: 26,
+        width: size,
+        height: size,
         borderRadius: "var(--radius-xs)",
         border: "1px solid var(--border-strong)",
         overflow: "hidden",
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
         gridTemplateRows: "1fr 1fr",
+        flexShrink: 0,
       }}
     >
       {colors.map((color) => (
         <span key={color} style={{ background: color }} />
       ))}
     </span>
+  );
+}
+
+// A horizontal set of selectable theme chips — swatch + name in a pill. The
+// premium replacement for a native <select>: you see each theme's palette at a
+// glance and pick in one click. The active chip carries the accent tint + ring.
+function ThemeChips({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: ThemeId;
+  options: { id: ThemeId; name: string; swatches: string[] }[];
+  onChange: (value: ThemeId) => void;
+  label: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      style={{ display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "flex-end" }}
+    >
+      {options.map((opt) => {
+        const active = opt.id === value;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(opt.id)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 34,
+              padding: "0 12px 0 7px",
+              borderRadius: 999,
+              cursor: "pointer",
+              border: `1px solid ${active ? "color-mix(in srgb, var(--accent) 42%, var(--border))" : "var(--border)"}`,
+              background: active ? "var(--accent-soft)" : "var(--bg-elevated)",
+              color: active ? "var(--accent)" : "var(--fg-strong)",
+              fontSize: 12.5,
+              fontWeight: active ? 600 : 500,
+              boxShadow: active ? "inset 0 1px 0 var(--panel-highlight)" : "none",
+              transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
+            }}
+          >
+            <ThemeSwatch colors={opt.swatches} size={18} />
+            {opt.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// A precise − value + stepper for small numeric ranges (font size, etc.) where
+// a slider is fiddly. Quieter and more exact than dragging; the value reads as
+// tabular so the control doesn't reflow as digits change.
+function Stepper({
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  suffix,
+  label,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+  suffix?: string;
+  label: string;
+}) {
+  const set = (next: number) => onChange(clamp(next, min, max));
+  const btn = (dir: -1 | 1, glyph: string, aria: string, atEdge: boolean) => (
+    <button
+      type="button"
+      aria-label={aria}
+      disabled={atEdge}
+      onClick={() => set(value + dir * step)}
+      style={{
+        width: 30,
+        height: 30,
+        display: "grid",
+        placeItems: "center",
+        border: "none",
+        background: "transparent",
+        borderRadius: 999,
+        color: atEdge ? "var(--fg-dim)" : "var(--fg-strong)",
+        cursor: atEdge ? "not-allowed" : "pointer",
+        fontSize: 16,
+        lineHeight: 1,
+      }}
+      onMouseEnter={(e) => {
+        if (!atEdge) e.currentTarget.style.background = "var(--bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {glyph}
+    </button>
+  );
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 2,
+        padding: 2,
+        borderRadius: 999,
+        border: "1px solid var(--border-strong)",
+        background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
+      }}
+    >
+      {btn(-1, "−", `Decrease ${label}`, value <= min)}
+      <span
+        style={{
+          minWidth: 58,
+          textAlign: "center",
+          color: "var(--fg-strong)",
+          fontSize: 13,
+          fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+        {suffix}
+      </span>
+      {btn(1, "+", `Increase ${label}`, value >= max)}
+    </div>
   );
 }
 
@@ -833,6 +988,7 @@ const API_KEY_PROVIDERS: {
   { id: "openai", title: "OpenAI", envVar: "OPENAI_API_KEY", placeholder: "sk-..." },
   { id: "mistral", title: "Mistral", envVar: "MISTRAL_API_KEY", placeholder: "..." },
   { id: "xai", title: "xAI Grok", envVar: "XAI_API_KEY", placeholder: "xai-..." },
+  { id: "openrouter", title: "OpenRouter", envVar: "OPENROUTER_API_KEY", placeholder: "sk-or-..." },
 ];
 
 type KeyStatus = { hasKey: boolean; source: "keychain" | "env" | "reference" | "none" };
@@ -869,6 +1025,11 @@ function ApiKeySummary() {
     </div>
   );
 }
+
+// Live prepaid balance, USD. `null` fields where the provider only reports
+// usage (no cap). The whole object is null for providers that don't expose a
+// balance over the API — today only OpenRouter does.
+type ProviderCredits = { total: number | null; used: number | null; remaining: number | null };
 
 function ApiKeyRow({
   id,
@@ -1034,7 +1195,7 @@ function ApiKeyRow({
             }}
           />
           <LinkButton onClick={() => void save()}>
-            {busy ? "..." : "Save"}
+            {busy ? <DotGridLoader size={14} color="currentColor" label="Saving" /> : "Save"}
           </LinkButton>
           {(status.source === "keychain" || status.source === "reference") && (
             <GhostButton onClick={() => void clear()}>Clear</GhostButton>
@@ -1042,6 +1203,540 @@ function ApiKeyRow({
         </div>
       }
     />
+  );
+}
+
+// ── Per-provider balance calculator ──────────────────────────────────
+// Providers without a live balance API (everyone but OpenRouter) can still
+// show "how much is left": the user enters what they topped up, and we
+// subtract the spend Klide has already tracked (sum of run costUsd for that
+// provider). Top-up amounts are not secrets, so they live in localStorage.
+const BUDGET_KEY = (p: string) => `klide.budget.${p}`;
+
+function readBudget(p: string): number | null {
+  try {
+    const raw = localStorage.getItem(BUDGET_KEY(p));
+    const n = raw == null ? NaN : parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function readAllBudgets(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of API_KEY_PROVIDERS) {
+    const n = readBudget(p.id);
+    if (n != null) out[p.id] = n;
+  }
+  return out;
+}
+
+function writeBudget(p: string, n: number | null) {
+  try {
+    if (n != null && n > 0) localStorage.setItem(BUDGET_KEY(p), String(n));
+    else localStorage.removeItem(BUDGET_KEY(p));
+  } catch {
+    /* private mode / quota — the figure just won't persist */
+  }
+}
+
+function providerColor(id: string): string {
+  return PROVIDER_BRAND_COLOR[id] ?? "var(--accent)";
+}
+
+// One balance donut in the provider row: used vs left, with the remaining
+// figure in the centre and the provider's logo + name beneath. Clicking the
+// card selects the provider (swaps the chart below); the small pencil opens an
+// inline top-up field so you can set/edit "$ added" without leaving the row.
+// Memoised so selecting one provider doesn't re-render the other donuts.
+const BalanceDonut = memo(function BalanceDonut({
+  provider,
+  used,
+  added,
+  usageLoaded,
+  selected,
+  onSelect,
+  onSetBudget,
+}: {
+  provider: { id: string; title: string };
+  used: number;
+  added: number | null;
+  // Whether spend has been parsed yet. Before "Load usage" we don't know
+  // `used`, so the donut shows the top-up amount, not a misleading $0-spent.
+  usageLoaded: boolean;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  onSetBudget: (id: string, n: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const remaining = added != null ? added - used : null;
+  const color = providerColor(provider.id);
+  const track = "color-mix(in srgb, var(--fg-subtle) 16%, var(--bg))";
+  const segments = !usageLoaded
+    ? [{ key: "budget", color: added != null ? color : track, value: 1, title: added != null ? `Topped up ${formatUsd(added)}` : "No top-up set" }]
+    : added != null
+      ? [
+          { key: "used", color, value: used, title: `Used ${formatUsd(used)}` },
+          {
+            key: "left",
+            color: track,
+            value: Math.max(0, remaining ?? 0),
+            title: `Left ${formatUsd(Math.max(0, remaining ?? 0))}`,
+          },
+        ]
+      : [{ key: "empty", color: track, value: 1, title: "No top-up set" }];
+  const centerValue = !usageLoaded
+    ? added != null
+      ? formatUsd(added)
+      : "—"
+    : added != null
+      ? formatUsd(Math.max(0, remaining ?? 0))
+      : "—";
+  const centerLabel = usageLoaded ? "left" : added != null ? "added" : "set $";
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      onClick={() => onSelect(provider.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(provider.id);
+        }
+      }}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8,
+        padding: "10px 4px",
+        border: "1px solid",
+        borderColor: selected ? "var(--border-strong)" : "transparent",
+        borderRadius: 10,
+        background: selected ? "var(--bg-hover)" : "transparent",
+        cursor: "pointer",
+        transition:
+          "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
+      }}
+    >
+      <DonutChart size={84} segments={segments} centerValue={centerValue} centerLabel={centerLabel} />
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: "100%" }}>
+        <ProviderLogo id={provider.id as ProviderId} size={14} />
+        <span
+          style={{
+            color: selected ? "var(--fg-strong)" : "var(--fg)",
+            fontSize: 12,
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {provider.title}
+        </span>
+      </span>
+
+      {/* Inline top-up editor: a pencil/＋ chip that expands to a $ field. */}
+      {editing ? (
+        <span onClick={(e) => e.stopPropagation()}>
+          <TopUpInput
+            autoFocus
+            added={added}
+            onAdded={(n) => {
+              onSetBudget(provider.id, n);
+              setEditing(false);
+            }}
+            label={`${provider.title} amount added`}
+          />
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditing(true);
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            height: 24,
+            padding: "0 8px",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "transparent",
+            color: "var(--fg-subtle)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+        >
+          <PencilIcon size={11} />
+          {added != null ? `$${added}` : "Add $"}
+        </button>
+      )}
+    </div>
+  );
+});
+
+// Top-up entry — number field committing on blur / Enter.
+function TopUpInput({
+  added,
+  onAdded,
+  label,
+  autoFocus = false,
+}: {
+  added: number | null;
+  onAdded: (n: number | null) => void;
+  label: string;
+  autoFocus?: boolean;
+}) {
+  const [draft, setDraft] = useState(added != null ? String(added) : "");
+  useEffect(() => {
+    setDraft(added != null ? String(added) : "");
+  }, [added]);
+  const commit = () => {
+    const n = parseFloat(draft);
+    onAdded(Number.isFinite(n) && n > 0 ? n : null);
+  };
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        height: 30,
+        padding: "0 8px",
+        gap: 2,
+        border: "1px solid var(--border-strong)",
+        borderRadius: 6,
+        background: "var(--bg)",
+      }}
+    >
+      <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)", fontSize: 12 }}>$</span>
+      <input
+        type="number"
+        min={0}
+        step="0.01"
+        autoFocus={autoFocus}
+        value={draft}
+        placeholder="0.00"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        aria-label={label}
+        style={{
+          width: 72,
+          height: 28,
+          border: "none",
+          background: "transparent",
+          color: "var(--fg-strong)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+          outline: "none",
+        }}
+      />
+    </span>
+  );
+}
+
+// The "Balance" block: spend Klide tracked per provider, against a top-up the
+// user enters. Loads runs once (same cache the Stats panel uses) and pulls
+// any live balances on the side.
+function ProviderBalanceBlock() {
+  // Parsing run history is the slow part, so we don't do it on tab open — the
+  // user taps "Load usage" (or it's instant when the Stats cache is warm).
+  const [runs, setRuns] = useState<Run[]>(() => peekAgentRunsCache(1000, 0) ?? []);
+  const [loaded, setLoaded] = useState(() => peekAgentRunsCache(1000, 0) !== null);
+  const [loading, setLoading] = useState(false);
+  const [budgets, setBudgets] = useState<Record<string, number>>(() => readAllBudgets());
+  const [live, setLive] = useState<Record<string, number>>({});
+  // Provider id whose detail chart is showing, or null for the global view.
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const all = await fetchAgentRunsCached(1000, 0);
+      setRuns(all);
+      setLoaded(true);
+    } catch {
+      /* outside Tauri — nothing to load */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Live balances (OpenRouter) — only after usage is loaded, so opening the
+  // tab stays quiet. Cheap + non-blocking; no-ops for providers without one.
+  useEffect(() => {
+    if (!loaded) return;
+    let cancel = false;
+    void (async () => {
+      for (const p of API_KEY_PROVIDERS) {
+        try {
+          const c = await invoke<ProviderCredits | null>("ai_provider_credits", { provider: p.id });
+          if (!cancel && c?.remaining != null) {
+            setLive((prev) => ({ ...prev, [p.id]: c.remaining as number }));
+          }
+        } catch {
+          /* no balance endpoint for this provider */
+        }
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [loaded]);
+
+  const usedByProvider = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const r of runs) {
+      if (r.source !== "klide" || !r.provider) continue;
+      m[r.provider] = (m[r.provider] ?? 0) + (r.costUsd ?? 0);
+    }
+    return m;
+  }, [runs]);
+
+  // Stable callbacks so the memoised donuts don't all re-render on every
+  // selection / edit — only the one whose props actually changed does.
+  const setBudget = useCallback((id: string, n: number | null) => {
+    writeBudget(id, n);
+    setBudgets((prev) => {
+      const next = { ...prev };
+      if (n != null && n > 0) next[id] = n;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+
+  const onSelect = useCallback((id: string) => {
+    setSelected((cur) => (cur === id ? null : id));
+  }, []);
+
+  // Order by name, but providers with spend float to the front.
+  const ordered = useMemo(
+    () =>
+      [...API_KEY_PROVIDERS].sort((a, b) => {
+        const ua = (usedByProvider[a.id] ?? 0) > 0 ? 1 : 0;
+        const ub = (usedByProvider[b.id] ?? 0) > 0 ? 1 : 0;
+        if (ua !== ub) return ub - ua;
+        return a.title.localeCompare(b.title);
+      }),
+    [usedByProvider],
+  );
+
+  const hostedIds = API_KEY_PROVIDERS.map((p) => p.id);
+  const selProvider = selected ? API_KEY_PROVIDERS.find((p) => p.id === selected) ?? null : null;
+  const selIndex = selected ? ordered.findIndex((p) => p.id === selected) : -1;
+  const caretFrac = selIndex >= 0 && ordered.length ? (selIndex + 0.5) / ordered.length : null;
+
+  // Global chart: hosted-provider runs, stacked by provider (brand colours).
+  const globalRuns = useMemo(
+    () => runs.filter((r) => r.source === "klide" && r.provider != null && hostedIds.includes(r.provider)),
+    [runs],
+  );
+  const globalGroupOrder = useMemo(
+    () =>
+      ordered
+        .filter((p) => (usedByProvider[p.id] ?? 0) > 0)
+        .map((p) => ({ key: `klide:${p.id}`, color: providerColor(p.id), label: p.title })),
+    [ordered, usedByProvider],
+  );
+
+  // Provider chart: that provider's runs, stacked by model (shades of its hue).
+  const providerRuns = useMemo(
+    () => (selected ? runs.filter((r) => r.source === "klide" && r.provider === selected) : []),
+    [runs, selected],
+  );
+  const providerKeyOf = useCallback((r: Run) => r.model?.trim() || "unknown", []);
+  const providerGroupOrder = useMemo(() => {
+    if (!selected) return [];
+    const totals = new Map<string, number>();
+    for (const r of providerRuns) {
+      const k = r.model?.trim() || "unknown";
+      totals.set(k, (totals.get(k) ?? 0) + runCost(r));
+    }
+    const color = providerColor(selected);
+    const STEPS = [100, 72, 50, 34, 22, 14];
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([k], i) => ({
+        key: k,
+        label: k,
+        color: `color-mix(in srgb, ${color} ${STEPS[i % STEPS.length]}%, var(--bg-elevated))`,
+      }));
+  }, [selected, providerRuns]);
+
+  const totalUsed = Object.values(usedByProvider).reduce((s, v) => s + v, 0);
+
+  return (
+    <Panel>
+      <div style={{ position: "relative", padding: "16px 14px 18px" }}>
+        {/* Donut row */}
+        <div style={{ display: "flex", gap: 6 }}>
+          {ordered.map((p) => (
+            <BalanceDonut
+              key={p.id}
+              provider={p}
+              used={usedByProvider[p.id] ?? 0}
+              added={budgets[p.id] ?? null}
+              usageLoaded={loaded}
+              selected={selected === p.id}
+              onSelect={onSelect}
+              onSetBudget={setBudget}
+            />
+          ))}
+        </div>
+
+        {/* Caret + chart card */}
+        <div
+          style={{
+            position: "relative",
+            marginTop: 16,
+            border: "1px solid color-mix(in srgb, var(--border-strong) 72%, transparent)",
+            borderRadius: "var(--radius-lg)",
+            background: "var(--bg-elevated)",
+            padding: "14px 16px",
+          }}
+        >
+          {!loaded ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 10,
+                padding: "16px 0",
+              }}
+            >
+              <span style={{ color: "var(--fg-subtle)", fontSize: 12.5 }}>
+                See how much of each provider's top-up you've spent.
+              </span>
+              <button
+                type="button"
+                onClick={() => void load()}
+                disabled={loading}
+                style={{
+                  height: 32,
+                  padding: "0 16px",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: 7,
+                  background: "var(--bg)",
+                  color: "var(--fg-strong)",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: loading ? "default" : "pointer",
+                }}
+              >
+                {loading ? "Loading…" : "Load usage"}
+              </button>
+            </div>
+          ) : (
+          <>
+          {caretFrac != null && (
+            <span
+              aria-hidden
+              style={{
+                position: "absolute",
+                top: -6,
+                left: `${caretFrac * 100}%`,
+                transform: "translateX(-50%) rotate(45deg)",
+                width: 10,
+                height: 10,
+                background: "var(--bg-elevated)",
+                borderLeft: "1px solid color-mix(in srgb, var(--border-strong) 72%, transparent)",
+                borderTop: "1px solid color-mix(in srgb, var(--border-strong) 72%, transparent)",
+              }}
+            />
+          )}
+
+          {/* Header */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 14,
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              {selProvider && <ProviderLogo id={selProvider.id as ProviderId} size={16} />}
+              <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>
+                {selProvider ? `${selProvider.title} usage` : "All API providers"}
+              </span>
+            </span>
+            {selProvider ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11.5,
+                    color: "var(--fg-subtle)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {formatUsd(usedByProvider[selProvider.id] ?? 0)} used
+                  {budgets[selProvider.id] != null && (
+                    <>
+                      {" · "}
+                      <span
+                        style={{
+                          color:
+                            budgets[selProvider.id] - (usedByProvider[selProvider.id] ?? 0) < 0
+                              ? "var(--danger)"
+                              : "var(--fg-strong)",
+                        }}
+                      >
+                        {formatUsd(budgets[selProvider.id] - (usedByProvider[selProvider.id] ?? 0))} left
+                      </span>
+                    </>
+                  )}
+                  {live[selProvider.id] != null && <> · {formatUsd(live[selProvider.id])} live</>}
+                </span>
+              </span>
+            ) : (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>
+                {formatUsd(totalUsed)} used · click a provider for its breakdown
+              </span>
+            )}
+          </div>
+
+          {/* Chart */}
+          {selProvider ? (
+            providerGroupOrder.length > 0 ? (
+              <UsageHistogram
+                runs={providerRuns}
+                metric="cost"
+                groupOrder={providerGroupOrder}
+                keyOf={providerKeyOf}
+              />
+            ) : (
+              <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: "8px 0 14px" }}>
+                No tracked spend for {selProvider.title} yet.
+              </div>
+            )
+          ) : globalGroupOrder.length > 0 ? (
+            <UsageHistogram runs={globalRuns} metric="cost" groupOrder={globalGroupOrder} />
+          ) : (
+            <div style={{ color: "var(--fg-subtle)", fontSize: 12, padding: "8px 0 14px" }}>
+              No tracked API spend yet. Run a conversation against a hosted provider and come back.
+            </div>
+          )}
+          </>
+          )}
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -1068,10 +1763,10 @@ function MethodToggle({
           border: "none",
           borderRadius: 6,
           background: active ? "var(--bg-elevated)" : "transparent",
-          boxShadow: active ? "0 1px 2px rgba(38,38,32,0.12)" : "none",
+          boxShadow: active ? "var(--shadow-raised)" : "none",
           color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
           fontSize: 11.5,
-          fontWeight: active ? 560 : 500,
+          fontWeight: active ? 600 : 500,
           cursor: "pointer",
           transition: "background 120ms ease, color 120ms ease",
         }}
@@ -2124,9 +2819,6 @@ export function SettingsPanel({
   // The active-section card + capsule is a single element that FLIP-slides
   // between rows on switch (same hook as the activity bar / tab underline).
   const navFlip = useFlipIndicator(activeSection, { size: 31, active: true });
-  // Hover is React-controlled (not imperative .style mutation) so the tint
-  // always clears on re-render — otherwise a hovered row stays highlighted.
-  const [hoveredSection, setHoveredSection] = useState<SectionId | null>(null);
   // "Look for a setting" query. While non-empty, the nav is replaced by a
   // flat list of matching settings, each labelled with its section.
   const [settingQuery, setSettingQuery] = useState("");
@@ -2360,14 +3052,27 @@ export function SettingsPanel({
                 cursor: "pointer",
               }}
             >
-              ✕
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
             </button>
           )}
         </div>
 
         {settingQuery.trim() ? (
           // Search results replace the nav. Each row jumps to its section.
-          <div style={{ display: "flex", flexDirection: "column", gap: 3, overflow: "auto", minHeight: 0 }}>
+          <div className="klide-fade-swap" style={{ display: "flex", flexDirection: "column", gap: 3, overflow: "auto", minHeight: 0 }}>
             {settingMatches.length === 0 ? (
               <p style={{ margin: "6px 10px", fontSize: 12, color: "var(--fg-dim)" }}>
                 No settings match “{settingQuery.trim()}”.
@@ -2379,12 +3084,11 @@ export function SettingsPanel({
                   <button
                     key={`${entry.section}:${entry.label}`}
                     type="button"
+                    className="klide-settings-search-row"
                     onClick={() => {
                       goToSection(entry.section);
                       setSettingQuery("");
                     }}
-                    onMouseEnter={() => setHoveredSection(entry.section)}
-                    onMouseLeave={() => setHoveredSection((h) => (h === entry.section ? null : h))}
                     style={{
                       display: "flex",
                       flexDirection: "column",
@@ -2393,7 +3097,7 @@ export function SettingsPanel({
                       padding: "6px 10px",
                       borderRadius: 9,
                       border: "1px solid transparent",
-                      background: hoveredSection === entry.section ? "var(--bg-hover)" : "transparent",
+                      background: "transparent",
                       cursor: "pointer",
                       textAlign: "left",
                     }}
@@ -2411,6 +3115,7 @@ export function SettingsPanel({
         <nav
           ref={navFlip.trackRef}
           data-flip={navFlip.flip}
+          className="klide-fade-swap"
           style={{ position: "relative", display: "flex", flexDirection: "column", gap: 7 }}
         >
           {/* The single moving card — slides between rows on switch. The
@@ -2427,7 +3132,7 @@ export function SettingsPanel({
               borderRadius: 9,
               background: "var(--bg-elevated)",
               border: "1px solid var(--border)",
-              boxShadow: "0 1px 2px rgba(28,28,28,0.05)",
+              boxShadow: "var(--shadow-raised)",
             }}
           >
             <span
@@ -2450,9 +3155,9 @@ export function SettingsPanel({
                 key={section.id}
                 ref={navFlip.setItemRef(section.id)}
                 type="button"
+                className="klide-settings-nav-item"
+                data-active={active}
                 onClick={() => goToSection(section.id)}
-                onMouseEnter={() => setHoveredSection(section.id)}
-                onMouseLeave={() => setHoveredSection((h) => (h === section.id ? null : h))}
                 style={{
                   position: "relative",
                   zIndex: 1,
@@ -2463,14 +3168,13 @@ export function SettingsPanel({
                   alignItems: "center",
                   gap: 9,
                   color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                  background: !active && hoveredSection === section.id ? "var(--bg-hover)" : "transparent",
+                  background: "transparent",
                   borderRadius: 9,
                   justifyContent: "flex-start",
                   fontSize: 13,
                   fontWeight: active ? 600 : 400,
                   border: "1px solid transparent",
                   cursor: "pointer",
-                  transition: "color 0.15s ease, font-weight 0.15s ease",
                 }}
               >
                 <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", flexShrink: 0 }}>
@@ -2490,23 +3194,40 @@ export function SettingsPanel({
         }}
       >
         <div
+          className="klide-settings-enter"
           style={{
-            width: "min(930px, calc(100vw - 360px))",
-            margin: "0 auto",
-            padding: "32px 28px 64px",
+            // Every section is ragged-left and fills the pane. A generous max
+            // keeps line lengths sane on ultra-wide displays; Stats goes fully
+            // edge-to-edge since its charts want all the width they can get.
+            width: "100%",
+            maxWidth: activeSection === "stats" ? "none" : 1280,
+            margin: 0,
+            padding: "32px 36px 64px",
           }}
         >
-          <h1
-            style={{
-              margin: "0 0 32px",
-              color: "var(--fg-strong)",
-              fontSize: 20,
-              lineHeight: 1.2,
-              fontWeight: 600,
-            }}
-          >
-            {sectionTitle}
-          </h1>
+          <header style={{ margin: "0 0 32px" }}>
+            <h1
+              style={{
+                margin: 0,
+                color: "var(--fg-strong)",
+                fontSize: 20,
+                lineHeight: 1.2,
+                fontWeight: 600,
+              }}
+            >
+              {sectionTitle}
+            </h1>
+            <p
+              style={{
+                margin: "6px 0 0",
+                color: "var(--fg-subtle)",
+                fontSize: 13,
+                lineHeight: 1.45,
+              }}
+            >
+              {SECTION_SUBTITLES[activeSection]}
+            </p>
+          </header>
 
           <Section id="general" active={activeSection} mounted={visitedSections.has("general")}>
             <SettingBlock title="Panels">
@@ -2557,38 +3278,32 @@ export function SettingsPanel({
                         title="Light theme"
                         description="Theme used when your system is in light mode."
                         control={
-                          <select
+                          <ThemeChips
+                            label="Light theme"
                             value={lightTheme}
-                            onChange={(e) => onLightThemeChange(e.target.value as ThemeId)}
-                            className="klide-field"
-                            style={{
-                              padding: "4px 8px",
-                              fontSize: 12,
-                            }}
-                          >
-                            {THEMES.filter((t) => !t.isDark).map((t) => (
-                              <option key={t.id} value={t.id}>{t.name}</option>
-                            ))}
-                          </select>
+                            onChange={onLightThemeChange}
+                            options={THEMES.filter((t) => !t.isDark).map((t) => ({
+                              id: t.id,
+                              name: t.name,
+                              swatches: t.swatches,
+                            }))}
+                          />
                         }
                       />
                       <Row
                         title="Dark theme"
                         description="Theme used when your system is in dark mode."
                         control={
-                          <select
+                          <ThemeChips
+                            label="Dark theme"
                             value={darkTheme}
-                            onChange={(e) => onDarkThemeChange(e.target.value as ThemeId)}
-                            className="klide-field"
-                            style={{
-                              padding: "4px 8px",
-                              fontSize: 12,
-                            }}
-                          >
-                            {THEMES.filter((t) => t.isDark).map((t) => (
-                              <option key={t.id} value={t.id}>{t.name}</option>
-                            ))}
-                          </select>
+                            onChange={onDarkThemeChange}
+                            options={THEMES.filter((t) => t.isDark).map((t) => ({
+                              id: t.id,
+                              name: t.name,
+                              swatches: t.swatches,
+                            }))}
+                          />
                         }
                       />
                     </>
@@ -3272,6 +3987,9 @@ export function SettingsPanel({
                   ))}
                 </Panel>
               </SettingBlock>
+              <SettingBlock title="Balance">
+                <ProviderBalanceBlock />
+              </SettingBlock>
               <SettingBlock title="Self-hosted endpoints">
                 <CustomEndpointsBlock onProviderKeyChange={onProviderKeyChange} />
               </SettingBlock>
@@ -3398,7 +4116,7 @@ export function SettingsPanel({
                   title="Font size"
                   description="Preferred code editor text size."
                   control={
-                    <Range
+                    <Stepper
                       label="Editor font size"
                       value={editorFontSize}
                       min={11}
@@ -3493,17 +4211,48 @@ export function SettingsPanel({
 // a GitHub-style activity heatmap and a provider/model breakdown, both
 // switchable between conversation counts and real token usage.
 
-type StatsMetric = "conversations" | "tokens";
+type StatsMetric = "conversations" | "tokens" | "cost";
 
-// Per-source brand tints for the breakdown bars. Flat hexes (not CSS vars)
-// so color-mix can fade them against the panel background.
-const STATS_SOURCE_COLOR: Record<RunSource, string> = {
+// Brand hues we're confident about, keyed by AI provider id OR delegate
+// source. Only distinct, recognisable colors live here — Anthropic's
+// terracotta, OpenRouter blue, Mistral orange, Oh-My-Pi violet. Providers
+// whose brand is essentially monochrome (OpenAI, xAI, Codex) are deliberately
+// absent so they fall to the neutral ramp instead of inventing a color.
+const PROVIDER_BRAND_COLOR: Record<string, string> = {
+  anthropic: "#D97757",
   "claude-code": "#D97757",
-  codex: "var(--fg-strong)",
-  opencode: "var(--fg-subtle)",
+  mistral: "#FA520F",
+  openrouter: "#4A6CF7",
   omp: "#7C6BAE",
-  klide: "var(--accent)",
 };
+
+// Graduated neutral steps for providers with no brand hue. Cycled by order of
+// appearance so two "neutral" providers still read apart in the donut.
+const NEUTRAL_STEPS = [
+  "var(--fg-strong)",
+  "color-mix(in srgb, var(--fg-subtle) 80%, var(--bg))",
+  "color-mix(in srgb, var(--fg-subtle) 54%, var(--bg))",
+  "color-mix(in srgb, var(--fg-subtle) 34%, var(--bg))",
+];
+
+// The id we colour a group by: a Klide group wears its AI provider's colour
+// (so Klide·Anthropic is Anthropic orange); an external CLI wears its own.
+function groupProviderId(g: ProviderGroup): string {
+  return g.source === "klide" ? g.provider ?? "klide" : g.source;
+}
+
+// One stable colour per group: brand hue when known, else the next neutral
+// step. Computed over the whole (sorted) list so neutral assignment is
+// deterministic and collision-free within a render.
+function assignGroupColors(groups: ProviderGroup[]): Map<string, string> {
+  const out = new Map<string, string>();
+  let neutral = 0;
+  for (const g of groups) {
+    const brand = PROVIDER_BRAND_COLOR[groupProviderId(g)];
+    out.set(g.key, brand ?? NEUTRAL_STEPS[neutral++ % NEUTRAL_STEPS.length]);
+  }
+  return out;
+}
 
 // Opacity steps for model segments within one provider's bar — first model
 // wears the full tint, later ones fade toward the background.
@@ -3513,8 +4262,38 @@ function runTokens(r: Run): number {
   return (r.inputTokens ?? 0) + (r.outputTokens ?? 0);
 }
 
+function runCost(r: Run): number {
+  return r.costUsd ?? 0;
+}
+
+// The breakdown key a run belongs to: a Klide run splits by its AI provider,
+// an external CLI is one group. Shared by the provider breakdown and the
+// stacked histogram so their colours line up.
+function groupKeyOf(r: Run): string {
+  return r.source === "klide" ? `klide:${r.provider ?? ""}` : r.source;
+}
+
+// $1.2k / $12.34 / $0.0042 — compact for totals, but keeps sub-dollar
+// costs legible (local/cheap models land in fractions of a cent).
+function formatUsd(n: number): string {
+  if (n >= 1000) return `$${(n / 1000).toFixed(1)}k`;
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n > 0) return `$${n.toFixed(n >= 0.01 ? 3 : 4)}`;
+  return "$0";
+}
+
 function prettyProvider(id: string): string {
   return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+// Round a max up to a "nice" round number (1/2/2.5/5 × 10ⁿ) so the histogram's
+// top gridline lands on a readable value instead of the raw data maximum.
+function niceCeil(x: number): number {
+  if (x <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / mag;
+  const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
+  return nice * mag;
 }
 
 /**
@@ -3554,7 +4333,8 @@ type ProviderGroup = {
   tokens: number;
   inputTokens: number;
   outputTokens: number;
-  models: { name: string; conversations: number; tokens: number }[];
+  cost: number;
+  models: { name: string; conversations: number; tokens: number; cost: number }[];
 };
 
 // The breakdown rows wear real brand marks: external CLIs use their tool's
@@ -3582,7 +4362,7 @@ function MetricToggle({
         overflow: "hidden",
       }}
     >
-      {(["conversations", "tokens"] as const).map((m) => (
+      {(["conversations", "tokens", "cost"] as const).map((m) => (
         <button
           key={m}
           type="button"
@@ -3599,7 +4379,7 @@ function MetricToggle({
             color: value === m ? "var(--fg-strong)" : "var(--fg-subtle)",
           }}
         >
-          {m === "conversations" ? "Conversations" : "Tokens"}
+          {m === "conversations" ? "Conversations" : m === "tokens" ? "Tokens" : "Cost"}
         </button>
       ))}
     </div>
@@ -3609,10 +4389,25 @@ function MetricToggle({
 // Weekly histogram of the last 26 weeks. In tokens mode each bar stacks
 // input (faded) under output (full accent); in conversations mode it's a
 // plain count. Clicking a bar pins its exact numbers below the chart.
-function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) {
+function UsageHistogram({
+  runs,
+  metric,
+  groupOrder,
+  keyOf = groupKeyOf,
+}: {
+  runs: Run[];
+  metric: StatsMetric;
+  // Stacked segments, sorted largest-first, each with its colour. Keys must
+  // match what `keyOf` returns so segments line up with the legend.
+  groupOrder: { key: string; color: string; label: string }[];
+  // How a run maps to a stack key — by provider (default) or by model when a
+  // single provider is in focus.
+  keyOf?: (r: Run) => string;
+}) {
   const WEEKS = 26;
   const WEEK_MS = 7 * 86_400_000;
   const [selected, setSelected] = useState<number | null>(null);
+  const [hovered, setHovered] = useState<number | null>(null);
 
   const buckets = useMemo(() => {
     const startMonday = mondayOfWeek(startOfDay(Date.now())) - (WEEKS - 1) * WEEK_MS;
@@ -3621,21 +4416,42 @@ function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) 
       conversations: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cost: 0,
+      // Per-provider-group contribution, for the stacked segments.
+      groups: {} as Record<string, { conversations: number; tokens: number; cost: number }>,
     }));
     for (const r of runs) {
       const idx = Math.floor((mondayOfWeek(r.createdMs) - startMonday) / WEEK_MS);
       if (idx < 0 || idx >= WEEKS) continue;
-      buckets[idx].conversations += 1;
-      buckets[idx].inputTokens += r.inputTokens ?? 0;
-      buckets[idx].outputTokens += r.outputTokens ?? 0;
+      const bk = buckets[idx];
+      bk.conversations += 1;
+      bk.inputTokens += r.inputTokens ?? 0;
+      bk.outputTokens += r.outputTokens ?? 0;
+      bk.cost += r.costUsd ?? 0;
+      const gk = keyOf(r);
+      const gb = bk.groups[gk] ?? (bk.groups[gk] = { conversations: 0, tokens: 0, cost: 0 });
+      gb.conversations += 1;
+      gb.tokens += runTokens(r);
+      gb.cost += runCost(r);
     }
     return buckets;
-  }, [runs]);
+  }, [runs, keyOf]);
+
+  const segValue = (gb: { conversations: number; tokens: number; cost: number }) =>
+    metric === "tokens" ? gb.tokens : metric === "cost" ? gb.cost : gb.conversations;
 
   const valueOf = (b: (typeof buckets)[number]) =>
-    metric === "tokens" ? b.inputTokens + b.outputTokens : b.conversations;
+    metric === "tokens" ? b.inputTokens + b.outputTokens : metric === "cost" ? b.cost : b.conversations;
   const max = Math.max(1, ...buckets.map(valueOf));
   const sel = selected != null ? buckets[selected] : null;
+
+  // Round the axis top to a clean number and lay 4 evenly-spaced gridlines
+  // (0 · ¼ · ½ · ¾ · top). Bars scale against this, not the raw max, so the
+  // top of the tallest bar sits just under a labelled line.
+  const axisTop = niceCeil(max);
+  const fmtAxis = (v: number) =>
+    metric === "cost" ? formatUsd(v) : metric === "tokens" ? formatCompact(v) : Math.round(v).toLocaleString("en-US");
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({ f, value: axisTop * f }));
 
   // One label at each month change, positioned by week index.
   const monthLabels = useMemo(() => {
@@ -3654,79 +4470,211 @@ function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) 
   const weekLabel = (startMs: number) =>
     `Week of ${new Date(startMs).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
-  const chartHeight = 110;
+  const chartHeight = 120;
+  const AXIS_W = 50;
+
+  // The bar the readout describes: hover wins over a pinned click.
+  const active = hovered ?? selected;
+  const ab = active != null ? buckets[active] : null;
+
+  // Per-week tooltip content: provider rows (largest-first) + total.
+  const fmtVal = (v: number) =>
+    metric === "cost" ? formatUsd(v) : metric === "tokens" ? formatCompact(v) : Math.round(v).toLocaleString("en-US");
 
   return (
     <div>
-      {/* Bars */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: 3,
-          height: chartHeight,
-        }}
-      >
-        {buckets.map((b, i) => {
-          const total = valueOf(b);
-          const isSel = i === selected;
-          return (
-            <div
-              key={b.startMs}
-              title={`${weekLabel(b.startMs)}: ${b.conversations} conversations · ${formatCompact(
-                b.inputTokens + b.outputTokens,
-              )} tokens`}
-              onClick={() => setSelected(isSel ? null : i)}
+      {/* Axis gutter + plot area */}
+      <div style={{ display: "flex" }}>
+        <div style={{ width: AXIS_W, height: chartHeight, position: "relative", flexShrink: 0 }}>
+          {ticks.map((t) => (
+            <span
+              key={t.f}
               style={{
-                flex: 1,
-                minWidth: 0,
-                height: "100%",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "flex-end",
-                cursor: "pointer",
-                borderRadius: 3,
-                background: isSel ? "var(--bg-hover)" : "transparent",
+                position: "absolute",
+                bottom: `${t.f * 100}%`,
+                right: 8,
+                transform: "translateY(50%)",
+                color: "var(--fg-subtle)",
+                fontSize: 10,
+                fontFamily: "var(--font-mono)",
+                whiteSpace: "nowrap",
               }}
             >
-              {total > 0 && metric === "tokens" ? (
-                <>
-                  {/* input above output — output (the model's work) anchors the bar */}
-                  <div
-                    style={{
-                      height: `${(b.inputTokens / max) * 100}%`,
-                      background: "color-mix(in srgb, var(--accent) 30%, var(--bg-elevated))",
-                      borderRadius: "2px 2px 0 0",
-                    }}
-                  />
-                  <div
-                    style={{
-                      height: `${(b.outputTokens / max) * 100}%`,
-                      minHeight: 2,
-                      background: "var(--accent)",
-                    }}
-                  />
-                </>
-              ) : total > 0 ? (
+              {fmtAxis(t.value)}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ position: "relative", flex: 1, height: chartHeight }}>
+          {/* Gridlines */}
+          {ticks.map((t) => (
+            <div
+              key={t.f}
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: `${t.f * 100}%`,
+                borderTop: "1px solid var(--border)",
+                opacity: t.f === 0 ? 1 : 0.45,
+              }}
+            />
+          ))}
+
+          {/* Bars */}
+          <div
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              position: "relative",
+              display: "flex",
+              alignItems: "flex-end",
+              gap: 3,
+              height: "100%",
+            }}
+          >
+            {buckets.map((b, i) => {
+              const total = valueOf(b);
+              const isActive = i === active;
+              // Stack provider segments bottom-up: render largest-last so the
+              // biggest provider anchors the base (groupOrder is largest-first).
+              const segs = [...groupOrder]
+                .reverse()
+                .map((g) => ({ color: g.color, v: segValue(b.groups[g.key] ?? { conversations: 0, tokens: 0, cost: 0 }) }))
+                .filter((s) => s.v > 0);
+              return (
+                <div
+                  key={b.startMs}
+                  onMouseEnter={() => setHovered(i)}
+                  onClick={() => setSelected((cur) => (cur === i ? null : i))}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "flex-end",
+                    cursor: "pointer",
+                    borderRadius: 3,
+                    background: isActive ? "var(--bg-hover)" : "transparent",
+                  }}
+                >
+                  {total > 0
+                    ? segs.map((s, si) => (
+                        <div
+                          key={si}
+                          style={{
+                            height: `${(s.v / axisTop) * 100}%`,
+                            minHeight: 1,
+                            background: s.color,
+                            // Round only the topmost (first-rendered) segment.
+                            borderRadius: si === 0 ? "2px 2px 0 0" : 0,
+                          }}
+                        />
+                      ))
+                    : null}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Hover tooltip — anchored over the active bar, inside the plot so
+              it can't clip against the panel's overflow. */}
+          {ab &&
+            active != null &&
+            (() => {
+              const rows = groupOrder
+                .map((g) => ({
+                  label: g.label,
+                  color: g.color,
+                  v: segValue(ab.groups[g.key] ?? { conversations: 0, tokens: 0, cost: 0 }),
+                }))
+                .filter((r) => r.v > 0)
+                .sort((a, b) => b.v - a.v);
+              const total = valueOf(ab);
+              const leftPct = ((active + 0.5) / WEEKS) * 100;
+              const xShift = active <= 2 ? "0%" : active >= WEEKS - 3 ? "-100%" : "-50%";
+              return (
                 <div
                   style={{
-                    height: `${(total / max) * 100}%`,
-                    minHeight: 2,
-                    background: "var(--accent)",
-                    borderRadius: "2px 2px 0 0",
+                    position: "absolute",
+                    top: 4,
+                    left: `${leftPct}%`,
+                    transform: `translateX(${xShift})`,
+                    pointerEvents: "none",
+                    zIndex: 5,
+                    minWidth: 132,
+                    maxWidth: 224,
+                    padding: "7px 9px",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-strong)",
+                    borderRadius: 7,
+                    boxShadow: "0 4px 14px rgba(0, 0, 0, 0.16)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11,
                   }}
-                />
-              ) : (
-                // Empty weeks still get a hairline so the axis reads continuously.
-                <div style={{ height: 2, background: "var(--bg)", borderRadius: 1 }} />
-              )}
-            </div>
-          );
-        })}
+                >
+                  <div
+                    style={{
+                      color: "var(--fg-strong)",
+                      fontWeight: 600,
+                      marginBottom: rows.length ? 6 : 0,
+                    }}
+                  >
+                    {weekLabel(ab.startMs)}
+                  </div>
+                  {rows.length === 0 ? (
+                    <div style={{ color: "var(--fg-subtle)" }}>No activity</div>
+                  ) : (
+                    <>
+                      {rows.map((r) => (
+                        <div
+                          key={r.label}
+                          style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 3 }}
+                        >
+                          <span
+                            aria-hidden
+                            style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: r.color }}
+                          />
+                          <span
+                            style={{
+                              color: "var(--fg)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              flex: 1,
+                            }}
+                          >
+                            {r.label}
+                          </span>
+                          <span style={{ color: "var(--fg-strong)", whiteSpace: "nowrap" }}>{fmtVal(r.v)}</span>
+                        </div>
+                      ))}
+                      {rows.length > 1 && (
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 10,
+                            marginTop: 6,
+                            paddingTop: 5,
+                            borderTop: "1px solid var(--border)",
+                            color: "var(--fg-subtle)",
+                          }}
+                        >
+                          <span>Total</span>
+                          <span style={{ color: "var(--fg-strong)" }}>{fmtVal(total)}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+        </div>
       </div>
 
-      {/* Month labels */}
-      <div style={{ position: "relative", height: 16, marginTop: 4 }}>
+      {/* Month labels (aligned under the plot area) */}
+      <div style={{ position: "relative", height: 16, marginTop: 4, marginLeft: AXIS_W }}>
         {monthLabels.map(({ i, name }) => (
           <span
             key={`${i}-${name}`}
@@ -3744,37 +4692,30 @@ function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) 
         ))}
       </div>
 
-      {/* Legend (tokens mode) */}
-      {metric === "tokens" && (
+      {/* Provider legend — the bars stack by provider, in breakdown colours. */}
+      {groupOrder.length > 0 && (
         <div
           style={{
             display: "flex",
-            gap: 14,
-            marginTop: 6,
+            flexWrap: "wrap",
+            gap: "4px 14px",
+            marginTop: 8,
+            marginLeft: AXIS_W,
             fontSize: 11,
             fontFamily: "var(--font-mono)",
             color: "var(--fg-subtle)",
           }}
         >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              aria-hidden
-              style={{ width: 8, height: 8, borderRadius: 2, background: "var(--accent)" }}
-            />
-            output
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              aria-hidden
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: 2,
-                background: "color-mix(in srgb, var(--accent) 30%, var(--bg-elevated))",
-              }}
-            />
-            input
-          </span>
+          {groupOrder.slice(0, 7).map((g) => (
+            <span key={g.key} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span
+                aria-hidden
+                style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: g.color }}
+              />
+              {g.label}
+            </span>
+          ))}
+          {groupOrder.length > 7 && <span>+{groupOrder.length - 7} more</span>}
         </div>
       )}
 
@@ -3804,6 +4745,9 @@ function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) 
           <span style={{ color: "var(--fg)" }}>
             {sel.outputTokens.toLocaleString("en-US")} tokens out
           </span>
+          {sel.cost > 0 && (
+            <span style={{ color: "var(--fg)" }}>{formatUsd(sel.cost)}</span>
+          )}
           <span style={{ flex: 1 }} />
           <button
             type="button"
@@ -3822,6 +4766,90 @@ function UsageHistogram({ runs, metric }: { runs: Run[]; metric: StatsMetric }) 
         </div>
       )}
     </div>
+  );
+}
+
+// Inline-SVG donut: each slice's arc length is its share of the total, drawn
+// as a stroke-dasharray on one concentric ring (no chart library). The center
+// holds the grand total for the active metric.
+function DonutChart({
+  segments,
+  centerValue,
+  centerLabel,
+  size = 124,
+}: {
+  segments: { key: string; color: string; value: number; title: string }[];
+  centerValue: string;
+  centerLabel: string;
+  size?: number;
+}) {
+  const stroke = Math.max(9, Math.round(size * 0.11));
+  const radius = (size - stroke) / 2;
+  const circ = 2 * Math.PI * radius;
+  const c = size / 2;
+  // Scale the centre type with the donut so a small (balance) donut and the
+  // large (breakdown) donut both read cleanly.
+  const valueFont = Math.max(10, Math.round(size * 0.14));
+  const labelFont = Math.max(7, Math.round(size * 0.078));
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  let acc = 0;
+  const arcs =
+    total > 0
+      ? segments
+          .filter((s) => s.value > 0)
+          .map((s) => {
+            const frac = s.value / total;
+            const arc = { ...s, len: frac * circ, offset: acc * circ };
+            acc += frac;
+            return arc;
+          })
+      : [];
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      role="img"
+      aria-label={`${centerLabel}: ${centerValue}`}
+      style={{ flexShrink: 0 }}
+    >
+      <g transform={`rotate(-90 ${c} ${c})`}>
+        <circle cx={c} cy={c} r={radius} fill="none" stroke="var(--bg)" strokeWidth={stroke} />
+        {arcs.map((a) => (
+          <circle
+            key={a.key}
+            cx={c}
+            cy={c}
+            r={radius}
+            fill="none"
+            stroke={a.color}
+            strokeWidth={stroke}
+            strokeDasharray={`${a.len} ${circ - a.len}`}
+            strokeDashoffset={-a.offset}
+          >
+            <title>{a.title}</title>
+          </circle>
+        ))}
+      </g>
+      <text
+        x={c}
+        y={c - size * 0.025}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        style={{ fontFamily: "var(--font-mono)", fontSize: valueFont, fontWeight: 600, fill: "var(--fg-strong)" }}
+      >
+        {centerValue}
+      </text>
+      <text
+        x={c}
+        y={c + size * 0.11}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        style={{ fontFamily: "var(--font-mono)", fontSize: labelFont, letterSpacing: 0.3, fill: "var(--fg-subtle)" }}
+      >
+        {centerLabel}
+      </text>
+    </svg>
   );
 }
 
@@ -4052,14 +5080,15 @@ function StatsSection() {
 
   // Stable weight fn so the heatmap's useMemo doesn't recompute every render.
   const tokenWeight = useCallback((r: Run) => runTokens(r), []);
+  const costWeight = useCallback((r: Run) => runCost(r), []);
 
   const groups = useMemo<ProviderGroup[]>(() => {
-    const map = new Map<string, ProviderGroup & { byModel: Map<string, { conversations: number; tokens: number }> }>();
+    const map = new Map<string, ProviderGroup & { byModel: Map<string, { conversations: number; tokens: number; cost: number }> }>();
     for (const r of runs) {
       // Klide runs split by their AI provider (Ollama, Anthropic…);
       // external CLIs are one group each.
       const isKlide = r.source === "klide";
-      const key = isKlide ? `klide:${r.provider ?? ""}` : r.source;
+      const key = groupKeyOf(r);
       let g = map.get(key);
       if (!g) {
         g = {
@@ -4069,31 +5098,38 @@ function StatsSection() {
               ? `Klide · ${prettyProvider(r.provider)}`
               : "Klide"
             : SOURCE_LABEL[r.source],
-          color: STATS_SOURCE_COLOR[r.source],
+          // Base colour; the render reassigns via assignGroupColors so neutral
+          // providers get distinct steps. This is only a sensible fallback.
+          color:
+            PROVIDER_BRAND_COLOR[isKlide ? r.provider ?? "" : r.source] ?? "var(--fg-subtle)",
           source: r.source,
           provider: r.provider ?? null,
           conversations: 0,
           tokens: 0,
           inputTokens: 0,
           outputTokens: 0,
+          cost: 0,
           models: [],
           byModel: new Map(),
         };
         map.set(key, g);
       }
       const tokens = runTokens(r);
+      const cost = runCost(r);
       g.conversations += 1;
       g.tokens += tokens;
       g.inputTokens += r.inputTokens ?? 0;
       g.outputTokens += r.outputTokens ?? 0;
+      g.cost += cost;
       const model = r.model?.trim() || "unknown";
-      const m = g.byModel.get(model) ?? { conversations: 0, tokens: 0 };
+      const m = g.byModel.get(model) ?? { conversations: 0, tokens: 0, cost: 0 };
       m.conversations += 1;
       m.tokens += tokens;
+      m.cost += cost;
       g.byModel.set(model, m);
     }
-    const valueOf = (x: { conversations: number; tokens: number }) =>
-      metric === "tokens" ? x.tokens : x.conversations;
+    const valueOf = (x: { conversations: number; tokens: number; cost: number }) =>
+      metric === "tokens" ? x.tokens : metric === "cost" ? x.cost : x.conversations;
     return [...map.values()]
       .map(({ byModel, ...g }) => ({
         ...g,
@@ -4104,9 +5140,12 @@ function StatsSection() {
       .sort((a, b) => valueOf(b) - valueOf(a));
   }, [runs, metric]);
 
-  const valueOf = (x: { conversations: number; tokens: number }) =>
-    metric === "tokens" ? x.tokens : x.conversations;
+  const valueOf = (x: { conversations: number; tokens: number; cost: number }) =>
+    metric === "tokens" ? x.tokens : metric === "cost" ? x.cost : x.conversations;
   const maxGroupValue = Math.max(1, ...groups.map(valueOf));
+  const totalValue = groups.reduce((s, g) => s + valueOf(g), 0);
+  const groupColors = assignGroupColors(groups);
+  const colorOf = (g: ProviderGroup) => groupColors.get(g.key) ?? g.color;
 
   // Exact numbers for the clicked heatmap day.
   const dayDetail = useMemo(() => {
@@ -4114,13 +5153,15 @@ function StatsSection() {
     let conversations = 0;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cost = 0;
     for (const r of runs) {
       if (msToKey(r.createdMs) !== selectedDay) continue;
       conversations += 1;
       inputTokens += r.inputTokens ?? 0;
       outputTokens += r.outputTokens ?? 0;
+      cost += r.costUsd ?? 0;
     }
-    return { conversations, inputTokens, outputTokens };
+    return { conversations, inputTokens, outputTokens, cost };
   }, [runs, selectedDay]);
 
   if (!fetched) {
@@ -4150,8 +5191,8 @@ function StatsSection() {
               <ActivityHeatmap
                 runs={runs}
                 weeks={52}
-                weight={metric === "tokens" ? tokenWeight : undefined}
-                unit={metric}
+                weight={metric === "tokens" ? tokenWeight : metric === "cost" ? costWeight : undefined}
+                unit={metric === "cost" ? "USD" : metric}
                 selectedDay={selectedDay}
                 onSelectDay={setSelectedDay}
               />
@@ -4186,6 +5227,9 @@ function StatsSection() {
                 <span style={{ color: "var(--fg)" }}>
                   {dayDetail.outputTokens.toLocaleString("en-US")} tokens out
                 </span>
+                {dayDetail.cost > 0 && (
+                  <span style={{ color: "var(--fg)" }}>{formatUsd(dayDetail.cost)}</span>
+                )}
                 <span style={{ flex: 1 }} />
                 <button
                   type="button"
@@ -4210,7 +5254,11 @@ function StatsSection() {
       <SettingBlock title="Usage over time">
         <Panel>
           <div style={{ padding: "14px 18px" }}>
-            <UsageHistogram runs={runs} metric={metric} />
+            <UsageHistogram
+              runs={runs}
+              metric={metric}
+              groupOrder={groups.map((g) => ({ key: g.key, color: colorOf(g), label: g.label }))}
+            />
           </div>
         </Panel>
       </SettingBlock>
@@ -4222,8 +5270,84 @@ function StatsSection() {
               No agent sessions found yet. Run a conversation and come back.
             </div>
           )}
+          {groups.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 22,
+                padding: "18px 18px",
+                borderBottom: "1px solid var(--border)",
+                flexWrap: "wrap",
+              }}
+            >
+              <DonutChart
+                segments={groups.map((g) => ({
+                  key: g.key,
+                  color: colorOf(g),
+                  value: valueOf(g),
+                  title:
+                    metric === "cost"
+                      ? `${g.label}: ${formatUsd(g.cost)}`
+                      : metric === "tokens"
+                        ? `${g.label}: ${formatCompact(g.tokens)} tokens`
+                        : `${g.label}: ${g.conversations} conversations`,
+                }))}
+                centerValue={metric === "cost" ? formatUsd(totalValue) : formatCompact(totalValue)}
+                centerLabel={metric === "cost" ? "spend" : metric === "tokens" ? "tokens" : "convos"}
+              />
+              <div style={{ flex: 1, minWidth: 190, display: "flex", flexDirection: "column", gap: 7 }}>
+                {groups.map((g) => {
+                  const v = valueOf(g);
+                  const pct = totalValue > 0 ? (v / totalValue) * 100 : 0;
+                  return (
+                    <div key={g.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                      <span
+                        aria-hidden
+                        style={{ width: 9, height: 9, borderRadius: 2, flexShrink: 0, background: colorOf(g) }}
+                      />
+                      <GroupLogo group={g} size={14} />
+                      <span
+                        style={{
+                          color: "var(--fg)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {g.label}
+                      </span>
+                      <span style={{ flex: 1 }} />
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          color: "var(--fg-strong)",
+                          fontSize: 11.5,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {metric === "cost" ? formatUsd(g.cost) : formatCompact(v)}
+                      </span>
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          color: "var(--fg-subtle)",
+                          fontSize: 11,
+                          width: 36,
+                          textAlign: "right",
+                        }}
+                      >
+                        {pct.toFixed(0)}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {groups.map((g, gi) => {
             const groupValue = valueOf(g);
+            const base = colorOf(g);
             return (
               <div
                 key={g.key}
@@ -4266,6 +5390,12 @@ function StatsSection() {
                         <PreciseNumber value={g.outputTokens} suffix="out" />
                       </>
                     )}
+                    {g.cost > 0 && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span style={{ color: "var(--fg-strong)" }}>{formatUsd(g.cost)}</span>
+                      </>
+                    )}
                   </span>
                 </div>
 
@@ -4293,7 +5423,7 @@ function StatsSection() {
                         key={m.name}
                         style={{
                           width: `${(valueOf(m) / Math.max(1, groupValue)) * 100}%`,
-                          background: `color-mix(in srgb, ${g.color} ${SEGMENT_MIX[i]}%, var(--bg-elevated))`,
+                          background: `color-mix(in srgb, ${base} ${SEGMENT_MIX[i]}%, var(--bg-elevated))`,
                         }}
                       />
                     ))}
@@ -4319,7 +5449,7 @@ function StatsSection() {
                           height: 8,
                           borderRadius: 2,
                           flexShrink: 0,
-                          background: `color-mix(in srgb, ${g.color} ${SEGMENT_MIX[i]}%, var(--bg-elevated))`,
+                          background: `color-mix(in srgb, ${base} ${SEGMENT_MIX[i]}%, var(--bg-elevated))`,
                         }}
                       />
                       <span
@@ -4336,6 +5466,8 @@ function StatsSection() {
                       <span style={{ color: "var(--fg-subtle)", whiteSpace: "nowrap" }}>
                         {metric === "tokens" ? (
                           <PreciseNumber value={m.tokens} suffix="tokens" />
+                        ) : metric === "cost" ? (
+                          formatUsd(m.cost)
                         ) : (
                           <PreciseNumber value={m.conversations} suffix="conv" />
                         )}

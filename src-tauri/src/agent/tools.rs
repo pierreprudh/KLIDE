@@ -452,6 +452,24 @@ fn registry() -> Vec<ToolEntry> {
             run_write_preview: None,
             summary: default_summary,
         },
+        // `spawn_subagent` is also a Pause tool: it does not execute in Rust.
+        // The loop dispatches `spawn_subagent` to `process_subagent_tool`, which
+        // emits SubagentRequested and parks on the same oneshot the question
+        // pause uses. The frontend runs the named (read-only) subagent as a
+        // nested child run and resolves with its report as the tool result.
+        ToolEntry {
+            kind: ToolKind::Pause,
+            schema: schema("spawn_subagent", "Delegate a focused, read-only investigation to a named subagent and get its report back as the tool result. Use this to parallelise discovery without spending your own context — e.g. have the explorer map a subsystem or the reviewer critique a file. The subagent cannot edit; it returns findings only.",
+                serde_json::json!({
+                    "subagent": { "type": "string", "enum": ["explorer", "reviewer"], "description": "Which subagent to delegate to: 'explorer' locates and maps code; 'reviewer' critiques code for bugs and clarity." },
+                    "task": { "type": "string", "description": "The focused task for the subagent, with enough context for it to act standalone." }
+                }),
+                &["subagent", "task"]),
+            run_read: None,
+            run_write_preview: None,
+            summary: |call| call.input.get("subagent").and_then(|v| v.as_str())
+                .map(|s| format!("delegate → @{s}")).unwrap_or_else(|| "spawn_subagent".to_string()),
+        },
     ]
 }
 

@@ -14,6 +14,8 @@ export type Msg =
       projectContext?: ProjectContextPayload;
       queueState?: "queued" | "running";
       queueId?: string;
+      /** Set when this turn was dispatched to a named subagent via `@<id>`. */
+      subagent?: string;
       /** Exact token count for this message's text under the active model's own
        *  tokenizer (Ollama / Anthropic). `exact` is false when the provider has
        *  no tokenizer endpoint and the number is a length-based estimate. */
@@ -63,6 +65,8 @@ export type QueuedTurn = {
   reflectionLevel?: string;
   attachments: Attachment[];
   projectContext?: ProjectContextPayload;
+  /** Set when the user dispatched this turn to a named subagent via `@<id>`. */
+  subagent?: string;
 };
 
 export type Conversation = {

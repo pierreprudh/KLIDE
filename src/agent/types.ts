@@ -198,7 +198,9 @@ export type AgentEvent =
   | { type: "run_result"; runId: string; result: AgentRunResult; ts: number }
   | { type: "run_error"; runId: string; error: AgentError; ts: number }
   | { type: "user_question_requested"; runId: string; requestId: string; question: string; ts: number }
-  | { type: "user_question_resolved"; runId: string; requestId: string; answer: string; ts: number };
+  | { type: "user_question_resolved"; runId: string; requestId: string; answer: string; ts: number }
+  | { type: "subagent_requested"; runId: string; requestId: string; subagent: string; task: string; ts: number }
+  | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ts: number };
 
 export type AgentMessageView = {
   id: string;

@@ -82,6 +82,10 @@
     0 10px 34px rgba(28, 28, 28, 0.055),
     0 32px 90px rgba(28, 28, 28, 0.040);
 
+  /* Subtle 1px lift for small raised controls (active pills, the nav capsule).
+     Tokenised so the value lives in one place and can be tuned per theme. */
+  --shadow-raised: 0 1px 2px rgba(28, 28, 28, 0.08);
+
   /* Inset shadow signature for dark CTAs (button-primary) */
   --inset-highlight: rgba(255, 255, 255, 0.20);
   --inset-ring:      rgba(0, 0, 0, 0.20);
@@ -165,6 +169,7 @@
     0 1px 1px rgba(0, 0, 0, 0.14),
     0 12px 40px rgba(0, 0, 0, 0.18),
     0 36px 110px rgba(0, 0, 0, 0.16);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 :root[data-theme="vscode-dark"] {
@@ -206,6 +211,7 @@
     0 1px 1px rgba(0, 0, 0, 0.16),
     0 12px 40px rgba(0, 0, 0, 0.20),
     0 36px 110px rgba(0, 0, 0, 0.18);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 :root[data-theme="github-light"] {
@@ -284,6 +290,7 @@
     0 1px 1px rgba(0, 0, 0, 0.14),
     0 12px 40px rgba(0, 20, 25, 0.24),
     0 36px 110px rgba(0, 20, 25, 0.20);
+  --shadow-raised: 0 1px 2px rgba(0, 20, 25, 0.4);
 }
 
 html, body, #root {
@@ -483,6 +490,23 @@ select.klide-field {
   align-items: center;
   gap: 18px;
   transition: background var(--motion-fast) var(--ease-out);
+}
+
+/* Nav rail + search-result hover lives in CSS, not React state — so moving the
+   mouse over the rail no longer re-renders the whole Settings tree. The nav
+   item only lights up when it isn't the active section (the FLIP capsule
+   already marks that one). */
+.klide-settings-nav-item {
+  transition: color 0.15s var(--ease-out), background var(--motion-fast) var(--ease-out);
+}
+.klide-settings-nav-item[data-active="false"]:hover {
+  background: var(--bg-hover);
+}
+.klide-settings-search-row {
+  transition: background var(--motion-fast) var(--ease-out);
+}
+.klide-settings-search-row:hover {
+  background: var(--bg-hover);
 }
 
 .klide-settings-row:last-child {
@@ -1206,6 +1230,46 @@ select.klide-field {
 }
 @media (prefers-reduced-motion: reduce) {
   .klide-tooltip {
+    animation: none;
+  }
+}
+
+/* Quiet entrance fade for content that swaps in place (e.g. the Settings nav
+   giving way to search results, and back). Honours reduced-motion below. */
+.klide-fade-swap {
+  animation: klide-fade-swap var(--motion-fast) var(--ease-out);
+}
+@keyframes klide-fade-swap {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-fade-swap {
+    animation: none;
+  }
+}
+
+/* Settings opens with a quiet fade + rise on the content column. Kept off the
+   nav rail so the FLIP indicator measures from a settled position. */
+.klide-settings-enter {
+  animation: klide-settings-enter var(--motion-slow) var(--ease-soft) both;
+}
+@keyframes klide-settings-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-settings-enter {
     animation: none;
   }
 }

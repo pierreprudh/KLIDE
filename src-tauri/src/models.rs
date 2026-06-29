@@ -116,6 +116,58 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
     }
 }
 
+/// A provider's prepaid balance, in USD. All fields optional: a provider may
+/// report usage without a cap, and most hosted providers don't expose a
+/// balance at all (then the command returns `Ok(None)`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCredits {
+    /// Credits/limit granted, USD. `None` when the key has no cap.
+    pub total: Option<f64>,
+    /// Spent so far, USD.
+    pub used: Option<f64>,
+    /// `total - used` when both are known; `None` for uncapped keys.
+    pub remaining: Option<f64>,
+}
+
+/// Live prepaid balance for a provider. Only providers with a public balance
+/// endpoint return `Some` — today that's OpenRouter (`/api/v1/credits`).
+/// Anthropic, OpenAI, Mistral and xAI don't expose a key balance over the
+/// API, so they return `Ok(None)` and the UI omits the gauge for them.
+#[tauri::command]
+pub(crate) async fn ai_provider_credits(provider: String) -> Result<Option<ProviderCredits>, String> {
+    match provider.as_str() {
+        "openrouter" => fetch_openrouter_credits().await.map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// `GET https://openrouter.ai/api/v1/credits` →
+/// `{ "data": { "total_credits": f64, "total_usage": f64 } }`.
+async fn fetch_openrouter_credits() -> Result<ProviderCredits, String> {
+    let key = provider_key("openrouter")?.ok_or_else(|| "Missing API key".to_string())?;
+    let res = reqwest::Client::new()
+        .get("https://openrouter.ai/api/v1/credits")
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach OpenRouter: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(response_error("OpenRouter", status, &body));
+    }
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let data = value.get("data").unwrap_or(&value);
+    let total = data.get("total_credits").and_then(|v| v.as_f64());
+    let used = data.get("total_usage").and_then(|v| v.as_f64());
+    let remaining = match (total, used) {
+        (Some(t), Some(u)) => Some(t - u),
+        _ => None,
+    };
+    Ok(ProviderCredits { total, used, remaining })
+}
+
 /// `GET {OLLAMA_URL}/api/tags` with a 10-second in-process cache.
 async fn fetch_ollama_tags() -> Result<Vec<String>, String> {
     {

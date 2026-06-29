@@ -490,6 +490,17 @@ impl StreamingProvider for OpenAiAdapter {
         if self.include_usage_in_stream {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
+        // OpenRouter only attaches the real charged `usage.cost` when usage
+        // accounting is explicitly requested. Without this it returns token
+        // counts but no cost, and we silently fall back to a price-table
+        // estimate that doesn't match what OpenRouter actually bills (markup,
+        // prompt caching, BYOK). Asking for it makes cost ground-truth again.
+        // `stream_options.include_usage` also ensures the cost-bearing usage
+        // block arrives on the final streamed chunk.
+        if self.provider == "openrouter" {
+            body["usage"] = serde_json::json!({ "include": true });
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
         let mut req = client.post(&self.chat_url).json(&body);
         if let Some(key) = &self.key {
             req = req.bearer_auth(key);

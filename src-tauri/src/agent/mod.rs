@@ -734,6 +734,73 @@ where
     }))
 }
 
+/// Subagent spawn tool (`spawn_subagent`): a Pause tool that delegates a
+/// focused, read-only investigation to a named subagent. The loop emits
+/// `SubagentRequested` and parks on the same oneshot the question pause uses;
+/// the frontend runs the child subagent (nested under this run via `parentId`)
+/// and resolves through `agent_resolve_question` with the subagent's report,
+/// which becomes this tool's result. Cancelling during the wait bubbles up as
+/// `Cancelled`.
+async fn process_subagent_tool<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    emit: &mut E,
+) -> Result<ToolOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let subagent = call
+        .input
+        .get("subagent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("explorer")
+        .to_string();
+    let task = call
+        .input
+        .get("task")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let request_id = format!("sub_{}_{}", ctx.id, call.id);
+
+    let report = match pause_for_user(
+        ctx.app,
+        ctx.id,
+        AgentRunStatus::WaitingForPermission,
+        AgentEvent::SubagentRequested {
+            run_id: ctx.id.to_string(),
+            request_id: request_id.clone(),
+            subagent: subagent.clone(),
+            task: task.clone(),
+            ts: now_ms(),
+        },
+        "(subagent produced no output)",
+        ctx.cancel,
+        emit,
+        |handle, tx| {
+            *handle.pending_question.lock().unwrap() = Some(tx);
+        },
+    )
+    .await?
+    {
+        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
+        PauseOutcome::Resolved(report) => report,
+    };
+
+    emit(AgentEvent::SubagentResolved {
+        run_id: ctx.id.to_string(),
+        request_id,
+        result: report.clone(),
+        ts: now_ms(),
+    })?;
+
+    Ok(ToolOutcome::Produced(ToolResult {
+        ok: true,
+        content: report,
+        metadata: Some(serde_json::json!({ "subagent": subagent })),
+    }))
+}
+
 /// Command tool (`run_command` and dynamic command-capability tools): run a
 /// shell command, but only after the user approves it through the permission
 /// gate. Approvals/rejections are remembered per-run (and project-scoped ones
@@ -1664,6 +1731,9 @@ async fn run_agent_loop(
             };
 
             let outcome = match kind {
+                Some(ToolKind::Pause) if call.name == "spawn_subagent" => {
+                    process_subagent_tool(&ctx, &call, &mut emit).await?
+                }
                 Some(ToolKind::Pause) => process_pause_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Command) => process_command_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Network) => process_network_tool(&ctx, &call, &mut emit).await?,

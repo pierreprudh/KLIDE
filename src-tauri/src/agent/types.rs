@@ -434,6 +434,25 @@ pub enum AgentEvent {
         answer: String,
         ts: i64,
     },
+    /// The model called `spawn_subagent` and is paused waiting for a child
+    /// subagent run to finish. The frontend runs the named (read-only)
+    /// subagent as a nested run and resolves through `agent_resolve_question`
+    /// (the spawn shares the question pause's oneshot); the subagent's report
+    /// becomes the tool result. A paired `SubagentResolved` is emitted so the
+    /// transcript captures both halves.
+    SubagentRequested {
+        run_id: String,
+        request_id: String,
+        subagent: String,
+        task: String,
+        ts: i64,
+    },
+    SubagentResolved {
+        run_id: String,
+        request_id: String,
+        result: String,
+        ts: i64,
+    },
 }
 
 #[cfg(test)]

@@ -251,7 +251,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             chat_url: "https://openrouter.ai/api/v1/chat/completions",
             models_url: "https://openrouter.ai/api/v1/models",
             include_tools: true,
-            // OpenRouter sends the usage block unprompted.
+            // OpenRouter needs usage accounting requested explicitly to return
+            // the real charged cost; the adapter sets `usage.include` +
+            // `stream_options.include_usage` for this provider in build_request.
             include_usage_in_stream: false,
             supports_reasoning_effort: true,
         }),

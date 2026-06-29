@@ -39,12 +39,9 @@ import {
   formatValidationTitle,
   runAttentionReason,
   runBoardReason,
-  runNeedsAttention,
   runRoutineInfo,
   seedRuns,
   relativeTime,
-  ATTENTION_LABEL,
-  ATTENTION_TONE,
   SOURCE_COLOR,
   SOURCE_LABEL,
   LIFECYCLE_COLOR,
@@ -52,7 +49,6 @@ import {
   STATUS_COLOR,
   STATUS_LABEL,
   type Run,
-  type RunAttention,
   type RunBoardReasonTone,
   type RunBoardSection,
   type RunKind,
@@ -1041,19 +1037,7 @@ function RunRow({
 //   - Severity ordering (failed → needs-me → idle → review) puts the runs
 //     that are likely to lose money or context at the top.
 
-const ATTENTION_SEVERITY: Record<RunAttention["kind"], number> = {
-  failed: 0,
-  awaiting_input: 1,
-  idle: 2,
-  awaiting_review: 3,
-};
-
-const DISMISSED_ATTENTION_KEY = "klide-dismissed-attention";
 const DISMISSED_BOARD_KEY = "klide-dismissed-board-runs";
-
-function attentionDismissKey(run: Pick<Run, "source" | "id" | "status" | "updatedMs">): string {
-  return `${run.source}:${run.id}:${run.status}:${run.updatedMs}`;
-}
 
 function boardDismissKey(run: Pick<Run, "source" | "id" | "updatedMs">): string {
   return `${run.source}:${run.id}:${run.updatedMs}`;
@@ -1073,14 +1057,6 @@ function writeStringSet(key: string, ids: Set<string>) {
   localStorage.setItem(key, JSON.stringify(Array.from(ids)));
 }
 
-function readDismissedAttention(): Set<string> {
-  return readStringSet(DISMISSED_ATTENTION_KEY);
-}
-
-function writeDismissedAttention(ids: Set<string>) {
-  writeStringSet(DISMISSED_ATTENTION_KEY, ids);
-}
-
 function readDismissedBoardRuns(): Set<string> {
   return readStringSet(DISMISSED_BOARD_KEY);
 }
@@ -1089,328 +1065,6 @@ function writeDismissedBoardRuns(ids: Set<string>) {
   writeStringSet(DISMISSED_BOARD_KEY, ids);
 }
 
-// Compact one-line summary for an attention reason, in the row's subtitle
-// slot. The label alone ("Failed", "Needs you") is too generic on a board
-// with many runs — append the agent so the user knows which tool to look at.
-function attentionSubtitle(reason: RunAttention, source: RunSource): string {
-  switch (reason.kind) {
-    case "failed":
-      return `${reason.agentLabel} failed`;
-    case "awaiting_input":
-      return `${SOURCE_LABEL[source]} is waiting for input`;
-    case "idle": {
-      const min = Math.floor(reason.idleMs / 60_000);
-      return min < 60 ? `Idle ${min}m` : `Idle ${Math.floor(min / 60)}h`;
-    }
-    case "awaiting_review":
-      return source === "klide"
-        ? "Subagent finished — read its output"
-        : `${SOURCE_LABEL[source]} finished — review the work`;
-  }
-}
-
-// Theme-aware tone styling for the reason pill. Pulled out so the queue can
-// stay compact while still differentiating severity at a glance.
-function attentionPillStyle(kind: RunAttention["kind"]): React.CSSProperties {
-  const tone = ATTENTION_TONE[kind];
-  const fg = tone === "danger" ? "var(--danger)" : "var(--fg-subtle)";
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    height: 16,
-    padding: 0,
-    borderRadius: 0,
-    border: "none",
-    background: "transparent",
-    color: fg,
-    fontSize: 9,
-    fontWeight: 500,
-    letterSpacing: "0.04em",
-    textTransform: "uppercase",
-    fontFamily: "var(--font-mono)",
-    flexShrink: 0,
-  };
-}
-
-function AttentionQueueItem({
-  run,
-  reason,
-  isTask,
-  onSelect,
-  onDismiss,
-  onResumeKlide,
-  onOpenInAiPanel,
-}: {
-  run: Run;
-  reason: RunAttention;
-  /** True when the run was spawned by Mission Control's task composer — the
-   *  "send an agent" affordance is the right action for queued/error tasks. */
-  isTask: boolean;
-  onSelect: () => void;
-  onDismiss: () => void;
-  onResumeKlide?: (runId: string) => void;
-  onOpenInAiPanel?: (input: { provider: DelegateId; workspaceRoot: string | null; resumeSessionId: string }) => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const subtitle = attentionSubtitle(reason, run.source);
-
-  // The "jump back into this run" action — resume in Klide, or re-open the CLI
-  // session in an AI panel. Shared across the reason kinds whose next step is
-  // "get back in there": failed (retry), awaiting_input (answer it), and idle
-  // (nudge / take over).
-  const resumeAction: React.ReactNode | null =
-    run.source === "klide" && onResumeKlide ? (
-      <ResumeKlide runId={run.id} onResume={onResumeKlide} />
-    ) : isDelegateId(run.source) && onOpenInAiPanel ? (
-      <ResumeCli
-        source={run.source}
-        onResume={() =>
-          onOpenInAiPanel({
-            provider: run.source as DelegateId,
-            workspaceRoot: run.cwd,
-            resumeSessionId: run.id,
-          })
-        }
-      />
-    ) : null;
-
-  // Pick the inline action. The hover-revealed slot mirrors RunRow's pattern
-  // so the row stays quiet until the user reaches for it. Every reason kind now
-  // surfaces its own next step, so the queue is actionable without first
-  // drilling into the detail pane.
-  let action: React.ReactNode | null = null;
-  if (isTask && (run.status === "queued" || run.status === "error")) {
-    action = <QuickSend taskId={run.id} onSent={onSelect} />;
-  } else if (
-    reason.kind === "failed" ||
-    reason.kind === "awaiting_input" ||
-    reason.kind === "idle"
-  ) {
-    action = resumeAction;
-  } else if (reason.kind === "awaiting_review") {
-    // The review surface is the detail pane; the action just selects the row.
-    action = <ReviewAction onReview={onSelect} />;
-  }
-
-  return (
-    <button
-      onClick={onSelect}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        width: "100%",
-        textAlign: "left",
-        padding: "7px 9px",
-        borderRadius: "var(--radius-sm)",
-        background: hovered ? "var(--bg-hover)" : "transparent",
-        transition: "background var(--motion-fast) var(--ease-out)",
-      }}
-    >
-      <RunAvatar source={run.source} kind={run.kind} model={run.model} provider={run.provider} />
-      <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
-        <span
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            minWidth: 0,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 12,
-              color: "var(--fg-strong)",
-              lineHeight: 1.3,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              minWidth: 0,
-            }}
-          >
-            {run.title}
-          </span>
-        </span>
-        <span
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            minWidth: 0,
-          }}
-        >
-          <span style={attentionPillStyle(reason.kind)}>{ATTENTION_LABEL[reason.kind]}</span>
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--fg-subtle)",
-              fontFamily: "var(--font-mono)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              minWidth: 0,
-            }}
-          >
-            {subtitle}
-          </span>
-        </span>
-      </span>
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 3,
-          flexShrink: 0,
-        }}
-      >
-        {hovered && action ? action : null}
-        <span
-          style={{
-            width: 22,
-            height: 22,
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          {hovered ? (
-            <DismissAttention
-              label={isTask ? "Delete task" : "Dismiss from attention"}
-              onDismiss={onDismiss}
-            />
-          ) : (
-            <StatusDot status={run.status} size={7} />
-          )}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-function AttentionQueue({
-  runs,
-  tasks,
-  onSelect,
-  onResumeKlide,
-  onOpenInAiPanel,
-}: {
-  runs: RunLedgerEntry[];
-  tasks: TaskSession[];
-  onSelect: (run: RunLedgerEntry) => void;
-  onResumeKlide?: (runId: string) => void;
-  onOpenInAiPanel?: (input: { provider: DelegateId; workspaceRoot: string | null; resumeSessionId: string }) => void;
-}) {
-  // Stable open/closed state — collapse the queue after the user dismisses
-  // it once, and remember the choice across re-renders. The first render is
-  // open when there's something to look at, so the user doesn't have to dig
-  // for a 1-item queue.
-  const [open, setOpen] = useState(true);
-  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissedAttention());
-
-  const items = useMemo(() => {
-    const taskIds = new Set(tasks.map((t) => t.id));
-    return runs
-      .map((run) => {
-        const reason = runAttentionReason(run);
-        if (reason && dismissed.has(attentionDismissKey(run))) return null;
-        return reason ? { run, reason, isTask: taskIds.has(run.id) } : null;
-      })
-      .filter((x): x is { run: RunLedgerEntry; reason: RunAttention; isTask: boolean } => x !== null)
-      .sort((a, b) => {
-        const sev = ATTENTION_SEVERITY[a.reason.kind] - ATTENTION_SEVERITY[b.reason.kind];
-        if (sev !== 0) return sev;
-        return b.run.updatedMs - a.run.updatedMs;
-      });
-  }, [runs, tasks, dismissed]);
-
-  function dismiss(run: RunLedgerEntry, isTask: boolean) {
-    if (isTask && run.status !== "running") {
-      removeTask(run.id);
-      return;
-    }
-    setDismissed((prev) => {
-      const next = new Set(prev);
-      next.add(attentionDismissKey(run));
-      writeDismissedAttention(next);
-      return next;
-    });
-  }
-
-  // The strip is hidden entirely when nothing needs attention — its presence
-  // is the signal. Returning null keeps the layout compact and avoids a
-  // permanent "0 items" empty state.
-  if (items.length === 0) return null;
-
-  return (
-    <div
-      style={{
-        margin: "4px 8px 12px",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--bg-elevated)",
-        overflow: "hidden",
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        title={open ? "Collapse attention queue" : "Expand attention queue"}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          width: "100%",
-          padding: "8px 11px",
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          textAlign: "left",
-          color: "var(--fg-strong)",
-          fontSize: 10,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          fontFamily: "var(--font-mono)",
-        }}
-      >
-        <span
-          style={{ color: "var(--fg-strong)" }}
-        >
-          Attention
-        </span>
-        <span style={{ opacity: 0.7 }}>{items.length}</span>
-        <span style={{ marginLeft: "auto", color: "var(--fg-subtle)", fontSize: 12, lineHeight: 1 }}>
-          {open ? "▾" : "▸"}
-        </span>
-      </button>
-      {open && (
-        <div
-          style={{
-            borderTop: "1px solid var(--border)",
-            padding: "2px 4px 4px",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          {items.map(({ run, reason, isTask }) => (
-            <AttentionQueueItem
-              key={run.id}
-              run={run}
-              reason={reason}
-              isTask={isTask}
-              onSelect={() => onSelect(run)}
-              onDismiss={() => dismiss(run, isTask)}
-              onResumeKlide={onResumeKlide}
-              onOpenInAiPanel={onOpenInAiPanel}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function SendIcon() {
   return (
@@ -1501,85 +1155,6 @@ function ResumeCli({
 // run's detail pane, so this just selects the run — but giving it an explicit
 // affordance (rather than relying on a bare row click) keeps the queue reading
 // as a list of actions. Same hover-revealed slot as ResumeKlide / QuickSend.
-function ReviewAction({ onReview }: { onReview: () => void }) {
-  return (
-    <span
-      role="button"
-      aria-label="Review output"
-      title="Review output"
-      onClick={(e) => {
-        e.stopPropagation();
-        onReview();
-      }}
-      style={{
-        width: 22,
-        height: 22,
-        flexShrink: 0,
-        display: "grid",
-        placeItems: "center",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        color: "var(--accent)",
-        background: "var(--accent-soft)",
-      }}
-    >
-      <ReviewIcon />
-    </span>
-  );
-}
-
-function ReviewIcon() {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function DismissAttention({
-  label,
-  onDismiss,
-}: {
-  label: string;
-  onDismiss: () => void;
-}) {
-  return (
-    <span
-      role="button"
-      aria-label={label}
-      title={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onDismiss();
-      }}
-      style={{
-        width: 22,
-        height: 22,
-        flexShrink: 0,
-        display: "grid",
-        placeItems: "center",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        color: "var(--fg-subtle)",
-        background: "var(--bg-hover)",
-      }}
-    >
-      <DismissIcon />
-    </span>
-  );
-}
-
 function DismissIcon() {
   return (
     <svg
@@ -4078,79 +3653,132 @@ function SearchIcon() {
   );
 }
 
-function ChevronDownIcon() {
+// Source filter mark. Delegates (claude-code/codex/opencode/omp) are real
+// ProviderIds with logos; the native "klide" source is NOT a ProviderId, so it
+// would hit ProviderLogo's fallback circle — render the Klide mark instead.
+function SourceMark({ source, size = 16 }: { source: RunSource; size?: number }) {
+  if (source === "klide") {
+    return (
+      <img
+        src="/klide-logo.png"
+        alt=""
+        aria-hidden
+        width={size}
+        height={size}
+        className="provider-logo-img"
+        style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }}
+      />
+    );
+  }
+  return <ProviderLogo id={source as ProviderId} size={size} />;
+}
+
+// A project option: its name + whether it actually has runs (vs. a known
+// workspace you've opened but not run anything in yet).
+type ProjectOpt = { name: string; hasRuns: boolean };
+
+// Recent workspaces App.tsx records in localStorage, as project names — lets
+// you pre-scope a project before it has any runs.
+function recentProjectNames(): string[] {
+  try {
+    const raw = localStorage.getItem("klide.recentFolders");
+    const paths: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(paths)) return [];
+    return paths
+      .filter((p): p is string => typeof p === "string")
+      .map((p) => projectName(p))
+      .filter((n): n is string => !!n);
+  } catch {
+    return [];
+  }
+}
+
+// Title-level project scope switcher — a quiet breadcrumb pill that opens a
+// menu of projects (plus "All projects"). Replaces the old inline dropdown.
+function ProjectSwitcher({
+  value,
+  options,
+  onChange,
+}: {
+  value: ProjectFilter;
+  options: ProjectOpt[];
+  onChange: (v: ProjectFilter) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const label = value === "all" ? "All projects" : value;
+  const pick = (v: ProjectFilter) => { onChange(v); setOpen(false); };
   return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
+    <div ref={ref} style={{ position: "relative", minWidth: 0 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Switch project"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 5, maxWidth: 130,
+          height: 22, padding: "0 7px", borderRadius: 6, border: "none",
+          background: open ? "var(--bg-hover)" : "transparent",
+          color: "var(--fg)", fontFamily: "inherit", fontSize: 12, cursor: "pointer",
+          transition: "background var(--motion-fast) var(--ease-out)",
+        }}
+        onMouseEnter={(e) => { if (!open) e.currentTarget.style.background = "var(--bg-hover)"; }}
+        onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = "transparent"; }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 50,
+            minWidth: 180, maxHeight: "min(50vh, 320px)", overflowY: "auto",
+            background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
+            borderRadius: 8, boxShadow: "0 1px 1px rgba(28,28,28,0.04), 0 12px 32px rgba(28,28,28,0.12)", padding: 4,
+          }}
+        >
+          <ProjectOption label="All projects" active={value === "all"} onClick={() => pick("all")} />
+          {options.length > 0 && <div aria-hidden style={{ height: 1, background: "var(--border)", margin: "4px 6px" }} />}
+          {options.map((o) => (
+            <ProjectOption key={o.name} label={o.name} active={value === o.name} muted={!o.hasRuns} onClick={() => pick(o.name)} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-// A calm filter dropdown: a pill matching the search input, with one custom
-// chevron instead of the heavy native double-arrow. Keeps the bar consistent.
-function FilterSelect({
-  value,
-  onChange,
-  ariaLabel,
-  children,
-}: {
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-  ariaLabel: string;
-  children: React.ReactNode;
-}) {
+function ProjectOption({ label, active, muted, onClick }: { label: string; active: boolean; muted?: boolean; onClick: () => void }) {
   return (
-    <div style={{ position: "relative", flex: "0 0 auto", display: "flex" }}>
-      <select
-        value={value}
-        onChange={onChange}
-        aria-label={ariaLabel}
-        style={{
-          height: 26,
-          padding: "0 26px 0 10px",
-          borderRadius: 999,
-          border: "1px solid var(--border)",
-          color: "var(--fg-strong)",
-          background: "var(--bg)",
-          fontSize: 11,
-          fontFamily: "inherit",
-          cursor: "pointer",
-          outline: "none",
-          appearance: "none",
-          WebkitAppearance: "none",
-          MozAppearance: "none",
-        }}
-        onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-        onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
-      >
-        {children}
-      </select>
-      <span
-        aria-hidden
-        style={{
-          position: "absolute",
-          right: 9,
-          top: "50%",
-          transform: "translateY(-50%)",
-          display: "grid",
-          placeItems: "center",
-          color: "var(--fg-subtle)",
-          pointerEvents: "none",
-        }}
-      >
-        <ChevronDownIcon />
-      </span>
-    </div>
+    <button
+      role="menuitem"
+      onClick={onClick}
+      title={muted ? "No runs yet" : undefined}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 9px",
+        borderRadius: 6, border: "none", background: active ? "var(--bg-hover)" : "transparent",
+        color: "var(--fg-strong)", fontFamily: "inherit", fontSize: 12.5, textAlign: "left", cursor: "pointer",
+      }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--bg-hover)"; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+    >
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: muted ? 0.5 : 1 }}>{label}</span>
+      {/* Workspaces with no runs yet read quieter, with a hint, so an empty
+          board after selecting one isn't a surprise. */}
+      {muted && <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--fg-dim)", flexShrink: 0 }}>no runs</span>}
+      {active && (
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M11.5 4l-5.5 6L2.5 7" /></svg>
+      )}
+    </button>
   );
 }
 
@@ -4390,10 +4018,10 @@ export function MissionControl({
   // Default the project filter to the project Klide is currently rooted in, so a
   // user juggling several projects only sees the active one's runs on open. They
   // can switch to "All projects" (or any other) from the dropdown.
+  // Board scopes to the current project by default; the title-level
+  // ProjectSwitcher lets you change it (or see "All projects").
   const currentProject = projectName(workspaceRoot);
-  const [projectFilter, setProjectFilter] = useState<ProjectFilter>(
-    () => currentProject ?? "all"
-  );
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>(() => currentProject ?? "all");
   const [sessionQuery, setSessionQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   // Delegate PTYs still live in this process — drives the "Live now" strip and
@@ -4535,15 +4163,18 @@ export function MissionControl({
   // Which source chips to show — only sources actually present.
   const presentSources = useMemo(() => presentRunSources(allRuns), [allRuns]);
 
-  // Projects to list in the dropdown: every project with runs, plus the current
-  // project even when it has none yet (so the default selection always resolves
-  // to a real <option> instead of an empty select).
-  const projectOptions = useMemo(() => {
-    const present = presentProjects(allRuns);
-    if (currentProject && !present.includes(currentProject)) {
-      return [currentProject, ...present].sort((a, b) => a.localeCompare(b));
-    }
-    return present;
+  // Projects to offer in the switcher: every project with runs, MERGED with
+  // recent workspaces (so you can pre-scope a project before it has any runs)
+  // and the current one. Run-backed projects are marked hasRuns; the rest read
+  // quieter in the menu.
+  const projectOptions = useMemo<ProjectOpt[]>(() => {
+    const withRuns = new Set(presentProjects(allRuns));
+    const all = new Set<string>(withRuns);
+    for (const name of recentProjectNames()) all.add(name);
+    if (currentProject) all.add(currentProject);
+    return [...all]
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => ({ name, hasRuns: withRuns.has(name) }));
   }, [allRuns, currentProject]);
 
   const filtered = useMemo(() => {
@@ -4756,12 +4387,48 @@ export function MissionControl({
     }
   }
 
-  const attentionCount = filtered.filter(runNeedsAttention).length;
-  const runningCount = grouped.running.length;
-  const blockedCount = grouped.blocked.length;
 
   return (
     <div style={{ flex: 1, display: "flex", minWidth: 0, background: "var(--bg)" }}>
+      {/* Board motion — same de-blur/spring-settle family as the rest of the app
+          (klide-orch-in). Rows fade + rise on first mount with a capped stagger;
+          a section's explanation reveals on hover instead of a native tooltip;
+          cards firm their hairline to charcoal on hover. All disabled under
+          prefers-reduced-motion. */}
+      <style>{`
+        @keyframes mc-row-in {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        .mc-row { animation: mc-row-in 320ms var(--ease-out) backwards; }
+        .mc-card { transition: border-color var(--motion-fast) var(--ease-out); }
+        .mc-card:hover { border-color: var(--border-strong); }
+        .mc-sec-head .mc-hint {
+          opacity: 0;
+          transform: translateX(-3px);
+          transition: opacity var(--motion-med) var(--ease-out), transform var(--motion-med) var(--ease-out);
+          pointer-events: none;
+        }
+        .mc-sec-head:hover .mc-hint { opacity: 0.85; transform: translateX(0); }
+        /* Header: status chips, source-logo toggles, icon buttons. */
+        .mc-chip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 9px 0 7px; border-radius: 999px; background: var(--bg-hover); font-family: var(--font-mono); font-size: 11px; color: var(--fg-strong); font-variant-numeric: tabular-nums; }
+        .mc-chip i { width: 6px; height: 6px; border-radius: 999px; display: inline-block; flex-shrink: 0; }
+        .mc-iconbtn { width: 28px; height: 28px; display: grid; place-items: center; flex-shrink: 0; border: none; background: transparent; color: var(--fg-subtle); border-radius: 6px; cursor: pointer; transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+        .mc-iconbtn:hover { background: var(--bg-hover); color: var(--fg-strong); }
+        /* source filter — agent logos as toggles; "All" is the resting state.
+           Every present source shows; the strip scrolls horizontally rather
+           than squeezing search or wrapping. */
+        .mc-srcscroll { display: flex; align-items: center; gap: 1px; min-width: 0; max-width: 58%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; scroll-snap-type: x proximity; }
+        .mc-srcscroll::-webkit-scrollbar { height: 0; width: 0; display: none; }
+        .mc-src { height: 28px; min-width: 28px; flex-shrink: 0; padding: 0 7px; border: none; background: transparent; border-radius: 7px; cursor: pointer; display: grid; place-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); opacity: 0.42; transition: opacity var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+        .mc-src:hover { opacity: 1; }
+        .mc-src.active { opacity: 1; background: var(--bg-hover); color: var(--fg-strong); }
+        .mc-srcdiv { width: 1px; height: 16px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+        @media (prefers-reduced-motion: reduce) {
+          .mc-row { animation: none; }
+          .mc-sec-head .mc-hint { transition: none; }
+        }
+      `}</style>
       {/* Left: the board */}
       <div
         style={{
@@ -4773,166 +4440,97 @@ export function MissionControl({
           minHeight: 0,
         }}
       >
-        <header style={{ padding: "16px 16px 10px", borderBottom: "1px solid var(--border)" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              marginBottom: 12,
-            }}
-          >
+        <header style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Row 1 — title · status chips · refresh */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {onBack && (
               <button
                 onClick={onBack}
                 title="Back to workbench"
                 aria-label="Back to workbench"
-                style={{
-                  width: 24, height: 24, display: "grid", placeItems: "center",
-                  borderRadius: "var(--radius-xs)", border: "none", background: "transparent",
-                  color: "var(--fg-subtle)", cursor: "pointer", flexShrink: 0,
-                  transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                className="mc-iconbtn"
+                style={{ width: 24, height: 24 }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M15 6l-6 6 6 6" />
                 </svg>
               </button>
             )}
-            <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0 }}>
-              Mission Control
-            </h1>
-            <span
-              style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}
-            >
-              {loading
-                ? "loading…"
-                : [
-                    attentionCount > 0 ? `${attentionCount} attention` : null,
-                    runningCount > 0 ? `${runningCount} running` : null,
-                    blockedCount > 0 ? `${blockedCount} blocked` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flex: "0 1 auto" }}>
+              <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
+                Mission Control
+              </h1>
+              {projectOptions.length > 0 && (
+                <>
+                  <svg width="7" height="7" viewBox="0 0 12 12" fill="none" stroke="var(--fg-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flexShrink: 0 }}><path d="M4.5 3l4 3-4 3" /></svg>
+                  <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
+                </>
+              )}
+            </div>
+            {loading && (
+              <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>loading…</span>
+            )}
+            <button onClick={() => void load()} title="Refresh" aria-label="Refresh runs" className="mc-iconbtn" style={{ marginLeft: loading ? 0 : "auto" }}>
+              <RefreshIcon />
+            </button>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {/* Row 1: search shares its line with the refresh action. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div
-              style={{
-                position: "relative",
-                flex: "1 1 auto",
-                minWidth: 0,
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  position: "absolute",
-                  left: 9,
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  display: "grid",
-                  placeItems: "center",
-                  color: "var(--fg-subtle)",
-                  pointerEvents: "none",
-                }}
+
+          {/* Row 2 — source filter (agent logos) · search · archived.
+              Project selection has its own dedicated surface (TODO); until then
+              the board stays scoped to the current project by default. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div role="group" aria-label="Filter by agent" className="mc-srcscroll">
+              <button
+                type="button"
+                className={`mc-src${sourceFilter === "all" ? " active" : ""}`}
+                aria-pressed={sourceFilter === "all"}
+                onClick={() => setSourceFilter("all")}
+                title="All runs"
               >
+                All
+              </button>
+              {presentSources.length > 0 && <span className="mc-srcdiv" aria-hidden />}
+              {presentSources.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`mc-src${sourceFilter === s ? " active" : ""}`}
+                  aria-pressed={sourceFilter === s}
+                  aria-label={SOURCE_LABEL[s]}
+                  title={SOURCE_LABEL[s]}
+                  onClick={() => setSourceFilter(sourceFilter === s ? "all" : s)}
+                >
+                  <SourceMark source={s} size={16} />
+                </button>
+              ))}
+            </div>
+            <div style={{ position: "relative", flex: "1 1 auto", minWidth: 0 }}>
+              <span aria-hidden style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", display: "grid", placeItems: "center", color: "var(--fg-subtle)", pointerEvents: "none" }}>
                 <SearchIcon />
               </span>
               <input
                 value={sessionQuery}
                 onChange={(e) => setSessionQuery(e.target.value)}
                 aria-label="Search sessions"
-                placeholder="Search sessions"
-                style={{
-                  width: "100%",
-                  height: 26,
-                  padding: "3px 8px 3px 27px",
-                  borderRadius: 999,
-                  border: "1px solid var(--border)",
-                  background: "var(--bg)",
-                  color: "var(--fg-strong)",
-                  fontSize: 11,
-                  fontFamily: "inherit",
-                  outline: "none",
-                }}
+                placeholder="Search"
+                style={{ width: "100%", height: 28, padding: "3px 8px 3px 28px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-strong)", fontSize: 11, fontFamily: "inherit", outline: "none", transition: "border-color var(--motion-fast) var(--ease-out)" }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
                 onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
               />
             </div>
             <button
-              onClick={() => void load()}
-              title="Refresh"
-              aria-label="Refresh runs"
-              style={{
-                width: 26,
-                height: 26,
-                flexShrink: 0,
-                display: "grid",
-                placeItems: "center",
-                color: "var(--fg-subtle)",
-                borderRadius: "var(--radius-sm)",
-                transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
-            >
-              <RefreshIcon />
-            </button>
-            </div>
-            {/* Row 2: the filter options share one line. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <FilterSelect
-              value={sourceFilter}
-              onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)}
-              ariaLabel="Filter runs"
-            >
-              <option value="all">All runs</option>
-              <option value="subagent">Subagent</option>
-              {presentSources.map((s) => (
-                <option key={s} value={s}>{SOURCE_LABEL[s]}</option>
-              ))}
-            </FilterSelect>
-            {projectOptions.length > 0 && (
-              <FilterSelect
-                value={projectFilter}
-                onChange={(e) => setProjectFilter(e.target.value as ProjectFilter)}
-                ariaLabel="Filter by project"
-              >
-                <option value="all">All projects</option>
-                {projectOptions.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </FilterSelect>
-            )}
-            <button
               type="button"
               onClick={() => setShowArchived((v) => !v)}
               aria-pressed={showArchived}
               title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
-              style={{
-                height: 26,
-                padding: "0 11px",
-                borderRadius: 999,
-                border: `1px solid ${showArchived ? "var(--accent)" : "var(--border)"}`,
-                background: showArchived ? "var(--bg-selected)" : "var(--bg)",
-                color: showArchived ? "var(--accent)" : "var(--fg-subtle)",
-                fontSize: 11,
-                fontFamily: "inherit",
-                cursor: "pointer",
-                flexShrink: 0,
-                transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
-              }}
-              onMouseEnter={(e) => { if (!showArchived) { e.currentTarget.style.borderColor = "var(--border-strong)"; e.currentTarget.style.color = "var(--fg-strong)"; } }}
-              onMouseLeave={(e) => { if (!showArchived) { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--fg-subtle)"; } }}
+              className="mc-iconbtn"
+              style={showArchived ? { color: "var(--accent)", background: "var(--accent-soft)" } : undefined}
             >
-              Archived
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="4" rx="1" />
+                <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+              </svg>
             </button>
-            </div>
           </div>
         </header>
 
@@ -4940,14 +4538,6 @@ export function MissionControl({
           sessions={liveSessions}
           workspaceRoot={workspaceRoot}
           onReattach={onReattachLiveSession}
-        />
-
-        <AttentionQueue
-          runs={filtered}
-          tasks={tasks}
-          onSelect={selectRun}
-          onResumeKlide={onResumeKlideRun}
-          onOpenInAiPanel={onOpenInAiPanel}
         />
 
         <div style={{ overflowY: "auto", padding: "8px 8px 16px", minHeight: 0, flex: 1 }}>
@@ -4989,6 +4579,7 @@ export function MissionControl({
               return (
                 <div key={section} style={{ marginBottom: 14 }}>
                   <div
+                    className="mc-sec-head"
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -5000,12 +4591,30 @@ export function MissionControl({
                       color: "var(--fg-subtle)",
                       fontFamily: "var(--font-mono)",
                     }}
-                    title={BOARD_SECTION_HINT[section]}
                   >
                     {BOARD_SECTION_LABEL[section]}
                     <span style={{ opacity: 0.7 }}>{visible.length}</span>
+                    {/* The section's meaning, revealed softly on hover — no
+                        abrupt native tooltip. */}
+                    <span
+                      className="mc-hint"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        textTransform: "none",
+                        letterSpacing: "0.01em",
+                        fontFamily: "var(--font-ui)",
+                        fontSize: 10.5,
+                        color: "var(--fg-dim)",
+                      }}
+                    >
+                      {BOARD_SECTION_HINT[section]}
+                    </span>
                   </div>
-                  {visible.map((run) => {
+                  {visible.map((run, i) => {
                     const task = tasks.find((t) => t.id === run.id);
                     const sendable =
                       task && (task.status === "queued" || task.status === "error");
@@ -5031,13 +4640,17 @@ export function MissionControl({
                     return (
                       <div
                         key={run.id}
+                        className="mc-row"
                         style={{
                           position: "relative",
                           margin: "0 8px 10px",
+                          // Capped stagger — long lists (Done) still settle fast.
+                          animationDelay: `${Math.min(i, 6) * 35}ms`,
                         }}
                       >
                         {/* Main conversation card — top of the stack. */}
                         <div
+                          className="mc-card"
                           style={{
                             position: "relative",
                             zIndex: children.length + 1,

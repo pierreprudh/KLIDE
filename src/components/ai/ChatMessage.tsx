@@ -115,10 +115,39 @@ function summarizeArgs(args: unknown): string {
   return "";
 }
 
+// `spawn_subagent` reads as a delegation, not a tool call: an accent dot, the
+// @role it handed to, and the task in plain prose — expandable to the full task
+// when it's long. No JSON, no "spawn_subagent(...)" — the report follows below.
+function SubagentCallRow({ args }: { args: unknown }) {
+  const o = (args ?? {}) as Record<string, unknown>;
+  const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
+  const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
+  const long = task.length > 96;
+  const short = long ? task.slice(0, 95) + "…" : task;
+  return (
+    <details style={{ margin: "5px 0 -3px" }}>
+      <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
+        <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+        <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>Delegated to</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 500, color: "var(--accent)", flexShrink: 0 }}>@{subagent}</span>
+        {short && (
+          <span style={{ fontSize: 12, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>· {short}</span>
+        )}
+      </summary>
+      {long && (
+        <div style={{ margin: "3px 0 3px 13px", padding: "6px 10px", fontSize: 12, lineHeight: 1.55, color: "var(--fg-subtle)", background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+          {task}
+        </div>
+      )}
+    </details>
+  );
+}
+
 // Minimalist tool-call line, à la Claude Code's `⏺ Read(file)`: one slim
 // mono row — tool glyph, tool name, primary arg — expandable to the full
 // args JSON.
 function ToolCallRow({ name, args, repeated = false }: { name: string; args: unknown; repeated?: boolean }) {
+  if (name === "spawn_subagent") return <SubagentCallRow args={args} />;
   const argsText = formatJson(args);
   const summary = summarizeArgs(args);
   return (
@@ -261,8 +290,11 @@ function summarizeResult(content: string): { line: string; extra: string } {
 function ToolResultRow({ content, active, toolName }: { content: string; active: boolean; toolName?: string }) {
   const pending = active && /^Running /.test(content);
   const isError = /^(Tool error from|Error:)/.test(content);
+  const isSubagent = toolName === "spawn_subagent";
   const { line, extra } = summarizeResult(content);
-  const label = toolName || (pending ? content.replace(/^Running\s+/, "").replace(/\.\.\.$/, "") : "tool");
+  const label = isSubagent
+    ? (pending ? "subagent working…" : "subagent report")
+    : toolName || (pending ? content.replace(/^Running\s+/, "").replace(/\.\.\.$/, "") : "tool");
   return (
     <details className="klide-tool-result-row" style={{ margin: pending ? "0 0 5px" : "-2px 0 6px", paddingLeft: 34 }}>
       <summary
@@ -363,6 +395,8 @@ function ToolResultRow({ content, active, toolName }: { content: string; active:
             color: "var(--fg-subtle)",
             background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))",
             border: "1px solid var(--border)",
+            // An accent left-rail marks output that came back from a subagent.
+            ...(isSubagent ? { borderLeft: "2px solid var(--accent)" } : null),
             borderRadius: "var(--radius-sm)",
           }}
         >
