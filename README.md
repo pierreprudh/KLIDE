@@ -19,6 +19,10 @@ Local models by default · online providers when you want them · real agent ter
 ![Binary](https://img.shields.io/badge/binary-~10_MB-5A7B4C?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-555555?style=flat-square)
 
+<br/>
+
+<img src=".github/assets/welcome.png" alt="Klide welcome screen — a live ASCII globe rotating against a starfield" width="860" />
+
 </div>
 
 ---

@@ -814,6 +814,48 @@ select.klide-field {
     0 0 13px rgba(80, 160, 255, 0.16);
 }
 
+/* ── Idle motion ─────────────────────────────────────────────────────────
+   The sphere drifts as if suspended — a slow vertical breathe rather than a
+   spin (the lighting is baked into the glyphs, so an actual rotate would drag
+   the lit hemisphere around with it). Stars drift the opposite way a touch
+   slower for parallax depth, the backlight breathes, and bright stars twinkle.
+   Amplitudes stay tiny (≤4px) so it reads as life, not movement. Each keyframe
+   carries the layer's base translate(-50%,-50%) centring through the motion.
+   Disabled wholesale under reduced-motion. */
+@keyframes klide-cosmos-float {
+  0%, 100% { transform: translate(-50%, calc(-50% - 4px)); }
+  50%      { transform: translate(-50%, calc(-50% + 4px)); }
+}
+@keyframes klide-cosmos-drift {
+  0%, 100% { transform: translate(-50%, calc(-50% + 3px)); }
+  50%      { transform: translate(-50%, calc(-50% - 3px)); }
+}
+@keyframes klide-cosmos-breathe {
+  0%, 100% { opacity: 0.46; transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: 0.62; transform: translate(-50%, -50%) scale(1.04); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .klide-cosmos-layer.is-planet,
+  .klide-cosmos-layer.is-planet-glow {
+    animation: klide-cosmos-float 11s var(--ease-in-out, ease-in-out) infinite;
+    will-change: transform;
+  }
+  .klide-cosmos-layer.is-stars {
+    animation: klide-cosmos-drift 15s var(--ease-in-out, ease-in-out) infinite;
+    will-change: transform;
+  }
+  .klide-cosmos-layer.is-bright-stars {
+    /* Per-star twinkle is rendered in JS (buildStarfield); the layer only
+       drifts for parallax. */
+    animation: klide-cosmos-drift 15s var(--ease-in-out, ease-in-out) infinite;
+    will-change: transform;
+  }
+  .klide-cosmos-glow {
+    animation: klide-cosmos-breathe 11s var(--ease-in-out, ease-in-out) infinite;
+    will-change: transform, opacity;
+  }
+}
+
 /* Glass action button — translucent, blurred, hairline border. */
 .klide-welcome-glass-btn {
   display: inline-flex;

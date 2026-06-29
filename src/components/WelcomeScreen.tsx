@@ -43,6 +43,8 @@ const GLYPH_ASPECT = 0.6; // rendered monospace cell width / height
 const SURFACE_RAMP = " .,:;~-=+ox*X#%8@"; // dark → bright
 const STAR_DIM = ".:'";
 const STAR_BRIGHT = "+x*";
+const SPIN_RATE = 0.16; // longitude radians / second — slow, calm drift
+const FRAME_MS = 120; // ~8fps; ASCII reads best chunky, and it's cheap
 
 function hash2(x: number, y: number): number {
   let h = (x * 374761393 + y * 668265263) | 0;
@@ -72,18 +74,76 @@ function fbm(x: number, y: number): number {
   return vnoise(x, y) * 0.6 + vnoise(x * 2.3 + 5, y * 2.3 + 9) * 0.27 + vnoise(x * 4.7 + 11, y * 4.7 + 3) * 0.13;
 }
 
-type Planet = {
-  cols: number;
-  rows: number;
-  stars: string;
-  brightStars: string;
-  body: string;
-  rim: string;
-};
+type Starfield = { stars: string; brightStars: string };
+type Globe = { body: string; rim: string };
 
-function buildPlanet(cols: number, rows: number): Planet {
+// The starfield is the static backdrop — positions never rotate with the
+// planet, but each star twinkles on its own clock: a per-star sine drives a
+// brightness pulse, and a brief dip below threshold blinks it off entirely.
+// `t` is elapsed seconds; with t omitted (reduced-motion) every star sits at
+// its steady mid-brightness.
+function buildStarfield(cols: number, rows: number, t: number): Starfield {
   const stars: string[] = [];
   const bright: string[] = [];
+  const cx = (cols - 1) / 2;
+  const cy = (rows - 1) / 2;
+  const radius = Math.min(cols * GLYPH_ASPECT, rows) * 0.4;
+
+  for (let row = 0; row < rows; row++) {
+    let sLine = "";
+    let bLine = "";
+    for (let col = 0; col < cols; col++) {
+      const dx = (col - cx) * GLYPH_ASPECT;
+      const dy = row - cy;
+      const nd = Math.sqrt(dx * dx + dy * dy) / radius;
+      // Inside the disc the planet covers the sky — no stars there.
+      if (nd <= 1.0) {
+        sLine += " ";
+        bLine += " ";
+        continue;
+      }
+      const pocket = fbm(col * 0.05 + 2, row * 0.08 + 5);
+      const density = 0.013 + (pocket > 0.7 ? 0.012 : 0);
+      if (hash2(col * 7 + 3, row * 11 + 5) >= density) {
+        sLine += " ";
+        bLine += " ";
+        continue;
+      }
+
+      // Per-star twinkle: offset the phase by the star's hash so they blink
+      // out of sync. tw ∈ [0,1]; a brief trough blinks the star off.
+      const sp = hash2(col * 3 + 7, row * 5 + 11) * 6.2831853;
+      const tw = Math.sin(t * 1.6 + sp) * 0.5 + 0.5;
+      if (tw < 0.12) {
+        sLine += " ";
+        bLine += " ";
+        continue;
+      }
+
+      const canBurn = hash2(col * 17 + 2, row * 19 + 9) < 0.22; // bright-capable
+      if (canBurn && tw > 0.5) {
+        const bi = Math.min(STAR_BRIGHT.length - 1, Math.floor(tw * STAR_BRIGHT.length));
+        bLine += STAR_BRIGHT[bi];
+        sLine += " ";
+      } else {
+        const di = Math.min(STAR_DIM.length - 1, Math.floor(hash2(col, row) * STAR_DIM.length));
+        sLine += STAR_DIM[di];
+        bLine += " ";
+      }
+    }
+    stars.push(sLine);
+    bright.push(bLine);
+  }
+  return { stars: stars.join("\n"), brightStars: bright.join("\n") };
+}
+
+// The globe is rebuilt every frame for a given longitude `phase`. The light
+// stays bolted to the upper-left; only the surface texture advances in
+// longitude, so the planet reads as spinning under fixed light rather than
+// tumbling. Each on-sphere pixel maps to true sphere coords — longitude via
+// atan2(nx,nz), latitude via asin(ny) — so continents compress toward the limb
+// the way a real globe's do, and glyphs shift frame to frame.
+function buildGlobe(cols: number, rows: number, phase: number): Globe {
   const body: string[] = [];
   const rim: string[] = [];
   const cx = (cols - 1) / 2;
@@ -100,8 +160,6 @@ function buildPlanet(cols: number, rows: number): Planet {
   const Lz = lz / llen;
 
   for (let row = 0; row < rows; row++) {
-    let sLine = "";
-    let bLine = "";
     let bodyLine = "";
     let rimLine = "";
     for (let col = 0; col < cols; col++) {
@@ -109,73 +167,49 @@ function buildPlanet(cols: number, rows: number): Planet {
       const dy = row - cy;
       const nd = Math.sqrt(dx * dx + dy * dy) / radius;
 
-      if (nd <= 1) {
-        // On the sphere: reconstruct the surface normal and shade it.
-        const nx = dx / radius;
-        const ny = dy / radius;
-        const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
-        const light = Math.max(0, nx * Lx + ny * Ly + nz * Lz);
-        const tex = fbm(nx * 1.8 + 4, ny * 1.8 + 7); // continents
-        const relief = fbm(nx * 5.0 + 1, ny * 5.0 + 9); // mid grain
-        const fine = fbm(nx * 12.0 + 3, ny * 12.0 + 6); // fine speckle
-        const v = Math.max(
-          0,
-          Math.min(1, light * 0.78 + tex * 0.26 + relief * 0.12 + fine * 0.06 - 0.05)
-        );
-
-        // Dither the dark hemisphere so the terminator dissolves into grains
-        // instead of reading as a hard-edged blob.
-        if (hash2(col * 5 + 1, row * 5 + 1) > 0.42 + v * 0.66) {
-          bodyLine += " ";
-          rimLine += " ";
-          sLine += " ";
-          bLine += " ";
-          continue;
-        }
-
-        const idx = Math.max(0, Math.min(SURFACE_RAMP.length - 1, Math.round(v * (SURFACE_RAMP.length - 1))));
-        bodyLine += SURFACE_RAMP[idx];
-        rimLine +=
-          nd > 0.86 && light > 0.08
-            ? SURFACE_RAMP[Math.min(SURFACE_RAMP.length - 1, idx + 3)]
-            : " ";
-        sLine += " ";
-        bLine += " ";
+      if (nd > 1) {
+        bodyLine += " ";
+        rimLine += " ";
         continue;
       }
 
-      // Off the sphere: sparse starfield, clustered into faint pockets.
-      bodyLine += " ";
-      rimLine += " ";
-      const pocket = fbm(col * 0.05 + 2, row * 0.08 + 5);
-      const density = 0.013 + (pocket > 0.7 ? 0.012 : 0);
-      if (hash2(col * 7 + 3, row * 11 + 5) < density) {
-        if (hash2(col * 17 + 2, row * 19 + 9) < 0.22) {
-          bLine += STAR_BRIGHT[Math.floor(hash2(col + 5, row + 3) * STAR_BRIGHT.length)];
-          sLine += " ";
-        } else {
-          sLine += STAR_DIM[Math.floor(hash2(col, row) * STAR_DIM.length)];
-          bLine += " ";
-        }
-      } else {
-        sLine += " ";
-        bLine += " ";
+      // Reconstruct the surface normal, then shade it.
+      const nx = dx / radius;
+      const ny = dy / radius;
+      const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+      const light = Math.max(0, nx * Lx + ny * Ly + nz * Lz);
+
+      // Spherical surface coords — rotate the texture in longitude only.
+      const lon = Math.atan2(nx, nz) + phase;
+      const lat = Math.asin(Math.max(-1, Math.min(1, ny)));
+      const tex = fbm(lon * 1.7 + 4, lat * 1.7 + 7); // continents
+      const relief = fbm(lon * 4.3 + 1, lat * 4.3 + 9); // mid grain
+      const fine = fbm(nx * 12.0 + 3, ny * 12.0 + 6); // screen-fixed speckle
+      const v = Math.max(
+        0,
+        Math.min(1, light * 0.78 + tex * 0.26 + relief * 0.12 + fine * 0.06 - 0.05)
+      );
+
+      // Dither the dark hemisphere so the terminator dissolves into grains
+      // instead of reading as a hard-edged blob. The threshold is cell-fixed,
+      // so cells flip in/out as `v` crosses it — that's the rotation reveal.
+      if (hash2(col * 5 + 1, row * 5 + 1) > 0.42 + v * 0.66) {
+        bodyLine += " ";
+        rimLine += " ";
+        continue;
       }
+
+      const idx = Math.max(0, Math.min(SURFACE_RAMP.length - 1, Math.round(v * (SURFACE_RAMP.length - 1))));
+      bodyLine += SURFACE_RAMP[idx];
+      rimLine +=
+        nd > 0.86 && light > 0.08
+          ? SURFACE_RAMP[Math.min(SURFACE_RAMP.length - 1, idx + 3)]
+          : " ";
     }
-    stars.push(sLine);
-    bright.push(bLine);
     body.push(bodyLine);
     rim.push(rimLine);
   }
-
-  return {
-    cols,
-    rows,
-    stars: stars.join("\n"),
-    brightStars: bright.join("\n"),
-    body: body.join("\n"),
-    rim: rim.join("\n"),
-  };
+  return { body: body.join("\n"), rim: rim.join("\n") };
 }
 
 export function WelcomeScreen({
@@ -194,7 +228,6 @@ export function WelcomeScreen({
   const [composerBusy, setComposerBusy] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const composerInputRef = useRef<HTMLInputElement | null>(null);
-  const [keyProbe, setKeyProbe] = useState<string | null>(null); // TEMP probe
   // rootRef is the framed cosmos card on the right; the ASCII art is sized to
   // fit that card rather than the whole welcome surface.
   const [surface, setSurface] = useState({ width: 620, height: 720 });
@@ -210,7 +243,52 @@ export function WelcomeScreen({
     const rows = Math.max(52, Math.round(height / font));
     return { font, cols, rows };
   }, [surface]);
-  const planet = useMemo(() => buildPlanet(geometry.cols, geometry.rows), [geometry.cols, geometry.rows]);
+  // One clock (elapsed seconds) drives everything: the globe's longitude phase
+  // (clock · SPIN_RATE) and the stars' twinkle. Both rebuild per animation tick.
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const [clock, setClock] = useState(0);
+  const starfield = useMemo(
+    () => buildStarfield(geometry.cols, geometry.rows, clock),
+    [geometry.cols, geometry.rows, clock]
+  );
+  const globe = useMemo(
+    () => buildGlobe(geometry.cols, geometry.rows, clock * SPIN_RATE),
+    [geometry.cols, geometry.rows, clock]
+  );
+
+  // Honour the OS "reduce motion" setting — fall back to the static globe.
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduceMotion(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  // Throttled rAF loop: advance longitude at SPIN_RATE, regenerate the globe
+  // every FRAME_MS. Uses the rAF timestamp (not Date.now) so it stays cheap and
+  // pauses with the tab. `phase` is monotonic, so noise never repeats a seam.
+  useEffect(() => {
+    if (reduceMotion) return;
+    let raf = 0;
+    let last = 0;
+    let acc = 0;
+    const loop = (t: number) => {
+      raf = requestAnimationFrame(loop);
+      if (last === 0) {
+        last = t;
+        return;
+      }
+      acc += t - last;
+      last = t;
+      if (acc < FRAME_MS) return;
+      const dt = acc / 1000;
+      acc = 0;
+      setClock((c) => c + dt);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [reduceMotion]);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -262,12 +340,6 @@ export function WelcomeScreen({
   // screen is mounted, so it never clashes with editor shortcuts.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      // TEMP PROBE — remove once shortcuts are confirmed.
-      if (e.metaKey || e.ctrlKey) {
-        setKeyProbe(
-          `key=${JSON.stringify(e.key)} code=${e.code} meta=${e.metaKey} ctrl=${e.ctrlKey} shift=${e.shiftKey}`
-        );
-      }
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       // Match N by physical key (e.code) so it's layout-independent.
       if (e.code === "KeyN" || e.key === "n" || e.key === "N") {
@@ -495,21 +567,6 @@ export function WelcomeScreen({
               </span>
             </div>
           )}
-
-          {/* TEMP PROBE — shows what the last ⌘/Ctrl keypress reported. */}
-          {keyProbe && (
-            <div
-              style={{
-                marginTop: 14,
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                color: "var(--w-dim)",
-                wordBreak: "break-all",
-              }}
-            >
-              {keyProbe}
-            </div>
-          )}
         </div>
       </div>
 
@@ -522,10 +579,10 @@ export function WelcomeScreen({
         >
           <div className="klide-welcome-cosmos" aria-hidden>
             <div className="klide-cosmos-glow" />
-            <pre className="klide-cosmos-layer is-stars">{planet.stars}</pre>
-            <pre className="klide-cosmos-layer is-bright-stars">{planet.brightStars}</pre>
-            <pre className="klide-cosmos-layer is-planet">{planet.body}</pre>
-            <pre className="klide-cosmos-layer is-planet-glow">{planet.rim}</pre>
+            <pre className="klide-cosmos-layer is-stars">{starfield.stars}</pre>
+            <pre className="klide-cosmos-layer is-bright-stars">{starfield.brightStars}</pre>
+            <pre className="klide-cosmos-layer is-planet">{globe.body}</pre>
+            <pre className="klide-cosmos-layer is-planet-glow">{globe.rim}</pre>
           </div>
         </div>
       </div>
