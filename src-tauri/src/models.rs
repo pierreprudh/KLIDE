@@ -559,10 +559,23 @@ fn codex_context_window(model: &str) -> Option<usize> {
 }
 
 pub(crate) fn fallback_context_window(provider: &str, model: &str) -> usize {
+    // A provider with a fixed window owns that fact on its registry row.
+    if let Some(window) = providers::lookup(provider).and_then(|e| e.context_window) {
+        return window;
+    }
+    // Otherwise guess from the model name — this is genuinely cross-provider
+    // (an aggregator like OpenRouter serves claude-*/gemini/grok slugs under one
+    // provider id), so it stays a name heuristic, not a provider fact.
+    context_window_for_model_name(model)
+}
+
+/// Best-effort context window from a model name alone, for providers whose
+/// window is model-dependent. Defaults to 128k for unknown models.
+fn context_window_for_model_name(model: &str) -> usize {
     let lower = model.to_lowercase();
-    if provider == "claude-code" || lower.starts_with("claude-") {
+    if lower.starts_with("claude-") {
         200_000
-    } else if provider == "codex" || lower.starts_with("gpt-5") {
+    } else if lower.starts_with("gpt-5") {
         272_000
     } else if lower.starts_with("gpt-4.1") {
         1_000_000
@@ -572,9 +585,8 @@ pub(crate) fn fallback_context_window(provider: &str, model: &str) -> usize {
         128_000
     } else if lower.contains("grok") {
         256_000
-    } else if provider == "mlx" || lower.contains("gemma") {
-        128_000
     } else {
+        // gemma and everything unknown
         128_000
     }
 }

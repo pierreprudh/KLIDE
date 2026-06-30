@@ -79,6 +79,13 @@ _Avoid_: message, update
 The append-only JSONL record of a run's agent events on disk. A run can be replayed from it.
 _Avoid_: log, history, chat history
 
+**Conversation**:
+The reader-facing shape of a Transcript — a `RunMessage[]` folded into renderable
+items (messages with their inline tool calls hoisted out; consecutive process
+notes collapsed). Parsed by the transcript module (`src/transcripts.ts`),
+independent of any view, so Mission Control, Memory, and export share one parser.
+_Avoid_: chat log, message list, thread
+
 **Provider**:
 A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. Differs only in wire format; behaviour behind the seam is shared.
 _Avoid_: vendor, backend, LLM
@@ -100,6 +107,14 @@ _Avoid_: external agent, subprocess, CLI tool
 **Klide convo**:
 A snapshot of an AI-panel conversation published to Mission Control, so it stays on the board after its panel closes.
 _Avoid_: chat, conversation, thread
+
+**Account snapshot**:
+A saved copy of the credentials a Delegate CLI already wrote, captured so Klide can switch which account that CLI runs under (personal vs. work). Snapshot/restore only — Klide never mints or refreshes tokens. Stored under `~/.klide/accounts/<provider>/`.
+_Avoid_: login, credential, token
+
+**Account provider**:
+The per-CLI seam for Account snapshots (`src-tauri/src/accounts.rs`) — one `AccountProvider` adapter per CLI (Codex / Claude Code / OpenCode) behind a trait, resolved by a single `provider(id)` registry. Mirrors the Delegate seam: where a login lives, how to read its identity, and how to capture and restore it all sit behind the trait; the generic save / list / activate flow knows nothing CLI-specific.
+_Avoid_: account manager, credential handler
 
 ### Prompt assembly
 

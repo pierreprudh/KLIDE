@@ -125,6 +125,12 @@ pub struct ProviderEntry {
     pub key: KeySource,
     pub models: ModelsHandler,
     pub subscription: Option<SubscriptionSpec>,
+    /// The provider's fixed context window, when every model it serves shares
+    /// one (Claude Code = 200k, Codex = 272k, MLX = 128k). `None` when the
+    /// window is model-dependent or discovered at runtime (hosted APIs,
+    /// OpenRouter, local Ollama) — those fall back to the model-name heuristic
+    /// in `models::fallback_context_window`. The single home for this fact.
+    pub context_window: Option<usize>,
 }
 
 /// The registry. One row per provider. Order is "local first, then hosted
@@ -137,6 +143,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::OllamaTags,
         subscription: None,
+        context_window: None,
     },
     ProviderEntry {
         id: "mlx",
@@ -158,6 +165,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         // an explicit configured value instead of polling the server.
         models: ModelsHandler::StaticPresets(crate::MLX_MODEL_PRESETS),
         subscription: None,
+        context_window: Some(128_000),
     },
     // LM Studio is a one-row affair now. Previously it would have meant
     // adding to four match statements + the frontend's PROVIDER_GROUPS
@@ -177,6 +185,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        context_window: None,
     },
     // ── Hosted APIs: key required ──────────────────────────────────────
     ProviderEntry {
@@ -188,6 +197,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::AnthropicModels,
         subscription: None,
+        context_window: None,
     },
     ProviderEntry {
         id: "openai",
@@ -204,6 +214,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        context_window: None,
     },
     ProviderEntry {
         id: "mistral",
@@ -227,6 +238,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        context_window: None,
     },
     ProviderEntry {
         id: "xai",
@@ -244,6 +256,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        context_window: None,
     },
     ProviderEntry {
         id: "openrouter",
@@ -263,6 +276,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        context_window: None,
     },
     // ── Subscription CLIs: PTY / stdio delegates ──────────────────────
     //
@@ -280,6 +294,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             default_models: &["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
             cached_models: crate::models::claude_cached_models,
         }),
+        context_window: Some(200_000),
     },
     ProviderEntry {
         id: "codex",
@@ -292,6 +307,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             default_models: &["gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini"],
             cached_models: crate::models::codex_cached_models,
         }),
+        context_window: Some(272_000),
     },
     ProviderEntry {
         id: "opencode",
@@ -304,6 +320,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             default_models: &["opencode"],
             cached_models: crate::models::opencode_cached_models,
         }),
+        context_window: None,
     },
 ];
 

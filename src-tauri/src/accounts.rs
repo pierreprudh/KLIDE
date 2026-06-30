@@ -31,7 +31,7 @@
 //!     keychain item, never in a plaintext file.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const CODEX: &str = "codex";
 pub const CLAUDE: &str = "claude-code";
@@ -52,22 +52,6 @@ fn store_dir(provider: &str) -> Option<PathBuf> {
 
 fn index_path(provider: &str) -> Option<PathBuf> {
     store_dir(provider).map(|d| d.join("accounts.json"))
-}
-
-/// The live source files a file-based provider reads/writes. Absolute paths.
-/// Claude is not file-based (keychain), so it returns an empty list.
-fn live_files(provider: &str) -> Vec<PathBuf> {
-    let Some(home) = crate::home_dir_path() else {
-        return Vec::new();
-    };
-    match provider {
-        CODEX => vec![home.join(".codex").join("auth.json")],
-        OPENCODE => {
-            let base = home.join(".local").join("share").join("opencode");
-            vec![base.join("auth.json"), base.join("account.json")]
-        }
-        _ => Vec::new(),
-    }
 }
 
 /// `~/.claude.json`.
@@ -218,28 +202,140 @@ fn claude_identity(config: &serde_json::Value) -> AccountIdentity {
     }
 }
 
-/// Read the live login for `provider` and return its identity, or `None` when
-/// the CLI isn't logged in / the source is unreadable. Never touches the
-/// keychain (Claude identity comes from `~/.claude.json` alone).
-fn live_identity(provider: &str) -> Option<AccountIdentity> {
-    match provider {
-        CODEX => {
-            let bytes = std::fs::read(live_files(CODEX).first()?).ok()?;
-            let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-            Some(codex_identity(&v))
-        }
-        OPENCODE => {
-            // account.json is the second file; it holds the identity.
-            let bytes = std::fs::read(live_files(OPENCODE).get(1)?).ok()?;
-            let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-            Some(opencode_identity(&v))
-        }
-        CLAUDE => {
-            let bytes = std::fs::read(claude_config_path()?).ok()?;
-            let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-            let id = claude_identity(&v);
-            id.is_recognised().then_some(id)
-        }
+// --- the provider seam -----------------------------------------------------
+
+/// One account-snapshot backend per delegate CLI. The same shape as the
+/// Delegate seam (`src/delegate/`): every piece of per-CLI knowledge — where the
+/// login lives, how to read its identity, how to capture and restore it — sits
+/// behind this trait, so the generic save / list / activate flow below knows
+/// nothing CLI-specific. A new provider is one `impl` + one line in `provider()`.
+trait AccountProvider {
+    /// Human label for messages.
+    fn label(&self) -> &'static str;
+    /// What to run to log in, for the "not logged in" hint.
+    fn login_cmd(&self) -> &'static str;
+    /// Live source files (file-based providers); empty for keychain-based ones.
+    fn live_files(&self) -> Vec<PathBuf>;
+    /// Read the live login's identity, or `None` when the CLI isn't logged in /
+    /// the source is unreadable. Never touches the keychain.
+    fn live_identity(&self) -> Option<AccountIdentity>;
+    /// Capture the current login into `dir` under `name`. Returns the snapshot
+    /// file names plus an optional Klide-keychain ref (Claude).
+    fn capture(
+        &self,
+        dir: &Path,
+        name: &str,
+        existing: Option<&Account>,
+    ) -> Result<(Vec<String>, Option<String>), String>;
+    /// Restore a saved snapshot over the CLI's live store.
+    fn restore(&self, dir: &Path, account: &Account) -> Result<(), String>;
+}
+
+struct CodexProvider;
+struct OpenCodeProvider;
+struct ClaudeProvider;
+
+impl AccountProvider for CodexProvider {
+    fn label(&self) -> &'static str {
+        "Codex"
+    }
+    fn login_cmd(&self) -> &'static str {
+        "codex login"
+    }
+    fn live_files(&self) -> Vec<PathBuf> {
+        crate::home_dir_path()
+            .map(|h| vec![h.join(".codex").join("auth.json")])
+            .unwrap_or_default()
+    }
+    fn live_identity(&self) -> Option<AccountIdentity> {
+        let bytes = std::fs::read(self.live_files().first()?).ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        Some(codex_identity(&v))
+    }
+    fn capture(
+        &self,
+        dir: &Path,
+        name: &str,
+        existing: Option<&Account>,
+    ) -> Result<(Vec<String>, Option<String>), String> {
+        Ok((capture_files(&self.live_files(), dir, name, existing)?, None))
+    }
+    fn restore(&self, dir: &Path, account: &Account) -> Result<(), String> {
+        restore_files(&self.live_files(), self.label(), dir, account)
+    }
+}
+
+impl AccountProvider for OpenCodeProvider {
+    fn label(&self) -> &'static str {
+        "OpenCode"
+    }
+    fn login_cmd(&self) -> &'static str {
+        "opencode auth login"
+    }
+    fn live_files(&self) -> Vec<PathBuf> {
+        crate::home_dir_path()
+            .map(|h| {
+                let base = h.join(".local").join("share").join("opencode");
+                vec![base.join("auth.json"), base.join("account.json")]
+            })
+            .unwrap_or_default()
+    }
+    fn live_identity(&self) -> Option<AccountIdentity> {
+        // account.json (the second file) holds the identity.
+        let bytes = std::fs::read(self.live_files().get(1)?).ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        Some(opencode_identity(&v))
+    }
+    fn capture(
+        &self,
+        dir: &Path,
+        name: &str,
+        existing: Option<&Account>,
+    ) -> Result<(Vec<String>, Option<String>), String> {
+        Ok((capture_files(&self.live_files(), dir, name, existing)?, None))
+    }
+    fn restore(&self, dir: &Path, account: &Account) -> Result<(), String> {
+        restore_files(&self.live_files(), self.label(), dir, account)
+    }
+}
+
+impl AccountProvider for ClaudeProvider {
+    fn label(&self) -> &'static str {
+        "Claude Code"
+    }
+    fn login_cmd(&self) -> &'static str {
+        "claude → /login"
+    }
+    fn live_files(&self) -> Vec<PathBuf> {
+        Vec::new() // keychain-based; no live files
+    }
+    fn live_identity(&self) -> Option<AccountIdentity> {
+        let bytes = std::fs::read(claude_config_path()?).ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let id = claude_identity(&v);
+        id.is_recognised().then_some(id)
+    }
+    fn capture(
+        &self,
+        dir: &Path,
+        name: &str,
+        _existing: Option<&Account>,
+    ) -> Result<(Vec<String>, Option<String>), String> {
+        let (kref, file) = capture_claude(dir, name)?;
+        Ok((vec![file], Some(kref)))
+    }
+    fn restore(&self, _dir: &Path, account: &Account) -> Result<(), String> {
+        restore_claude(account)
+    }
+}
+
+/// Resolve a provider id to its backend. The one place provider ids are matched;
+/// every other path goes through the trait. Mirrors `delegate::lookup`.
+fn provider(id: &str) -> Option<Box<dyn AccountProvider>> {
+    match id {
+        CODEX => Some(Box::new(CodexProvider)),
+        CLAUDE => Some(Box::new(ClaudeProvider)),
+        OPENCODE => Some(Box::new(OpenCodeProvider)),
         _ => None,
     }
 }
@@ -351,9 +447,16 @@ fn claude_keychain_username() -> String {
 
 /// List saved snapshots for `provider`, mark the active one, and report whether
 /// the current login is unsaved. Read-only; never touches the keychain.
-pub fn list(provider: &str) -> AccountsView {
-    let accounts = read_index(provider);
-    let live = live_identity(provider);
+pub fn list(provider_id: &str) -> AccountsView {
+    let Some(p) = provider(provider_id) else {
+        return AccountsView {
+            provider: provider_id.to_string(),
+            present: false,
+            ..Default::default()
+        };
+    };
+    let accounts = read_index(provider_id);
+    let live = p.live_identity();
     let live_key = live.as_ref().and_then(AccountIdentity::match_key);
 
     let mut matched_any = false;
@@ -383,7 +486,7 @@ pub fn list(provider: &str) -> AccountsView {
     };
 
     AccountsView {
-        provider: provider.to_string(),
+        provider: provider_id.to_string(),
         accounts: rows,
         current_unsaved,
         present,
@@ -395,39 +498,30 @@ pub fn list(provider: &str) -> AccountsView {
 /// mode 600 (file providers), or copies the keychain tokens into Klide's own
 /// keychain item + snapshots the `oauthAccount` block (Claude). Re-saving an
 /// existing name overwrites that snapshot in place.
-pub fn save_current(provider: &str, name: &str) -> Result<Account, String> {
+pub fn save_current(provider_id: &str, name: &str) -> Result<Account, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Give the account a name.".to_string());
     }
-    if !matches!(provider, CODEX | CLAUDE | OPENCODE) {
-        return Err(format!("Unknown provider \"{provider}\""));
-    }
+    let p = provider(provider_id).ok_or_else(|| format!("Unknown provider \"{provider_id}\""))?;
 
-    let identity = live_identity(provider).ok_or_else(|| not_logged_in_msg(provider))?;
+    let identity = p.live_identity().ok_or_else(|| not_logged_in_msg(p.as_ref()))?;
     if !identity.is_recognised() {
         return Err(format!(
             "Couldn't recognise {}'s login shape — not saving, to avoid storing \
              credentials Klide can't restore. (The CLI may have changed its format.)",
-            provider_label(provider)
+            p.label()
         ));
     }
 
-    let dir = store_dir(provider).ok_or_else(|| "Could not resolve home directory".to_string())?;
+    let dir =
+        store_dir(provider_id).ok_or_else(|| "Could not resolve home directory".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {dir:?}: {e}"))?;
 
-    let mut index = read_index(provider);
+    let mut index = read_index(provider_id);
     let existing = index.iter().find(|a| a.name == name).cloned();
 
-    let (files, keychain_ref) = if provider == CLAUDE {
-        let (kref, file) = capture_claude(&dir, name)?;
-        (vec![file], Some(kref))
-    } else {
-        (
-            capture_files(provider, &dir, name, existing.as_ref())?,
-            None,
-        )
-    };
+    let (files, keychain_ref) = p.capture(&dir, name, existing.as_ref())?;
 
     let account = Account {
         name: name.to_string(),
@@ -440,19 +534,18 @@ pub fn save_current(provider: &str, name: &str) -> Result<Account, String> {
         Some(slot) => *slot = account.clone(),
         None => index.push(account.clone()),
     }
-    write_index(provider, &index)?;
+    write_index(provider_id, &index)?;
     Ok(account)
 }
 
 /// Copy each of a file-based provider's live files into the store. Reuses the
 /// existing snapshot's filenames when overwriting a same-named account.
 fn capture_files(
-    provider: &str,
-    dir: &std::path::Path,
+    live: &[PathBuf],
+    dir: &Path,
     name: &str,
     existing: Option<&Account>,
 ) -> Result<Vec<String>, String> {
-    let live = live_files(provider);
     let stem = slugify(name);
     let mut out = Vec::new();
     for (i, src) in live.iter().enumerate() {
@@ -529,31 +622,27 @@ fn atomic_write_private(dest: &std::path::Path, bytes: &[u8]) -> Result<(), Stri
 /// live store: an atomic file swap for Codex/OpenCode, or a keychain + config
 /// splice for Claude. Reads every source before writing any destination, so a
 /// missing/corrupt snapshot aborts before the live store is touched.
-pub fn activate(provider: &str, name: &str) -> Result<(), String> {
-    let account = read_index(provider)
+pub fn activate(provider_id: &str, name: &str) -> Result<(), String> {
+    let p = provider(provider_id).ok_or_else(|| format!("Unknown provider \"{provider_id}\""))?;
+    let account = read_index(provider_id)
         .into_iter()
         .find(|a| a.name == name)
-        .ok_or_else(|| {
-            format!(
-                "No saved \"{name}\" account for {}.",
-                provider_label(provider)
-            )
-        })?;
-    match provider {
-        CODEX | OPENCODE => restore_files(provider, &account),
-        CLAUDE => restore_claude(&account),
-        _ => Err(format!("Unknown provider \"{provider}\"")),
-    }
+        .ok_or_else(|| format!("No saved \"{name}\" account for {}.", p.label()))?;
+    let dir =
+        store_dir(provider_id).ok_or_else(|| "Could not resolve home directory".to_string())?;
+    p.restore(&dir, &account)
 }
 
-fn restore_files(provider: &str, account: &Account) -> Result<(), String> {
-    let dir = store_dir(provider).ok_or_else(|| "Could not resolve home directory".to_string())?;
-    let live = live_files(provider);
+fn restore_files(
+    live: &[PathBuf],
+    label: &str,
+    dir: &Path,
+    account: &Account,
+) -> Result<(), String> {
     if account.files.len() != live.len() {
         return Err(format!(
-            "The saved \"{}\" snapshot doesn't match {}'s current file layout — not switching.",
+            "The saved \"{}\" snapshot doesn't match {label}'s current file layout — not switching.",
             account.name,
-            provider_label(provider)
         ));
     }
     // Read all snapshots up front so a missing one aborts before any live
@@ -633,25 +722,11 @@ fn restore_claude(account: &Account) -> Result<(), String> {
     atomic_write_private(&cfg_path, &new_cfg)
 }
 
-fn provider_label(provider: &str) -> &'static str {
-    match provider {
-        CODEX => "Codex",
-        CLAUDE => "Claude Code",
-        OPENCODE => "OpenCode",
-        _ => "the CLI",
-    }
-}
-
-fn not_logged_in_msg(provider: &str) -> String {
-    let cmd = match provider {
-        CODEX => "codex login",
-        CLAUDE => "claude → /login",
-        OPENCODE => "opencode auth login",
-        _ => "the CLI's login",
-    };
+fn not_logged_in_msg(p: &dyn AccountProvider) -> String {
     format!(
-        "{} isn't logged in. Run `{cmd}` first.",
-        provider_label(provider)
+        "{} isn't logged in. Run `{}` first.",
+        p.label(),
+        p.login_cmd()
     )
 }
 
