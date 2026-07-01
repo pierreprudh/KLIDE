@@ -996,7 +996,7 @@ export function AiPanel({
   const systemPromptForDraft = useMemo(() => {
     let prompt: string;
     if (effectiveMode === "chat" && (provider === "mlx" || provider === "ollama")) {
-      prompt = `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
+      prompt = `You are Kit, Klide's coding assistant — a calm, warm pair-programmer. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation. If asked who you are, you're Kit; never claim to be Claude, GPT, or any other product.
 
 If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
 
@@ -2871,7 +2871,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             <div style={{ width: 38, height: 38, margin: "0 auto 14px", borderRadius: "var(--radius-lg)", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)", border: "1px solid var(--panel-border)", boxShadow: "inset 0 1px 0 var(--panel-highlight)" }}>
               <span style={{ fontFamily: "var(--font-ui)", fontSize: 19, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
             </div>
-            <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, marginBottom: 6 }}>{workspaceRoot ? "Ask Klide" : "Open a workspace"}</div>
+            <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, marginBottom: 6 }}>{workspaceRoot ? "Ask Kit" : "Open a workspace"}</div>
             <div style={{ fontSize: 12 }}>{workspaceRoot ? (providerDelegatesWork ? `Delegate workspace tasks to ${providerName(provider)}.` : `Read, reason, and propose edits with ${providerName(provider)}.`) : "Open a folder to enable local agent mode."}</div>
             {workspaceRoot && !providerDelegatesWork && (
               <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 6 }}>
