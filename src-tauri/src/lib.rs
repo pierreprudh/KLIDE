@@ -917,6 +917,7 @@ pub fn run() {
             agent::agent_resolve_question,
             agent::agent_compact_context,
             agent::agent_abort_run,
+            agent::agent_run_status,
             agent::agent_list_runs,
             agent::agent_read_run,
             agent::agent_list_checkpoints,

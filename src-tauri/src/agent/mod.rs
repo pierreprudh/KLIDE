@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
+use tauri::Emitter;
 use tauri::Manager;
 use tokio_util::sync::CancellationToken;
 
@@ -153,6 +154,25 @@ trait RunSupervisor: Send + Sync {
     /// when the lock is poisoned or the run handle is gone — both best-effort
     /// (the sets `f` touches are re-ask-avoidance conveniences).
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool;
+    /// Broadcast a persisted event on the per-run *global* channel
+    /// (`agent-run:{id}`), carrying its transcript `seq`. This is the reattach
+    /// stream: the request-scoped `Channel` in `agent_start_run` dies when the
+    /// webview reloads or the panel unmounts, but the run keeps going in Rust —
+    /// so a remounted panel snapshots the transcript then follows this event to
+    /// stay live. Best-effort; a no-op off-Tauri (tests). Only events that go
+    /// through the `emit` closure (structural events, persisted with a `seq`)
+    /// are broadcast — token deltas stream separately and are not replayed.
+    fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent);
+}
+
+/// Payload for the `agent-run:{id}` reattach stream. `seq` is the event's
+/// transcript index, so the frontend drops any live event already covered by
+/// its snapshot (`seq < snapshot.len()`).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunEventEnvelope {
+    seq: u64,
+    event: AgentEvent,
 }
 
 /// Production adapter: the supervisor backed by Tauri's managed
@@ -190,6 +210,16 @@ impl RunSupervisor for TauriSupervisor {
             }
             None => false,
         }
+    }
+
+    fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent) {
+        let _ = self.app.emit(
+            &format!("agent-run:{run_id}"),
+            RunEventEnvelope {
+                seq,
+                event: event.clone(),
+            },
+        );
     }
 }
 
@@ -1481,6 +1511,10 @@ async fn run_agent_loop(
 
     let mut emit = |event: AgentEvent| -> Result<(), String> {
         append_event(&runs_dir, &id, seq, &event)?;
+        // Broadcast before advancing seq so the global reattach stream carries
+        // the same index the transcript just wrote. append-then-broadcast means
+        // any seq a listener sees is already durable on disk.
+        sup.broadcast(&id, seq, &event);
         seq += 1;
         let _ = on_event.send(event);
         Ok(())
@@ -1982,6 +2016,22 @@ pub async fn agent_abort_run(
         }
         None => Err(format!("No known run with id {run_id}")),
     }
+}
+
+/// Live status of a run in the supervisor map, or `None` if no run with this id
+/// is currently tracked (never started this session, or already settled and
+/// evicted). The frontend calls this on panel mount: an *active* status
+/// (running / waiting / queued / paused) means the run is still going in Rust,
+/// so the panel reattaches to the `agent-run:{id}` stream instead of showing a
+/// frozen transcript snapshot.
+#[tauri::command]
+pub fn agent_run_status(
+    state: tauri::State<'_, AgentSupervisorState>,
+    run_id: String,
+) -> Option<String> {
+    let runs = state.runs.lock().ok()?;
+    runs.get(&run_id)
+        .map(|h| run_status_wire(&h.status).to_string())
 }
 
 /// Write a compaction marker into a run's transcript. The frontend generates
@@ -3058,6 +3108,7 @@ mod run_supervisor_tests {
                 None => false,
             }
         }
+        fn broadcast(&self, _run_id: &str, _seq: u64, _event: &AgentEvent) {}
     }
 
     fn make_handle() -> AgentRunHandle {

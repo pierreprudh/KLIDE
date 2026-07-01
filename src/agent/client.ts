@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   AgentEvent,
   AgentMode,
@@ -122,6 +123,73 @@ export async function resolveUserQuestion(input: {
 
 export async function readAgentRunEvents(runId: string): Promise<AgentEvent[]> {
   return invoke<AgentEvent[]>("agent_read_run", { runId });
+}
+
+/** Wire statuses that mean the run is still going in Rust (worth reattaching). */
+const ACTIVE_RUN_STATUSES = new Set([
+  "queued",
+  "running",
+  "waiting_for_permission",
+  "waiting_for_diff",
+  "paused",
+]);
+
+/**
+ * Live status of a run, or null if the supervisor isn't tracking it (finished
+ * and evicted, or never started this session). Used on panel mount to decide
+ * whether to reattach to a still-running harness run.
+ */
+export async function getAgentRunStatus(runId: string): Promise<string | null> {
+  return invoke<string | null>("agent_run_status", { runId });
+}
+
+export function isActiveRunStatus(status: string | null): boolean {
+  return status !== null && ACTIVE_RUN_STATUSES.has(status);
+}
+
+export type RunReattachment = {
+  /** Stop listening to the run's global event stream. */
+  detach: () => void;
+  /** Settles when the run emits run_result / run_error while we're attached. */
+  done: Promise<void>;
+};
+
+/**
+ * Reattach to a run that's still going in Rust after the panel remounted (the
+ * request-scoped channel from `startAgentRun` died with the old mount). Follows
+ * the global `agent-run:{id}` stream the harness broadcasts for every persisted
+ * event, dropping any event already covered by the caller's snapshot
+ * (`seq < fromSeq`). Only structural events replay here — token deltas stream
+ * on the original channel and are not rebroadcast, so a reattached view shows
+ * tool calls and completed messages landing rather than a token animation.
+ *
+ * Listen is registered before the caller snapshots, and dedup is by absolute
+ * `seq`, so no event is lost or double-applied across the snapshot/live seam.
+ */
+export async function reattachAgentRun(
+  runId: string,
+  fromSeq: number,
+  onEvent: (event: AgentEvent, seq: number) => void
+): Promise<RunReattachment> {
+  let settle: () => void = () => {};
+  const done = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  const unlisten = await listen<{ seq: number; event: AgentEvent }>(
+    `agent-run:${runId}`,
+    ({ payload }) => {
+      if (payload.seq < fromSeq) return;
+      onEvent(payload.event, payload.seq);
+      if (payload.event.type === "run_result" || payload.event.type === "run_error") settle();
+    }
+  );
+  return {
+    detach: () => {
+      void unlisten();
+      settle();
+    },
+    done,
+  };
 }
 
 export async function listCheckpoints(runId: string): Promise<CheckpointEntry[]> {

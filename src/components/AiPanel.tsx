@@ -19,7 +19,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints } from "../agent/client";
+import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
@@ -1210,6 +1210,10 @@ This user request requires workspace inspection. Before answering, you MUST call
   const processingQueueRef = useRef(false);
   const queueGenerationRef = useRef(0);
   const activeHarnessRunRef = useRef<string | null>(null);
+  // Live subscription to a run that was still going when this panel mounted
+  // (see the mount reconnect effect). Held so we can detach on unmount / when
+  // the run settles, and so a conversation switch doesn't leave it listening.
+  const reattachRef = useRef<RunReattachment | null>(null);
   // MLX's port can be up while the model is still cold (false readiness), which
   // makes the first message stream-error. We warm the model on the first send
   // for a given model and remember it here so later sends skip the round-trip;
@@ -1277,9 +1281,14 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   // Switching conversations (or loading one from history) starts a fresh
   // revert scope — the previous run's changes are no longer "what I just did".
+  // Also drop any mount-time reattach listener bound to the previous id (the
+  // reconnect effect is mount-only, so it won't re-follow the new one — the
+  // adopt guard already blocks stale writes; this just stops the leak).
   useEffect(() => {
     runChangedPathsRef.current = new Set();
     setRevertableFiles(0);
+    reattachRef.current?.detach();
+    reattachRef.current = null;
   }, [currentId]);
 
   // One-click undo of every file this run wrote, then re-sync the open editors
@@ -1352,6 +1361,10 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  // Tracks the live active conversation id so the mount reconnect effect can
+  // bail if the user switches conversations while it's awaiting async work.
+  const currentIdRef = useRef(currentId);
+  useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
   useEffect(() => { currentForkedFromRef.current = currentForkedFrom; }, [currentForkedFrom]);
   useEffect(() => { conversationGitMetaRef.current = conversationGitMeta; }, [conversationGitMeta]);
 
@@ -1374,27 +1387,76 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (saved.model && saved.model !== model) onModelChange(saved.model);
     }
     // Reconnect to a run that progressed while the panel was unmounted: the
-    // harness keeps running in Rust and writes the transcript, but the live
-    // event stream is per-mount and doesn't survive a view switch. So if a
-    // mid-run switch left us with just the user message, rebuild from the
-    // on-disk transcript — which has the (possibly finished) assistant reply.
+    // harness keeps running in Rust and writes the transcript, but the request-
+    // scoped event channel from startAgentRun dies with the old mount. So we (1)
+    // rebuild from the on-disk transcript — which has the (possibly finished)
+    // reply — and (2) if the run is STILL going, follow the global reattach
+    // stream so it keeps updating instead of freezing at a stale snapshot.
     // Klide runs only (currentId == transcript id); delegates use the PTY.
     if (!providerDelegatesWork) {
+      const reattachId = currentId;
       const baseLen = msgsRef.current.length;
       void (async () => {
-        try {
-          const events = await invoke<AgentEvent[]>("agent_read_run", { runId: currentId });
+        // Re-read the transcript and adopt the replay, guarding against a
+        // conversation switch mid-await and against clobbering typing. Reports
+        // the event count and whether the transcript *tail* is terminal — the
+        // harness writes RunResult/RunError to disk before it flips the run's
+        // status, so the tail is the authoritative "is this turn done" signal.
+        const adopt = async (guardBaseLen?: number): Promise<{ len: number; terminal: boolean }> => {
+          const events = await invoke<AgentEvent[]>("agent_read_run", { runId: reattachId });
           const replayed = eventsToMsgs(events);
-          // Adopt only if the user did nothing since mount (msgs length is
-          // still the restored snapshot) and the transcript is richer —
-          // guards against clobbering a chat the user already started typing.
-          if (msgsRef.current.length === baseLen && replayed.length > baseLen) {
+          const safe =
+            currentIdRef.current === reattachId &&
+            (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen) &&
+            replayed.length >= msgsRef.current.length;
+          if (safe) {
             setMsgs(replayed);
             msgsRef.current = replayed;
           }
+          const tail = events[events.length - 1]?.type;
+          return { len: events.length, terminal: tail === "run_result" || tail === "run_error" };
+        };
+
+        let snapshot: { len: number; terminal: boolean };
+        try {
+          snapshot = await adopt(baseLen);
         } catch {
-          /* no transcript for this id (brand-new chat) — nothing to reconnect */
+          return; // no transcript for this id (brand-new chat) — nothing to reconnect
         }
+        if (snapshot.terminal) return; // already finished — snapshot is the final word
+
+        // Is the run still live in Rust? If not, the snapshot is the final word.
+        let status: string | null = null;
+        try { status = await getAgentRunStatus(reattachId); } catch { /* ignore */ }
+        if (!isActiveRunStatus(status) || currentIdRef.current !== reattachId) return;
+
+        // Follow it live. Every persisted event just signals "re-read the
+        // transcript" — disk is the source of truth, so there are no gaps to
+        // reconcile and dedup is implicit in the full replay.
+        setStreaming(true);
+        activeHarnessRunRef.current = reattachId;
+        const settle = () => {
+          setStreaming(false);
+          setActivity(null);
+          if (activeHarnessRunRef.current === reattachId) activeHarnessRunRef.current = null;
+          reattachRef.current?.detach();
+          reattachRef.current = null;
+        };
+        const reatt = await reattachAgentRun(reattachId, snapshot.len, (event) => {
+          void adopt().catch(() => {});
+          if (event.type === "run_result" || event.type === "run_error") settle();
+        });
+        // A conversation switch during the listen await would have moved
+        // currentId — drop the fresh listener instead of leaking it.
+        if (currentIdRef.current !== reattachId) { reatt.detach(); setStreaming(false); return; }
+        reattachRef.current = reatt;
+        // Close the snapshot→subscribe race: a terminal event emitted while we
+        // were registering the listener won't arrive live. Re-read the tail
+        // (authoritative) and settle if the run already finished.
+        try {
+          const post = await adopt();
+          if (post.terminal) settle();
+        } catch { /* ignore transient read error */ }
       })();
     }
     // Intentionally only the *initial* currentId matters — subsequent
@@ -1403,12 +1465,15 @@ This user request requires workspace inspection. Before answering, you MUST call
   }, []);
 
   // Clear any pending auto-save notice when the panel unmounts (timer would
-  // otherwise fire setState on a dead component).
+  // otherwise fire setState on a dead component). Also drop any live reattach
+  // listener — the run keeps going in Rust and the next mount reattaches fresh.
   useEffect(() => () => {
     if (autoMemoryTimerRef.current !== null) {
       clearTimeout(autoMemoryTimerRef.current);
       autoMemoryTimerRef.current = null;
     }
+    reattachRef.current?.detach();
+    reattachRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -2639,13 +2704,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                         onMouseEnter={(e) => { if (item.available && !active) e.currentTarget.style.background = "var(--bg-hover)"; }}
                         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
                         <span style={{ display: "grid", placeItems: "center", flexShrink: 0, color: item.available ? "var(--fg-subtle)" : "var(--fg-dim)" }}><ProviderLogo id={item.id} size={15} /></span>
-                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
-                        {item.available && keylessProviders.has(item.id) && !active && (
-                          <span title="No API key set — add one in Settings" style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 500, color: "var(--warning)" }}>
-                            <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--warning)" }} />
-                            key
-                          </span>
-                        )}
+                        {(() => {
+                          const keyless = item.available && keylessProviders.has(item.id);
+                          return (
+                            <span
+                              title={keyless ? "No API key set — add one in Settings" : undefined}
+                              style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: keyless ? "line-through" : undefined, textDecorationThickness: keyless ? "1px" : undefined, color: keyless ? "var(--fg-dim)" : undefined }}
+                            >{item.name}</span>
+                          );
+                        })()}
                         {active && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg-subtle)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
                       </button>
                     );
