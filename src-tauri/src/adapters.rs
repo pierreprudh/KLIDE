@@ -462,6 +462,12 @@ struct OpenAiAdapter {
     /// family honours it; local proxies may reject the field, so we
     /// leave it off there. Comes from `OpenAiConfig::include_usage_in_stream`.
     include_usage_in_stream: bool,
+    /// Whether to request explicit cost accounting (`usage.include` +
+    /// `stream_options.include_usage`). From `OpenAiConfig::include_cost_accounting`.
+    include_cost_accounting: bool,
+    /// Whether to send Klide app-attribution headers. From
+    /// `OpenAiConfig::send_attribution`.
+    send_attribution: bool,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Option<Vec<serde_json::Value>>,
@@ -497,7 +503,7 @@ impl StreamingProvider for OpenAiAdapter {
         // prompt caching, BYOK). Asking for it makes cost ground-truth again.
         // `stream_options.include_usage` also ensures the cost-bearing usage
         // block arrives on the final streamed chunk.
-        if self.provider == "openrouter" {
+        if self.include_cost_accounting {
             body["usage"] = serde_json::json!({ "include": true });
             body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
@@ -505,12 +511,12 @@ impl StreamingProvider for OpenAiAdapter {
         if let Some(key) = &self.key {
             req = req.bearer_auth(key);
         }
-        // OpenRouter uses these optional headers for app attribution — they
-        // identify Klide on the user's OpenRouter activity dashboard and the
-        // public model-usage rankings. Harmless for other OpenAI-wire
-        // providers (they ignore unknown headers), but scoped to OpenRouter
-        // to keep requests to other endpoints byte-for-byte unchanged.
-        if self.provider == "openrouter" {
+        // App-attribution headers — they identify Klide on the provider's
+        // activity dashboard and public usage rankings (OpenRouter). Harmless
+        // for other OpenAI-wire providers (they ignore unknown headers), but
+        // scoped via the flag to keep requests to other endpoints byte-for-byte
+        // unchanged.
+        if self.send_attribution {
             req = req
                 .header("HTTP-Referer", "https://github.com/pierreprudh/KLIDE")
                 .header("X-Title", "Klide");
@@ -699,11 +705,14 @@ fn split_thinking_tags(raw: &str) -> (String, String) {
 /// caller (`ai_chat`) — from the static registry for built-in providers,
 /// or from the custom-provider store for self-hosted ones. The adapter
 /// itself stays oblivious to where the config came from.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn openai_compatible_chat(
     provider: String,
     chat_url: String,
     include_tools: bool,
     include_usage_in_stream: bool,
+    include_cost_accounting: bool,
+    send_attribution: bool,
     key: Option<String>,
     reasoning_effort: Option<String>,
     model: String,
@@ -716,6 +725,8 @@ pub(crate) async fn openai_compatible_chat(
         chat_url,
         include_tools,
         include_usage_in_stream,
+        include_cost_accounting,
+        send_attribution,
         model,
         messages,
         tools,
@@ -1388,6 +1399,8 @@ mod tests {
             chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
             include_tools: true,
             include_usage_in_stream: true,
+            include_cost_accounting: false,
+            send_attribution: false,
             model: "gpt-4.1".to_string(),
             messages: vec![],
             tools: None,
@@ -1467,6 +1480,8 @@ mod tests {
             chat_url: "https://api.openai.com/v1/chat/completions".to_string(),
             include_tools: true,
             include_usage_in_stream: true,
+            include_cost_accounting: false,
+            send_attribution: false,
             model: "gpt-5".to_string(),
             messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
             tools: None,
@@ -1482,6 +1497,57 @@ mod tests {
         let body = request.body().and_then(|b| b.as_bytes()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(body).unwrap();
         assert_eq!(value["reasoning_effort"], "high");
+    }
+
+    fn build_flagged_request(
+        include_cost_accounting: bool,
+        send_attribution: bool,
+    ) -> reqwest::Request {
+        let adapter = OpenAiAdapter {
+            provider: "any-openai-wire".to_string(),
+            chat_url: "https://example.test/v1/chat/completions".to_string(),
+            include_tools: true,
+            include_usage_in_stream: false,
+            include_cost_accounting,
+            send_attribution,
+            model: "some-model".to_string(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            tools: None,
+            key: Some("sk-test".to_string()),
+            reasoning_effort: None,
+            usage: AiUsage::default(),
+        };
+        adapter
+            .build_request(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn cost_accounting_flag_drives_usage_body_not_the_provider_id() {
+        let on = build_flagged_request(true, false);
+        let body: serde_json::Value =
+            serde_json::from_slice(on.body().and_then(|b| b.as_bytes()).unwrap()).unwrap();
+        assert_eq!(body["usage"], serde_json::json!({ "include": true }));
+        assert_eq!(body["stream_options"], serde_json::json!({ "include_usage": true }));
+
+        let off = build_flagged_request(false, false);
+        let body: serde_json::Value =
+            serde_json::from_slice(off.body().and_then(|b| b.as_bytes()).unwrap()).unwrap();
+        assert!(body.get("usage").is_none());
+        assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn attribution_flag_drives_headers_not_the_provider_id() {
+        let on = build_flagged_request(false, true);
+        assert_eq!(on.headers().get("HTTP-Referer").unwrap(), "https://github.com/pierreprudh/KLIDE");
+        assert_eq!(on.headers().get("X-Title").unwrap(), "Klide");
+
+        let off = build_flagged_request(false, false);
+        assert!(off.headers().get("HTTP-Referer").is_none());
+        assert!(off.headers().get("X-Title").is_none());
     }
 
     #[test]
@@ -1602,6 +1668,8 @@ mod tests {
             chat_url: "https://api.mistral.ai/v1/chat/completions".to_string(),
             include_tools: true,
             include_usage_in_stream: false,
+            include_cost_accounting: false,
+            send_attribution: false,
             model: "mistral-large".to_string(),
             messages: vec![],
             tools: None,

@@ -419,6 +419,8 @@ async fn ai_chat(
             cp.chat_url(),
             true,
             false,
+            false,
+            false,
             providers::custom_token(&cp.id),
             None,
             model,
@@ -472,6 +474,8 @@ async fn ai_chat(
                 cfg.chat_url.to_string(),
                 cfg.include_tools,
                 cfg.include_usage_in_stream,
+                cfg.include_cost_accounting,
+                cfg.send_attribution,
                 key,
                 if cfg.supports_reasoning_effort {
                     adapters::reflection_level_to_openai_effort(reflection_level.as_deref())

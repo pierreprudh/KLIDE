@@ -65,6 +65,17 @@ pub struct OpenAiConfig {
     /// Local/custom OpenAI-compatible endpoints stay false unless explicitly
     /// proven compatible.
     pub supports_reasoning_effort: bool,
+    /// Whether to request explicit cost accounting in the request body
+    /// (`usage.include` + `stream_options.include_usage`). Aggregators like
+    /// OpenRouter only return the real charged cost when asked; plain hosted
+    /// APIs price from the table, so they leave this off. The single home for
+    /// this quirk — the adapter reads the flag, never the provider id.
+    pub include_cost_accounting: bool,
+    /// Whether to send Klide app-attribution headers (`HTTP-Referer` /
+    /// `X-Title`). OpenRouter surfaces these on its activity dashboard and
+    /// public usage rankings; other endpoints ignore them, so we scope the
+    /// headers to providers that use them rather than string-matching the id.
+    pub send_attribution: bool,
 }
 
 /// How a provider's API key is sourced. Local providers don't have one.
@@ -158,6 +169,8 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             include_tools: true,
             include_usage_in_stream: false,
             supports_reasoning_effort: false,
+            include_cost_accounting: false,
+            send_attribution: false,
         }),
         key: KeySource::Local,
         // mlx_lm.server's /v1/models is expensive/noisy and can interfere
@@ -181,6 +194,8 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             // model users don't get 400s on first request.
             include_usage_in_stream: false,
             supports_reasoning_effort: false,
+            include_cost_accounting: false,
+            send_attribution: false,
         }),
         key: KeySource::Local,
         models: ModelsHandler::OpenAiModels,
@@ -207,6 +222,8 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             include_tools: true,
             include_usage_in_stream: true,
             supports_reasoning_effort: true,
+            include_cost_accounting: false,
+            send_attribution: false,
         }),
         key: KeySource::Hosted {
             env: Some("OPENAI_API_KEY"),
@@ -231,6 +248,8 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             // harmless but unnecessary.
             include_usage_in_stream: false,
             supports_reasoning_effort: false,
+            include_cost_accounting: false,
+            send_attribution: false,
         }),
         key: KeySource::Hosted {
             env: Some("MISTRAL_API_KEY"),
@@ -248,6 +267,8 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             include_tools: true,
             include_usage_in_stream: true,
             supports_reasoning_effort: false,
+            include_cost_accounting: false,
+            send_attribution: false,
         }),
         key: KeySource::Hosted {
             env: Some("XAI_API_KEY"),
@@ -264,11 +285,14 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             chat_url: "https://openrouter.ai/api/v1/chat/completions",
             models_url: "https://openrouter.ai/api/v1/models",
             include_tools: true,
-            // OpenRouter needs usage accounting requested explicitly to return
-            // the real charged cost; the adapter sets `usage.include` +
-            // `stream_options.include_usage` for this provider in build_request.
+            // `include_cost_accounting` below already sets
+            // `stream_options.include_usage`, so the generic flag stays off.
             include_usage_in_stream: false,
             supports_reasoning_effort: true,
+            // OpenRouter only returns the real charged cost when usage
+            // accounting is requested; and it surfaces app-attribution headers.
+            include_cost_accounting: true,
+            send_attribution: true,
         }),
         key: KeySource::Hosted {
             env: Some("OPENROUTER_API_KEY"),
