@@ -8,36 +8,12 @@
 
 import type { Run, RunMessage, RunToolCall } from "./runs";
 
-// One rendered row of a conversation: either a real message (with its inline
-// tool calls hoisted out of the text) or a collapsed stack of process notes —
-// the model's running commentary ("I found…", "Build is green") folded away.
+// One rendered row of a conversation: either a real message (with its structured
+// tool calls) or a collapsed stack of process notes — the model's running
+// commentary ("I found…", "Build is green") folded away.
 export type ConversationItem =
   | { type: "message"; message: RunMessage; text: string; tools: RunToolCall[] }
   | { type: "process"; notes: string[] };
-
-// Pull `[tool: name summary]` markers out of message text into structured tool
-// calls, returning the cleaned text alongside them.
-export function splitToolCalls(text: string): { text: string; tools: RunToolCall[] } {
-  const tools: RunToolCall[] = [];
-  const lines = text.split("\n");
-  const kept = lines.filter((line) => {
-    const tool = line.match(/^\[tool:\s*([^\]]+)\]\s*$/);
-    if (!tool) return true;
-    tools.push(toolFromMarker(tool[1]));
-    return false;
-  });
-  return { text: kept.join("\n").trim(), tools };
-}
-
-function toolFromMarker(marker: string): RunToolCall {
-  const raw = marker.trim();
-  const match = raw.match(/^([^\s(:]+)(?:\s+(.+))?$/);
-  return {
-    name: match?.[1] ?? (raw || "tool"),
-    summary: match?.[2]?.trim(),
-    status: "unknown",
-  };
-}
 
 // Heuristic: is this assistant turn running commentary rather than a substantive
 // reply? Process notes get collapsed so the conversation reads as a dialogue.
@@ -71,9 +47,8 @@ export function compactConversationMessages(messages: RunMessage[]): Conversatio
     return false;
   };
   for (const message of messages) {
-    const parsed = splitToolCalls(message.text);
-    const text = parsed.text.trim();
-    const messageTools = [...(message.tools ?? []), ...parsed.tools];
+    const text = message.text.trim();
+    const messageTools = message.tools ?? [];
     if (message.role === "assistant" && text && isProcessNote(text)) {
       if (messageTools.length > 0) appendToolsToPreviousAssistant(messageTools);
       notes.push(text);

@@ -1,4 +1,4 @@
-use super::runs::{cap_messages, clean_title, project_name, tool_file_path};
+use super::runs::{cap_messages, clean_title, project_name, tool_file_path, RunToolCall};
 use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
 use std::collections::HashSet;
 
@@ -193,13 +193,14 @@ impl Delegate for OpenCode {
                 continue;
             }
             let parts = parts_by_message.get(&msg_id);
-            if let Some(text) = message_text(parts.map(|v| v.as_slice()).unwrap_or(&[])) {
+            if let Some((text, tools)) = message_text(parts.map(|v| v.as_slice()).unwrap_or(&[])) {
                 if role == "user" && text.starts_with('<') {
                     continue;
                 }
                 msgs.push(RunMessage {
                     role: role.to_string(),
                     text,
+                    tools,
                 });
             }
         }
@@ -398,7 +399,7 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
             .ok()?
             .filter_map(|r| r.ok())
             .collect();
-        message_text(&parts).map(|t| clean_title(&t))
+        message_text(&parts).map(|(t, _)| clean_title(&t))
     })();
 
     Some(AgentRun {
@@ -436,11 +437,14 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
     })
 }
 
-// Walk a message's parts into a single readable string: text parts
-// concatenate, tool parts collapse to a one-line "[tool: <name>]".
-// Step/reasoning/control parts are dropped — they're noise in a résumé view.
-fn message_text(parts: &[serde_json::Value]) -> Option<String> {
+// Walk a message's parts into readable text plus structured tool calls: text
+// parts concatenate; tool parts become structured RunToolCall entries (no
+// longer folded into text as "[tool: <name>]"). Step/reasoning/control parts
+// are dropped — they're noise in a résumé view. Returns None only when there is
+// neither text nor a tool call to show.
+fn message_text(parts: &[serde_json::Value]) -> Option<(String, Vec<RunToolCall>)> {
     let mut buf = String::new();
+    let mut tools: Vec<RunToolCall> = Vec::new();
     for part in parts {
         match part.get("type").and_then(|t| t.as_str()) {
             Some("text") => {
@@ -456,19 +460,19 @@ fn message_text(parts: &[serde_json::Value]) -> Option<String> {
             }
             Some("tool") => {
                 let name = part.get("tool").and_then(|n| n.as_str()).unwrap_or("tool");
-                if !buf.is_empty() {
-                    buf.push('\n');
-                }
-                buf.push_str(&format!("[tool: {name}]"));
+                tools.push(RunToolCall {
+                    name: name.to_string(),
+                    summary: None,
+                });
             }
             _ => {}
         }
     }
-    let t = buf.trim();
-    if t.is_empty() {
+    let t = buf.trim().to_string();
+    if t.is_empty() && tools.is_empty() {
         None
     } else {
-        Some(t.to_string())
+        Some((t, tools))
     }
 }
 
@@ -578,7 +582,9 @@ mod tests {
         let msgs = OpenCode.read_run(home.to_str().unwrap(), "oss-1").unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].text, "please fix");
-        assert_eq!(msgs[1].text, "[tool: grep]\ndone");
+        assert_eq!(msgs[1].text, "done");
+        assert_eq!(msgs[1].tools.len(), 1);
+        assert_eq!(msgs[1].tools[0].name, "grep");
     }
 
     #[test]

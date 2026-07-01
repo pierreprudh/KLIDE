@@ -57,6 +57,7 @@ import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summar
 import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
 import { eventsToMsgs } from "./ai/eventsToMsgs";
+import { locateAssistant as locateAssistantPure, appendDelta, startToolCall, finishToolCall, finalizeAssistantMessage } from "./ai/transcriptReducer";
 import { buildRunHandoff, type HandoffSummary } from "../agentHandoff";
 import {
   genId,
@@ -1918,25 +1919,19 @@ This user request requires workspace inspection. Before answering, you MUST call
     // never showed their final answer (the transcript had it; the live
     // view threw it away). Walk past tool cards and insert a fresh bubble
     // for the new turn instead.
-    const locateAssistant = (next: Msg[]): number => {
-      let i = nextAssistantIdx;
-      while (next[i]?.role === "tool") i += 1;
-      if (next[i]?.role === "assistant") {
-        nextAssistantIdx = i;
-        return i;
-      }
-      next.splice(i, 0, { role: "assistant", content: "", delegateConsole, delegateProvider });
-      nextAssistantIdx = i;
-      return i;
+    const delegate = { delegateConsole, delegateProvider };
+
+    // Thin wrapper: the pure locateAssistant returns the resolved index; the
+    // component stores it back into the mutable turn cursor.
+    const ensureAssistant = (): { msgs: Msg[]; index: number } => {
+      const located = locateAssistantPure(msgsRef.current, nextAssistantIdx, delegate);
+      nextAssistantIdx = located.index;
+      return located;
     };
 
     const appendPendingDelta = (c: string, t: string) => {
-      const next = [...msgsRef.current];
-      const i = locateAssistant(next);
-      const existing = next[i] as Msg & { role: "assistant" };
-      const newContent = (existing.content || "") + c;
-      const newThinking = [existing.thinking, t].filter(Boolean).join("") || undefined;
-      next[i] = { ...existing, content: newContent, thinking: newThinking, delegateConsole, delegateProvider };
+      const { msgs: next, index } = appendDelta(msgsRef.current, nextAssistantIdx, c, t, delegate);
+      nextAssistantIdx = index;
       commit(next);
     };
 
@@ -2006,92 +2001,35 @@ This user request requires workspace inspection. Before answering, you MUST call
             appendPendingDelta(pendingDelta.content, pendingDelta.thinking);
           }
           pendingDelta = { content: "", thinking: "" };
-          const text = event.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-          const thinking = event.content.filter((b) => b.type === "thinking").map((b) => b.text).join("").trim();
-          const tcBlocks = event.content.filter((b) => b.type === "tool_call");
-          const tcCalls = tcBlocks.map((b) => ({ id: ("toolCallId" in b ? b.toolCallId : "") as string, name: "name" in b ? b.name as string : "", args: "input" in b ? b.input : {} }));
           const now = Date.now();
-          const turnMs = now - turnStartedAt;
-          const ttftMs = firstTokenAt !== null ? firstTokenAt - turnStartedAt : undefined;
+          const result = finalizeAssistantMessage({
+            msgs: msgsRef.current,
+            nextAssistantIdx,
+            event,
+            timing: { turnStartedAt, firstTokenAt },
+            now,
+            pricing,
+            delegate,
+          });
+          // Reset per-turn timing so multi-turn runs time each turn.
           turnStartedAt = now;
           firstTokenAt = null;
-          const next = [...msgsRef.current];
-          const i = locateAssistant(next);
-          const existing = next[i] as Msg & { role: "assistant" };
-          // Empty text with streamed deltas → keep the streamed content.
-          const msgContent = text || existing.content || "";
-          const estimatedTokens = estimateTokens(msgContent) + estimateTokens(thinking);
-          // Prefer the provider's real counts when present — Ollama reports
-          // eval_count + eval_duration on the final frame, OpenAI/Anthropic
-          // send a usage block. The estimate stays as a fallback for
-          // providers that don't (e.g. subscription CLIs).
-          const usage = event.usage;
-          const tokens =
-            usage?.completionTokens !== undefined ? usage.completionTokens : estimatedTokens;
+          nextAssistantIdx = result.index;
           // Capture the real context size for the gauge: the prompt the model
           // just saw (system + tools + full history) plus the reply it added.
-          // This is the authoritative "how full" number until the next turn.
-          if (usage?.promptTokens !== undefined) {
-            const completion = usage.completionTokens ?? tokens;
-            setMeasuredPromptTokens(usage.promptTokens + completion);
-            setMeasuredUsageTokens({ prompt: usage.promptTokens, completion });
-          }
-          // tok/s over decode time (turn minus TTFT) — the rate users feel.
-          // Prefer the provider's own eval_duration when available: it's
-          // pure decode time, wall-clock can be dragged out by tool calls
-          // and rendering, which makes local models look slower than they
-          // are. Anthropic and OpenAI don't send a duration, so we fall
-          // back to the wall-clock decode window.
-          const decodeMs = ttftMs !== undefined ? turnMs - ttftMs : turnMs;
-          let tps: number | undefined;
-          if (
-            usage?.completionTokens !== undefined &&
-            usage?.evalDurationMs !== undefined &&
-            usage.evalDurationMs > 0
-          ) {
-            tps = Math.round(usage.completionTokens / (usage.evalDurationMs / 1000));
-          } else if (tokens > 0 && decodeMs > 100) {
-            tps = Math.round(tokens / (decodeMs / 1000));
-          }
-          const exact = usage?.completionTokens !== undefined;
-          // Per-message cost. The provider's own figure wins when present —
-          // OpenRouter reports the real charged amount (incl. markup), which
-          // beats any table estimate and covers models the table doesn't
-          // price. Otherwise fall back to this turn's token counts × the
-          // model's list price. Local / subscription turns leave costUsd
-          // undefined (no per-token bill).
-          const costUsd =
-            usage?.costUsd !== undefined
-              ? usage.costUsd
-              : pricing && usage?.promptTokens !== undefined && usage?.completionTokens !== undefined
-                ? (usage.promptTokens * pricing.inputPerMillion +
-                    usage.completionTokens * pricing.outputPerMillion) /
-                  1_000_000
-                : undefined;
-          next[i] = { role: "assistant", content: msgContent, thinking: thinking || undefined, toolCalls: tcCalls.length ? tcCalls : undefined, delegateConsole, delegateProvider, meta: { ms: turnMs, tokens, promptTokens: usage?.promptTokens, ttftMs, tps, exact, costUsd } };
-          commit(next);
+          if (result.measuredPromptTokens !== undefined) setMeasuredPromptTokens(result.measuredPromptTokens);
+          if (result.measuredUsage !== undefined) setMeasuredUsageTokens(result.measuredUsage);
+          commit(result.msgs);
           break;
         }
         case "tool_call_started": {
-          const next = [...msgsRef.current];
-          next.splice(nextAssistantIdx + 1, 0, { role: "tool", content: `Running ${event.name}...`, toolName: event.name, toolCallId: event.toolCallId, tool_call_id: event.toolCallId });
-          nextAssistantIdx += 1;
+          const { msgs: next, index } = startToolCall(msgsRef.current, nextAssistantIdx, event.name, event.toolCallId);
+          nextAssistantIdx = index;
           commit(next);
           break;
         }
         case "tool_call_finished": {
-          // Match by id over the whole list — ids are unique per run, and
-          // searching from nextAssistantIdx+1 used to skip the very row the
-          // result belongs to.
-          const next = [...msgsRef.current];
-          for (let i = 0; i < next.length; i++) {
-            const msg = next[i];
-            if (msg.role === "tool" && (msg.toolCallId === event.toolCallId || msg.tool_call_id === event.toolCallId)) {
-              next[i] = { role: "tool" as const, content: event.result.content, toolName: msg.toolName, toolCallId: event.toolCallId, tool_call_id: event.toolCallId };
-              break;
-            }
-          }
-          commit(next);
+          commit(finishToolCall(msgsRef.current, event.toolCallId, event.result.content));
           break;
         }
         case "diff_proposed": {
@@ -2275,8 +2213,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (harnessError) throw harnessError;
     } catch (e) {
       if (queueGenerationRef.current !== generation) return;
-      const next = [...msgsRef.current];
-      const i = locateAssistant(next);
+      const located = ensureAssistant();
+      const next = [...located.msgs];
+      const i = located.index;
       const failedUser = next[userIndex];
       if (failedUser?.role === "user") next[userIndex] = { ...failedUser, queueState: undefined, queueId: undefined };
       next[i] = { role: "assistant", content: `⚠ ${(e as Error).message}. Check ${providerName(turn.provider)} connection and credentials.` };

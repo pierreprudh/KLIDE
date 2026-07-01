@@ -3,29 +3,8 @@ import {
   compactConversationMessages,
   isProcessNote,
   runMessagesToMarkdown,
-  splitToolCalls,
 } from "./transcripts";
 import type { RunMessage } from "./runs";
-
-describe("splitToolCalls", () => {
-  it("hoists [tool: …] markers out of the text", () => {
-    const { text, tools } = splitToolCalls("Reading the file.\n[tool: read_file src/a.ts]\nDone.");
-    expect(text).toBe("Reading the file.\nDone.");
-    expect(tools).toHaveLength(1);
-    expect(tools[0]).toMatchObject({ name: "read_file", summary: "src/a.ts", status: "unknown" });
-  });
-
-  it("leaves marker-free text untouched and returns no tools", () => {
-    const { text, tools } = splitToolCalls("Just a normal reply.");
-    expect(text).toBe("Just a normal reply.");
-    expect(tools).toEqual([]);
-  });
-
-  it("parses a bare marker with no summary", () => {
-    const { tools } = splitToolCalls("[tool: grep]");
-    expect(tools[0]).toMatchObject({ name: "grep", summary: undefined });
-  });
-});
 
 describe("isProcessNote", () => {
   it("flags running commentary", () => {

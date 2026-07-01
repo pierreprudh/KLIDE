@@ -1,6 +1,6 @@
 use super::runs::{
     cap_messages, clean_title, extract_user_text, mtime_ms, project_name, recency_status,
-    tool_file_path, AgentRun, RunMessage,
+    tool_file_path, AgentRun, RunMessage, RunToolCall,
 };
 use super::{shell_quote, Delegate, RunCandidate, RunParser};
 use std::collections::HashSet;
@@ -96,13 +96,14 @@ impl Delegate for Omp {
                 Some("assistant") => "assistant",
                 _ => continue,
             };
-            if let Some(text) = message_text(message) {
+            if let Some((text, tools)) = message_text(message) {
                 if role == "user" && text.starts_with('<') {
                     continue; // environment / context wrappers
                 }
                 msgs.push(RunMessage {
                     role: role.to_string(),
                     text,
+                    tools,
                 });
             }
         }
@@ -170,7 +171,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                 }
                 if role == "assistant" {
                     // Newest assistant turn wins — "what the run last did".
-                    if let Some(t) = message_text(message) {
+                    if let Some((t, _)) = message_text(message) {
                         last_event = Some(clean_title(&t));
                     }
                     if model.is_none() {
@@ -268,21 +269,24 @@ fn iso_to_ms(s: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
-// Walk a message's content into a single readable string: text parts
-// concatenate, tool_use parts collapse to a one-line "[tool: <name>]".
-// Thinking / tool_result noise is dropped — it has no place in a résumé view.
-fn message_text(message: &serde_json::Value) -> Option<String> {
+// Walk a message's content into readable text plus structured tool calls: text
+// parts concatenate; tool_use parts become structured RunToolCall entries (no
+// longer folded into text as "[tool: <name>]"). Thinking / tool_result noise is
+// dropped — it has no place in a résumé view. Returns None only when there is
+// neither text nor a tool call to show.
+fn message_text(message: &serde_json::Value) -> Option<(String, Vec<RunToolCall>)> {
     let content = message.get("content")?;
     if let Some(s) = content.as_str() {
         let t = s.trim();
         return if t.is_empty() || t.starts_with('<') {
             None
         } else {
-            Some(t.to_string())
+            Some((t.to_string(), vec![]))
         };
     }
     if let Some(arr) = content.as_array() {
         let mut buf = String::new();
+        let mut tools: Vec<RunToolCall> = Vec::new();
         for part in arr {
             match part.get("type").and_then(|t| t.as_str()) {
                 Some("text") => {
@@ -298,17 +302,17 @@ fn message_text(message: &serde_json::Value) -> Option<String> {
                 }
                 Some("tool_use") => {
                     let name = part.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
-                    if !buf.is_empty() {
-                        buf.push('\n');
-                    }
-                    buf.push_str(&format!("[tool: {name}]"));
+                    tools.push(RunToolCall {
+                        name: name.to_string(),
+                        summary: None,
+                    });
                 }
                 _ => {}
             }
         }
-        let t = buf.trim();
-        if !t.is_empty() {
-            return Some(t.to_string());
+        let t = buf.trim().to_string();
+        if !t.is_empty() || !tools.is_empty() {
+            return Some((t, tools));
         }
     }
     None
@@ -421,6 +425,8 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[0].text, "fix the login bug");
-        assert_eq!(msgs[1].text, "On it.\n[tool: read]");
+        assert_eq!(msgs[1].text, "On it.");
+        assert_eq!(msgs[1].tools.len(), 1);
+        assert_eq!(msgs[1].tools[0].name, "read");
     }
 }

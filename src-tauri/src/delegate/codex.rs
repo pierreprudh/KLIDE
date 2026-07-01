@@ -131,6 +131,9 @@ impl Delegate for Codex {
                 msgs.push(RunMessage {
                     role: role.to_string(),
                     text,
+                    // Codex flattens tool activity into its own text stream; no
+                    // structured tool parts to surface here.
+                    tools: vec![],
                 });
             }
         }

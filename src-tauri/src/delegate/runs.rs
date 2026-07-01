@@ -94,6 +94,23 @@ pub(crate) fn worktree_label(cwd: &str) -> Option<String> {
 pub struct RunMessage {
     pub role: String, // "user" | "assistant"
     pub text: String,
+    /// Tool calls made during this turn, structured. Emitted directly by the
+    /// adapters so the reader-facing Conversation no longer has to recover them
+    /// from `[tool: <name>]` text markers. Omitted from the wire when empty
+    /// (matches the frontend's optional `tools?` on RunMessage).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<RunToolCall>,
+}
+
+/// One tool call in a delegate run's conversation. The adapters know the tool's
+/// name (and sometimes a short argument summary); the richer fields the frontend
+/// `RunToolCall` allows are populated by the Klide-native fold path, not here.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunToolCall {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// A run a delegate left on disk, before parsing: just enough to sort and
@@ -354,6 +371,7 @@ mod tests {
             .map(|i| RunMessage {
                 role: "user".into(),
                 text: format!("m{i}"),
+                tools: vec![],
             })
             .collect();
         msgs[99].text = "y".repeat(5000);

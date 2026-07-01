@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::Manager;
 use tokio_util::sync::CancellationToken;
@@ -140,14 +140,86 @@ impl AgentProviderCaller for RealProviderCaller {
     }
 }
 
-fn set_run_status(app: &tauri::AppHandle, run_id: &str, status: AgentRunStatus) {
-    let state = app.state::<AgentSupervisorState>();
-    let Ok(mut runs) = state.runs.lock() else {
-        return;
-    };
-    if let Some(handle) = runs.get_mut(run_id) {
-        handle.status = status;
+/// The run-scoped capabilities the loop needs from its supervisor: set a run's
+/// status, and run a closure against a run's handle (its trust sets + the pause
+/// channels). This is the seam that used to be a raw `tauri::AppHandle` reach
+/// into `AgentSupervisorState`. `TauriSupervisor` implements it over the live
+/// state in production; `FakeSupervisor` (tests) implements it over a plain map
+/// — so the whole run loop can be driven headlessly, off the Tauri app.
+trait RunSupervisor: Send + Sync {
+    /// Best-effort: set a run's status. No-op if the lock/run is unavailable.
+    fn set_status(&self, run_id: &str, status: AgentRunStatus);
+    /// Run `f` against a run's handle under the supervisor lock. Returns false
+    /// when the lock is poisoned or the run handle is gone — both best-effort
+    /// (the sets `f` touches are re-ask-avoidance conveniences).
+    fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool;
+}
+
+/// Production adapter: the supervisor backed by Tauri's managed
+/// `AgentSupervisorState`. Owns a cheap `AppHandle` clone.
+struct TauriSupervisor {
+    app: tauri::AppHandle,
+}
+
+impl TauriSupervisor {
+    fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
     }
+}
+
+impl RunSupervisor for TauriSupervisor {
+    fn set_status(&self, run_id: &str, status: AgentRunStatus) {
+        let state = self.app.state::<AgentSupervisorState>();
+        let Ok(mut runs) = state.runs.lock() else {
+            return;
+        };
+        if let Some(handle) = runs.get_mut(run_id) {
+            handle.status = status;
+        }
+    }
+
+    fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
+        let state = self.app.state::<AgentSupervisorState>();
+        let Ok(runs) = state.runs.lock() else {
+            return false;
+        };
+        match runs.get(run_id) {
+            Some(handle) => {
+                f(handle);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+fn set_run_status(sup: &dyn RunSupervisor, run_id: &str, status: AgentRunStatus) {
+    sup.set_status(run_id, status);
+}
+
+/// Settle a run that ended without cancellation (done / error / max-turns):
+/// broadcast the terminal status and write the terminal summary to disk. The one
+/// place the "status + summary" terminal sequence lives — callers only choose
+/// the status. (Cancellation adds a RunError(aborted) emit on top; see
+/// `finish_cancelled`.)
+fn settle_run(
+    sup: &dyn RunSupervisor,
+    runs_dir: &Path,
+    id: &str,
+    summary: &AgentRunSummary,
+    message_count: u32,
+    status: AgentRunStatus,
+) -> Result<(), String> {
+    set_run_status(sup, id, status);
+    write_summary(
+        runs_dir,
+        &AgentRunSummary {
+            status: run_status_wire(&status).to_string(),
+            updated_ms: now_ms(),
+            message_count,
+            ..summary.clone()
+        },
+    )
 }
 
 fn run_status_wire(status: &AgentRunStatus) -> &'static str {
@@ -547,7 +619,7 @@ async fn run_read_tools_parallel(
 /// Settle a cancelled run: aborted event, summary on disk, handle status.
 fn finish_cancelled<E: FnMut(AgentEvent) -> Result<(), String>>(
     emit: &mut E,
-    app: &tauri::AppHandle,
+    sup: &dyn RunSupervisor,
     runs_dir: &Path,
     id: &str,
     summary: &AgentRunSummary,
@@ -563,16 +635,7 @@ fn finish_cancelled<E: FnMut(AgentEvent) -> Result<(), String>>(
         },
         ts: now_ms(),
     })?;
-    set_run_status(app, id, AgentRunStatus::Cancelled);
-    write_summary(
-        runs_dir,
-        &AgentRunSummary {
-            status: "cancelled".to_string(),
-            updated_ms: now_ms(),
-            message_count,
-            ..summary.clone()
-        },
-    )
+    settle_run(sup, runs_dir, id, summary, message_count, AgentRunStatus::Cancelled)
 }
 
 /// What a pause settled to: the user's reply, or cancellation while waiting.
@@ -591,7 +654,7 @@ enum PauseOutcome {
 /// and the default used if the channel closes — so those are the parameters.
 /// This is the one place the question / permission / diff pauses share.
 async fn pause_for_user<E, S>(
-    app: &tauri::AppHandle,
+    sup: &dyn RunSupervisor,
     id: &str,
     waiting: AgentRunStatus,
     request_event: AgentEvent,
@@ -604,29 +667,31 @@ where
     E: FnMut(AgentEvent) -> Result<(), String>,
     S: FnOnce(&AgentRunHandle, tokio::sync::oneshot::Sender<String>),
 {
-    set_run_status(app, id, waiting);
+    set_run_status(sup, id, waiting);
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     {
-        let state = app.state::<AgentSupervisorState>();
-        let mut runs = state
-            .runs
-            .lock()
-            .map_err(|_| "Agent state unavailable".to_string())?;
-        if let Some(handle) = runs.get_mut(id) {
-            stash(handle, tx);
-        }
+        // Stash the reply sender into the run's handle. If the handle is gone,
+        // `tx` drops here and `rx` resolves to `default_on_close` below — the
+        // same degrade-to-default the old lock-miss path produced.
+        let mut stash = Some(stash);
+        let mut tx = Some(tx);
+        sup.with_handle(id, &mut |handle| {
+            if let (Some(stash), Some(tx)) = (stash.take(), tx.take()) {
+                stash(handle, tx);
+            }
+        });
     }
 
     emit(request_event)?;
 
     let reply = tokio::select! {
         _ = cancel.cancelled() => {
-            set_run_status(app, id, AgentRunStatus::Running);
+            set_run_status(sup, id, AgentRunStatus::Running);
             return Ok(PauseOutcome::Cancelled);
         }
         result = rx => result.unwrap_or_else(|_| default_on_close.to_string()),
     };
-    set_run_status(app, id, AgentRunStatus::Running);
+    set_run_status(sup, id, AgentRunStatus::Running);
     Ok(PauseOutcome::Resolved(reply))
 }
 
@@ -640,23 +705,28 @@ where
 /// re-ask-avoidance conveniences, so degrading to `None` (and thus re-prompting
 /// the user) is a safer failure mode than erroring the whole run.
 fn with_run_handle<R>(
-    app: &tauri::AppHandle,
+    sup: &dyn RunSupervisor,
     id: &str,
     f: impl FnOnce(&AgentRunHandle) -> R,
 ) -> Option<R> {
-    let state = app.state::<AgentSupervisorState>();
-    let runs = state.runs.lock().ok()?;
-    runs.get(id).map(f)
+    let mut out: Option<R> = None;
+    let mut f = Some(f);
+    sup.with_handle(id, &mut |handle| {
+        if let Some(f) = f.take() {
+            out = Some(f(handle));
+        }
+    });
+    out
 }
 
 /// The slice of run-loop state a per-tool handler needs to execute one tool
-/// call: the app handle (run state + pause channels), the run id, the start
+/// call: the supervisor (run state + pause channels), the run id, the start
 /// request (workspace root, allowlists, timeouts, review mode), the cancel
 /// token, and the runs dir (write checkpoints). Bundled so each handler takes
 /// one context rather than six positional args. All borrows — cheap to build
 /// once per call.
 struct ToolCtx<'a> {
-    app: &'a tauri::AppHandle,
+    sup: &'a dyn RunSupervisor,
     id: &'a str,
     request: &'a StartRunRequest,
     cancel: &'a CancellationToken,
@@ -694,7 +764,7 @@ where
     let request_id = format!("q_{}_{}", ctx.id, call.id);
 
     let answer = match pause_for_user(
-        ctx.app,
+        ctx.sup,
         ctx.id,
         AgentRunStatus::WaitingForPermission,
         AgentEvent::UserQuestionRequested {
@@ -764,7 +834,7 @@ where
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
 
     let report = match pause_for_user(
-        ctx.app,
+        ctx.sup,
         ctx.id,
         AgentRunStatus::WaitingForPermission,
         AgentEvent::SubagentRequested {
@@ -1159,7 +1229,7 @@ where
     // "Reject" sticks; tell the model to change course rather than re-surfacing
     // the same diff.
     let edit_key = format!("{}::{}", proposal.path, proposal.new_hash);
-    let already_rejected = with_run_handle(ctx.app, ctx.id, |h| {
+    let already_rejected = with_run_handle(ctx.sup, ctx.id, |h| {
         h.rejected_edits.lock().unwrap().contains(&edit_key)
     })
     .unwrap_or(false);
@@ -1188,7 +1258,7 @@ Do not propose it again — take a different approach or ask the user what they'
         "apply".to_string()
     } else {
         match pause_for_user(
-            ctx.app,
+            ctx.sup,
             ctx.id,
             AgentRunStatus::WaitingForDiff,
             AgentEvent::DiffProposed {
@@ -1267,7 +1337,7 @@ Do not propose it again — take a different approach or ask the user what they'
     } else {
         // Remember this rejection so a byte-identical re-proposal is
         // auto-declined above instead of prompting again.
-        with_run_handle(ctx.app, ctx.id, |h| {
+        with_run_handle(ctx.sup, ctx.id, |h| {
             h.rejected_edits.lock().unwrap().insert(edit_key.clone());
         });
         Ok(ToolOutcome::Produced(ToolResult {
@@ -1357,11 +1427,11 @@ pub async fn agent_start_run(
 
     // Detach the loop so this command returns the run id immediately; the UI
     // follows progress through the event channel and can abort via the token.
-    let task_app = app.clone();
+    let supervisor: Arc<dyn RunSupervisor> = Arc::new(TauriSupervisor::new(app.clone()));
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = run_agent_loop(
-            task_app,
+            supervisor,
             runs_dir,
             task_id.clone(),
             request,
@@ -1379,7 +1449,7 @@ pub async fn agent_start_run(
 }
 
 async fn run_agent_loop(
-    app: tauri::AppHandle,
+    supervisor: Arc<dyn RunSupervisor>,
     runs_dir: PathBuf,
     id: String,
     request: StartRunRequest,
@@ -1387,6 +1457,9 @@ async fn run_agent_loop(
     cancel: CancellationToken,
     provider_caller: impl AgentProviderCaller,
 ) -> Result<(), String> {
+    // The loop touches run-scoped state only through this seam — no direct
+    // AppHandle reach. Production passes a TauriSupervisor; tests pass a fake.
+    let sup: &dyn RunSupervisor = supervisor.as_ref();
     let cwd = request.workspace_root.clone();
     // A reused id means this is a follow-up turn in an existing conversation
     // (the AI panel keys runs by its convo id). Continue the transcript instead
@@ -1556,7 +1629,7 @@ async fn run_agent_loop(
         // effect mid-request, not only between turns.
         let provider_result = tokio::select! {
             _ = cancel.cancelled() => {
-                finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
                 return Ok(());
             }
             result = provider_caller.call(ProviderTurnRequest {
@@ -1585,16 +1658,7 @@ async fn run_agent_loop(
                     error,
                     ts: now_ms(),
                 })?;
-                set_run_status(&app, &id, AgentRunStatus::Error);
-                write_summary(
-                    &runs_dir,
-                    &AgentRunSummary {
-                        status: "error".to_string(),
-                        updated_ms: now_ms(),
-                        message_count,
-                        ..summary.clone()
-                    },
-                )?;
+                settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Error)?;
                 completed = true;
                 break;
             }
@@ -1640,16 +1704,7 @@ async fn run_agent_loop(
                     result: serde_json::json!({ "status": "done" }),
                     ts: now_ms(),
                 })?;
-                set_run_status(&app, &id, AgentRunStatus::Done);
-                write_summary(
-                    &runs_dir,
-                    &AgentRunSummary {
-                        status: "done".to_string(),
-                        updated_ms: now_ms(),
-                        message_count,
-                        ..summary.clone()
-                    },
-                )?;
+                settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Done)?;
                 completed = true;
                 break;
             }
@@ -1693,7 +1748,7 @@ async fn run_agent_loop(
 
         for call in tool_calls {
             if cancel.is_cancelled() {
-                finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
                 return Ok(());
             }
             let kind = find_tool_kind_for_workspace(&call.name, request.workspace_root.as_deref());
@@ -1723,7 +1778,7 @@ async fn run_agent_loop(
             };
 
             let ctx = ToolCtx {
-                app: &app,
+                sup,
                 id: id.as_str(),
                 request: &request,
                 cancel: &cancel,
@@ -1752,7 +1807,7 @@ async fn run_agent_loop(
             match outcome {
                 ToolOutcome::Produced(result) => tool_result = result,
                 ToolOutcome::Cancelled => {
-                    finish_cancelled(&mut emit, &app, &runs_dir, &id, &summary, message_count)?;
+                    finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
                     return Ok(());
                 }
             }
@@ -1800,16 +1855,7 @@ async fn run_agent_loop(
             error,
             ts: now_ms(),
         })?;
-        set_run_status(&app, &id, AgentRunStatus::Error);
-        write_summary(
-            &runs_dir,
-            &AgentRunSummary {
-                status: "error".to_string(),
-                updated_ms: now_ms(),
-                message_count,
-                ..summary
-            },
-        )?;
+        settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Error)?;
     }
 
     Ok(())
@@ -2967,6 +3013,153 @@ mod provider_caller_tests {
                 true
             )]
         );
+    }
+}
+
+#[cfg(test)]
+mod run_supervisor_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// A supervisor backed by a plain map — no Tauri app. This is the second
+    /// adapter that makes the seam real: the loop's run-scoped helpers can be
+    /// exercised headlessly against it.
+    struct FakeSupervisor {
+        runs: Mutex<HashMap<String, AgentRunHandle>>,
+    }
+
+    impl FakeSupervisor {
+        fn with_run(id: &str) -> Self {
+            let mut runs = HashMap::new();
+            runs.insert(id.to_string(), make_handle());
+            Self {
+                runs: Mutex::new(runs),
+            }
+        }
+    }
+
+    impl RunSupervisor for FakeSupervisor {
+        fn set_status(&self, run_id: &str, status: AgentRunStatus) {
+            if let Ok(mut runs) = self.runs.lock() {
+                if let Some(handle) = runs.get_mut(run_id) {
+                    handle.status = status;
+                }
+            }
+        }
+        fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
+            let Ok(runs) = self.runs.lock() else {
+                return false;
+            };
+            match runs.get(run_id) {
+                Some(handle) => {
+                    f(handle);
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
+    fn make_handle() -> AgentRunHandle {
+        AgentRunHandle {
+            status: AgentRunStatus::Running,
+            cancel: CancellationToken::new(),
+            pending_diff: Mutex::new(None),
+            pending_question: Mutex::new(None),
+            pending_permission: Mutex::new(None),
+            approved_commands: Mutex::new(std::collections::HashSet::new()),
+            rejected_edits: Mutex::new(std::collections::HashSet::new()),
+            rejected_commands: Mutex::new(std::collections::HashSet::new()),
+            approved_network: Mutex::new(std::collections::HashSet::new()),
+            rejected_network: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    #[test]
+    fn set_status_and_with_run_handle_round_trip_off_tauri() {
+        let sup = FakeSupervisor::with_run("run-1");
+        set_run_status(&sup, "run-1", AgentRunStatus::WaitingForDiff);
+        let status = with_run_handle(&sup, "run-1", |h| h.status);
+        assert_eq!(status, Some(AgentRunStatus::WaitingForDiff));
+    }
+
+    #[test]
+    fn with_run_handle_returns_none_for_a_missing_run() {
+        let sup = FakeSupervisor::with_run("run-1");
+        assert!(with_run_handle(&sup, "ghost", |_| ()).is_none());
+    }
+
+    /// Poll the run's stashed permission sender and answer it — stands in for
+    /// the agent_resolve_permission command in a headless drive of the pause.
+    async fn answer_permission(sup: &FakeSupervisor, id: &str, reply: &str) {
+        loop {
+            let mut answered = false;
+            sup.with_handle(id, &mut |h| {
+                if let Some(tx) = h.pending_permission.lock().unwrap().take() {
+                    let _ = tx.send(reply.to_string());
+                    answered = true;
+                }
+            });
+            if answered {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn request_event() -> AgentEvent {
+        AgentEvent::RunResult {
+            run_id: "run-1".to_string(),
+            result: serde_json::json!({ "kind": "permission" }),
+            ts: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn pause_for_user_drives_a_full_pause_through_the_seam() {
+        let sup = FakeSupervisor::with_run("run-1");
+        let cancel = CancellationToken::new();
+        let mut emit = |_: AgentEvent| Ok(());
+        let (outcome, _) = tokio::join!(
+            pause_for_user(
+                &sup,
+                "run-1",
+                AgentRunStatus::WaitingForPermission,
+                request_event(),
+                "(default)",
+                &cancel,
+                &mut emit,
+                |h: &AgentRunHandle, tx| {
+                    *h.pending_permission.lock().unwrap() = Some(tx);
+                },
+            ),
+            answer_permission(&sup, "run-1", "approved"),
+        );
+        assert!(matches!(outcome, Ok(PauseOutcome::Resolved(r)) if r == "approved"));
+        // Status was restored to Running after the pause resolved.
+        assert_eq!(with_run_handle(&sup, "run-1", |h| h.status), Some(AgentRunStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn pause_for_user_reports_cancellation_through_the_seam() {
+        let sup = FakeSupervisor::with_run("run-1");
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // already cancelled → the pause bails immediately
+        let mut emit = |_: AgentEvent| Ok(());
+        let outcome = pause_for_user(
+            &sup,
+            "run-1",
+            AgentRunStatus::WaitingForPermission,
+            request_event(),
+            "(default)",
+            &cancel,
+            &mut emit,
+            |h: &AgentRunHandle, tx| {
+                *h.pending_permission.lock().unwrap() = Some(tx);
+            },
+        )
+        .await;
+        assert!(matches!(outcome, Ok(PauseOutcome::Cancelled)));
     }
 }
 

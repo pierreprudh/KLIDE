@@ -157,7 +157,7 @@ pub fn request_id(ctx: &ToolCtx<'_>, call: &NormalizedToolCall) -> String {
 /// handler because the command capability's wildcard/external-path nuance is
 /// command-specific). Falls back to `Ask` whenever the run handle is missing.
 pub fn precheck(ctx: &ToolCtx<'_>, cap: Capability, run_key: &str, project_ok: bool) -> Precheck {
-    let (run_ok, run_no) = with_run_handle(ctx.app, ctx.id, |h| {
+    let (run_ok, run_no) = with_run_handle(ctx.sup, ctx.id, |h| {
         (cap.run_approved(h, run_key), cap.run_rejected(h, run_key))
     })
     .unwrap_or((false, false));
@@ -185,7 +185,7 @@ where
     E: FnMut(AgentEvent) -> Result<(), String>,
 {
     let decision = match pause_for_user(
-        ctx.app,
+        ctx.sup,
         ctx.id,
         AgentRunStatus::WaitingForPermission,
         AgentEvent::PermissionRequested {
@@ -249,7 +249,7 @@ pub fn record(
     match decision {
         GateDecision::Approved { scope, pattern } => {
             if scope == "run" || scope == "project" {
-                with_run_handle(ctx.app, ctx.id, |h| cap.remember_approved(h, run_key));
+                with_run_handle(ctx.sup, ctx.id, |h| cap.remember_approved(h, run_key));
             }
             if scope == "project" {
                 if let Some(root) = ctx.request.workspace_root.as_deref() {
@@ -258,7 +258,7 @@ pub fn record(
             }
         }
         GateDecision::Rejected => {
-            with_run_handle(ctx.app, ctx.id, |h| cap.remember_rejected(h, run_key));
+            with_run_handle(ctx.sup, ctx.id, |h| cap.remember_rejected(h, run_key));
         }
         GateDecision::Cancelled => {}
     }
