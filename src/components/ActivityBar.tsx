@@ -1,7 +1,18 @@
+import { useState } from "react";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 
 type View = "home" | "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "orchestrator" | "settings" | "profile";
-type Props = { active: Record<View, boolean>; onToggle: (v: View, meta?: boolean) => void };
+type Project = { path: string; name: string };
+type Props = {
+  active: Record<View, boolean>;
+  onToggle: (v: View, meta?: boolean) => void;
+  // Multi-project switcher (Variant C — home popover). The rail only lists
+  // projects; switching swaps the single hydrated workspace.
+  projects?: Project[];
+  activeProjectPath?: string | null;
+  onSwitchProject?: (path: string) => void;
+  onOpenFolder?: () => void;
+};
 
 function HomeIcon() {
   return (
@@ -209,7 +220,15 @@ function ProfileIcon() {
   );
 }
 
-export function ActivityBar({ active, onToggle }: Props) {
+export function ActivityBar({
+  active,
+  onToggle,
+  projects = [],
+  activeProjectPath,
+  onSwitchProject,
+  onOpenFolder,
+}: Props) {
+  const [projectsOpen, setProjectsOpen] = useState(false);
   // Top zone — in-workbench / full-window tools. The FLIP bar rides
   // between them when one is active.
   const toolItems: { id: View; label: string; Icon: () => React.JSX.Element }[] = [
@@ -262,14 +281,14 @@ export function ActivityBar({ active, onToggle }: Props) {
           alignItems: "stretch",
         }}
       >
-        {/* Home — returns to the editor workbench from any full-window
-            view. Sits above the tool switcher and outside the FLIP track:
-            it's a destination ("take me back"), not one of the tools the
-            indicator rides between. */}
+        {/* Home — back to the Welcome screen to switch projects. Sits above
+            the tool switcher and outside the FLIP track: it's a destination
+            ("leave this project"), not one of the tools the indicator rides
+            between. */}
         <button
           onClick={() => onToggle("home")}
-          title="Home"
-          aria-label="Home"
+          title="Home — switch project"
+          aria-label="Home — switch project"
           aria-pressed={active.home}
           data-active={active.home}
           className="klide-activity-bar-item"

@@ -97,6 +97,13 @@ export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRo
     else setActiveIdx(Math.min(Math.max(activeIdx, 0), next.length - 1));
   }
 
+  // Drop every open tab at once — used when closing the folder / returning to
+  // the welcome screen so no stale paths from the old project linger.
+  function closeAllTabs() {
+    setTabs([]);
+    setActiveIdx(-1);
+  }
+
   async function closeTab(i: number) {
     const closing = tabs[i];
     if (closing?.dirty) {
@@ -224,6 +231,7 @@ export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRo
     onEntryRenamed,
     onEntryDeleted,
     closeTab,
+    closeAllTabs,
     saveActive,
     onAgentWrote,
   };

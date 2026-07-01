@@ -208,6 +208,7 @@ function App() {
     onEntryRenamed,
     onEntryDeleted,
     closeTab,
+    closeAllTabs,
     saveActive,
     onAgentWrote,
   } = useEditorTabs({ notify: setFileNotice, workspaceRoot });
@@ -377,11 +378,11 @@ function App() {
 
   function togglePanel(panel: ActivityPanel, meta?: boolean) {
     if (panel === "home") {
-      // Plain "go back to the editor" — returns to the workbench without
-      // touching any sidebar/AI panel visibility, so whatever was open
-      // before a full-window view (Git Review, Mission Control,
-      // Orchestrator) is restored exactly as it was.
-      setView("workbench");
+      // Home = back to the Welcome screen to switch projects. Clears the
+      // workspace (and open tabs) so the project chooser takes over. Getting
+      // back to the editor from a full-window view is handled by Esc /
+      // clicking a tool, so this top slot is free to mean "leave this project".
+      closeFolder();
       return;
     }
     if (panel === "settings") {
@@ -543,7 +544,7 @@ function App() {
             width={panelLayout.explorer?.w ?? 280}
             workspaceRoot={workspaceRoot}
             onOpen={openFile}
-            onRootChange={setWorkspaceRoot}
+            onRootChange={changeRoot}
             onEntryRenamed={onEntryRenamed}
             onEntryDeleted={onEntryDeleted}
             onFilePreview={setPreviewPath}
@@ -632,8 +633,30 @@ function App() {
 
   async function openFolderDialog() {
     const picked = await open({ directory: true });
-    if (typeof picked === "string") setWorkspaceRoot(picked);
+    if (typeof picked === "string") changeRoot(picked);
   }
+
+  // Return to the welcome screen so a different project can be opened. Clears
+  // open tabs so no stale paths from the old workspace linger, and drops any
+  // full-screen view (settings/git/etc.) back to the workbench so the welcome
+  // condition (`view !== "settings" && !workspaceRoot`) actually fires.
+  function closeFolder() {
+    closeAllTabs();
+    setView("workbench");
+    setWorkspaceRoot(null);
+  }
+
+  // Single entry point for switching projects. Clearing the root (null) runs
+  // the full close-folder path; switching to a different project tears down the
+  // old project's open tabs first so only one project is ever hydrated in the
+  // webview — long-running agent runs/PTYs survive in Rust and reattach on
+  // return, so we never hold two projects' editor state in memory at once.
+  const changeRoot = (root: string | null) => {
+    if (root === null) return closeFolder();
+    if (root === workspaceRoot) return;
+    closeAllTabs();
+    setWorkspaceRoot(root);
+  };
 
   // New project: pick a parent location, create + `git init` the folder in
   // Rust, then open it. Throws on error so the welcome screen can show it.
@@ -1399,6 +1422,7 @@ function App() {
   const paletteCommands = [
     { id: "save", label: "File: Save", shortcut: "⌘S", action: () => { saveActive(); setPaletteOpen(false); } },
     { id: "open-folder", label: "File: Open Folder…", shortcut: "⌘O", action: () => { openFolderDialog(); setPaletteOpen(false); } },
+    { id: "close-folder", label: "File: Switch Project (Welcome)", action: () => { closeFolder(); setPaletteOpen(false); } },
     { id: "close-tab", label: "View: Close Tab", shortcut: "⌘W", action: () => { if (activeIdx >= 0) closeTab(activeIdx); setPaletteOpen(false); } },
     { id: "find", label: "Edit: Find in Files", shortcut: "⌘⇧F", action: () => { setSearchVisible((v) => !v); setPaletteOpen(false); } },
     { id: "terminal-toggle", label: "Terminal: Toggle", shortcut: "⌘`", action: () => { setTerminalVisible((v) => !v); setPaletteOpen(false); } },
@@ -1602,7 +1626,7 @@ function App() {
                 onChangeCode={updateActiveCode}
                 setSearchVisible={setSearchVisible}
                 onOpenFile={openFile}
-                onRootChange={setWorkspaceRoot}
+                onRootChange={changeRoot}
                 onEntryRenamed={onEntryRenamed}
                 onEntryDeleted={onEntryDeleted}
                 onFilePreview={setPreviewPath}
@@ -1745,7 +1769,7 @@ function App() {
                             width={explorerRect.w}
                             workspaceRoot={workspaceRoot}
                             onOpen={openFile}
-                            onRootChange={setWorkspaceRoot}
+                            onRootChange={changeRoot}
                             onEntryRenamed={onEntryRenamed}
                             onEntryDeleted={onEntryDeleted}
                             onFilePreview={setPreviewPath}
@@ -1773,7 +1797,7 @@ function App() {
                         width={explorerRect.w}
                         workspaceRoot={workspaceRoot}
                         onOpen={openFile}
-                        onRootChange={setWorkspaceRoot}
+                        onRootChange={changeRoot}
                         onEntryRenamed={onEntryRenamed}
                         onEntryDeleted={onEntryDeleted}
                         onFilePreview={setPreviewPath}

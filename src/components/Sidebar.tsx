@@ -986,7 +986,7 @@ export function Sidebar({
         {root ? (
           <div className="klide-explorer-header-workspace" title={root}>
             <span className="klide-explorer-header-workspace-name">
-              Explorer
+              {root.split("/").filter(Boolean).pop() ?? "Explorer"}
             </span>
           </div>
         ) : (
