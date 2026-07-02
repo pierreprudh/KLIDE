@@ -44,6 +44,16 @@ export function isFavModel(provider: string, model: string): boolean {
   return read().has(favKey(provider, model));
 }
 
+/** Favourite models for one provider, in star order (the Set preserves
+ *  insertion order, so the first entry is the oldest star — the "top"
+ *  favourite). Used to seed the model choice on a provider switch. */
+export function favModelsFor(provider: string): string[] {
+  const prefix = provider + SEP;
+  return [...read()]
+    .filter((k) => k.startsWith(prefix))
+    .map((k) => k.slice(prefix.length));
+}
+
 export function toggleFavModel(provider: string, model: string): void {
   const set = read();
   const k = favKey(provider, model);

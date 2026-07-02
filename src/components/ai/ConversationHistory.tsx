@@ -56,23 +56,34 @@ export function ConversationHistory({ conversations, currentId, historyOpen, set
               No past conversations yet.
             </div>
           ) : (
-            conversations.map((c) => (
+            conversations.map((c) => {
+              const current = c.id === currentId;
+              return (
               <div
                 key={c.id}
                 onClick={() => onSelect(c)}
+                aria-current={current || undefined}
                 style={{
                   display: "flex", alignItems: "center", gap: 8, padding: "7px 8px",
                   borderRadius: "var(--radius-sm)", cursor: "pointer",
-                  background: c.id === currentId ? "var(--bg-selected)" : "transparent",
+                  background: current ? "var(--bg-selected)" : "transparent",
+                  // The ongoing conversation reads as "you are here": an accent
+                  // spine (inset shadow — no layout shift) + heavier title.
+                  boxShadow: current ? "inset 2px 0 0 var(--accent)" : "none",
                 }}
-                onMouseEnter={(e) => { if (c.id !== currentId) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = c.id === currentId ? "var(--bg-selected)" : "transparent"; }}
+                onMouseEnter={(e) => { if (!current) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = current ? "var(--bg-selected)" : "transparent"; }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--fg-strong)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: 12, fontWeight: current ? 650 : 500, color: "var(--fg-strong)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {c.title}
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 1 }}>{relativeTime(c.updatedAt)}</div>
+                  <div
+                    title={c.model ? `${c.model}` : undefined}
+                    style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  >
+                    {current ? "Current · " : ""}{relativeTime(c.updatedAt)}{c.model ? ` · ${c.model}` : ""}
+                  </div>
                 </div>
                 <button
                   onClick={(e) => onDelete(c.id, e)}
@@ -87,7 +98,8 @@ export function ConversationHistory({ conversations, currentId, historyOpen, set
                   </svg>
                 </button>
               </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

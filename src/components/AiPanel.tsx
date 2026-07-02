@@ -52,6 +52,7 @@ import { renderMessageBody, CompactionRow } from "./ai/ChatMessage";
 import { MessageActions } from "./ai/MessageActions";
 import { ConversationHistory } from "./ai/ConversationHistory";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
+import { favModelsFor } from "../favModels";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
@@ -345,6 +346,16 @@ function normalizeReflectionLevel(level: string | undefined | null): string | un
 function defaultModelFor(id: ProviderId): string {
   if (isCustomProvider(id)) return customDefaultModel(id);
   return DEFAULT_MODELS[id] ?? "";
+}
+
+// The model a provider SWITCH lands on: the top favourite for that provider
+// when one is starred, else the last-used/stored model. Continuing an existing
+// conversation still restores that conversation's own model — this only seeds
+// fresh provider picks. If the favourite turns out not to be available, the
+// models-load effect corrects to the first favourite that is (then the list
+// head).
+function switchModelForProvider(id: ProviderId): string {
+  return favModelsFor(id)[0] ?? storedModelForProvider(id);
 }
 
 function storedModelForProvider(id: ProviderId): string {
@@ -724,7 +735,7 @@ export function AiPanel({
     onProviderChange?.(id);
     if (panelId) localStorage.setItem(`klide.provider.${panelId}`, id);
     localStorage.setItem("klide.provider", id);
-    onModelChange(storedModelForProvider(id));
+    onModelChange(switchModelForProvider(id));
     closeProviderMenu();
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
@@ -1403,6 +1414,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // bail if the user switches conversations while it's awaiting async work.
   const currentIdRef = useRef(currentId);
   useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
+  // Live provider/model for the unmount flush below — its [] closure would
+  // otherwise stamp the conversation with the MOUNT-time pair, reverting any
+  // provider/model switch made during the session when the panel unmounts.
+  const providerModelRef = useRef({ provider, model });
+  useEffect(() => { providerModelRef.current = { provider, model }; }, [provider, model]);
   useEffect(() => { currentForkedFromRef.current = currentForkedFrom; }, [currentForkedFrom]);
   useEffect(() => { conversationGitMetaRef.current = conversationGitMeta; }, [conversationGitMeta]);
 
@@ -1421,7 +1437,17 @@ This user request requires workspace inspection. Before answering, you MUST call
       msgsRef.current = saved.msgs;
       setCurrentForkedFrom(saved.forkedFrom ?? null);
       setConversationGitMeta({ branch: saved.branch ?? null, worktree: saved.worktree ?? null });
-      if (saved.provider && saved.provider !== provider) onProviderChange?.(saved.provider);
+      // Adopt the conversation's provider LOCALLY too — onProviderChange only
+      // updates the parent's panel record, and `provider` state is what send()
+      // snapshots into the turn. Restoring only the model would leave the pair
+      // split (old provider + this convo's model): the first send then hits
+      // the old provider's wire with a foreign model id (Ollama 404), and the
+      // klide.model.<provider> persist effect stores the mismatch.
+      if (saved.provider && saved.provider !== provider) {
+        setProvider(saved.provider);
+        if (panelId) localStorage.setItem(`klide.provider.${panelId}`, saved.provider);
+        onProviderChange?.(saved.provider);
+      }
       if (saved.model && saved.model !== model) onModelChange(saved.model);
     }
     // Reconnect to a run that progressed while the panel was unmounted: the
@@ -1708,7 +1734,13 @@ This user request requires workspace inspection. Before answering, you MUST call
     setConversationGitMeta({ branch: c.branch ?? null, worktree: c.worktree ?? null });
     setMsgs(c.msgs);
     msgsRef.current = c.msgs;
-    if (c.provider && c.provider !== provider) onProviderChange?.(c.provider);
+    // Same provider adoption as the mount-restore effect: keep the local
+    // provider state, the parent record, and the model a consistent trio.
+    if (c.provider && c.provider !== provider) {
+      setProvider(c.provider);
+      if (panelId) localStorage.setItem(`klide.provider.${panelId}`, c.provider);
+      onProviderChange?.(c.provider);
+    }
     if (c.model && c.model !== model) onModelChange(c.model);
     // Explicit resume is intent to continue this thread, so keep it pinned
     // across a remount (view switch) until it finishes or the user starts a
@@ -1832,19 +1864,21 @@ This user request requires workspace inspection. Before answering, you MUST call
     const snapshot = messagesForPersist(msgsRef.current);
     if (snapshot.length === 0) return;
     persistConversation({
-      id: currentId,
+      id: currentIdRef.current,
       title: deriveTitle(snapshot),
       msgs: snapshot,
       updatedAt: Date.now(),
-      provider,
-      model,
+      provider: providerModelRef.current.provider,
+      model: providerModelRef.current.model,
       cwd: workspaceRoot,
       branch: conversationGitMetaRef.current.branch,
       worktree: conversationGitMetaRef.current.worktree,
       forkedFrom: currentForkedFromRef.current ?? null,
     });
-    // Intentionally only currentId at unmount matters; msgsRef is the
-    // fresh source of truth for the snapshot.
+    // Everything mutable reads through refs: this [] cleanup runs with
+    // first-render values otherwise, which both mis-filed the snapshot under
+    // the mount-time conversation id after a history switch AND reverted the
+    // persisted provider/model to the mount-time pair.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1867,7 +1901,12 @@ This user request requires workspace inspection. Before answering, you MUST call
         const fallbackModel = defaultModelFor(provider);
         const next = names.length > 0 ? names : fallbackModel ? [fallbackModel] : [];
         onAvailableModelsChange(next);
-        if (next.length > 0 && !next.includes(model)) onModelChange(next[0]);
+        // Current model isn't available on this provider — prefer the first
+        // starred favourite that is, then fall back to the list head.
+        if (next.length > 0 && !next.includes(model)) {
+          const fav = favModelsFor(provider).find((m) => next.includes(m));
+          onModelChange(fav ?? next[0]);
+        }
       } catch {
         if (cancelled) return;
         setConnected(false);
