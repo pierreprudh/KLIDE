@@ -204,6 +204,7 @@ function BudgetLine({ label, value }: { label: string; value: string }) {
   );
 }
 
+// Plain colored text — the tone carries state, no chip box (Design.md).
 function Badge({ label, tone }: { label: string; tone: "accent" | "danger" | "warn" | "neutral" }) {
   const color =
     tone === "accent"
@@ -216,13 +217,6 @@ function Badge({ label, tone }: { label: string; tone: "accent" | "danger" | "wa
   return (
     <span
       style={{
-        height: 20,
-        display: "inline-flex",
-        alignItems: "center",
-        padding: "0 7px",
-        borderRadius: "var(--radius-xs)",
-        border: `1px solid color-mix(in srgb, ${color} 28%, var(--border))`,
-        background: `color-mix(in srgb, ${color} 8%, transparent)`,
         color,
         fontSize: 11,
         fontFamily: "var(--font-mono)",
@@ -499,10 +493,7 @@ const taskNumberStyle = {
   height: 22,
   display: "grid",
   placeItems: "center",
-  borderRadius: "var(--radius-xs)",
-  background: "var(--bg)",
   color: "var(--fg-subtle)",
-  border: "1px solid var(--border)",
   fontSize: 11,
   fontFamily: "var(--font-mono)",
 } satisfies React.CSSProperties;

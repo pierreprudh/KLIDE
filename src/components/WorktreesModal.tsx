@@ -179,7 +179,7 @@ export function WorktreesModal({ open, workspaceRoot, onOpenWorktree, onNotice, 
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--fg-strong)", fontWeight: 600 }}>
                     {w.branch || "(detached)"}
-                    {main && <span style={{ fontSize: 10, fontWeight: 500, color: "var(--fg-subtle)", border: "1px solid var(--border)", borderRadius: 999, padding: "0 6px" }}>main checkout</span>}
+                    {main && <span style={{ fontSize: 10, fontWeight: 500, color: "var(--fg-subtle)" }}>· main checkout</span>}
                   </div>
                   <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.path}</div>
                 </div>

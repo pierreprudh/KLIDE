@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *  Generic over the position payload `P` so a caller can carry extra fields
  *  (e.g. the context tooltip's `width` / `compact`) alongside `bottom`/`left`.
  */
-export function usePortalMenu<P extends { bottom: number; left: number }>(opts: {
+export function usePortalMenu<P extends { left: number }>(opts: {
   /** Compute the portal position from the trigger's bounding rect. Return
    *  null to abort opening. */
   computePos: (triggerRect: DOMRect) => P | null;
@@ -47,10 +47,19 @@ export function usePortalMenu<P extends { bottom: number; left: number }>(opts: 
   }, []);
 
   // The portal can't follow the trigger across scroll/resize — close rather
-  // than let it drift.
+  // than let it drift. Scrolls that originate inside the menu itself are the
+  // menu's own list scrolling, not the trigger moving — leave it open.
   useEffect(() => {
     if (!open) return;
-    const onMove = () => close();
+    const onMove = (e?: Event) => {
+      if (
+        e?.type === "scroll" &&
+        e.target instanceof Node &&
+        menuRef.current?.contains(e.target)
+      )
+        return;
+      close();
+    };
     window.addEventListener("scroll", onMove, true);
     window.addEventListener("resize", onMove);
     return () => {

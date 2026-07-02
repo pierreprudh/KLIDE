@@ -32,8 +32,6 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
           style={{
             fontSize: 10,
             fontWeight: 600,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
             fontFamily: "var(--font-mono)",
             color: streaming ? "var(--accent)" : undefined,
           }}
@@ -100,7 +98,7 @@ function summarizeArgs(args: unknown): string {
   return "";
 }
 
-// `spawn_subagent` reads as a delegation, not a tool call: an accent dot, the
+// `spawn_subagent` reads as a delegation, not a tool call: a middot, the
 // @role it handed to, and the task in plain prose — expandable to the full task
 // when it's long. No JSON, no "spawn_subagent(...)" — the report follows below.
 function SubagentCallRow({ args }: { args: unknown }) {
@@ -112,7 +110,7 @@ function SubagentCallRow({ args }: { args: unknown }) {
   return (
     <details style={{ margin: "5px 0 -3px" }}>
       <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
-        <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+        <span aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0 }}>·</span>
         <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>Delegated to</span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 500, color: "var(--accent)", flexShrink: 0 }}>@{subagent}</span>
         {short && (

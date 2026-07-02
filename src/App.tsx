@@ -13,6 +13,7 @@ import { MissionControl } from "./components/MissionControl";
 // The real tier-board console (built from the prototype's winning variant C).
 import { OrchestratorConsole } from "./components/OrchestratorConsole";
 import { Sidebar } from "./components/Sidebar";
+import { FocusMode } from "./components/FocusMode";
 import { TabBar } from "./components/TabBar";
 import { EditorArea } from "./components/EditorArea";
 import { WelcomeScreen } from "./components/WelcomeScreen";
@@ -24,6 +25,7 @@ import { notify } from "./toast";
 import { eventsToConversation } from "./components/ai/eventsToMsgs";
 import { loadPanelSession } from "./components/ai/utils";
 import type { AgentEvent, ProviderId } from "./agent/types";
+import { DEFAULT_MODELS } from "./agent/providers";
 import type { Conversation, Msg } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
@@ -138,6 +140,30 @@ function App() {
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
+  // General settings — startup, files, and tab behaviour.
+  const [restoreLastProject, setRestoreLastProject] = useState(
+    () => localStorage.getItem("klide-restore-project") === "true"
+  );
+  const [autoSaveMode, setAutoSaveMode] = useState<"off" | "delay" | "blur">(() => {
+    const v = localStorage.getItem("klide-autosave");
+    return v === "delay" || v === "blur" ? v : "off";
+  });
+  const [showHiddenFiles, setShowHiddenFiles] = useState(
+    () => localStorage.getItem("klide-show-hidden") !== "false"
+  );
+  const [confirmCloseDirty, setConfirmCloseDirty] = useState(
+    () => localStorage.getItem("klide-confirm-close") !== "false"
+  );
+  // Third main screen next to Anchored and Free: a single centered AI
+  // conversation (the Claude Code / Codex desktop pattern). The editor,
+  // explorer, and terminal step back; the chat column is the workbench.
+  const [focusMode, setFocusMode] = useState(
+    () => localStorage.getItem("klide-focus-mode") === "true"
+  );
+  // Focus screen state: home (hero composer) vs the live conversation, and
+  // the hero composer's text on its way into the AI panel.
+  const [focusChatActive, setFocusChatActive] = useState(false);
+  const [focusInitialMessage, setFocusInitialMessage] = useState<string | null>(null);
   const [memoryVisible, setMemoryVisible] = useState(false);
   const [worktreesVisible, setWorktreesVisible] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -208,10 +234,14 @@ function App() {
     onEntryRenamed,
     onEntryDeleted,
     closeTab,
-    closeAllTabs,
     saveActive,
     onAgentWrote,
-  } = useEditorTabs({ notify: setFileNotice, workspaceRoot });
+  } = useEditorTabs({
+    notify: setFileNotice,
+    workspaceRoot,
+    autoSave: autoSaveMode,
+    confirmCloseDirty,
+  });
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [recentFolders, setRecentFolders] = useState<string[]>(() => {
     try {
@@ -250,7 +280,7 @@ function App() {
     setAiPanelProvider,
     setAiPanelModel,
     closeAiPanel,
-  } = usePanelLayout({ workspaceRoot, view });
+  } = usePanelLayout({ workspaceRoot, view, focusMode });
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
 
   const reloadFilesystemSkills = useCallback(async () => {
@@ -503,7 +533,11 @@ function App() {
 
   // Build the real panel for a grid cell. Reuses the same state/handlers as the
   // fixed frame, but with `fill` so each panel sizes to its cell.
-  function renderPanel(kind: PanelKind, key: string): ReactNode {
+  function renderPanel(
+    kind: PanelKind,
+    key: string,
+    opts?: { aiVariant?: "focus" }
+  ): ReactNode {
     switch (kind) {
       case "editor":
         return (
@@ -541,6 +575,7 @@ function App() {
             key={key}
             fill
             visible
+            showHidden={showHiddenFiles}
             width={panelLayout.explorer?.w ?? 280}
             workspaceRoot={workspaceRoot}
             onOpen={openFile}
@@ -596,6 +631,9 @@ function App() {
                 : null
             }
             onResumeConsumed={() => setResumeTarget(null)}
+            variant={opts?.aiVariant}
+            initialMessage={opts?.aiVariant === "focus" ? focusInitialMessage : null}
+            onInitialMessageConsumed={() => setFocusInitialMessage(null)}
           />
         );
       default:
@@ -641,20 +679,18 @@ function App() {
   // full-screen view (settings/git/etc.) back to the workbench so the welcome
   // condition (`view !== "settings" && !workspaceRoot`) actually fires.
   function closeFolder() {
-    closeAllTabs();
     setView("workbench");
     setWorkspaceRoot(null);
   }
 
-  // Single entry point for switching projects. Clearing the root (null) runs
-  // the full close-folder path; switching to a different project tears down the
-  // old project's open tabs first so only one project is ever hydrated in the
-  // webview — long-running agent runs/PTYs survive in Rust and reattach on
-  // return, so we never hold two projects' editor state in memory at once.
+  // Single entry point for switching projects. Clearing the root (null) sends
+  // you back to Welcome; switching swaps the workspace. Floating panels are
+  // persisted per project (usePanelLayout keys on workspaceRoot), so the target
+  // project's own window layout re-hydrates and the previous one is restored
+  // when you switch back — we never wipe tabs or windows on switch.
   const changeRoot = (root: string | null) => {
     if (root === null) return closeFolder();
     if (root === workspaceRoot) return;
-    closeAllTabs();
     setWorkspaceRoot(root);
   };
 
@@ -1099,8 +1135,54 @@ function App() {
     else localStorage.removeItem("klide-active-grid");
   }, [activeGridId]);
 
+  // Remember the last open project so "Reopen last project on launch"
+  // (Settings → General) has something to restore. Closing the folder on
+  // purpose (root → null) leaves the stored value alone — the next launch
+  // still reopens the project you were last working in.
   useEffect(() => {
+    if (workspaceRoot) localStorage.setItem("klide.lastRoot", workspaceRoot);
   }, [workspaceRoot]);
+
+  // Boot restore: probe the stored root first (the folder may have moved or
+  // been deleted since) and only then open it. `cur ?? last` keeps a folder
+  // the user opened while the probe was in flight.
+  useEffect(() => {
+    if (localStorage.getItem("klide-restore-project") !== "true") return;
+    const last = localStorage.getItem("klide.lastRoot");
+    if (!last) return;
+    let cancelled = false;
+    invoke("list_dir", { workspaceRoot: last, path: last })
+      .then(() => {
+        if (!cancelled) setWorkspaceRoot((cur) => cur ?? last);
+      })
+      .catch(() => {
+        /* folder gone — stay on Welcome */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("klide-restore-project", String(restoreLastProject));
+  }, [restoreLastProject]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-autosave", autoSaveMode);
+  }, [autoSaveMode]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-show-hidden", String(showHiddenFiles));
+  }, [showHiddenFiles]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-confirm-close", String(confirmCloseDirty));
+  }, [confirmCloseDirty]);
+
+  useEffect(() => {
+    localStorage.setItem("klide-focus-mode", String(focusMode));
+  }, [focusMode]);
 
   useEffect(() => {
     localStorage.setItem("klide-explorer-visible", String(explorerVisible));
@@ -1432,6 +1514,9 @@ function App() {
     { id: "word-wrap", label: "Editor: Toggle Word Wrap", action: () => { setEditorWordWrap((v) => !v); setPaletteOpen(false); } },
     { id: "line-numbers", label: "Editor: Toggle Line Numbers", action: () => { setEditorLineNumbers((v) => !v); setPaletteOpen(false); } },
     { id: "minimap", label: "Editor: Toggle Minimap", action: () => { setEditorMinimap((v) => !v); setPaletteOpen(false); } },
+    { id: "layout-anchored", label: "Layout: Anchored (IDE)", action: () => { setFocusMode(false); setAnchoredLayout(true); exitGrid(); setView("workbench"); setPaletteOpen(false); } },
+    { id: "layout-free", label: "Layout: Free (floating panels)", action: () => { setFocusMode(false); setAnchoredLayout(false); exitGrid(); setView("workbench"); setPaletteOpen(false); } },
+    { id: "layout-focus", label: "Layout: Focus (chat)", action: () => { setFocusMode(true); exitGrid(); setView("workbench"); setPaletteOpen(false); } },
     { id: "runs", label: "View: Mission Control", action: () => { setView("runs"); setPaletteOpen(false); } },
     { id: "orchestrator", label: "View: Orchestrator Preview", action: () => { setView("orchestrator"); setPaletteOpen(false); } },
     { id: "back-to-workbench", label: "View: Back to Workbench", shortcut: "Esc", action: () => { setView("workbench"); setPaletteOpen(false); } },
@@ -1533,6 +1618,15 @@ function App() {
             harnessSettings={harnessSettings}
             onHarnessSettingsChange={setHarnessSettings}
             explorerVisible={explorerVisible}
+            onExplorerVisibleChange={setExplorerVisible}
+            restoreLastProject={restoreLastProject}
+            onRestoreLastProjectChange={setRestoreLastProject}
+            autoSaveMode={autoSaveMode}
+            onAutoSaveModeChange={setAutoSaveMode}
+            showHiddenFiles={showHiddenFiles}
+            onShowHiddenFilesChange={setShowHiddenFiles}
+            confirmCloseDirty={confirmCloseDirty}
+            onConfirmCloseDirtyChange={setConfirmCloseDirty}
             customLayouts={customLayouts}
             onCustomLayoutsChange={updateCustomLayouts}
             onApplyLayout={applyLayout}
@@ -1541,7 +1635,23 @@ function App() {
           />
         ) : (
           <>
-            <ActivityBar active={activityState} onToggle={togglePanel} />
+            {/* Focus is chat-first: the icon rail steps back while the focus
+                screen itself is showing (its own rail carries navigation —
+                projects, Mission Control, profile). Overlay views opened from
+                it (Mission Control, Git) bring the rail back. */}
+            {!(focusMode && view === "workbench") && (
+            <ActivityBar
+              active={activityState}
+              onToggle={togglePanel}
+              projects={recentFolders.map((p) => ({
+                path: p,
+                name: p.split("/").filter(Boolean).pop() ?? p,
+              }))}
+              activeProjectPath={workspaceRoot}
+              onSwitchProject={changeRoot}
+              onOpenFolder={openFolderDialog}
+            />
+            )}
             {view === "git-review" ? (
               <GitReview
                 workspaceRoot={effectiveGitReviewRoot}
@@ -1578,7 +1688,7 @@ function App() {
               // Real tier-board console. workspaceRoot enables real plan-mode
               // dispatch through the slice-1 dispatcher seam.
               <OrchestratorConsole workspaceRoot={workspaceRoot} />
-            ) : activeGrid ? (
+            ) : activeGrid && !focusMode ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : null}
             {/* The workbench stays mounted across view switches so an in-flight
@@ -1588,7 +1698,7 @@ function App() {
                 via the transcript. Here it's hidden (display:none), not
                 unmounted, whenever an overlay view is showing. Grid mode owns
                 its own layout, so it's excluded. */}
-            {!activeGrid && (
+            {(!activeGrid || focusMode) && (
               <div
                 style={{
                   display: view === "workbench" ? "flex" : "none",
@@ -1597,7 +1707,78 @@ function App() {
                   minHeight: 0,
                 }}
               >
-                {panelLayout.anchored ? (
+                {focusMode ? (
+              /* Focus — the chat-first main screen: rail + hero home, and
+                 for the live conversation the same fully-wired AiPanel in
+                 its fullscreen "focus" design variant (centered reading
+                 column). One agent surface, two designs. */
+              <FocusMode
+                workspaceRoot={workspaceRoot}
+                branch={gitStatus?.branch ?? null}
+                projects={recentFolders}
+                chatActive={focusChatActive}
+                onSwitchProject={(root) => {
+                  setFocusChatActive(false);
+                  changeRoot(root);
+                }}
+                onNewChat={() => setFocusChatActive(false)}
+                onOpenConversation={(convo) => {
+                  // A conversation from another project's history brings its
+                  // project along — resuming it against the wrong workspace
+                  // would point every tool at the wrong tree.
+                  if (convo.cwd && convo.cwd !== workspaceRoot) changeRoot(convo.cwd);
+                  setResumeTarget({ panelId: aiPanels[0]?.id ?? "ai-main", convo });
+                  setFocusChatActive(true);
+                }}
+                onSubmit={(text) => {
+                  setFocusInitialMessage(text);
+                  setFocusChatActive(true);
+                }}
+                onOpenMissionControl={() => setView("runs")}
+                renderChat={() => renderPanel("ai", "focus-ai", { aiVariant: "focus" })}
+                provider={
+                  aiPanels[0]?.provider ??
+                  ((localStorage.getItem("klide.provider") as ProviderId) || "ollama")
+                }
+                onProviderChange={(p) => {
+                  const panelId = aiPanels[0]?.id ?? "ai-main";
+                  setAiPanelProvider(panelId, p);
+                  // The panel keeps its model across provider switches, but a
+                  // hero pick means "start on this provider" — reset to its
+                  // default so the pair is never mismatched.
+                  updateAiPanelModel(panelId, DEFAULT_MODELS[p] ?? "");
+                }}
+                model={aiPanels[0]?.model ?? aiModel}
+                onModelChange={(m) => updateAiPanelModel(aiPanels[0]?.id ?? "ai-main", m)}
+                effort={harnessSettings?.reflectionLevels?.[aiPanels[0]?.model ?? aiModel]}
+                onEffortChange={(v) => {
+                  const m = aiPanels[0]?.model ?? aiModel;
+                  const next = { ...(harnessSettings?.reflectionLevels ?? {}) };
+                  if (v === undefined) delete next[m];
+                  else next[m] = v;
+                  setHarnessSettings({ ...harnessSettings, reflectionLevels: next });
+                  // The AI panel prefers its own per-panel override when one
+                  // was set from its composer — drop it so the value picked
+                  // here is what the next run actually uses.
+                  const panelId = aiPanels[0]?.id ?? "ai-main";
+                  const prov =
+                    aiPanels[0]?.provider ?? localStorage.getItem("klide.provider") ?? "ollama";
+                  try {
+                    localStorage.removeItem(`klide.reflectionLevel.${panelId}.${prov}.${m}`);
+                  } catch {
+                    /* storage unavailable */
+                  }
+                }}
+                contextWindow={harnessSettings?.contextWindows?.[aiPanels[0]?.model ?? aiModel]}
+                onContextWindowChange={(w) => {
+                  const m = aiPanels[0]?.model ?? aiModel;
+                  const next = { ...(harnessSettings?.contextWindows ?? {}) };
+                  if (w === undefined) delete next[m];
+                  else next[m] = w;
+                  setHarnessSettings({ ...harnessSettings, contextWindows: next });
+                }}
+              />
+            ) : panelLayout.anchored ? (
               <AnchoredWorkbench
                 workbenchRef={workbenchRef}
                 workbenchSize={workbenchSize}
@@ -1766,6 +1947,7 @@ function App() {
                           <Sidebar
                             fill
                             visible
+                            showHidden={showHiddenFiles}
                             width={explorerRect.w}
                             workspaceRoot={workspaceRoot}
                             onOpen={openFile}
@@ -1794,6 +1976,7 @@ function App() {
                       <Sidebar
                         fill
                         visible
+                        showHidden={showHiddenFiles}
                         width={explorerRect.w}
                         workspaceRoot={workspaceRoot}
                         onOpen={openFile}
@@ -1990,6 +2173,8 @@ function App() {
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
         anchoredLayout={panelLayout.anchored !== false}
+        focusMode={focusMode}
+        onSetFocusMode={setFocusMode}
         onApplyGrid={applyGrid}
         onExitGrid={exitGrid}
         onSetAnchored={setAnchoredLayout}

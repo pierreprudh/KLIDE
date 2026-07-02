@@ -188,22 +188,9 @@ function Avatar({ name, size }: { name: string; size: number }) {
         fontWeight: 600,
         letterSpacing: "-0.01em",
         boxShadow: "inset 0 1px 0 rgba(255,255,255,0.2)",
-        position: "relative",
       }}
     >
       {initials}
-      <span
-        style={{
-          position: "absolute",
-          right: -1,
-          bottom: -1,
-          width: Math.max(8, size * 0.22),
-          height: Math.max(8, size * 0.22),
-          borderRadius: "50%",
-          background: "var(--success)",
-          border: `2px solid var(--bg-elevated)`,
-        }}
-      />
     </div>
   );
 }

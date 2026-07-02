@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
+import { Z } from "../zLayers";
 
 type View = "home" | "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "orchestrator" | "settings" | "profile";
 type Project = { path: string; name: string };
@@ -281,35 +282,132 @@ export function ActivityBar({
           alignItems: "stretch",
         }}
       >
-        {/* Home — back to the Welcome screen to switch projects. Sits above
-            the tool switcher and outside the FLIP track: it's a destination
-            ("leave this project"), not one of the tools the indicator rides
-            between. */}
-        <button
-          onClick={() => onToggle("home")}
-          title="Home — switch project"
-          aria-label="Home — switch project"
-          aria-pressed={active.home}
-          data-active={active.home}
-          className="klide-activity-bar-item"
-          style={{
-            width: 32,
-            height: 32,
-            margin: "0 auto 6px",
-            borderRadius: "var(--radius-md)",
-            display: "grid",
-            placeItems: "center",
-            color: active.home ? "var(--fg-strong)" : "var(--fg-subtle)",
-          }}
-          onMouseEnter={(e) => {
-            if (!active.home) e.currentTarget.style.color = "var(--fg-strong)";
-          }}
-          onMouseLeave={(e) => {
-            if (!active.home) e.currentTarget.style.color = "var(--fg-subtle)";
-          }}
-        >
-          <HomeIcon />
-        </button>
+        {/* Home — opens a project switcher popover (open + recent projects,
+            open-folder, back-to-welcome). Sits above the tool switcher and
+            outside the FLIP track: it's a destination, not a tool. With no
+            recents it falls straight through to the Welcome screen. */}
+        <div style={{ position: "relative", margin: "0 auto 6px" }}>
+          <button
+            onClick={() => (projects.length ? setProjectsOpen((v) => !v) : onToggle("home"))}
+            title="Projects — switch or open"
+            aria-label="Projects"
+            aria-haspopup="menu"
+            aria-expanded={projectsOpen}
+            data-active={projectsOpen}
+            className="klide-activity-bar-item"
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: "var(--radius-md)",
+              display: "grid",
+              placeItems: "center",
+              color: projectsOpen ? "var(--fg-strong)" : "var(--fg-subtle)",
+            }}
+            onMouseEnter={(e) => {
+              if (!projectsOpen) e.currentTarget.style.color = "var(--fg-strong)";
+            }}
+            onMouseLeave={(e) => {
+              if (!projectsOpen) e.currentTarget.style.color = "var(--fg-subtle)";
+            }}
+          >
+            <HomeIcon />
+          </button>
+          {projectsOpen && (
+            <>
+              {/* click-away scrim. Must clear the floating-panel band
+                  (Z.panel 1000+), so it rides on the popover tier — a plain
+                  200 falls *behind* a focused panel (see zLayers.ts). */}
+              <div
+                onClick={() => setProjectsOpen(false)}
+                style={{ position: "fixed", inset: 0, zIndex: Z.popover - 1 }}
+              />
+              <div
+                role="menu"
+                aria-label="Projects"
+                style={{
+                  position: "absolute",
+                  left: "calc(100% + 8px)",
+                  top: 0,
+                  width: 236,
+                  background: "var(--bg-elevated)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-lg)",
+                  boxShadow: "var(--panel-shadow)",
+                  padding: 6,
+                  zIndex: Z.popover,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "var(--fg-faint)",
+                    padding: "6px 8px 4px",
+                  }}
+                >
+                  Projects
+                </div>
+                {projects.map((p) => {
+                  const isActive = p.path === activeProjectPath;
+                  return (
+                    <button
+                      key={p.path}
+                      role="menuitem"
+                      title={p.path}
+                      onClick={() => {
+                        setProjectsOpen(false);
+                        if (!isActive) onSwitchProject?.(p.path);
+                      }}
+                      className="klide-project-menu-item"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "7px 8px",
+                        borderRadius: "var(--radius-md)",
+                        border: 0,
+                        cursor: "pointer",
+                        background: isActive
+                          ? "color-mix(in srgb, var(--accent) 12%, transparent)"
+                          : "transparent",
+                        color: isActive ? "var(--fg-strong)" : "var(--fg)",
+                      }}
+                    >
+                      <span style={{ color: isActive ? "var(--accent)" : "var(--fg-subtle)", flexShrink: 0 }}>
+                        <FolderIcon />
+                      </span>
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: isActive ? 600 : 500 }}>
+                        {p.name}
+                      </span>
+                    </button>
+                  );
+                })}
+                <div style={{ height: 1, background: "var(--border)", margin: "6px 4px" }} />
+                <button
+                  role="menuitem"
+                  onClick={() => { setProjectsOpen(false); onOpenFolder?.(); }}
+                  className="klide-project-menu-item"
+                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "7px 8px", borderRadius: "var(--radius-md)", border: 0, cursor: "pointer", background: "transparent", color: "var(--fg-subtle)", fontSize: 12.5 }}
+                >
+                  <span style={{ width: 18, textAlign: "center", fontSize: 15, lineHeight: 1 }}>+</span>
+                  Open folder…
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => { setProjectsOpen(false); onToggle("home"); }}
+                  className="klide-project-menu-item"
+                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "7px 8px", borderRadius: "var(--radius-md)", border: 0, cursor: "pointer", background: "transparent", color: "var(--fg-subtle)", fontSize: 12.5 }}
+                >
+                  <span style={{ width: 18, display: "grid", placeItems: "center" }}><HomeIcon /></span>
+                  Welcome screen
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         {/* Hairline notch separating Home from the tool switcher. */}
         <div
           aria-hidden

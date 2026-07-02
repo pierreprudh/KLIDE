@@ -14,7 +14,7 @@ import {
 // auto-dismiss so a result can be read (or its action taken) without racing a
 // timer.
 
-const TONE_DOT: Record<ToastTone, string> = {
+const TONE_COLOR: Record<ToastTone, string> = {
   info: "var(--fg-subtle)",
   success: "var(--success)",
   warn: "var(--warning)",
@@ -44,7 +44,7 @@ function ToastRow({ toast }: { toast: Toast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const dotColor = TONE_DOT[tone];
+  const toneColor = TONE_COLOR[tone];
 
   return (
     <div
@@ -63,6 +63,7 @@ function ToastRow({ toast }: { toast: Toast }) {
         padding: "9px 11px 9px 13px",
         borderRadius: "var(--radius-md)",
         border: "1px solid var(--panel-border)",
+        borderLeft: `2px solid ${toneColor}`,
         boxShadow: "var(--panel-shadow)",
         fontSize: 12.5,
         fontWeight: 500,
@@ -70,17 +71,6 @@ function ToastRow({ toast }: { toast: Toast }) {
         color: "var(--fg-strong)",
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          flexShrink: 0,
-          background: dotColor,
-          boxShadow: `0 0 0 3px color-mix(in srgb, ${dotColor} 18%, transparent)`,
-        }}
-      />
       <span
         style={{
           flex: 1,

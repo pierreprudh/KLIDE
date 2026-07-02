@@ -218,21 +218,14 @@ export function CheckpointPanel({ runId }: Props) {
               >
                 <span
                   style={{
-                    fontSize: 9,
+                    fontSize: 11,
                     fontWeight: 600,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
                     fontFamily: "var(--font-mono)",
                     color: entry.isCreate ? "var(--diff-add)" : "var(--accent)",
-                    background: entry.isCreate
-                      ? "color-mix(in srgb, var(--diff-add) 12%, transparent)"
-                      : "var(--accent-soft)",
-                    padding: "1px 5px",
-                    borderRadius: 3,
                     flexShrink: 0,
                   }}
                 >
-                  {entry.isCreate ? "Create" : "Edit"}
+                  {entry.isCreate ? "add" : "edit"}
                 </span>
                 <span
                   style={{

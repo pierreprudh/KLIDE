@@ -147,13 +147,12 @@ function ProgressBar({ percent }: { percent: number }) {
 // Opaque narrow panel that floats over the bottom of the conversation and
 // docks onto the composer. Narrower than the chat, so messages stay visible in
 // the side margins. No shadow — it cast a dark halo (the "black bars") in dark
-// themes; the hairline border alone defines the panel.
+// themes; the hairline border alone defines the panel. No backdrop-filter —
+// solid surface (the webview has a known backdrop-filter bug).
 const glassCard: CSSProperties = {
-  background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
+  background: "var(--bg-elevated)",
   border: "none",
   borderTop: "1px solid var(--border-strong)",
-  backdropFilter: "blur(10px)",
-  WebkitBackdropFilter: "blur(10px)",
 };
 
 // Floats just above the composer, INSIDE the conversation area. It must not
@@ -474,8 +473,7 @@ export function TodoStrip({
                         ? "1.5px solid color-mix(in srgb, var(--accent) 74%, transparent)"
                         : "1.5px solid color-mix(in srgb, var(--fg-dim) 34%, transparent)",
                     color: item.done ? "var(--bg-elevated)" : "transparent",
-                    boxShadow: active ? "0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent)" : "none",
-                    transition: "background var(--motion-med) var(--ease-out), border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)",
+                    transition: "background var(--motion-med) var(--ease-out), border-color var(--motion-med) var(--ease-out)",
                   }}
                 >
                   {item.done && <CheckIcon />}

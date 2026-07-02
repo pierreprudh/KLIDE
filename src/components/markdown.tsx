@@ -92,8 +92,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
           style={{
             fontSize: 9,
             fontWeight: 600,
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
+            textTransform: "lowercase",
             color: "var(--fg-dim)",
             fontFamily: "var(--font-mono)",
           }}

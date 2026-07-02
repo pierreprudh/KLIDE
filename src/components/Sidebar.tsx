@@ -16,6 +16,8 @@ type Props = {
   width: number;
   workspaceRoot: string | null;
   fill?: boolean;
+  /** Show dotfiles in the tree. Defaults to true (Settings → General). */
+  showHidden?: boolean;
 };
 
 type TreeEntry = {
@@ -378,6 +380,7 @@ export function Sidebar({
   width,
   workspaceRoot,
   fill,
+  showHidden = true,
 }: Props) {
   const root = workspaceRoot;
   const [entries, setEntries] = useState<TreeEntry[]>([]);
@@ -780,13 +783,16 @@ export function Sidebar({
 
   function renderEntries(list: TreeEntry[], basePath: string, depth = 0) {
     const existingNames = new Set(list.map((entry) => entry.name));
-    const mergedEntries =
+    let mergedEntries =
       root == null
         ? list
         : [
             ...list,
             ...gitVirtualEntries(root, basePath, existingNames, gitFiles),
           ];
+    if (!showHidden) {
+      mergedEntries = mergedEntries.filter((e) => !e.name.startsWith("."));
+    }
 
     // Indent per depth. The grid is fixed (chevron + icon + name +
     // decoration), and the *whole row* is offset by `depth` levels

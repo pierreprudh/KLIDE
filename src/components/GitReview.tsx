@@ -135,15 +135,17 @@ function splitPath(path: string) {
   return { name, folder: parts.join("/") };
 }
 
-function StatusDot({ label }: { label: string }) {
-  const color = statusColor(label);
+function StatusLetter({ label }: { label: string }) {
   return (
     <span
       style={{
-        width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
-        background: color, boxShadow: `0 0 0 2px color-mix(in srgb, ${color} 18%, transparent)`,
+        width: "1.2em", flexShrink: 0, textAlign: "center",
+        fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 600,
+        color: statusColor(label),
       }}
-    />
+    >
+      {label}
+    </span>
   );
 }
 
@@ -239,10 +241,16 @@ function DiffViewer({ workspaceRoot, open }: DiffViewerProps) {
   );
 }
 
-function BranchPill({ branch, ahead, behind }: { branch: string; ahead: number; behind: number }) {
+function BranchLabel({ branch, ahead, behind }: { branch: string; ahead: number; behind: number }) {
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--fg-strong)", fontSize: 12, fontWeight: 600 }}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }} />
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 12, fontWeight: 600 }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, color: "var(--fg-subtle)" }}>
+        <circle cx="6" cy="5" r="2.3" />
+        <circle cx="6" cy="19" r="2.3" />
+        <circle cx="18" cy="12" r="2.3" />
+        <path d="M6 7.3v9.4" />
+        <path d="M8.1 6.2A8.3 8.3 0 0 1 15.8 10" />
+      </svg>
       <span style={{ fontFamily: "var(--font-mono)" }}>{branch}</span>
       {ahead > 0 && <span style={{ color: "var(--success)", fontFamily: "var(--font-mono)", fontSize: 11 }}>↑{ahead}</span>}
       {behind > 0 && <span style={{ color: "var(--warning)", fontFamily: "var(--font-mono)", fontSize: 11 }}>↓{behind}</span>}
@@ -341,7 +349,7 @@ function FileRow({ file, active, onOpen, onStage, onUnstage, onDiscard, loading 
         transition: "background var(--motion-fast) var(--ease-out)",
       }}
     >
-      <StatusDot label={label} />
+      <StatusLetter label={label} />
       <div style={{ minWidth: 0 }}>
         <div style={{ color: "var(--fg)", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {name}
@@ -421,18 +429,15 @@ function SectionHeader({ title, count, onAction, actionLabel }: {
 
 type PRBadgeProps = { badge: PullRequest["badge"] };
 function PRBadge({ badge }: PRBadgeProps) {
-  const map: Record<PullRequest["badge"], { color: string; bg: string; label: string }> = {
-    open: { color: "var(--success)", bg: "color-mix(in srgb, var(--success) 18%, transparent)", label: "Open" },
-    merged: { color: "var(--accent)", bg: "color-mix(in srgb, var(--accent) 18%, transparent)", label: "Merged" },
-    closed: { color: "var(--danger)", bg: "color-mix(in srgb, var(--danger) 18%, transparent)", label: "Closed" },
-    draft: { color: "var(--fg-subtle)", bg: "var(--bg-hover)", label: "Draft" },
+  const map: Record<PullRequest["badge"], { color: string; label: string }> = {
+    open: { color: "var(--success)", label: "Open" },
+    merged: { color: "var(--accent)", label: "Merged" },
+    closed: { color: "var(--danger)", label: "Closed" },
+    draft: { color: "var(--fg-subtle)", label: "Draft" },
   };
   const m = map[badge];
   return (
-    <span style={{
-      fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase",
-      padding: "2px 7px", borderRadius: 999, color: m.color, background: m.bg,
-    }}>{m.label}</span>
+    <span style={{ fontSize: 11, fontWeight: 600, color: m.color }}>{m.label}</span>
   );
 }
 
@@ -460,7 +465,7 @@ function PRCard({ pr, selected, onSelect, onOpen, onCheckout, onMerge }: {
         <span style={{ color: "var(--fg-dim)", fontSize: 12, fontFamily: "var(--font-mono)" }}>#{pr.number}</span>
         <PRBadge badge={pr.badge} />
         {pr.isCurrentBranch && (
-          <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", padding: "2px 6px", borderRadius: 999, color: "var(--accent)", background: "color-mix(in srgb, var(--accent) 18%, transparent)" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)" }}>
             Yours
           </span>
         )}
@@ -520,7 +525,7 @@ function PRDetail({ pr, onClose, onOpen, onCheckout, onMerge }: {
           <button onClick={() => onCheckout(pr.number)} style={pillButtonStyle}>Checkout ↓</button>
         )}
         {pr.badge === "open" && (
-          <button onClick={() => onMerge(pr.number)} style={{ ...pillButtonStyle, color: "#fff", background: "var(--accent)", borderColor: "var(--accent)" }}>Merge</button>
+          <button onClick={() => onMerge(pr.number)} style={{ ...pillButtonStyle, color: "var(--control-primary-fg)", background: "var(--accent)", borderColor: "var(--accent)" }}>Merge</button>
         )}
       </div>
       {pr.body && (
@@ -534,7 +539,7 @@ function PRDetail({ pr, onClose, onOpen, onCheckout, onMerge }: {
 }
 
 const pillButtonStyle: React.CSSProperties = {
-  height: 26, padding: "0 10px", borderRadius: 999, fontSize: 11, fontWeight: 600, letterSpacing: "0.02em",
+  height: 26, padding: "0 10px", borderRadius: "var(--radius-sm)", fontSize: 11, fontWeight: 600, letterSpacing: "0.02em",
   background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--fg)",
   cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
   transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
@@ -974,10 +979,6 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
                 whiteSpace: "nowrap",
                 fontSize: 10.5,
                 color: "var(--fg-subtle)",
-                border: "1px solid var(--border)",
-                borderRadius: 999,
-                padding: "1px 7px",
-                background: "var(--bg-elevated)",
                 fontFamily: "var(--font-mono)",
               }}
             >
@@ -992,7 +993,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
               }}
               title="Switch branch"
             >
-              <BranchPill branch={log?.branch ?? reviewStatus?.branch ?? "—"} ahead={log?.ahead ?? 0} behind={log?.behind ?? 0} />
+              <BranchLabel branch={log?.branch ?? reviewStatus?.branch ?? "—"} ahead={log?.ahead ?? 0} behind={log?.behind ?? 0} />
             </button>
             {branchMenuOpen && log && (
               <BranchMenu
@@ -1024,12 +1025,12 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
             style={{
               height: 32, padding: "0 14px", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 12, cursor: "pointer",
               background: commitMessage.trim() && stagedFiles.length > 0 && !commitLoading ? "var(--accent)" : "var(--bg-hover)",
-              color: commitMessage.trim() && stagedFiles.length > 0 && !commitLoading ? "#fff" : "var(--fg-subtle)",
+              color: commitMessage.trim() && stagedFiles.length > 0 && !commitLoading ? "var(--control-primary-fg)" : "var(--fg-subtle)",
               border: "1px solid " + (commitMessage.trim() && stagedFiles.length > 0 && !commitLoading
-                ? "color-mix(in srgb, var(--accent) 60%, #000)"
+                ? "color-mix(in srgb, var(--accent) 60%, var(--inset-ring))"
                 : "var(--border)"),
               boxShadow: commitMessage.trim() && stagedFiles.length > 0 && !commitLoading
-                ? "inset 0 1px 0 rgba(255,255,255,0.20), inset 0 0 0 1px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.05)"
+                ? "inset 0 1px 0 var(--inset-highlight), inset 0 0 0 1px var(--inset-ring), 0 1px 2px var(--inset-drop)"
                 : "none",
               transition: "background var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)",
             }}
@@ -1075,14 +1076,12 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           <span
             aria-hidden
             style={{
-              width: 6, height: 6, borderRadius: "50%",
-              background: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)",
-              boxShadow: actionMessage.kind === "ok"
-                ? "0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent)"
-                : "0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent)",
-              flexShrink: 0,
+              color: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)",
+              fontWeight: 600, flexShrink: 0,
             }}
-          />
+          >
+            {actionMessage.kind === "ok" ? "✓" : "×"}
+          </span>
           {actionMessage.text}
         </div>
       )}
@@ -1136,13 +1135,10 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
               style={{
                 height: 36, padding: "0 14px", display: "flex", alignItems: "center", gap: 8,
                 borderBottom: "1px solid var(--border)",
-                background: "color-mix(in srgb, var(--bg-elevated) 70%, transparent)",
                 fontSize: 12, color: "var(--fg-subtle)",
-                backdropFilter: "blur(12px) saturate(1.1)",
-                WebkitBackdropFilter: "blur(12px) saturate(1.1)",
               }}
             >
-              <StatusDot label={statusLabel(reviewStatus?.files.find((f) => f.path === open.path)?.status ?? "")} />
+              <StatusLetter label={statusLabel(reviewStatus?.files.find((f) => f.path === open.path)?.status ?? "")} />
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
               <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)" }}>{open.staged ? "staged" : "working"}</span>
             </div>
@@ -1159,10 +1155,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
             style={{
               height: 36, padding: "0 12px", display: "flex", alignItems: "center", gap: 8,
               borderBottom: "1px solid var(--border)",
-              background: "color-mix(in srgb, var(--bg-elevated) 70%, transparent)",
-              color: "var(--fg-subtle)", fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase",
-              backdropFilter: "blur(12px) saturate(1.1)",
-              WebkitBackdropFilter: "blur(12px) saturate(1.1)",
+              color: "var(--fg-dim)", fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase",
             }}
           >
             <img src="./github-invertocat.svg" alt="" width={14} height={14} style={{ color: "var(--fg)", flexShrink: 0 }} />
@@ -1276,7 +1269,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
             style={{
               width: 460, maxWidth: "90%", padding: 18, borderRadius: "var(--radius-md)",
               border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12,
-              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+              boxShadow: "var(--panel-shadow)",
             }}
           >
             <div style={{ fontWeight: 700, fontSize: 13, color: "var(--fg-strong)" }}>Open a pull request</div>
@@ -1310,8 +1303,8 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
                   height: 32, padding: "0 14px", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 12,
                   cursor: prComposer.title.trim() ? "pointer" : "not-allowed",
                   background: prComposer.title.trim() ? "var(--accent)" : "var(--bg-hover)",
-                  color: prComposer.title.trim() ? "#fff" : "var(--fg-subtle)",
-                  border: "1px solid " + (prComposer.title.trim() ? "color-mix(in srgb, var(--accent) 60%, #000)" : "var(--border)"),
+                  color: prComposer.title.trim() ? "var(--control-primary-fg)" : "var(--fg-subtle)",
+                  border: "1px solid " + (prComposer.title.trim() ? "color-mix(in srgb, var(--accent) 60%, var(--inset-ring))" : "var(--border)"),
                 }}
               >
                 Create PR

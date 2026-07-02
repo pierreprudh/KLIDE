@@ -21,8 +21,7 @@ export function DelegateConsole({
   return (
     <div style={{
       border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)",
-      background: "color-mix(in srgb, var(--bg-elevated) 88%, #000 12%)",
-      boxShadow: "inset 0 1px 0 var(--panel-highlight), 0 12px 34px rgba(38, 38, 32, 0.12)",
+      background: "color-mix(in srgb, var(--bg-elevated) 88%, var(--terminal-bg) 12%)",
       overflow: "hidden",
     }}>
       <div style={{
@@ -31,15 +30,10 @@ export function DelegateConsole({
         color: "var(--fg-subtle)", fontSize: 11,
       }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <span aria-hidden style={{
-            width: 7, height: 7, borderRadius: "50%",
-            background: active ? "var(--accent)" : "var(--fg-dim)",
-            boxShadow: active ? "0 0 14px var(--accent)" : "none",
-          }} />
           <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>Delegate Console</span>
           <span>{provider}</span>
         </span>
-        <span>{active ? "Running" : "Finished"}</span>
+        <span style={{ color: active ? "var(--accent)" : "var(--fg-subtle)" }}>{active ? "Running" : "Finished"}</span>
       </div>
       <pre style={{
         margin: 0, minHeight: 96, maxHeight: 260, overflow: "auto", padding: "10px 11px",

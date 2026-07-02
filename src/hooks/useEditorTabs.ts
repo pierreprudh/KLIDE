@@ -26,11 +26,24 @@ function filename(path: string): string {
  * externally-changed files. The host passes a `notify` sink for status-bar
  * messages; everything else about a file's lifecycle lives here.
  */
-export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRoot: string | null }) {
-  const { notify, workspaceRoot } = opts;
+export type AutoSaveMode = "off" | "delay" | "blur";
+
+export function useEditorTabs(opts: {
+  notify: (msg: string) => void;
+  workspaceRoot: string | null;
+  /** Auto-save dirty tabs: after a 1s typing pause, or when the window loses focus. */
+  autoSave?: AutoSaveMode;
+  /** Ask before closing a tab with unsaved changes. Defaults to true. */
+  confirmCloseDirty?: boolean;
+}) {
+  const { notify, workspaceRoot, autoSave = "off", confirmCloseDirty = true } = opts;
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeIdx, setActiveIdx] = useState<number>(-1);
   const active = activeIdx >= 0 ? tabs[activeIdx] : null;
+
+  // Latest tabs for timers/listeners (auto-save reads state outside render).
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
 
   // Monaco instance + the position a search-result click wants to land on.
   // The reveal runs in an effect so it fires after the tab's content commits.
@@ -97,16 +110,64 @@ export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRo
     else setActiveIdx(Math.min(Math.max(activeIdx, 0), next.length - 1));
   }
 
-  // Drop every open tab at once — used when closing the folder / returning to
-  // the welcome screen so no stale paths from the old project linger.
-  function closeAllTabs() {
-    setTabs([]);
-    setActiveIdx(-1);
+  // Write one tab to disk without any dialog — the auto-save path. Tabs
+  // flagged `externalChanged` are skipped on purpose: silently overwriting a
+  // file that moved under the user is exactly what auto-save must never do;
+  // that conflict stays with the explicit ⌘S confirm.
+  async function persistTab(path: string) {
+    if (!workspaceRoot) return;
+    const tab = tabsRef.current.find((t) => t.path === path);
+    if (!tab || !tab.dirty || tab.externalChanged) return;
+    const code = tab.code;
+    try {
+      await writeWorkspaceTextFile(workspaceRoot, path, code);
+      setTabs((cur) =>
+        cur.map((t) =>
+          // Only clear dirty if nothing was typed while the write was in
+          // flight — otherwise the newer edits keep the tab dirty.
+          t.path === path && t.code === code
+            ? { ...t, dirty: false, externalChanged: false, diskCode: code }
+            : t
+        )
+      );
+    } catch (e) {
+      notify(`Auto-save failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
+
+  // Auto-save "delay": debounce 1s after the last keystroke in the active tab.
+  useEffect(() => {
+    if (autoSave !== "delay" || !active?.dirty) return;
+    const path = active.path;
+    const timer = window.setTimeout(() => void persistTab(path), 1_000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSave, active?.path, active?.code, active?.dirty, workspaceRoot]);
+
+  // Auto-save "delay": switching tabs is a natural save point — flush the tab
+  // you just left (its pending debounce timer was cleared by the cleanup above).
+  useEffect(() => {
+    if (autoSave !== "delay") return;
+    for (const t of tabsRef.current) {
+      if (t.dirty && t.path !== active?.path) void persistTab(t.path);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSave, activeIdx]);
+
+  // Auto-save "blur": flush every dirty tab when the window loses focus.
+  useEffect(() => {
+    if (autoSave !== "blur") return;
+    const flush = () => {
+      for (const t of tabsRef.current) if (t.dirty) void persistTab(t.path);
+    };
+    window.addEventListener("blur", flush);
+    return () => window.removeEventListener("blur", flush);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSave, workspaceRoot]);
 
   async function closeTab(i: number) {
     const closing = tabs[i];
-    if (closing?.dirty) {
+    if (closing?.dirty && confirmCloseDirty) {
       // window.confirm is a no-op in Tauri's webview (always falsy) —
       // use the dialog plugin's native confirm instead.
       try {
@@ -231,7 +292,6 @@ export function useEditorTabs(opts: { notify: (msg: string) => void; workspaceRo
     onEntryRenamed,
     onEntryDeleted,
     closeTab,
-    closeAllTabs,
     saveActive,
     onAgentWrote,
   };

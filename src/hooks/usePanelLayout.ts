@@ -71,8 +71,12 @@ function readNumberSetting(key: string, fallback: number, min: number, max: numb
 export function usePanelLayout(opts: {
   workspaceRoot: string | null;
   view: string;
+  /** Focus mode swaps the workbench host node out entirely (the focus screen
+   *  doesn't attach `workbenchRef`), so the ResizeObserver must re-attach when
+   *  it toggles — same reason as `view`. */
+  focusMode: boolean;
 }) {
-  const { workspaceRoot, view } = opts;
+  const { workspaceRoot, view, focusMode } = opts;
 
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const [workbenchSize, setWorkbenchSize] = useState({ w: 0, h: 0 });
@@ -94,31 +98,36 @@ export function usePanelLayout(opts: {
   useEffect(() => {
     const el = workbenchRef.current;
     if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      const next = { w: Math.round(width), h: Math.round(height) };
+    // A 0×0 measurement is never a real workbench — it's the observer firing
+    // for a node that just got detached (focus-mode swap) or display:none'd
+    // (overlay views). Committing it would make every subsequent clampRect
+    // collapse panels to 1×1 at the origin and persist the wreckage, so keep
+    // the last real size instead.
+    const commit = (w: number, h: number) => {
+      const next = { w: Math.round(w), h: Math.round(h) };
+      if (next.w === 0 || next.h === 0) return;
       setWorkbenchSize((prev) =>
         prev.w === next.w && prev.h === next.h ? prev : next
       );
+    };
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      commit(entry.contentRect.width, entry.contentRect.height);
     });
     ro.observe(el);
     const rect = el.getBoundingClientRect();
-    const next = { w: Math.round(rect.width), h: Math.round(rect.height) };
-    setWorkbenchSize((prev) =>
-      prev.w === next.w && prev.h === next.h ? prev : next
-    );
+    commit(rect.width, rect.height);
     return () => ro.disconnect();
     // `workbenchRef` is attached to a *different* DOM node per mode:
     // AnchoredWorkbench's root (anchored), the free-mode div (free), or
-    // nothing (grid). When the host node swaps, the old observer is left
-    // watching a detached node and `workbenchSize` goes stale — floating
+    // nothing (grid, focus). When the host node swaps, the old observer is
+    // left watching a detached node and `workbenchSize` goes stale — floating
     // panels then mis-clamp on interaction and the explorer won't open.
     // Re-run on every dimension that swaps the host so we always observe
     // the live node. (A `view` change happened to mask this — that's why a
     // Mission Control round-trip "fixed" it.)
-  }, [view, workspaceRoot, panelLayout.anchored]);
+  }, [view, workspaceRoot, panelLayout.anchored, focusMode]);
 
   function fallbackAiRect(): PanelRect {
     const w = Math.min(360, Math.max(1, workbenchSize.w));

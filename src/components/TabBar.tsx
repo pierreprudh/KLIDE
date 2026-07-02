@@ -110,7 +110,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               borderRight: isActive
                 ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
                 : "1px solid transparent",
-              borderRadius: isActive ? "10px 10px 0 0" : "8px",
+              borderRadius: isActive ? "8px 8px 0 0" : "8px",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
               fontSize: 13,
               fontWeight: isActive ? 500 : 400,
@@ -148,21 +148,15 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
             </span>
             {t.externalChanged ? (
               // Conflict takes precedence over the dirty dot: the file changed
-              // on disk while open. A hollow warning ring distinguishes it from
-              // the filled sage dirty dot — review before saving over it.
+              // on disk while open. Same glyph as the dirty indicator, but in
+              // warning color — review before saving over it.
               <span
                 title="Changed on disk — review before saving"
                 aria-label="Changed on disk"
-                style={{
-                  flexShrink: 0,
-                  marginLeft: -1,
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  border: "1.5px solid var(--warning)",
-                  boxSizing: "border-box",
-                }}
-              />
+                style={{ color: "var(--warning)", flexShrink: 0, marginLeft: -2 }}
+              >
+                •
+              </span>
             ) : t.dirty ? (
               <span
                 style={{ color: "var(--accent)", flexShrink: 0, marginLeft: -2 }}

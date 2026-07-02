@@ -200,30 +200,13 @@ function RoutineBadge({ run }: { run: Pick<Run, "title"> }) {
     <Tooltip label={routine.label}>
     <span
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
         flexShrink: 0,
-        height: 16,
-        padding: "0 5px",
-        borderRadius: 999,
-        border: "1px solid color-mix(in srgb, var(--accent) 24%, var(--border))",
-        background: "color-mix(in srgb, var(--accent-soft) 30%, transparent)",
         color: "var(--fg-subtle)",
         fontFamily: "var(--font-mono)",
         fontSize: 9,
         lineHeight: 1,
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          width: 4,
-          height: 4,
-          borderRadius: "50%",
-          background: "var(--accent)",
-        }}
-      />
       {routine.cadence === "routine" ? "Routine" : routine.cadence}
     </span>
     </Tooltip>
@@ -246,22 +229,14 @@ function modelShortName(model: string | null): string | null {
 function ModelProviderBadge({ model }: { model: string | null }) {
   const provider = modelProvider(model);
   if (!provider) return null;
-  const color = provider === "opencode-go" ? "#D97757" : "var(--fg-dim)";
   return (
     <span
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3,
         fontSize: 9,
         fontWeight: 600,
         fontFamily: "var(--font-mono)",
         letterSpacing: "0.04em",
-        color,
-        padding: "1px 5px",
-        borderRadius: 3,
-        background: `color-mix(in srgb, ${provider === "opencode-go" ? "#D97757" : "var(--fg-dim)"} 10%, var(--bg-elevated))`,
-        border: `1px solid color-mix(in srgb, ${provider === "opencode-go" ? "#D97757" : "var(--border)"} 25%, var(--border))`,
+        color: "var(--fg-subtle)",
         flexShrink: 0,
       }}
     >
@@ -787,14 +762,10 @@ function RunRow({
           : "transparent",
         transform: dismissAction ? `translateX(${dragX}px)` : undefined,
         touchAction: dismissAction ? "pan-y" : undefined,
-        boxShadow:
-          dismissAction && dragX < 0
-            ? "8px 0 24px color-mix(in srgb, #000 11%, transparent)"
-            : undefined,
         transition:
           dragging
             ? "background var(--motion-fast) var(--ease-out)"
-            : "background var(--motion-fast) var(--ease-out), transform 420ms cubic-bezier(.18,.88,.22,1), box-shadow 420ms cubic-bezier(.18,.88,.22,1)",
+            : "background var(--motion-fast) var(--ease-out), transform 420ms cubic-bezier(.18,.88,.22,1)",
         position: "relative",
         zIndex: swipeOpen ? 1 : 3,
       }}
@@ -817,34 +788,11 @@ function RunRow({
                 letterSpacing: "0.08em",
                 textTransform: "uppercase",
                 color: "var(--accent)",
-                background: "color-mix(in srgb, var(--accent) 14%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--accent) 28%, transparent)",
-                padding: "1px 5px",
-                borderRadius: 999,
                 flexShrink: 0,
                 fontFamily: "var(--font-mono)",
               }}
             >
               Task
-            </span>
-          )}
-          {run.archived && (
-            <span
-              style={{
-                fontSize: 9,
-                fontWeight: 600,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: "var(--fg-subtle)",
-                background: "var(--bg-hover)",
-                border: "1px solid var(--border)",
-                padding: "1px 5px",
-                borderRadius: 999,
-                flexShrink: 0,
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              Archived
             </span>
           )}
           <RoutineBadge run={run} />
@@ -861,6 +809,11 @@ function RunRow({
           >
             {run.title}
           </span>
+          {run.archived && (
+            <span style={{ fontSize: 11, color: "var(--fg-subtle)", flexShrink: 0 }}>
+              · archived
+            </span>
+          )}
         </span>
           {!compact && run.lastEvent ? (
             <span
@@ -871,27 +824,14 @@ function RunRow({
                 gap: 6,
                 fontSize: 11.5,
                 // For a live run the last event IS the current activity — colour
-                // it accent and pair it with a pulse so it reads as "now", not
-                // "last did". Finished runs keep the quiet muted treatment.
+                // it accent so it reads as "now", not "last did". Finished runs
+                // keep the quiet muted treatment.
                 color: run.status === "running" ? "var(--accent)" : "var(--fg-muted)",
                 lineHeight: 1.3,
                 overflow: "hidden",
                 minWidth: 0,
               }}
             >
-              {run.status === "running" && (
-                <span
-                  aria-hidden
-                  style={{
-                    width: 5,
-                    height: 5,
-                    borderRadius: "50%",
-                    flexShrink: 0,
-                    background: "var(--accent)",
-                    animation: "klide-pulse 1.6s var(--ease-soft) infinite",
-                  }}
-                />
-              )}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {run.lastEvent}
               </span>
@@ -1000,8 +940,8 @@ function RunRow({
           border: "none",
           borderRadius: "var(--radius-sm)",
           background: dismissAction.danger
-            ? "linear-gradient(135deg, color-mix(in srgb, var(--danger) 24%, var(--bg-elevated)), color-mix(in srgb, var(--danger) 14%, var(--bg)))"
-            : "linear-gradient(135deg, color-mix(in srgb, var(--fg-subtle) 13%, var(--bg-elevated)), var(--bg-hover))",
+            ? "color-mix(in srgb, var(--danger) 18%, var(--bg-elevated))"
+            : "var(--bg-hover)",
           color: dismissAction.danger ? "var(--danger)" : "var(--fg-muted)",
           fontSize: 9,
           fontFamily: "var(--font-mono)",
@@ -1245,11 +1185,11 @@ function FilterChip({
       style={{
         fontSize: 11,
         padding: "3px 9px",
-        borderRadius: 999,
-        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        border: active ? "1px solid var(--border-strong)" : "1px solid var(--border)",
         color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-        background: active ? "var(--bg-selected)" : "transparent",
-        transition: "background var(--motion-fast) var(--ease-out)",
+        background: "transparent",
+        transition: "border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
       }}
     >
       {label}
@@ -1705,7 +1645,7 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
                     lineHeight: 1.6,
                     wordBreak: "break-word",
                     padding: isUser ? "10px 12px" : "12px 14px",
-                    borderRadius: isUser ? "16px 16px 5px 16px" : "16px 16px 16px 5px",
+                    borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
                     border: "1px solid var(--border)",
                     background: isUser
                       ? "color-mix(in srgb, var(--accent-soft) 55%, var(--bg-elevated))"
@@ -1878,7 +1818,6 @@ function ConversationAvatar({
   user?: boolean;
 }) {
   const initials = user ? initialsOf(label || "Me") : null;
-  const hue = user ? hueFromName(label || "Me") : 0;
   const modelLogoRule =
     source === "opencode" && model
       ? MODEL_LOGO_RULES.find((r) => r.pattern.test(model))
@@ -1903,17 +1842,14 @@ function ConversationAvatar({
         width: 34,
         height: 34,
         borderRadius: "50%",
-        background: user
-          ? `linear-gradient(140deg, oklch(0.78 0.10 ${hue}), oklch(0.62 0.12 ${(hue + 40) % 360}))`
-          : "transparent",
-        color: user ? "var(--bg-elevated)" : runAgentColor({ source, provider }),
+        background: user ? "var(--accent-soft)" : "transparent",
+        color: user ? "var(--fg-strong)" : runAgentColor({ source, provider }),
         display: "grid",
         placeItems: "center",
         fontSize: user ? 12 : undefined,
         fontFamily: user ? "var(--font-ui)" : undefined,
         fontWeight: user ? 650 : undefined,
         justifySelf: user ? "start" : "end",
-        boxShadow: user ? "inset 0 1px 0 rgba(255,255,255,0.2)" : undefined,
       }}
     >
       {user ? initials : logo}
@@ -1927,12 +1863,6 @@ function initialsOf(name: string): string {
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-function hueFromName(name: string): number {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return h % 360;
 }
 
 function compactToolValue(value: unknown): string | null {
@@ -2414,7 +2344,7 @@ function ModelSelect({
             background: "var(--bg-elevated)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius-md)",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+            boxShadow: "var(--panel-shadow)",
             zIndex: 20,
           }}
         >
@@ -2434,10 +2364,9 @@ function ModelSelect({
                       fontSize: 10,
                       letterSpacing: "0.06em",
                       textTransform: "uppercase",
-                      color: "var(--fg-subtle)",
+                      color: "var(--fg-dim)",
                       padding: "8px 12px 4px",
                       fontFamily: "var(--font-mono)",
-                      background: "var(--bg)",
                       borderBottom: "1px solid var(--border)",
                     }}
                   >
@@ -3389,7 +3318,7 @@ function ActionButton({
         padding: "5px 12px",
         borderRadius: "var(--radius-sm)",
         border: `1px solid ${primary && !disabled ? "var(--accent)" : "var(--border)"}`,
-        color: disabled ? "var(--fg-subtle)" : primary ? "#fff" : "var(--fg)",
+        color: disabled ? "var(--fg-subtle)" : primary ? "var(--control-primary-fg)" : "var(--fg)",
         background: primary && !disabled ? "var(--accent)" : "transparent",
         opacity: disabled ? 0.55 : 1,
         cursor: disabled ? "default" : "pointer",
@@ -3638,7 +3567,7 @@ function ProjectSwitcher({
             position: "absolute", top: "calc(100% + 5px)", right: 0, zIndex: 50,
             minWidth: 180, maxHeight: "min(50vh, 320px)", overflowY: "auto",
             background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
-            borderRadius: 8, boxShadow: "0 1px 1px rgba(28,28,28,0.04), 0 12px 32px rgba(28,28,28,0.12)", padding: 4,
+            borderRadius: 8, boxShadow: "var(--panel-shadow)", padding: 4,
           }}
         >
           <ProjectOption label="All projects" active={value === "all"} onClick={() => pick("all")} />
@@ -3751,7 +3680,6 @@ function LiveSessionsStrip({
           const canReattach = isDelegateId(s.provider) && !!onReattach;
           const idle = s.status === "idle";
           const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : "Active";
-          const statusColor = idle ? "var(--warning)" : "var(--accent)";
           const reattach = () =>
             canReattach &&
             onReattach!({
@@ -3808,23 +3736,12 @@ function LiveSessionsStrip({
                   gap: 5,
                   maxWidth: 88,
                   fontSize: 11,
-                  color: idle ? "var(--warning)" : "var(--fg-dim)",
+                  color: idle ? "var(--fg-subtle)" : "var(--accent)",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                 }}
               >
-                <span
-                  aria-hidden
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: statusColor,
-                    boxShadow: idle ? "none" : "0 0 10px color-mix(in srgb, var(--accent) 60%, transparent)",
-                    flexShrink: 0,
-                  }}
-                />
                 {idle ? "Idle" : "Active"}
               </span>
               <span

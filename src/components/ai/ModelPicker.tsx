@@ -499,7 +499,11 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
               uses the soft accent tint, hover uses bg-hover, and the
               keyboard cursor parks on the focused row regardless of
               hover. */}
-          <div ref={listRef} style={{ flex: 1, overflow: "auto", padding: 4 }}>
+          {/* minHeight: 0 lets this flex child shrink to the menu's
+              maxHeight — without it, min-height:auto keeps the list at
+              content height and the menu's overflow:hidden clips it,
+              so the list never gets to scroll. */}
+          <div ref={listRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 4 }}>
             {filtered.length === 0 ? (
               <div
                 style={{
@@ -635,8 +639,6 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
                             fontSize: 9,
                             color: "var(--warning)",
                             fontWeight: 600,
-                            letterSpacing: 0.04,
-                            textTransform: "uppercase",
                             flexShrink: 0,
                           }}
                         >
@@ -717,8 +719,6 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
                                 style={{
                                   color: "var(--warning)",
                                   fontWeight: 600,
-                                  letterSpacing: 0.04,
-                                  textTransform: "uppercase",
                                   fontSize: 9,
                                 }}
                               >

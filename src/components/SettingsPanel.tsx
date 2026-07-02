@@ -104,6 +104,15 @@ type Props = {
   harnessSettings?: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; testAfterEditCommand?: string; serverConcurrency?: number; autoMemoryOnRunDone?: boolean };
   onHarnessSettingsChange?: (settings: { chatPrompt?: string; planPrompt?: string; goalPrompt?: string; toolOverrides?: Record<string, boolean>; contextWindows?: Record<string, number>; effortBudgets?: Record<string, number>; reflectionLevels?: Record<string, string>; maxParallelTools?: number; maxTurns?: number; commandTimeoutSecs?: number; testAfterEditCommand?: string; serverConcurrency?: number; autoMemoryOnRunDone?: boolean }) => void;
   explorerVisible: boolean;
+  onExplorerVisibleChange: (visible: boolean) => void;
+  restoreLastProject: boolean;
+  onRestoreLastProjectChange: (enabled: boolean) => void;
+  autoSaveMode: "off" | "delay" | "blur";
+  onAutoSaveModeChange: (mode: "off" | "delay" | "blur") => void;
+  showHiddenFiles: boolean;
+  onShowHiddenFilesChange: (enabled: boolean) => void;
+  confirmCloseDirty: boolean;
+  onConfirmCloseDirtyChange: (enabled: boolean) => void;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
   onApplyLayout: (layout: ResolvedLayout) => void;
@@ -112,7 +121,7 @@ type Props = {
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "opencode";
+type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "omp";
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -121,6 +130,16 @@ type SubscriptionStatus = {
   detail: string;
   commandPath?: string | null;
   loginOptions: string[];
+};
+
+// The signed-in ollama.com account, read from the local daemon
+// (mirrors `local_servers::OllamaAccountStatus` serde camelCase output).
+type OllamaAccountStatus = {
+  running: boolean;
+  signedIn: boolean;
+  name?: string | null;
+  plan?: string | null;
+  detail: string;
 };
 
 // Account snapshots (mirrors `accounts::Account*` serde camelCase output).
@@ -196,24 +215,42 @@ const subscriptionProviders: {
   title: string;
   command: string;
   description: string;
+  /** Klide can snapshot/switch saved logins for this CLI (accounts.rs). */
+  accounts: boolean;
+  /** One line under "Model Options" saying where the model list comes from. */
+  modelNote: string;
 }[] = [
   {
     id: "claude-code",
     title: "Claude Code",
     command: "claude",
     description: "Subscription login, Console login, SSO, or long-lived setup token.",
+    accounts: true,
+    modelNote: "Loaded from Claude Code's local model usage cache.",
   },
   {
     id: "codex",
     title: "Codex",
     command: "codex",
     description: "ChatGPT login, device auth, API key, or access token.",
+    accounts: true,
+    modelNote: "Loaded from the current Codex model cache when available.",
   },
   {
     id: "opencode",
     title: "OpenCode",
     command: "opencode",
     description: "Interactive OpenCode CLI, launched as a real delegate terminal.",
+    accounts: true,
+    modelNote: "OpenCode chooses models inside its own interactive CLI.",
+  },
+  {
+    id: "omp",
+    title: "Oh My Pi",
+    command: "omp",
+    description: "Terminal coding agent routing 40+ providers — keys come from your shell environment.",
+    accounts: false,
+    modelNote: "Loaded from omp's model cache (providers it could actually reach).",
   },
 ];
 
@@ -233,13 +270,13 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
 // One orienting line per section, shown under the page title. Keeps each pane
 // self-explanatory the way Linear / Vercel settings do, without a help click.
 const SECTION_SUBTITLES: Record<SectionId, string> = {
-  general: "Panel visibility and workbench-wide defaults.",
+  general: "Startup, files, tabs, and workbench-wide defaults.",
   appearance: "Theme and how Klide follows your system light/dark setting.",
   layout: "Panel sizes and saved workbench layout presets.",
   ai: "How the assistant edits files, runs tools, and reasons.",
   "local-ai": "Run models on-device with Ollama and MLX — no key needed.",
   api: "Hosted provider keys, stored in your macOS Keychain.",
-  subscription: "Connect Claude Code, Codex, and OpenCode CLI logins.",
+  subscription: "Connect Claude Code, Codex, OpenCode, and Oh My Pi CLI logins — plus your ollama.com account.",
   editor: "Monaco editor preferences — font, gutter, and wrapping.",
   terminal: "The built-in shell's appearance and behaviour.",
   stats: "Token usage and cost across your agent runs.",
@@ -252,6 +289,9 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
 type SettingIndexEntry = { label: string; section: SectionId; keywords: string };
 const settingsIndex: SettingIndexEntry[] = [
   { label: "Panel visibility", section: "general", keywords: "explorer sidebar terminal ai panel show hide toggle" },
+  { label: "Startup", section: "general", keywords: "startup launch reopen restore last project welcome" },
+  { label: "Auto-save", section: "general", keywords: "autosave auto save delay focus blur dirty unsaved" },
+  { label: "Files & tabs", section: "general", keywords: "hidden files dotfiles confirm close unsaved tabs" },
   { label: "Theme", section: "appearance", keywords: "theme dark light color colour palette appearance" },
   { label: "Automatic light/dark theme", section: "appearance", keywords: "auto theme system light dark switch" },
   { label: "Panel sizes", section: "layout", keywords: "layout width height size resize panel" },
@@ -270,7 +310,7 @@ const settingsIndex: SettingIndexEntry[] = [
   { label: "Auto-draft memory on run done", section: "ai", keywords: "memory draft auto note handoff summarize pending review" },
   { label: "Local servers (Ollama / MLX)", section: "local-ai", keywords: "local ollama mlx server start stop concurrency model" },
   { label: "API keys", section: "api", keywords: "api key keychain anthropic openai mistral xai token secret" },
-  { label: "CLI subscriptions", section: "subscription", keywords: "subscription claude code codex opencode login account auth cli" },
+  { label: "CLI subscriptions", section: "subscription", keywords: "subscription claude code codex opencode omp oh my pi ollama signin login account auth cli" },
   { label: "Editor font size", section: "editor", keywords: "editor font size text monaco" },
   { label: "Line numbers", section: "editor", keywords: "editor line numbers gutter" },
   { label: "Word wrap", section: "editor", keywords: "editor word wrap soft" },
@@ -360,10 +400,10 @@ function Row({
   );
 }
 
-// A segmented pill control — one-click choice across a small ladder of
-// options, the premium alternative to a free-text number field. The first
-// option is the "off / auto / default" sentinel (value `undefined`); the
-// active pill is lifted with the accent tint.
+// A flat text-tab row — one-click choice across a small ladder of options,
+// the premium alternative to a free-text number field. The first option is
+// the "off / auto / default" sentinel (value `undefined`); the active option
+// carries a 2px accent underline.
 function Segmented({
   options,
   value,
@@ -384,10 +424,6 @@ function Segmented({
       style={{
         display: "inline-flex",
         gap: 2,
-        padding: 2,
-        borderRadius: 999,
-        border: "1px solid var(--border-strong)",
-        background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
       }}
     >
       {options.map((opt) => {
@@ -403,28 +439,30 @@ function Segmented({
             style={{
               height: 26,
               minWidth: 38,
-              padding: "0 11px",
-              borderRadius: 999,
+              padding: "0 9px",
+              borderRadius: "var(--radius-sm)",
               border: "none",
+              borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`,
               cursor: disabled ? "not-allowed" : "pointer",
               fontSize: 11.5,
               fontWeight: active ? 600 : 500,
               letterSpacing: "0.01em",
-              color: disabled ? "var(--fg-dim)" : active ? "var(--accent)" : "var(--fg-subtle)",
-              background: active
-                ? "color-mix(in srgb, var(--accent-soft) 60%, transparent)"
-                : "transparent",
-              boxShadow: active
-                ? "inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent)"
-                : "none",
+              color: disabled ? "var(--fg-dim)" : active ? "var(--fg-strong)" : "var(--fg-subtle)",
+              background: "transparent",
               transition:
                 "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
             }}
             onMouseEnter={(e) => {
-              if (!active && !disabled) e.currentTarget.style.color = "var(--fg-strong)";
+              if (!active && !disabled) {
+                e.currentTarget.style.color = "var(--fg-strong)";
+                e.currentTarget.style.background = "var(--bg-hover)";
+              }
             }}
             onMouseLeave={(e) => {
-              if (!active && !disabled) e.currentTarget.style.color = "var(--fg-subtle)";
+              if (!active && !disabled) {
+                e.currentTarget.style.color = "var(--fg-subtle)";
+                e.currentTarget.style.background = "transparent";
+              }
             }}
           >
             {opt.label}
@@ -608,9 +646,10 @@ function ThemeSwatch({ colors, size = 26 }: { colors: string[]; size?: number })
   );
 }
 
-// A horizontal set of selectable theme chips — swatch + name in a pill. The
-// premium replacement for a native <select>: you see each theme's palette at a
-// glance and pick in one click. The active chip carries the accent tint + ring.
+// A horizontal set of selectable theme options — swatch + name in a flat
+// hairline row. The premium replacement for a native <select>: you see each
+// theme's palette at a glance and pick in one click. The active option carries
+// a stronger border + text.
 function ThemeChips({
   value,
   options,
@@ -643,14 +682,13 @@ function ThemeChips({
               gap: 8,
               height: 34,
               padding: "0 12px 0 7px",
-              borderRadius: 999,
+              borderRadius: "var(--radius-sm)",
               cursor: "pointer",
-              border: `1px solid ${active ? "color-mix(in srgb, var(--accent) 42%, var(--border))" : "var(--border)"}`,
-              background: active ? "var(--accent-soft)" : "var(--bg-elevated)",
-              color: active ? "var(--accent)" : "var(--fg-strong)",
+              border: `1px solid ${active ? "var(--border-strong)" : "var(--border)"}`,
+              background: "var(--bg-elevated)",
+              color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
               fontSize: 12.5,
               fontWeight: active ? 600 : 500,
-              boxShadow: active ? "inset 0 1px 0 var(--panel-highlight)" : "none",
               transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
             }}
           >
@@ -722,7 +760,7 @@ function Stepper({
         alignItems: "center",
         gap: 2,
         padding: 2,
-        borderRadius: 999,
+        borderRadius: "var(--radius-md)",
         border: "1px solid var(--border-strong)",
         background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)",
       }}
@@ -866,10 +904,15 @@ function LinkButton({
   );
 }
 
-function CodePill({ children }: { children: ReactNode }) {
+function CodeText({ children }: { children: ReactNode }) {
   return (
     <span
-      className="klide-code-chip"
+      style={{
+        color: "var(--fg-subtle)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 12,
+        whiteSpace: "nowrap",
+      }}
     >
       {children}
     </span>
@@ -931,7 +974,7 @@ function CenteredLoader({ label }: { label?: string }) {
   );
 }
 
-function StatusPill({
+function StatusText({
   tone,
   children,
 }: {
@@ -939,19 +982,14 @@ function StatusPill({
   children: ReactNode;
 }) {
   const color =
-    tone === "ok" ? "var(--accent)" : tone === "warn" ? "var(--warning)" : "var(--fg-subtle)";
-  const background =
-    tone === "ok"
-      ? "var(--accent-soft)"
-      : tone === "warn"
-      ? "color-mix(in srgb, var(--warning) 12%, var(--bg-hover))"
-      : "var(--bg-hover)";
+    tone === "ok" ? "var(--success)" : tone === "warn" ? "var(--warning)" : "var(--fg-subtle)";
   return (
     <span
-      className="klide-status-chip"
       style={{
-        background,
         color,
+        fontSize: 12,
+        fontWeight: 500,
+        whiteSpace: "nowrap",
       }}
     >
       {children}
@@ -959,20 +997,36 @@ function StatusPill({
   );
 }
 
-function ModelChips({ models }: { models: string[] }) {
+function ModelList({ models, max }: { models: string[]; max?: number }) {
+  const shown = max ? models.slice(0, max) : models;
+  const hidden = models.length - shown.length;
   return (
     <div
       style={{
         display: "flex",
         flexWrap: "wrap",
         justifyContent: "flex-end",
-        gap: 6,
+        alignItems: "baseline",
+        columnGap: 6,
+        rowGap: 2,
         maxWidth: 420,
       }}
     >
-      {models.map((model) => (
-        <CodePill key={model}>{model}</CodePill>
+      {shown.map((model, i) => (
+        <span key={model} style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+          {i > 0 && (
+            <span aria-hidden style={{ color: "var(--fg-dim)" }}>
+              ·
+            </span>
+          )}
+          <CodeText>{model}</CodeText>
+        </span>
       ))}
+      {hidden > 0 && (
+        <span style={{ fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>
+          + {hidden} more
+        </span>
+      )}
     </div>
   );
 }
@@ -1133,25 +1187,25 @@ function ApiKeyRow({
     }
   }
 
-  const pill =
+  const statusText =
     verify === "checking" ? (
-      <StatusPill tone="idle">Checking…</StatusPill>
+      <StatusText tone="idle">Checking…</StatusText>
     ) : verify === "ok" ? (
-      <StatusPill tone="ok">Verified</StatusPill>
+      <StatusText tone="ok">Verified</StatusText>
     ) : verify === "fail" ? (
-      <StatusPill tone="warn">Unverified</StatusPill>
+      <StatusText tone="warn">Unverified</StatusText>
     ) : status.source === "keychain" ? (
-      <StatusPill tone="ok">Saved</StatusPill>
+      <StatusText tone="ok">Saved</StatusText>
     ) : status.source === "reference" ? (
       status.hasKey ? (
-        <StatusPill tone="ok">Linked</StatusPill>
+        <StatusText tone="ok">Linked</StatusText>
       ) : (
-        <StatusPill tone="warn">Unresolved</StatusPill>
+        <StatusText tone="warn">Unresolved</StatusText>
       )
     ) : status.source === "env" ? (
-      <StatusPill tone="warn">From env</StatusPill>
+      <StatusText tone="warn">From env</StatusText>
     ) : (
-      <StatusPill tone="idle">Not set</StatusPill>
+      <StatusText tone="idle">Not set</StatusText>
     );
 
   const description = error
@@ -1174,7 +1228,7 @@ function ApiKeyRow({
       description={description}
       control={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {pill}
+          {statusText}
           <MethodToggle method={method} onChange={setMethod} />
           <input
             type={method === "ref" ? "text" : "password"}
@@ -1974,24 +2028,24 @@ function CustomEndpointRow({
         <div style={{ padding: "0 18px 14px 40px", display: "grid", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {loading ? (
-              <StatusPill tone="idle">Checking…</StatusPill>
+              <StatusText tone="idle">Checking…</StatusText>
             ) : error ? (
-              <StatusPill tone="warn">Unreachable</StatusPill>
+              <StatusText tone="warn">Unreachable</StatusText>
             ) : (
-              <StatusPill tone="ok">{`${count} ${count === 1 ? "model" : "models"}`}</StatusPill>
+              <StatusText tone="ok">{`${count} ${count === 1 ? "model" : "models"}`}</StatusText>
             )}
             {keyStatus.source === "keychain" ? (
-              <StatusPill tone="ok">Token saved</StatusPill>
+              <StatusText tone="ok">Token saved</StatusText>
             ) : keyStatus.source === "env" ? (
-              <StatusPill tone="ok">Token from env</StatusPill>
+              <StatusText tone="ok">Token from env</StatusText>
             ) : keyStatus.source === "reference" ? (
               keyStatus.hasKey ? (
-                <StatusPill tone="ok">Token from .env</StatusPill>
+                <StatusText tone="ok">Token from .env</StatusText>
               ) : (
-                <StatusPill tone="warn">Reference unresolved</StatusPill>
+                <StatusText tone="warn">Reference unresolved</StatusText>
               )
             ) : (
-              <StatusPill tone="idle">No token</StatusPill>
+              <StatusText tone="idle">No token</StatusText>
             )}
           </div>
           <div style={{ fontSize: 12, color: "var(--fg-subtle)", wordBreak: "break-all" }}>
@@ -2076,15 +2130,8 @@ function CustomEndpointRow({
                           <span
                             style={{
                               flexShrink: 0,
-                              fontSize: 10,
-                              fontWeight: 600,
-                              letterSpacing: "0.03em",
-                              textTransform: "uppercase",
+                              fontSize: 10.5,
                               color: "var(--fg-subtle)",
-                              background: "var(--bg-hover)",
-                              border: "1px solid var(--border)",
-                              padding: "1px 6px",
-                              borderRadius: 999,
                               fontFamily: "var(--font-mono, monospace)",
                             }}
                           >
@@ -2430,10 +2477,10 @@ function LocalServerRow({
     }
   }
 
-  const pill = running ? (
-    <StatusPill tone="ok">Running</StatusPill>
+  const statusText = running ? (
+    <StatusText tone="ok">Running</StatusText>
   ) : (
-    <StatusPill tone="idle">Stopped</StatusPill>
+    <StatusText tone="idle">Stopped</StatusText>
   );
 
   return (
@@ -2442,7 +2489,7 @@ function LocalServerRow({
       description={error ? error : running ? "Server is reachable on localhost." : "Server is not running. Start it to enable chat."}
       control={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {pill}
+          {statusText}
           <button
             onClick={() => void toggle()}
             disabled={starting}
@@ -2657,7 +2704,7 @@ function AccountControl({
                 width: menuWidth,
                 padding: 6,
                 borderRadius: "var(--radius-md)",
-                boxShadow: "0 12px 36px rgba(0,0,0,0.32)",
+                boxShadow: "var(--panel-shadow)",
                 display: "flex",
                 flexDirection: "column",
                 gap: 2,
@@ -2800,6 +2847,15 @@ export function SettingsPanel({
   harnessSettings,
   onHarnessSettingsChange,
   explorerVisible,
+  onExplorerVisibleChange,
+  restoreLastProject,
+  onRestoreLastProjectChange,
+  autoSaveMode,
+  onAutoSaveModeChange,
+  showHiddenFiles,
+  onShowHiddenFilesChange,
+  confirmCloseDirty,
+  onConfirmCloseDirtyChange,
   customLayouts,
   onCustomLayoutsChange,
   onApplyLayout,
@@ -2841,6 +2897,7 @@ export function SettingsPanel({
   const [subscriptionModels, setSubscriptionModels] = useState<
     Partial<Record<SubscriptionProviderId, string[]>>
   >({});
+  const [ollamaAccount, setOllamaAccount] = useState<OllamaAccountStatus | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
 
@@ -2919,6 +2976,10 @@ export function SettingsPanel({
 
   async function refreshSubscriptionConnections() {
     setConnectionLoading(true);
+    const ollamaPromise = invoke<OllamaAccountStatus>("ollama_account_status").then(
+      (status) => setOllamaAccount(status),
+      () => setOllamaAccount(null)
+    );
     const entries = await Promise.all(
       subscriptionProviders.map(async (provider) => {
         const [statusResult, modelsResult] = await Promise.allSettled([
@@ -2950,6 +3011,7 @@ export function SettingsPanel({
     setSubscriptionModels(
       Object.fromEntries(entries.map((entry) => [entry.id, entry.models]))
     );
+    await ollamaPromise;
     setConnectionLoading(false);
   }
 
@@ -3230,8 +3292,78 @@ export function SettingsPanel({
           </header>
 
           <Section id="general" active={activeSection} mounted={visitedSections.has("general")}>
+            <SettingBlock title="Startup">
+              <Panel>
+                <Row
+                  title="Reopen last project"
+                  description="Open the project you were last working in when Klide launches, instead of the welcome screen."
+                  control={
+                    <Toggle
+                      checked={restoreLastProject}
+                      onChange={onRestoreLastProjectChange}
+                      label="Reopen last project"
+                    />
+                  }
+                />
+              </Panel>
+            </SettingBlock>
+            <SettingBlock title="Files">
+              <Panel>
+                <Row
+                  title="Auto-save"
+                  description="Save edited files after a 1-second typing pause, or when the window loses focus. Files changed on disk are never overwritten silently."
+                  control={
+                    <Segmented
+                      label="Auto-save"
+                      value={autoSaveMode}
+                      options={[
+                        { label: "Off", value: "off" },
+                        { label: "After delay", value: "delay" },
+                        { label: "On focus loss", value: "blur" },
+                      ]}
+                      onChange={(v) =>
+                        onAutoSaveModeChange(v === "delay" || v === "blur" ? v : "off")
+                      }
+                    />
+                  }
+                />
+                <Row
+                  title="Show hidden files"
+                  description="Show dotfiles (.env, .gitignore, .klide) in the file explorer."
+                  control={
+                    <Toggle
+                      checked={showHiddenFiles}
+                      onChange={onShowHiddenFilesChange}
+                      label="Show hidden files"
+                    />
+                  }
+                />
+                <Row
+                  title="Confirm before closing unsaved tabs"
+                  description="Ask before a tab with unsaved changes is closed and its edits discarded."
+                  control={
+                    <Toggle
+                      checked={confirmCloseDirty}
+                      onChange={onConfirmCloseDirtyChange}
+                      label="Confirm before closing unsaved tabs"
+                    />
+                  }
+                />
+              </Panel>
+            </SettingBlock>
             <SettingBlock title="Panels">
               <Panel>
+                <Row
+                  title="Show explorer"
+                  description="Display the file explorer on the left side of the workbench."
+                  control={
+                    <Toggle
+                      checked={explorerVisible}
+                      onChange={onExplorerVisibleChange}
+                      label="Show explorer"
+                    />
+                  }
+                />
                 <Row
                   title="Show AI panel"
                   description="Display the assistant panel on the right side of the workbench."
@@ -3577,9 +3709,6 @@ export function SettingsPanel({
                               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {p.name}
                               </span>
-                              {isActive && (
-                                <span style={{ marginLeft: "auto", width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
-                              )}
                             </button>
                           );
                         })}
@@ -3845,25 +3974,29 @@ export function SettingsPanel({
                                   alignItems: "center",
                                   gap: 6,
                                   height: 27,
-                                  padding: "0 10px",
-                                  borderRadius: 999,
-                                  border: `1px solid ${enabled ? "color-mix(in srgb, var(--accent) 32%, var(--border))" : "var(--border)"}`,
-                                  background: enabled ? "var(--accent-soft)" : "var(--bg-elevated)",
-                                  color: enabled ? "var(--accent)" : "var(--fg-subtle)",
+                                  padding: "0 8px",
+                                  borderRadius: "var(--radius-sm)",
+                                  border: "none",
+                                  background: "transparent",
+                                  color: enabled ? "var(--fg-strong)" : "var(--fg-dim)",
                                   fontSize: 11.5,
                                   fontWeight: enabled ? 600 : 500,
                                   fontFamily: "var(--font-mono)",
                                   cursor: "pointer",
-                                  transition: "background 0.12s ease, border-color 0.12s ease, color 0.12s ease",
+                                  transition: "background 0.12s ease, color 0.12s ease",
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = "var(--bg-hover)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = "transparent";
                                 }}
                               >
                                 <span aria-hidden style={{ display: "grid", placeItems: "center", width: 11, height: 11, flexShrink: 0 }}>
-                                  {enabled ? (
+                                  {enabled && (
                                     <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
                                       <path d="M2.5 6.2l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                                     </svg>
-                                  ) : (
-                                    <span style={{ width: 6, height: 6, borderRadius: "50%", border: "1px solid var(--border-strong)" }} />
                                   )}
                                 </span>
                                 {tool}
@@ -3960,12 +4093,12 @@ export function SettingsPanel({
                   <Row
                     title="Managed by Klide"
                     description="Klide can start and stop the server process. If the server is already running externally, it will be detected and left alone."
-                    control={<CodePill>Process</CodePill>}
+                    control={<CodeText>Process</CodeText>}
                   />
                   <Row
                     title="MLX default model"
                     description="The Start button uses the default model. Change the active model in the AI panel dropdown after the server is running."
-                    control={<CodePill>Model</CodePill>}
+                    control={<CodeText>Model</CodeText>}
                   />
                 </Panel>
               </SettingBlock>
@@ -3998,12 +4131,12 @@ export function SettingsPanel({
                   <Row
                     title="Secret boundary"
                     description="Keys are stored in the OS keychain and read only by Rust — they never enter the React webview."
-                    control={<CodePill>src-tauri</CodePill>}
+                    control={<CodeText>src-tauri</CodeText>}
                   />
                   <Row
                     title="Tool support"
                     description="These providers support chat and tool calls over the OpenAI-compatible API."
-                    control={<CodePill>Build</CodePill>}
+                    control={<CodeText>Build</CodeText>}
                   />
                 </Panel>
               </SettingBlock>
@@ -4024,16 +4157,43 @@ export function SettingsPanel({
                         title={provider.title}
                         description={status?.detail || provider.description}
                         control={
-                          <AccountControl
-                            provider={provider.id}
-                            title={provider.title}
-                            connected={!!status?.connected}
-                          />
+                          provider.accounts ? (
+                            <AccountControl
+                              provider={provider.id}
+                              title={provider.title}
+                              connected={!!status?.connected}
+                            />
+                          ) : (
+                            <StatusText tone={status?.connected ? "ok" : "idle"}>
+                              {status?.connected ? "Ready" : "Not installed"}
+                            </StatusText>
+                          )
                         }
                         leading={<ProviderLogo id={provider.id as ProviderId} />}
                       />
                     );
                   })}
+                  <Row
+                    title="Ollama"
+                    description={
+                      ollamaAccount?.detail ??
+                      "Sign in to ollama.com for cloud models and model pushes."
+                    }
+                    control={
+                      <StatusText
+                        tone={
+                          ollamaAccount?.signedIn ? "ok" : ollamaAccount?.running ? "warn" : "idle"
+                        }
+                      >
+                        {ollamaAccount?.signedIn
+                          ? ollamaAccount.name ?? "Signed in"
+                          : ollamaAccount?.running
+                          ? "Not signed in"
+                          : "Server offline"}
+                      </StatusText>
+                    }
+                    leading={<ProviderLogo id={"ollama" as ProviderId} />}
+                  />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Connection Options">
@@ -4052,11 +4212,17 @@ export function SettingsPanel({
                             ? `CLI path: ${status.commandPath}`
                             : provider.description
                         }
-                        control={<ModelChips models={options} />}
+                        control={<ModelList models={options} />}
                         leading={<ProviderLogo id={provider.id as ProviderId} />}
                       />
                     );
                   })}
+                  <Row
+                    title="Ollama"
+                    description="Sign in opens a browser; sign out clears the local session."
+                    control={<ModelList models={["ollama signin", "ollama signout"]} />}
+                    leading={<ProviderLogo id={"ollama" as ProviderId} />}
+                  />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Model Options">
@@ -4067,18 +4233,12 @@ export function SettingsPanel({
                       <Row
                         key={provider.id}
                         title={provider.title}
-                        description={
-                          provider.id === "claude-code"
-                            ? "Loaded from Claude Code's local model usage cache."
-                            : provider.id === "codex"
-                            ? "Loaded from the current Codex model cache when available."
-                            : "OpenCode chooses models inside its own interactive CLI."
-                        }
+                        description={provider.modelNote}
                         control={
                           models.length > 0 ? (
-                            <ModelChips models={models} />
+                            <ModelList models={models} max={8} />
                           ) : (
-                            <StatusPill tone="idle">Unavailable</StatusPill>
+                            <StatusText tone="idle">Unavailable</StatusText>
                           )
                         }
                         leading={<ProviderLogo id={provider.id as ProviderId} />}
@@ -4092,7 +4252,7 @@ export function SettingsPanel({
                   <Row
                     title="Read-only bridge"
                     description="Subscription CLIs can answer with your logged-in account without bypassing Klide diff review."
-                    control={<CodePill>Plan</CodePill>}
+                    control={<CodeText>Plan</CodeText>}
                   />
                   <Row
                     title="Refresh status"
@@ -4213,17 +4373,16 @@ export function SettingsPanel({
 
 type StatsMetric = "conversations" | "tokens" | "cost";
 
-// Brand hues we're confident about, keyed by AI provider id OR delegate
-// source. Only distinct, recognisable colors live here — Anthropic's
-// terracotta, OpenRouter blue, Mistral orange, Oh-My-Pi violet. Providers
-// whose brand is essentially monochrome (OpenAI, xAI, Codex) are deliberately
-// absent so they fall to the neutral ramp instead of inventing a color.
+// Chart-ramp steps assigned stably per AI provider id OR delegate source, so
+// a provider keeps the same hue across renders and metric switches. Spaced
+// steps (1/3/5/7) keep neighbours distinguishable; providers not listed here
+// fall to the neutral ramp instead.
 const PROVIDER_BRAND_COLOR: Record<string, string> = {
-  anthropic: "#D97757",
-  "claude-code": "#D97757",
-  mistral: "#FA520F",
-  openrouter: "#4A6CF7",
-  omp: "#7C6BAE",
+  anthropic: "var(--chart-1)",
+  "claude-code": "var(--chart-1)",
+  mistral: "var(--chart-3)",
+  openrouter: "var(--chart-5)",
+  omp: "var(--chart-7)",
 };
 
 // Graduated neutral steps for providers with no brand hue. Cycled by order of
@@ -4608,7 +4767,7 @@ function UsageHistogram({
                     background: "var(--bg-elevated)",
                     border: "1px solid var(--border-strong)",
                     borderRadius: 7,
-                    boxShadow: "0 4px 14px rgba(0, 0, 0, 0.16)",
+                    boxShadow: "var(--panel-shadow)",
                     fontFamily: "var(--font-mono)",
                     fontSize: 11,
                   }}

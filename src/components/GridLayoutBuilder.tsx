@@ -367,7 +367,7 @@ export function GridLayoutBuilder() {
                 gridRow: `${candidate.y + 1} / span ${candidate.h}`,
                 borderRadius: "var(--radius-sm)",
                 border: `2px solid ${candidateOk ? "var(--accent)" : "var(--danger)"}`,
-                background: candidateOk ? "var(--accent-soft)" : "rgba(192,57,43,0.14)",
+                background: candidateOk ? "var(--accent-soft)" : "color-mix(in srgb, var(--danger) 14%, transparent)",
               }}
             />
           </div>
@@ -392,7 +392,7 @@ export function GridLayoutBuilder() {
             display: "flex",
             alignItems: "center",
             gap: 7,
-            boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
+            boxShadow: "var(--panel-shadow)",
           }}
         >
           <ShapeGlyph w={dragShape.w} h={dragShape.h} />

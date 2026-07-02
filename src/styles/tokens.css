@@ -566,27 +566,6 @@ select.klide-field {
   transform: translateX(18px);
 }
 
-.klide-status-chip,
-.klide-code-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--bg-hover);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.klide-code-chip {
-  color: var(--fg-strong);
-  font-family: var(--font-mono);
-  font-weight: 400;
-}
-
 .klide-kbd {
   margin-left: 2px;
   min-height: 18px;
@@ -1468,36 +1447,6 @@ select.klide-field {
   }
 }
 
-.ai-user-bubble-queued {
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 18%, transparent);
-  animation: ai-queue-pulse 2.2s var(--ease-soft) infinite;
-}
-
-.ai-user-bubble-running {
-  animation:
-    ai-queue-flow 2.4s linear infinite,
-    ai-queue-pulse 1.9s var(--ease-soft) infinite;
-}
-
-@keyframes ai-queue-flow {
-  from {
-    background-position: 0% 50%;
-  }
-  to {
-    background-position: 220% 50%;
-  }
-}
-
-@keyframes ai-queue-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 12%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
-  }
-}
-
 .workbench-main {
   padding: 2px 0;
   transition:
@@ -1569,17 +1518,6 @@ select.klide-field {
   }
 }
 
-/* Soft pulse for an actively-running agent's status dot (Mission Control) */
-@keyframes klide-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
 /* Thought-process disclosure: the chevron flips up when the reasoning is
    expanded. The block itself is borderless (a hairline left-rule carries the
    body) so a long run reads as a calm timeline, not a stack of cards. */
@@ -1624,8 +1562,8 @@ select.klide-field {
 }
 
 /* (No motion keyframe for the jump-to-latest chevron — the static
-   placement is the affordance. klide-pulse still drives the
-   streaming dot beside it.) */
+   placement is the affordance; while streaming the chevron itself
+   takes the accent color.) */
 
 /* Per-message meta footer (duration · tokens) — barely-there until the
    reader actually wants it. */
@@ -2678,6 +2616,16 @@ select.klide-field {
   overflow: hidden;
   padding: 2px 0;
 }
+/* Project switcher popover (ActivityBar home button) — quiet hover fill. */
+.klide-project-menu-item {
+  transition: background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+.klide-project-menu-item:hover {
+  background: var(--bg-selected, color-mix(in srgb, var(--fg) 7%, transparent)) !important;
+  color: var(--fg-strong) !important;
+}
+
 .klide-explorer-header-workspace[data-empty="true"] {
   /* Reserve a sliver of height when no folder is open so the header
      doesn't collapse and the action button stays optically centred. */
@@ -3001,6 +2949,69 @@ select.klide-field {
 
 @media (prefers-reduced-motion: reduce) {
   .klide-popover {
+    animation: none;
+  }
+}
+
+/* ============================================================ Focus mode */
+/* The chat-first main screen: rail + hero home + fullscreen conversation.
+   Motion is choreography, not decoration: the rail settles in from its
+   hairline, hero elements rise in beats (title → composer → cards, the
+   welcome keyframe), and home ⇄ chat crossfades as one surface. */
+
+.klide-focus-rail {
+  animation: klide-focus-rail-in var(--motion-slow) var(--ease-soft) both;
+}
+
+@keyframes klide-focus-rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.klide-focus-rise {
+  animation: klide-welcome-rise 0.5s var(--ease-soft) both;
+}
+
+.klide-focus-rise[data-beat="1"] {
+  animation-delay: 70ms;
+}
+
+.klide-focus-rise[data-beat="2"] {
+  animation-delay: 140ms;
+}
+
+.klide-focus-chat-in {
+  animation: klide-focus-chat-in var(--motion-slow) var(--ease-out) both;
+}
+
+@keyframes klide-focus-chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The rail's search field reveals as chrome; rows lean on background/color
+   transitions — no per-row keyframes. */
+.klide-focus-search {
+  animation: chrome-enter var(--motion-med) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-focus-rail,
+  .klide-focus-rise,
+  .klide-focus-chat-in,
+  .klide-focus-search {
     animation: none;
   }
 }

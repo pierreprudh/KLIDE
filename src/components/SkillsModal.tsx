@@ -138,7 +138,7 @@ function inline(text: string): ReactNode[] {
       out.push(<strong key={mdKey++} style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{m[1]}</strong>);
     } else {
       out.push(
-        <code key={mdKey++} className="klide-code-chip">{m[2]}</code>
+        <code key={mdKey++} style={{ fontFamily: "var(--font-mono)", fontSize: "0.9em", color: "var(--fg-strong)", background: "var(--bg-hover)", padding: "1px 4px", borderRadius: "var(--radius-xs)" }}>{m[2]}</code>
       );
     }
     last = m.index + m[0].length;
@@ -241,7 +241,7 @@ function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; labe
         transition: "background var(--motion-med) var(--ease-out)",
       }}
     >
-      <span style={{ position: "absolute", top: 2, left: on ? 14 : 2, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left var(--motion-med) var(--ease-out)" }} />
+      <span style={{ position: "absolute", top: 2, left: on ? 14 : 2, width: 14, height: 14, borderRadius: "50%", background: "var(--control-primary-fg)", transition: "left var(--motion-med) var(--ease-out)" }} />
     </button>
   );
 }
@@ -677,7 +677,11 @@ function SkillsPane({
                       {groupBadge(s)}
                     </span>
                   )}
-                  {s.builtin && <span style={pillStyle()}>Built-in</span>}
+                  {s.builtin && (
+                    <span style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
+                      Built-in
+                    </span>
+                  )}
                   <span style={{ flex: 1 }} />
                   <span style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
                     {s.tools.length}/{tools.length} tools
@@ -714,10 +718,6 @@ function SkillsPane({
 function groupBadge(s: Skill): string {
   if (s.group) return s.group;
   return s.fromFile ? "Local" : "Custom";
-}
-
-function pillStyle(): CSSProperties {
-  return { fontSize: 9.5, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--fg-dim)", border: "1px solid var(--border)", borderRadius: "var(--radius-xs)", padding: "1px 5px", fontWeight: 500 };
 }
 
 /* ----------------------------------------------------------- detail (view) */
@@ -781,18 +781,17 @@ function SkillDetail({
         </blockquote>
       )}
 
-      {/* Allowed tools grid */}
+      {/* Allowed tools list */}
       {skill.tools.length > 0 && (
         <section style={{ marginTop: 28 }}>
           <SectionLabel>Allowed tools</SectionLabel>
-          <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6 }}>
-            {skill.tools.map((id) => {
-              return (
-                <div key={id} className="klide-status-chip" style={{ minHeight: 26, padding: "0 9px", fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--fg)" }}>
-                  {id}
-                </div>
-              );
-            })}
+          <div style={{ marginTop: 10, fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--fg)", lineHeight: 1.9 }}>
+            {skill.tools.map((id, i) => (
+              <span key={id} style={{ whiteSpace: "nowrap" }}>
+                {i > 0 && <span style={{ color: "var(--fg-dim)", whiteSpace: "normal" }}>{" · "}</span>}
+                {id}
+              </span>
+            ))}
           </div>
         </section>
       )}
@@ -1019,7 +1018,7 @@ function ToolsView({
               <h2 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "var(--fg-strong)", fontFamily: "var(--font-mono)", letterSpacing: "-0.01em" }}>
                 {tool.id}
               </h2>
-              <span className="klide-status-chip" style={{ minHeight: 22, padding: "0 8px", fontSize: 10.5, fontFamily: "var(--font-mono)" }}>
+              <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", color: WRITE_TOOL_IDS.has(tool.id) ? "var(--warning)" : "var(--fg-subtle)" }}>
                 {WRITE_TOOL_IDS.has(tool.id) ? "Write" : "Read-only"}
               </span>
             </div>
@@ -1039,9 +1038,10 @@ function ToolsView({
                 {usedBy.length === 0 ? (
                   <div style={{ fontSize: 13, color: "var(--fg-subtle)" }}>No skills currently allow this tool.</div>
                 ) : (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {usedBy.map((s) => (
-                      <span key={s.id} className="klide-status-chip" style={{ minHeight: 26, padding: "0 9px", fontSize: 11.5 }}>
+                  <div style={{ fontSize: 11.5, color: "var(--fg)", lineHeight: 1.9 }}>
+                    {usedBy.map((s, i) => (
+                      <span key={s.id} style={{ whiteSpace: "nowrap" }}>
+                        {i > 0 && <span style={{ color: "var(--fg-dim)", whiteSpace: "normal" }}>{" · "}</span>}
                         {s.name}
                       </span>
                     ))}

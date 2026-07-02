@@ -206,12 +206,6 @@ function useRealDispatch(workspaceRoot: string | null) {
 const fmtUsd = (n: number) => (n === 0 ? "$0" : `$${n.toFixed(2)}`);
 const fmtMin = (ms: number) => `${Math.round(ms / 60_000)}m`;
 
-// ── Shared surface treatments ─────────────────────────────────────────────
-// One faint lift for elevated surfaces (Stripe's whisper shadow) + an inset for
-// recessed tracks. Defined once so every card/panel/lane reads identically.
-const CARD_LIFT = "inset 0 1px 0 var(--panel-highlight), 0 1px 1px rgba(28, 28, 28, 0.025)";
-const INSET_TRACK = "inset 0 1px 2px rgba(28, 28, 28, 0.045)";
-
 function prefersReducedMotion() {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
@@ -257,7 +251,7 @@ function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey
     if (el) setPill({ left: el.offsetLeft, width: el.offsetWidth });
   }, [mode]);
   return (
-    <div style={{ position: "relative", display: "inline-flex", padding: 3, gap: 2, background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: INSET_TRACK }}>
+    <div style={{ position: "relative", display: "inline-flex", padding: 3, gap: 2, background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
       {pill && (
         <span
           aria-hidden
@@ -269,8 +263,7 @@ function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey
             width: pill.width,
             background: "var(--bg-elevated)",
             border: "1px solid var(--border)",
-            borderRadius: 7,
-            boxShadow: "0 1px 2px rgba(28, 28, 28, 0.06)",
+            borderRadius: "var(--radius-md)",
             transition: "left var(--motion-med) var(--ease-spring), width var(--motion-med) var(--ease-spring)",
           }}
         />
@@ -289,7 +282,7 @@ function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey
               padding: "7px 13px",
               fontSize: 12,
               fontWeight: active ? 600 : 500,
-              borderRadius: 7,
+              borderRadius: "var(--radius-md)",
               background: "transparent",
               color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
               transition: "color var(--motion-med) var(--ease-out)",
@@ -304,26 +297,24 @@ function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey
 }
 
 // ── Atoms ───────────────────────────────────────────────────────────────────
-// Status: sage = live, amber = needs you, brick = failed, muted = idle/done.
+// Status: sage = live, brick = failed, muted = idle/done — plain status words
+// (the running card also carries a sage left spine), no dots or halos.
 // "done" recedes to a quiet muted check so the live work stays the focus.
 function StatusBadge({ status }: { status: CardStatus }) {
   if (status === "done") return <span style={{ display: "inline-flex", color: "var(--fg-subtle)" }}><IconCheck size={11} /></span>;
   const color = status === "error" ? "var(--danger)" : status === "running" ? "var(--accent)" : "var(--fg-dim)";
   return (
     <span
-      aria-hidden
       style={{
-        width: 7,
-        height: 7,
-        borderRadius: 999,
-        background: status === "idle" ? "transparent" : color,
-        border: status === "idle" ? "1.5px solid var(--fg-dim)" : "none",
-        // Soft halo on the live dot so it reads as a beacon, not just a dot.
-        boxShadow: status === "running" ? `0 0 0 3px color-mix(in srgb, ${color} 20%, transparent)` : undefined,
-        display: "inline-block",
-        animation: status === "running" ? "klide-pulse 1.1s ease-in-out infinite" : undefined,
+        fontSize: 10,
+        fontFamily: "var(--font-mono)",
+        letterSpacing: "0.04em",
+        color,
+        lineHeight: 1,
       }}
-    />
+    >
+      {status === "error" ? "error" : status === "running" ? "live" : "idle"}
+    </span>
   );
 }
 
@@ -535,7 +526,7 @@ function ModelChooser({
                     <button key={it.id} role="menuitem" onMouseEnter={() => showProvider(it.id)} onClick={() => showProvider(it.id)} style={leftItem(on)}>
                       <span style={{ display: "inline-flex", flexShrink: 0 }}><ProviderLogo id={it.id} size={14} /></span>
                       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-                      {chosen && <span aria-hidden style={{ width: 5, height: 5, borderRadius: 999, background: "var(--accent)", flexShrink: 0 }} />}
+                      {chosen && <span style={{ display: "inline-flex", color: "var(--accent)", flexShrink: 0 }}><IconCheck size={10} /></span>}
                       <span style={{ display: "inline-flex", color: "var(--fg-dim)", flexShrink: 0 }}><IconChevron size={8} /></span>
                     </button>
                   );
@@ -628,7 +619,7 @@ function BudgetMeter({ spent, max }: { spent: number; max: number | null }) {
         <span style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em", color: over ? "var(--danger)" : "var(--fg-strong)" }}>{fmtUsd(spent)}</span>
         {max != null && <span style={{ fontSize: 12, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>/ {fmtUsd(max)}</span>}
       </div>
-      <div style={{ height: 6, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", boxShadow: INSET_TRACK }}>
+      <div style={{ height: 6, borderRadius: 999, background: "var(--bg-hover)", overflow: "hidden", border: "1px solid var(--border)" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: tone, transition: "width 360ms var(--ease-out)" }} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontSize: 10.5, color: "var(--fg-dim)" }}>
@@ -744,37 +735,19 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
           animation: klide-orch-in 460ms var(--ease-spring) backwards;
           transition:
             transform var(--motion-fast) var(--ease-out),
-            border-color var(--motion-fast) var(--ease-out),
-            box-shadow var(--motion-med) var(--ease-out);
+            border-color var(--motion-fast) var(--ease-out);
         }
         /* Hover firms the hairline to charcoal and lifts a hair — depth stays
            shallow (Design.md: borders do the work, not ambient shadow). */
         .klide-orch-card:hover {
           transform: translateY(-1px);
           border-color: var(--border-strong) !important;
-          box-shadow:
-            inset 0 1px 0 var(--panel-highlight),
-            0 2px 6px rgba(28, 28, 28, 0.04) !important;
         }
-        /* Live card: a sage left-rail + faint wash so running work is the one
-           thing the eye lands on. The glow breathes so the card feels alive. */
+        /* Live card: a static sage left-rail + faint wash so running work is
+           the one thing the eye lands on. */
         .klide-orch-card[data-live="running"] {
           border-color: color-mix(in srgb, var(--accent) 42%, var(--border)) !important;
-          animation: klide-orch-live 2.4s var(--ease-soft) infinite;
-        }
-        @keyframes klide-orch-live {
-          0%, 100% {
-            box-shadow:
-              inset 2px 0 0 var(--accent),
-              inset 0 1px 0 var(--panel-highlight),
-              0 2px 9px color-mix(in srgb, var(--accent) 10%, transparent);
-          }
-          50% {
-            box-shadow:
-              inset 2px 0 0 var(--accent),
-              inset 0 1px 0 var(--panel-highlight),
-              0 5px 18px color-mix(in srgb, var(--accent) 22%, transparent);
-          }
+          box-shadow: inset 2px 0 0 var(--accent) !important;
         }
         /* Tier-strength bars grow up from their baseline on mount. */
         .klide-tier-bar {
@@ -786,7 +759,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
           to   { transform: scaleY(1);   opacity: inherit; }
         }
         .klide-orch-card[data-live="error"] {
-          box-shadow: inset 2px 0 0 var(--danger), inset 0 1px 0 var(--panel-highlight) !important;
+          box-shadow: inset 2px 0 0 var(--danger) !important;
         }
         /* Lanes + summary build in with the SAME spring rise as the cards, just
            sequenced earlier — so on create the structure assembles, then the
@@ -798,8 +771,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
         }
         .klide-orch-run:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)) !important; color: var(--accent) !important; background: var(--accent-soft) !important; }
         @media (prefers-reduced-motion: reduce) {
-          .klide-orch-card, .klide-orch-activity, .klide-tier-bar, .klide-orch-lane,
-          .klide-orch-card[data-live="running"] { animation: none; }
+          .klide-orch-card, .klide-orch-activity, .klide-tier-bar, .klide-orch-lane { animation: none; }
           .klide-orch-card:hover { transform: none; }
         }
       `}</style>
@@ -840,7 +812,6 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             borderRadius: "var(--radius-lg)",
             background: "var(--bg-elevated)",
             border: "1px solid var(--border)",
-            boxShadow: CARD_LIFT,
             flexWrap: "wrap",
             gap: "12px 0",
           }}
@@ -899,7 +870,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <TierMeter level={m.level} />
                       <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.005em" }}>{m.label}</span>
-                      <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-subtle)", background: "var(--bg-hover)", borderRadius: 999, padding: "1px 7px", lineHeight: 1.6 }}>{items.length}</span>
+                      <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-subtle)", lineHeight: 1.6 }}>{items.length}</span>
                       <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg-subtle)" }}>
                         {fmtUsd(colCost)}
                       </span>
@@ -938,7 +909,6 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                             // Soft hairline at rest (Design.md card spec); hover/live
                             // firm it to charcoal so the strong border earns its weight.
                             border: "1px solid var(--border)",
-                            boxShadow: CARD_LIFT,
                             cursor: "pointer",
                             animationDelay: `${220 + (buildOrder[t.taskId] ?? i) * 60}ms`,
                           }}
@@ -1015,7 +985,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                                     fontSize: 10.5,
                                     fontWeight: 500,
                                     padding: "3px 10px 3px 9px",
-                                    borderRadius: 999,
+                                    borderRadius: "var(--radius-sm)",
                                     border: "1px solid var(--border-strong)",
                                     color: "var(--fg-subtle)",
                                   }}

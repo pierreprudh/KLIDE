@@ -213,18 +213,6 @@ function segBtn(active: boolean): React.CSSProperties {
     background: active ? "var(--bg-hover)" : "transparent",
   };
 }
-function pillStyle(): React.CSSProperties {
-  return {
-    fontSize: 9.5,
-    letterSpacing: "0.05em",
-    textTransform: "uppercase",
-    color: "var(--fg-dim)",
-    border: "1px solid var(--border)",
-    borderRadius: "var(--radius-xs)",
-    padding: "1px 5px",
-  };
-}
-
 /* ============================================================== panel === */
 
 export function MemoryPanel({
@@ -524,7 +512,7 @@ export function MemoryPanel({
                           gap: 6,
                         }}
                       >
-                        <span style={pillStyle()}>draft</span>
+                        <span style={{ color: "var(--fg-dim)" }}>draft</span>
                         {d.model && (
                           <span
                             style={{
@@ -654,7 +642,17 @@ export function MemoryPanel({
                       flexWrap: "wrap",
                     }}
                   >
-                    {e.mode && <span style={pillStyle()}>{e.mode}</span>}
+                    {e.mode && (
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          color: "var(--accent)",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {e.mode}
+                      </span>
+                    )}
                     {e.provider && (
                       <span
                         style={{
@@ -1228,7 +1226,7 @@ function primaryBtnStyle(): React.CSSProperties {
     borderRadius: "var(--radius-sm)",
     border: "1px solid var(--accent)",
     background: "var(--accent)",
-    color: "var(--accent-fg, #fff)",
+    color: "var(--control-primary-fg)",
     cursor: "pointer",
     fontWeight: 500,
   };

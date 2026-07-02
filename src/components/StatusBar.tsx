@@ -15,6 +15,8 @@ type Props = {
   gridLayouts: GridLayout[];
   activeGridId: string | null;
   anchoredLayout: boolean;
+  focusMode: boolean;
+  onSetFocusMode: (on: boolean) => void;
   onApplyGrid: (id: string) => void;
   onExitGrid: () => void;
   onSetAnchored: (anchored: boolean) => void;
@@ -83,6 +85,8 @@ export function StatusBar({
   gridLayouts,
   activeGridId,
   anchoredLayout,
+  focusMode,
+  onSetFocusMode,
   onApplyGrid,
   onExitGrid,
   onSetAnchored,
@@ -192,28 +196,34 @@ export function StatusBar({
             height: 7,
             borderRadius: "50%",
             background: themeMeta.swatches[2],
-            boxShadow: "0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent)",
+            border: "1px solid var(--border)",
           }}
         />
         {autoTheme ? "Auto" : "Theme"} · {themeMeta.name}
       </button>
       </Tooltip>
-      <Tooltip label="Toggle terminal (⌃`)">
-      <button
-        onClick={onToggleTerminal}
-        aria-label="Toggle terminal"
-        aria-pressed={terminalVisible}
-        className="klide-status-chip-btn"
-        data-active={terminalVisible}
-      >
-        <TerminalIcon />
-        Terminal
-      </button>
-      </Tooltip>
+      {/* Focus mode has no terminal surface — the toggle would flip
+          state with nothing to show, so it steps out entirely. */}
+      {!focusMode && (
+        <Tooltip label="Toggle terminal (⌃`)">
+        <button
+          onClick={onToggleTerminal}
+          aria-label="Toggle terminal"
+          aria-pressed={terminalVisible}
+          className="klide-status-chip-btn"
+          data-active={terminalVisible}
+        >
+          <TerminalIcon />
+          Terminal
+        </button>
+        </Tooltip>
+      )}
       <LayoutBento
         gridLayouts={gridLayouts}
         activeGridId={activeGridId}
         anchored={anchoredLayout}
+        focused={focusMode}
+        onSetFocus={onSetFocusMode}
         onApplyGrid={onApplyGrid}
         onExitGrid={onExitGrid}
         onSetAnchored={onSetAnchored}

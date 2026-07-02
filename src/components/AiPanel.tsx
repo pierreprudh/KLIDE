@@ -219,6 +219,16 @@ type Props = {
   initialResumeSessionId?: string | null;
   /** First prompt pre-baked into the TUI's spawn — used for Klide handoff. */
   initialTask?: string | null;
+  /** A message to send through the normal composer path as soon as the panel
+   *  is ready — the Focus home's hero composer hands its text over with this.
+   *  Starts a fresh conversation first if the restored session already has
+   *  messages (the hero composer always means "new chat"). */
+  initialMessage?: string | null;
+  onInitialMessageConsumed?: () => void;
+  /** "focus" restyles the same surface for the fullscreen Focus screen: the
+   *  transcript and composer sit in a centered ~760px reading column with
+   *  roomier padding. Logic is identical — this is a design variant only. */
+  variant?: "panel" | "focus";
   /** Called once after the panel has consumed the initial* props (typically
    *  the App-level spawn queue entry). */
   onInitialConsumed?: () => void;
@@ -299,9 +309,9 @@ function ReflectionBars({ level, size = "compact" }: { level: number; size?: "co
               height,
               borderRadius: 1,
               background: isTip
-                ? "linear-gradient(to top, color-mix(in oklab, var(--accent) 70%, transparent), var(--accent))"
+                ? "var(--accent)"
                 : active
-                  ? "linear-gradient(to top, color-mix(in oklab, var(--fg) 65%, transparent), var(--fg))"
+                  ? "var(--fg)"
                   : "var(--border-strong)",
               opacity: isAuto ? 0.35 : active ? 0.88 : 0.32,
             }}
@@ -380,6 +390,9 @@ export function AiPanel({
   initialResumeSessionId,
   initialTask,
   onInitialConsumed,
+  initialMessage,
+  onInitialMessageConsumed,
+  variant = "panel",
   onMemoryWritten,
   onOpenMemory,
   onSkillGenerated,
@@ -414,7 +427,12 @@ export function AiPanel({
     if (initialConversationId) return initialConversationId;
     const prior = panelId ? loadPanelSession(panelId) : null;
     if (prior) return prior.convoId;
-    if (!isDelegateProvider(provider)) {
+    // Restore-the-latest-conversation is an app-relaunch nicety for the
+    // primary panel only. A *secondary* panel (duplicate, worktree panel)
+    // mounting without a session must start a fresh thread — falling back to
+    // "latest" would bind it to the SAME conversation id the original panel
+    // is showing, and the two panels would then clobber each other's saves.
+    if (!isDelegateProvider(provider) && (!panelId || panelId === "ai-main")) {
       const latest = latestRestorableConversationId(workspaceRoot, provider);
       if (latest) return latest;
     }
@@ -630,8 +648,30 @@ export function AiPanel({
 
   const providerDelegatesWork = isDelegateProvider(provider);
   const isLocalProvider = provider === "ollama" || provider === "mlx";
-  const [providerOpen, setProviderOpen] = useState(false);
-  const providerRef = useRef<HTMLDivElement>(null);
+  // Portalled to <body> like the composer popovers: the menu is taller than
+  // the panel's clip region (`.floating-panel` is overflow: hidden), so an
+  // in-tree absolute menu gets cut off and its own scrollbar never engages.
+  // Opens downward from the header, so the position is top-anchored with the
+  // max height clamped to the space left below the trigger.
+  const {
+    open: providerOpen,
+    pos: providerMenuPos,
+    triggerRef: providerTriggerRef,
+    menuRef: providerMenuRef,
+    openMenu: openProviderMenu,
+    close: closeProviderMenu,
+  } = usePortalMenu<{ top: number; left: number; maxHeight: number }>({
+    computePos: (rect) => {
+      const pad = 8;
+      const width = 200; // menu minWidth — used for the viewport clamp
+      return {
+        top: Math.round(rect.bottom + 6),
+        left: Math.round(Math.min(Math.max(pad, rect.left), window.innerWidth - width - pad)),
+        maxHeight: Math.round(Math.min(440, window.innerHeight - rect.bottom - 6 - pad)),
+      };
+    },
+    closeOnOutsideClick: true,
+  });
   // Self-hosted endpoints, loaded from the Rust store. Refreshed on mount
   // and whenever the picker opens, so endpoints added in Settings show up
   // without a panel reload.
@@ -675,11 +715,9 @@ export function AiPanel({
       setKeylessProviders(missing);
     })();
     // Open compact: expand only the stack holding the active provider.
+    // (Outside-click close lives in usePortalMenu.)
     const activeGroup = providerGroups.find((g) => g.items.some((it) => it.id === provider));
     setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
-    function onDown(e: MouseEvent) { if (providerRef.current && !providerRef.current.contains(e.target as Node)) setProviderOpen(false); }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
     setProvider(id);
@@ -687,7 +725,7 @@ export function AiPanel({
     if (panelId) localStorage.setItem(`klide.provider.${panelId}`, id);
     localStorage.setItem("klide.provider", id);
     onModelChange(storedModelForProvider(id));
-    setProviderOpen(false);
+    closeProviderMenu();
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
 
@@ -1537,6 +1575,34 @@ This user request requires workspace inspection. Before answering, you MUST call
     // active so a mid-run view switch re-attaches.
     if (panelId) savePanelSession(panelId, nid, false);
   }
+
+  // Focus-home handoff: the hero composer's text arrives as `initialMessage`.
+  // Two-phase on purpose — `newConversation()` mints the fresh conversation id
+  // via state, so the actual send waits one render for that id to commit
+  // before going through the normal composer path (warmup, modes, queueing).
+  const [pendingHeroSend, setPendingHeroSend] = useState<string | null>(null);
+  const consumedInitialMessageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const text = initialMessage?.trim();
+    if (!text || consumedInitialMessageRef.current === text) return;
+    consumedInitialMessageRef.current = text;
+    onInitialMessageConsumed?.();
+    if (msgsRef.current.length > 0) newConversation();
+    setPendingHeroSend(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMessage]);
+  useEffect(() => {
+    if (pendingHeroSend === null) return;
+    const text = pendingHeroSend;
+    setPendingHeroSend(null);
+    void send({ text });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingHeroSend]);
+
+  // The Focus variant's reading column: instead of restructuring the
+  // transcript/composer DOM, the horizontal padding grows to center a
+  // ~760px column — one computed gutter, no wrapper churn.
+  const focusGutter = "calc(max(20px, (100% - 760px) / 2))";
 
   // Write a structured memory note to .klide/memory/. Delegates to
   // summarizeAndHandoff so the prompt + parsing live in one place; we
@@ -2667,8 +2733,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     <>
     <aside className="floating-panel" style={{ width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
       <header style={{ padding: "8px 10px", fontSize: 11, color: "var(--fg-subtle)", letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 500, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, position: "relative", zIndex: 40 }}>
-        <div ref={providerRef} style={{ position: "relative", minWidth: 0, textTransform: "none", letterSpacing: 0 }}>
-          <button onClick={() => setProviderOpen((o) => !o)}
+        <div style={{ position: "relative", minWidth: 0, textTransform: "none", letterSpacing: 0 }}>
+          <button ref={providerTriggerRef} onClick={() => (providerOpen ? closeProviderMenu() : openProviderMenu())}
             title={isLocalProvider ? (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · not reachable`) : isDelegateProvider(provider) ? (connected ? `${providerName(provider)} · CLI available` : `${providerName(provider)} · check CLI install/auth`) : (connected ? `${providerName(provider)} · connected` : `${providerName(provider)} · check API key`)}
             aria-haspopup="menu" aria-expanded={providerOpen}
             style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 200, height: 24, padding: "0 6px", borderRadius: "var(--radius-sm)", background: providerOpen ? "var(--bg-hover)" : "transparent", color: providerOpen ? "var(--fg-strong)" : "var(--fg-subtle)", cursor: "pointer", transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)" }}
@@ -2678,22 +2744,21 @@ This user request requires workspace inspection. Before answering, you MUST call
             <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{providerName(provider)}</span>
             <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
           </button>
-          {providerOpen && (
-            <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: 200, maxHeight: "min(60vh, 440px)", overflowY: "auto", overscrollBehavior: "contain", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 30 }}>
+          {providerOpen && providerMenuPos && createPortal(
+            <div ref={providerMenuRef} role="menu" className="popover-enter" style={{ position: "fixed", top: providerMenuPos.top, left: providerMenuPos.left, minWidth: 200, maxHeight: providerMenuPos.maxHeight, overflowY: "auto", overscrollBehavior: "contain", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: Z.popover }}>
               {providerGroups.map((group) => {
                 const expanded = expandedGroups.has(group.label);
                 const hasActive = group.items.some((it) => it.id === provider);
                 return (
                 <div key={group.label} style={{ marginBottom: 2 }}>
                   <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={expanded}
-                    style={{ position: "sticky", top: 0, zIndex: 1, width: "100%", display: "flex", alignItems: "center", gap: 6, background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg-dim)", padding: "6px 8px 5px", textAlign: "left", transition: "color 120ms ease" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-dim)"; }}>
+                    style={{ position: "sticky", top: 0, zIndex: 1, width: "100%", display: "flex", alignItems: "center", gap: 6, background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)", padding: "6px 8px 5px", textAlign: "left", transition: "color 120ms ease" }}
+                    onMouseEnter={(e) => { if (!(!expanded && hasActive)) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)"; }}>
                     <span style={{ display: "grid", placeItems: "center", flexShrink: 0, transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 140ms cubic-bezier(0.4, 0, 0.2, 1)" }}>
                       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                     </span>
                     <span style={{ flex: 1 }}>{group.label}</span>
-                    {!expanded && hasActive && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--fg-subtle)", flexShrink: 0 }} />}
                     <span style={{ fontWeight: 500, opacity: 0.5, fontVariantNumeric: "tabular-nums" }}>{group.items.length}</span>
                   </button>
                   {expanded && group.items.map((item) => {
@@ -2720,7 +2785,8 @@ This user request requires workspace inspection. Before answering, you MUST call
                 </div>
                 );
               })}
-            </div>
+            </div>,
+            document.body
           )}
         </div>
         {isLocalProvider && (serverError || (!serverStarting && !serverRunning)) && (
@@ -2733,18 +2799,9 @@ This user request requires workspace inspection. Before answering, you MUST call
               gap: 5,
               fontSize: 9.5,
               letterSpacing: "0.04em",
-              color: "var(--fg-dim)",
+              color: serverError ? "var(--danger)" : "var(--fg-dim)",
             }}
           >
-            <span
-              style={{
-                width: 5,
-                height: 5,
-                borderRadius: "50%",
-                background: serverError ? "var(--danger)" : "var(--fg-dim)",
-                opacity: 0.7,
-              }}
-            />
             {serverError ?? "Stopped"}
           </div>
         )}
@@ -2858,7 +2915,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
-          style={{ flex: 1, overflowX: "hidden", overflowY: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : "10px 12px 12px", fontSize: 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain" }}
+          style={{ flex: 1, overflowX: "hidden", overflowY: providerDelegatesWork ? "hidden" : "auto", padding: providerDelegatesWork ? 0 : variant === "focus" ? `14px ${focusGutter} 16px` : "10px 12px 12px", fontSize: variant === "focus" ? 13.5 : 13, display: providerDelegatesWork ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !providerDelegatesWork && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain" }}
         >
         {providerDelegatesWork ? (
           <DelegateTerminalSurface
@@ -2874,7 +2931,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           <>
         {msgs.length === 0 && !serverStarting && (
           <div style={{ width: "min(300px, 86%)", textAlign: "center", color: "var(--fg-subtle)", lineHeight: 1.55, transform: "translateY(-10px)" }}>
-            <div style={{ width: 38, height: 38, margin: "0 auto 14px", borderRadius: "var(--radius-lg)", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)", border: "1px solid var(--panel-border)", boxShadow: "inset 0 1px 0 var(--panel-highlight)" }}>
+            <div style={{ width: 38, height: 38, margin: "0 auto 14px", borderRadius: "var(--radius-lg)", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 70%, transparent)", border: "1px solid var(--panel-border)" }}>
               <span style={{ fontFamily: "var(--font-ui)", fontSize: 19, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
             </div>
             <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 500, marginBottom: 6 }}>{workspaceRoot ? "Ask Kit" : "Open a workspace"}</div>
@@ -2942,11 +2999,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                     }}
                     onBlur={() => commitEdit(i)}
                     rows={Math.max(1, Math.min(10, editingDraft.split("\n").length))}
-                    style={{ maxWidth: "88%", width: "min(440px, 88%)", resize: "none", font: "inherit", fontSize: 13, lineHeight: 1.55, padding: "8px 12px", borderRadius: "13px 13px 4px 13px", border: "1px solid color-mix(in srgb, var(--accent) 50%, var(--border))", background: "var(--accent-soft)", color: "var(--fg-strong)", whiteSpace: "pre-wrap", wordBreak: "break-word", boxSizing: "border-box" }}
+                    style={{ maxWidth: "88%", width: "min(440px, 88%)", resize: "none", font: "inherit", fontSize: 13, lineHeight: 1.55, padding: "8px 12px", borderRadius: "12px 12px 4px 12px", border: "1px solid color-mix(in srgb, var(--accent) 50%, var(--border))", background: "var(--accent-soft)", color: "var(--fg-strong)", whiteSpace: "pre-wrap", wordBreak: "break-word", boxSizing: "border-box" }}
                   />
                 ) : (
-                  <div className={running ? "ai-user-bubble-running" : queued ? "ai-user-bubble-queued" : undefined}
-                    style={{ maxWidth: "88%", background: running ? "linear-gradient(110deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 68%, var(--bg)), var(--accent-soft))" : queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "13px 13px 4px 13px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1, backgroundSize: running ? "220% 100%" : undefined }}>
+                  <div
+                    style={{ maxWidth: "88%", background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
                     {m.content}
                   </div>
                 )}
@@ -2990,7 +3047,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           }
 
           // Compaction marker: a system event, not an assistant utterance —
-          // render it avatar-less and indented to align with tool output.
+          // render it gutter-less and indented to align with tool output.
           if (m.role === "system" && m.compaction) {
             const manual = m.compaction.source === "manual";
             return (
@@ -3000,12 +3057,12 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
-          // One avatar per response: multi-turn tool runs produce several
-          // consecutive assistant/tool messages — only the first assistant
-          // bubble after a user message carries the K mark, the rest get a
-          // spacer so bodies stay column-aligned.
+          // Response start: multi-turn tool runs produce several consecutive
+          // assistant/tool messages — only the first assistant message after a
+          // user message gets the larger top margin. All assistant bodies share
+          // a fixed 22px left gutter so they stay column-aligned with tool rows.
           const prevMsg = msgs[i - 1];
-          const showAvatar = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
+          const isResponseStart = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
           // Per-message actions belong on the *final* answer of a response, not
           // on intermediate narration turns ("OK, let me look…") that are
           // followed by more tool calls — otherwise the icon row appears in the
@@ -3014,14 +3071,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           const nextMsg = msgs[i + 1];
           const isResponseEnd = !nextMsg || nextMsg.role === "user";
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: showAvatar ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
-              {showAvatar ? (
-                <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
-                  <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
-                </div>
-              ) : (
-                <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
-              )}
+            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+              <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
@@ -3176,18 +3227,6 @@ This user request requires workspace inspection. Before answering, you MUST call
               e.currentTarget.style.opacity = "0.7";
             }}
           >
-            {streaming && (
-              <span
-                aria-hidden
-                style={{
-                  width: 4,
-                  height: 4,
-                  borderRadius: "50%",
-                  background: "currentColor",
-                  animation: "klide-pulse 1.6s ease-in-out infinite",
-                }}
-              />
-            )}
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 5v14" />
               <path d="m6 13 6 6 6-6" />
@@ -3203,7 +3242,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       </div>
 
       {!providerDelegatesWork && (
-      <div style={{ padding: "0 10px 10px" }}>
+      <div style={{ padding: variant === "focus" ? `0 ${focusGutter} 16px` : "0 10px 10px" }}>
         {pendingPermission && (
           <InlineCommandReview
             command={pendingPermission.command}
@@ -3225,14 +3264,14 @@ This user request requires workspace inspection. Before answering, you MUST call
               marginBottom: 8,
               padding: "10px 12px",
               borderRadius: "var(--radius-md)",
-              border: "1px solid color-mix(in srgb, var(--accent) 30%, var(--border))",
-              background: "color-mix(in srgb, var(--accent-soft) 35%, var(--bg-elevated))",
+              border: "1px solid var(--border-strong)",
+              background: "var(--bg-elevated)",
               display: "flex",
               flexDirection: "column",
               gap: 8,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-strong)", fontSize: 11, fontWeight: 600 }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ color: "var(--accent)" }}>
                 <circle cx="12" cy="12" r="10" />
                 <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" />
@@ -3446,7 +3485,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: width < 360 ? 4 : 6, minWidth: 0, flex: "0 0 auto", flexWrap: "nowrap", overflow: "hidden" }}>
               {providerDelegatesWork ? (
-                <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 8px", borderRadius: 999, border: "1px solid var(--border-strong)", background: "color-mix(in srgb, var(--bg-elevated) 88%, transparent)", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 500, flexShrink: 0 }}>
+                <div title={`Speaking to ${providerName(provider)} delegate`} style={{ height: 24, display: "inline-flex", alignItems: "center", gap: 6, padding: "0 4px", color: "var(--fg-subtle)", fontSize: 11, fontWeight: 500, flexShrink: 0 }}>
                   <ProviderLogo id={provider} size={13} /><span>{providerName(provider)}</span>
                 </div>
               ) : (
@@ -3502,9 +3541,10 @@ This user request requires workspace inspection. Before answering, you MUST call
               {conversationCostUsd > 0 && width >= 380 && (
                 <span
                   title={`This conversation has cost about $${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 4 : 2)} (${modelLabel(model)} list price)`}
-                  style={{ height: 20, display: "inline-flex", alignItems: "center", padding: "0 7px", borderRadius: 999, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
+                  style={{ height: 20, display: "inline-flex", alignItems: "center", gap: 5, padding: "0 4px", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
                 >
                   {conversationCostUsd < 0.01 ? "<$0.01" : `$${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 3 : 2)}`}
+                  <span aria-hidden style={{ color: "var(--fg-dim)", opacity: 0.6 }}>·</span>
                 </span>
               )}
               <ModelPicker

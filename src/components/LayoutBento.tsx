@@ -7,6 +7,9 @@ type Props = {
   gridLayouts: GridLayout[];
   activeGridId: string | null;
   anchored: boolean;
+  /** Focus screen — a single centered AI conversation, chat-first. */
+  focused: boolean;
+  onSetFocus: (on: boolean) => void;
   onApplyGrid: (id: string) => void;
   onExitGrid: () => void;
   onSetAnchored: (anchored: boolean) => void;
@@ -74,10 +77,32 @@ function FreeIcon() {
   );
 }
 
+function FocusIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M4 6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4 3.5v-3.5H6a2 2 0 0 1-2-2z" />
+      <line x1="8" y1="9" x2="16" y2="9" />
+      <line x1="8" y1="12.5" x2="13" y2="12.5" />
+    </svg>
+  );
+}
+
 export function LayoutBento({
   gridLayouts,
   activeGridId,
   anchored,
+  focused,
+  onSetFocus,
   onApplyGrid,
   onExitGrid,
   onSetAnchored,
@@ -166,7 +191,7 @@ export function LayoutBento({
         }}
       >
         <GridIcon />
-        {anchored && !activeGridId ? "Anchored" : "Layout"}
+        {focused ? "Focus" : anchored && !activeGridId ? "Anchored" : "Layout"}
       </button>
 
       {open && pos && createPortal(
@@ -187,93 +212,95 @@ export function LayoutBento({
             borderRadius: "var(--radius-md)",
             background: "var(--bg-elevated)",
             border: "1px solid var(--border-strong)",
-            boxShadow: "var(--shadow-popover, 0 8px 24px rgba(0,0,0,0.18))",
+            boxShadow: "var(--panel-shadow)",
             // Top tier: above floating panels, popovers, and modals — this
             // status-bar picker should never be occluded by app chrome.
             zIndex: Z.contextMenu,
             animation: "chrome-enter var(--motion-med) var(--ease-out)",
           }}
         >
-          {/* Anchored — the calm, fullscreen workbench (Ara-style). Default
-              for new workspaces; no drag/resize on panels. */}
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onSetAnchored(true);
-            }}
-            aria-pressed={anchored && !activeGridId}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "7px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: `1px solid ${anchored && !activeGridId ? "var(--accent)" : "var(--border)"}`,
-              background: anchored && !activeGridId ? "var(--accent-soft)" : "transparent",
-              color: anchored && !activeGridId ? "var(--accent)" : "var(--fg-strong)",
-              fontSize: 12,
-              cursor: "pointer",
-              textAlign: "left",
-            }}
-            onMouseEnter={(e) => {
-              if (!(anchored && !activeGridId)) e.currentTarget.style.background = "var(--bg-hover)";
-            }}
-            onMouseLeave={(e) => {
-              if (!(anchored && !activeGridId)) e.currentTarget.style.background = "transparent";
-            }}
-          >
-            <AnchoredIcon />
-            <span style={{ display: "flex", flexDirection: "column" }}>
-              <span>Anchored</span>
-              <span style={{ fontSize: 9, color: "var(--fg-subtle)", marginTop: 1 }}>
-                Side / editor / AI · calm, fullscreen
+          {/* The three main screens, one card each: Anchored (IDE), Free
+              (floating panels), Focus (single chat column). Same card, same
+              active treatment — the mode is the only variable. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {(
+            [
+              {
+                key: "anchored",
+                icon: <AnchoredIcon />,
+                title: "Anchored",
+                hint: "Side / editor / AI · calm, fullscreen",
+                active: anchored && !activeGridId && !focused,
+                apply: () => {
+                  onSetFocus(false);
+                  onSetAnchored(true);
+                },
+              },
+              {
+                key: "free",
+                icon: <FreeIcon />,
+                title: "Free layout",
+                hint: "Drag & resize panels",
+                active: !anchored && !activeGridId && !focused,
+                apply: () => {
+                  onSetFocus(false);
+                  onSetAnchored(false);
+                  onExitGrid();
+                },
+              },
+              {
+                key: "focus",
+                icon: <FocusIcon />,
+                title: "Focus",
+                hint: "Conversations, fullscreen · chat-first",
+                active: focused,
+                apply: () => {
+                  onSetFocus(true);
+                  onExitGrid();
+                },
+              },
+            ] as const
+          ).map((mode) => (
+            <button
+              key={mode.key}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                mode.apply();
+              }}
+              aria-pressed={mode.active}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "7px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: `1px solid ${mode.active ? "var(--accent)" : "var(--border)"}`,
+                background: mode.active ? "var(--accent-soft)" : "transparent",
+                color: mode.active ? "var(--accent)" : "var(--fg-strong)",
+                fontSize: 12,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              onMouseEnter={(e) => {
+                if (!mode.active) e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                if (!mode.active) e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {mode.icon}
+              <span style={{ display: "flex", flexDirection: "column" }}>
+                <span>{mode.title}</span>
+                <span style={{ fontSize: 9, color: "var(--fg-subtle)", marginTop: 1 }}>
+                  {mode.hint}
+                </span>
               </span>
-            </span>
-            {anchored && !activeGridId ? <span style={{ marginLeft: "auto", fontSize: 10 }}>active</span> : null}
-          </button>
-
-          {/* Free layout — opt-in: panels become draggable, resizable
-              FloatingPanels with the bento feel. */}
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onSetAnchored(false);
-              onExitGrid();
-            }}
-            aria-pressed={!anchored && !activeGridId}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "7px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: `1px solid ${!anchored && !activeGridId ? "var(--accent)" : "var(--border)"}`,
-              background: !anchored && !activeGridId ? "var(--accent-soft)" : "transparent",
-              color: !anchored && !activeGridId ? "var(--accent)" : "var(--fg-strong)",
-              fontSize: 12,
-              cursor: "pointer",
-              textAlign: "left",
-            }}
-            onMouseEnter={(e) => {
-              if (!(!anchored && !activeGridId)) e.currentTarget.style.background = "var(--bg-hover)";
-            }}
-            onMouseLeave={(e) => {
-              if (!(!anchored && !activeGridId)) e.currentTarget.style.background = "transparent";
-            }}
-          >
-            <FreeIcon />
-            <span style={{ display: "flex", flexDirection: "column" }}>
-              <span>Free layout</span>
-              <span style={{ fontSize: 9, color: "var(--fg-subtle)", marginTop: 1 }}>
-                Drag &amp; resize panels
-              </span>
-            </span>
-            {!anchored && !activeGridId ? <span style={{ marginLeft: "auto", fontSize: 10 }}>active</span> : null}
-          </button>
+              {mode.active ? <span style={{ marginLeft: "auto", fontSize: 10 }}>active</span> : null}
+            </button>
+          ))}
+          </div>
 
           {gridLayouts.length > 0 && (
             <div
@@ -300,6 +327,7 @@ export function LayoutBento({
                   type="button"
                   onClick={() => {
                     setOpen(false);
+                    onSetFocus(false);
                     onApplyGrid(grid.id);
                   }}
                   title={`Apply ${grid.name}`}
