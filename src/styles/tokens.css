@@ -2616,16 +2616,6 @@ select.klide-field {
   overflow: hidden;
   padding: 2px 0;
 }
-/* Project switcher popover (ActivityBar home button) — quiet hover fill. */
-.klide-project-menu-item {
-  transition: background var(--motion-fast) var(--ease-out),
-    color var(--motion-fast) var(--ease-out);
-}
-.klide-project-menu-item:hover {
-  background: var(--bg-selected, color-mix(in srgb, var(--fg) 7%, transparent)) !important;
-  color: var(--fg-strong) !important;
-}
-
 .klide-explorer-header-workspace[data-empty="true"] {
   /* Reserve a sliver of height when no folder is open so the header
      doesn't collapse and the action button stays optically centred. */

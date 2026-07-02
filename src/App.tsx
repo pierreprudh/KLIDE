@@ -408,11 +408,11 @@ function App() {
 
   function togglePanel(panel: ActivityPanel, meta?: boolean) {
     if (panel === "home") {
-      // Home = back to the Welcome screen to switch projects. Clears the
-      // workspace (and open tabs) so the project chooser takes over. Getting
-      // back to the editor from a full-window view is handled by Esc /
-      // clicking a tool, so this top slot is free to mean "leave this project".
-      closeFolder();
+      // Home = back to the main workbench from wherever you are (Mission
+      // Control, Git, Settings, …). Leaving a project entirely is the
+      // native Projects menu's job ("Welcome Screen" item), not this
+      // button's — it never clears the workspace.
+      setView("workbench");
       return;
     }
     if (panel === "settings") {
@@ -693,6 +693,52 @@ function App() {
     if (root === workspaceRoot) return;
     setWorkspaceRoot(root);
   };
+
+  // ── Native macOS menu: Projects ─────────────────────────────────────
+  // Project switching and the Welcome screen live in the system menu bar
+  // now — the rail's home icon returns to the workbench. The menu is
+  // rebuilt whenever the recents list or the active project changes, and is
+  // APPENDED to Tauri's default menu so the stock App/Edit/Window menus
+  // (copy, paste, hide, …) survive.
+  useEffect(() => {
+    let cancelled = false;
+    async function build() {
+      try {
+        const { Menu, Submenu, MenuItem, CheckMenuItem, PredefinedMenuItem } =
+          await import("@tauri-apps/api/menu");
+        const projectItems = await Promise.all(
+          recentFolders.map((p) =>
+            CheckMenuItem.new({
+              text: p.split("/").filter(Boolean).pop() ?? p,
+              checked: p === workspaceRoot,
+              action: () => changeRoot(p),
+            })
+          )
+        );
+        const items = [
+          ...projectItems,
+          ...(projectItems.length > 0
+            ? [await PredefinedMenuItem.new({ item: "Separator" })]
+            : []),
+          await MenuItem.new({ text: "Open Folder…", action: () => void openFolderDialog() }),
+          await MenuItem.new({ text: "Welcome Screen", action: () => closeFolder() }),
+        ];
+        const submenu = await Submenu.new({ text: "Projects", items });
+        const menu = await Menu.default();
+        await menu.append(submenu);
+        if (!cancelled) await menu.setAsAppMenu();
+      } catch (e) {
+        notify(`Projects menu unavailable: ${e instanceof Error ? e.message : String(e)}`, {
+          tone: "warn",
+        });
+      }
+    }
+    void build();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentFolders, workspaceRoot]);
 
   // New project: pick a parent location, create + `git init` the folder in
   // Rust, then open it. Throws on error so the welcome screen can show it.
@@ -1640,17 +1686,7 @@ function App() {
                 projects, Mission Control, profile). Overlay views opened from
                 it (Mission Control, Git) bring the rail back. */}
             {!(focusMode && view === "workbench") && (
-            <ActivityBar
-              active={activityState}
-              onToggle={togglePanel}
-              projects={recentFolders.map((p) => ({
-                path: p,
-                name: p.split("/").filter(Boolean).pop() ?? p,
-              }))}
-              activeProjectPath={workspaceRoot}
-              onSwitchProject={changeRoot}
-              onOpenFolder={openFolderDialog}
-            />
+            <ActivityBar active={activityState} onToggle={togglePanel} />
             )}
             {view === "git-review" ? (
               <GitReview
