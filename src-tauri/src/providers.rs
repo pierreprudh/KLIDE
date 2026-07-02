@@ -346,6 +346,24 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         }),
         context_window: None,
     },
+    // Oh My Pi routes to 40+ providers itself; keys come from the user's
+    // shell environment, so "installed" is the whole auth story (OpenCode's
+    // posture). Models come from its on-disk cache (`~/.omp/agent/models.db`),
+    // with a fuzzy-matchable fallback list — omp resolves "claude-sonnet-4-6"
+    // and "openai/gpt-5.2" alike.
+    ProviderEntry {
+        id: "omp",
+        wire: WireFormat::Ollama, // placeholder, never reached
+        key: KeySource::Local,
+        models: ModelsHandler::Subscription,
+        subscription: Some(SubscriptionSpec {
+            cmd: "omp",
+            label: "Oh My Pi",
+            default_models: &["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5", "gpt-5-mini"],
+            cached_models: crate::models::omp_cached_models,
+        }),
+        context_window: None,
+    },
 ];
 
 /// Look up a provider by id. O(n) over a 10–20 row registry — the
@@ -826,6 +844,7 @@ mod tests {
             "claude-code",
             "codex",
             "opencode",
+            "omp",
         ];
         for id in known {
             assert!(lookup(id).is_some(), "missing registry row for {id}");
@@ -886,6 +905,7 @@ mod tests {
             "claude-code",
             "codex",
             "opencode",
+            "omp",
         ] {
             let entry = lookup(id).expect(id);
             assert!(
@@ -923,7 +943,7 @@ mod tests {
 
     #[test]
     fn subscription_predicate_matches_known_set() {
-        for id in ["claude-code", "codex", "opencode"] {
+        for id in ["claude-code", "codex", "opencode", "omp"] {
             assert!(is_subscription(id), "{id} should be subscription");
             assert!(
                 lookup(id).unwrap().subscription.is_some(),
@@ -1038,6 +1058,7 @@ mod tests {
             "claude-code",
             "codex",
             "opencode",
+            "omp",
         ] {
             let key = provider_key(id).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(key.is_none(), "{id} should have no key, got {key:?}");

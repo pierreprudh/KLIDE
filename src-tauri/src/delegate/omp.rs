@@ -48,6 +48,20 @@ impl Delegate for Omp {
         ])
     }
 
+    /// omp has no login command — it reads provider keys straight from the
+    /// shell environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) or its own
+    /// config, so the "login" is just launching the TUI and picking a model.
+    fn login_commands(&self) -> Vec<String> {
+        vec!["omp".to_string()]
+    }
+
+    fn check_auth(&self, _command_path: &str) -> Result<(bool, String), String> {
+        Ok((
+            true,
+            "omp CLI is installed — provider keys come from your shell environment.".to_string(),
+        ))
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         let root = std::path::Path::new(home).join(".omp/agent/sessions");

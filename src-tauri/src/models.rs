@@ -429,6 +429,62 @@ pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
     }
 }
 
+pub(crate) fn omp_cached_models() -> Option<Vec<String>> {
+    let home = std::env::var("HOME").ok()?;
+    let db = std::path::Path::new(&home).join(".omp/agent/models.db");
+    if !db.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open(&db).ok()?;
+    // `authoritative = 1` marks providers whose model list omp actually
+    // fetched live (its credentials worked). The static bundles it ships for
+    // every other provider (google-vertex, llama.cpp, …) would flood the
+    // picker with models the user can't reach, so they stay out.
+    let mut stmt = conn
+        .prepare("SELECT provider_id, models FROM model_cache WHERE authoritative = 1")
+        .ok()?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .ok()?;
+    // Local models first, then hosted APIs, aggregators last — mirrors the
+    // Klide provider-group order so the top of the picker is the useful part.
+    fn provider_rank(id: &str) -> u8 {
+        match id {
+            "ollama" => 0,
+            "anthropic" => 1,
+            "openai" => 2,
+            "openrouter" => 4,
+            _ => 3,
+        }
+    }
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (provider, json) in rows.flatten() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+            continue;
+        };
+        let Some(arr) = value.as_array() else { continue };
+        // omp's `--model` accepts the qualified "provider/model" form, which
+        // also keeps same-named models from colliding across providers.
+        let ids: Vec<String> = arr
+            .iter()
+            .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
+            .map(|id| format!("{provider}/{id}"))
+            .collect();
+        if !ids.is_empty() {
+            groups.push((provider, ids));
+        }
+    }
+    groups.sort_by_key(|(p, _)| provider_rank(p));
+    let models: Vec<String> = groups.into_iter().flat_map(|(_, ids)| ids).collect();
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
+    }
+}
+
 pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
     let home = std::env::var("HOME").ok()?;
     let claude_dir = std::path::Path::new(&home).join(".claude");

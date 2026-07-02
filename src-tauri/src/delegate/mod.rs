@@ -281,8 +281,9 @@ mod tests {
             ]
         );
         assert_eq!(OpenCode.login_commands(), vec!["opencode"]);
-        // Omp is not a subscription CLI — the default (no login) applies.
-        assert!(Omp.login_commands().is_empty());
+        // omp has no login command — keys ride the shell environment; the
+        // "login option" is launching the TUI itself (OpenCode's posture).
+        assert_eq!(Omp.login_commands(), vec!["omp"]);
     }
 
     #[test]

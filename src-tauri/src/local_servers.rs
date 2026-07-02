@@ -331,6 +331,80 @@ pub(crate) async fn ai_local_server_status(provider: String) -> Result<bool, Str
     Ok(local_server_ready(&provider).await)
 }
 
+/// The signed-in ollama.com account, read from the local daemon. `ollama
+/// signin` stores its session with the server, and `POST {OLLAMA_URL}/api/me`
+/// (GET answers 405) returns the account JSON when one exists — a pure status
+/// read: no browser, no prompt, no token handling on Klide's side.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OllamaAccountStatus {
+    running: bool,
+    signed_in: bool,
+    name: Option<String>,
+    plan: Option<String>,
+    detail: String,
+}
+
+#[tauri::command]
+pub(crate) async fn ollama_account_status() -> Result<OllamaAccountStatus, String> {
+    let not_signed_in = |running: bool, detail: &str| OllamaAccountStatus {
+        running,
+        signed_in: false,
+        name: None,
+        plan: None,
+        detail: detail.to_string(),
+    };
+    let response = reqwest::Client::new()
+        .post(format!("{OLLAMA_URL}/api/me"))
+        .timeout(Duration::from_secs(4))
+        .send()
+        .await;
+    let response = match response {
+        Ok(res) => res,
+        Err(_) => {
+            return Ok(not_signed_in(
+                false,
+                "Ollama server is not running — start it in Local AI.",
+            ))
+        }
+    };
+    // Signed-out daemons (and older ones without /api/me) answer with an
+    // error status; both read as "no account" rather than a hard failure.
+    if !response.status().is_success() {
+        return Ok(not_signed_in(true, "Not signed in to ollama.com."));
+    }
+    let body: serde_json::Value = match response.json().await {
+        Ok(v) => v,
+        Err(_) => return Ok(not_signed_in(true, "Not signed in to ollama.com.")),
+    };
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let plan = body
+        .get("plan")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let Some(account) = name.clone().or_else(|| {
+        body.get("email")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }) else {
+        return Ok(not_signed_in(true, "Not signed in to ollama.com."));
+    };
+    let detail = match &plan {
+        Some(p) => format!("Signed in as {account} · {p} plan"),
+        None => format!("Signed in as {account}"),
+    };
+    Ok(OllamaAccountStatus {
+        running: true,
+        signed_in: true,
+        name,
+        plan,
+        detail,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
