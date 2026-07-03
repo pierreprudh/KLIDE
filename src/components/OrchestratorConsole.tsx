@@ -25,6 +25,7 @@ import {
 import { BUDGET_PRESETS, createBudgetLedger, type BudgetPreset } from "../agent/budgetLedger";
 import { createCapacityState } from "../agent/capacityPlanner";
 import { dispatchAssignment, type DispatchableTask } from "../agent/dispatcher";
+import { chainStep } from "../agent/missionChain";
 import type { AgentEvent, DiffProposal, PermissionRequest, ProviderId } from "../agent/types";
 import { resolveDiff, resolvePermission } from "../agent/client";
 import { DiffModal } from "./DiffModal";
@@ -135,18 +136,21 @@ type Pending =
   | { kind: "diff"; proposal: DiffProposal }
   | { kind: "permission"; request: PermissionRequest };
 
-function useRealDispatch(workspaceRoot: string | null) {
+function useRealDispatch(workspaceRoot: string | null, story: string) {
   const [live, setLive] = useState<Record<string, LiveCard>>({});
   const [pending, setPending] = useState<Pending[]>([]);
   const counter = useRef(0);
 
   async function run(task: PlannedTask, assignment: WorkerAssignment, requireReview: boolean, override?: ModelSel | null) {
     counter.current += 1;
+    // Every task prompt opens with the mission's user story (the goal as it was
+    // planned), so an agent working one card still knows the big picture. The
+    // fuller description (when the planner produced one) is the real
+    // instruction; fall back to the title.
+    const storyLine = story ? `User story: ${story}\n\n` : "";
     const dispatchable: DispatchableTask = {
       taskId: `orch-${task.taskId}-${counter.current}`,
-      // The fuller description (when the planner produced one) is the real
-      // instruction; fall back to the title.
-      prompt: task.description ? `${task.title}\n\n${task.description}` : task.title,
+      prompt: storyLine + `Task: ${task.title}` + (task.description ? `\n\n${task.description}` : ""),
       mode: task.mode,
     };
     // A per-task override swaps the provider/model the routing chose. Recompute
@@ -176,6 +180,13 @@ function useRealDispatch(workspaceRoot: string | null) {
     }
   }
 
+  // A new plan reuses task ids (t1..tN), so stale card statuses from the last
+  // plan must not leak onto the new cards. Pending pauses stay — they belong to
+  // live harness runs that still need an answer either way.
+  function reset() {
+    setLive({});
+  }
+
   const head = pending[0] ?? null;
   const pop = () => setPending((q) => q.slice(1));
 
@@ -199,7 +210,7 @@ function useRealDispatch(workspaceRoot: string | null) {
     pop();
   }
 
-  return { live, run, head, applyDiff, rejectDiff, decidePermission };
+  return { live, run, reset, head, applyDiff, rejectDiff, decidePermission };
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────
@@ -659,6 +670,9 @@ function PermissionPrompt({ request, onAllow, onDeny }: { request: PermissionReq
 // ── Console ───────────────────────────────────────────────────────────────
 export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: string | null }) {
   const [goal, setGoal] = useState("add rate limiting to the API");
+  // The user story — the goal as it was when Plan was pressed. Editing the
+  // input afterwards doesn't drift the story the running mission refers to.
+  const [story, setStory] = useState("");
   const [mode, setMode] = useState<ModeKey>("balanced");
   // The current plan (model-produced). Empty until the user plans — the board
   // shows an inviting empty state rather than a fake default plan.
@@ -693,12 +707,64 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
     }
     return order;
   }, [byTier]);
-  const real = useRealDispatch(workspaceRoot ?? null);
+  const real = useRealDispatch(workspaceRoot ?? null, story);
   const titleById = useMemo(() => Object.fromEntries(routed.map((r) => [r.task.taskId, r.task.title])), [routed]);
+
+  // ── Mission chaining ──────────────────────────────────────────────────────
+  // "Run mission" dispatches the dep-free tasks immediately, and as each run
+  // settles, tasks whose dependencies are all done dispatch next — the board
+  // drains the dependency graph instead of firing one wave. The unlock/block/
+  // settle rules live in the pure `chainStep` (src/agent/missionChain.ts).
+  const [missionOn, setMissionOn] = useState(false);
+  // Tasks this mission already launched — guards double-dispatch while the
+  // "running" status is still landing in `real.live`.
+  const chainLaunched = useRef<Set<string>>(new Set());
+
+  const launchTask = (id: string) => {
+    const r = routed.find((x) => x.task.taskId === id);
+    if (!r) return;
+    chainLaunched.current.add(id);
+    void real.run(r.task, r.assignment, reviewEdits, overrides[id] ?? null);
+  };
+
+  function runMission() {
+    chainLaunched.current = new Set();
+    const step = chainStep(routed.map((r) => r.task), () => undefined, chainLaunched.current);
+    step.launch.forEach(launchTask);
+    setMissionOn(true);
+  }
+
+  // The chain reactor: every live-state change re-checks the graph. Launch
+  // whatever became unblocked; when nothing is running and nothing new can
+  // launch, the mission has drained — settle and report.
+  useEffect(() => {
+    if (!missionOn) return;
+    const status = (id: string) => real.live[id]?.status;
+    const step = chainStep(routed.map((r) => r.task), status, chainLaunched.current);
+    if (step.launch.length > 0) {
+      step.launch.forEach(launchTask);
+      return;
+    }
+    if (step.settled) {
+      setMissionOn(false);
+      const done = routed.filter((r) => status(r.task.taskId) === "done").length;
+      const failed = routed.filter((r) => status(r.task.taskId) === "error").length;
+      const parked = routed.length - done - failed;
+      if (failed > 0) notify(`Mission settled — ${done} done, ${failed} failed${parked ? `, ${parked} blocked` : ""}`, { tone: "warn" });
+      else notify(`Mission complete — ${done} task${done === 1 ? "" : "s"} done`, { tone: "success" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missionOn, real.live, routed, reviewEdits, overrides]);
 
   async function plan() {
     if (!goal.trim() || planning) return;
     setPlanning(true);
+    setStory(goal.trim());
+    // Task ids restart at t1 on every plan — drop the old plan's statuses and
+    // any in-flight mission so the new board starts clean.
+    setMissionOn(false);
+    chainLaunched.current = new Set();
+    real.reset();
     try {
       const result = await planGoal(goal, plannerSel);
       setTasks(result);
@@ -712,12 +778,6 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
       setPlanSeq((n) => n + 1);
       setPlanning(false);
     }
-  }
-
-  // Run every task with no unmet dependency — plan-mode and goal-mode alike,
-  // honouring any per-task model override.
-  function runReady() {
-    routed.filter((r) => (r.task.dependsOn ?? []).length === 0).forEach((r) => real.run(r.task, r.assignment, reviewEdits, overrides[r.task.taskId] ?? null));
   }
 
   return (
@@ -926,12 +986,21 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                           {isOpen && t.description && (
                             <div className="klide-orch-activity" style={{ fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.5, marginBottom: 8 }}>{t.description}</div>
                           )}
-                          {dep && (
-                            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "var(--fg-dim)", marginBottom: 8 }}>
-                              <IconDep size={11} />
-                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>after {(titleById[dep] ?? dep).slice(0, 24)}</span>
-                            </div>
-                          )}
+                          {dep && (() => {
+                            // Mission-aware dep line: parked upstream failure →
+                            // blocked; waiting its turn in a live mission → queued.
+                            const depFailed = (t.dependsOn ?? []).some((d) => real.live[d]?.status === "error");
+                            const queued = missionOn && !liveCard && !depFailed;
+                            const depTitle = (titleById[dep] ?? dep).slice(0, 24);
+                            return (
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: depFailed ? "var(--danger)" : "var(--fg-dim)", marginBottom: 8 }}>
+                                <IconDep size={11} />
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {depFailed ? `blocked · ${depTitle} failed` : queued ? `queued · after ${depTitle}` : `after ${depTitle}`}
+                                </span>
+                              </div>
+                            );
+                          })()}
                           {liveCard && (
                             <div
                               className="klide-orch-activity"
@@ -1034,8 +1103,8 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                 Est. time <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg)" }}>{fmtMin(totalMs)}</span>
               </div>
             </div>
-            <button className="klide-button klide-button-primary" onClick={runReady} disabled={!workspaceRoot || readyCount === 0}>
-              {workspaceRoot ? `Run ${readyCount} ready` : "Open a workspace"}
+            <button className="klide-button klide-button-primary" onClick={runMission} disabled={!workspaceRoot || readyCount === 0 || missionOn}>
+              {!workspaceRoot ? "Open a workspace" : missionOn ? "Mission running…" : `Run mission · ${routed.length} task${routed.length === 1 ? "" : "s"}`}
             </button>
             {/* Review toggle — review every edit, or auto-apply (still checkpointed). */}
             <button
@@ -1051,7 +1120,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             </button>
             <div className="klide-surface" style={{ padding: 18, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
               <div style={{ ...eyebrow, marginBottom: 8 }}>How it works</div>
-              Running a task dispatches a real harness run on its routed model. Edits pause for review (or auto-apply); commands ask permission. Specialist/delegate tiers are recognised but not yet spawned.
+              Run mission dispatches the dep-free tasks first; as each finishes, the tasks waiting on it launch next. A failed task blocks its dependents. Edits pause for review (or auto-apply); commands ask permission. Specialist/delegate tiers are recognised but not yet spawned.
             </div>
           </div>
         </div>
