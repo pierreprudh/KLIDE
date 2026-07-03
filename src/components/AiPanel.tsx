@@ -3096,10 +3096,10 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
-          // Response start: multi-turn tool runs produce several consecutive
-          // assistant/tool messages — only the first assistant message after a
-          // user message gets the larger top margin. All assistant bodies share
-          // a fixed 22px left gutter so they stay column-aligned with tool rows.
+          // One avatar per response: multi-turn tool runs produce several
+          // consecutive assistant/tool messages — only the first assistant
+          // message after a user message carries Kit's K mark; the rest get a
+          // 22px spacer so bodies stay column-aligned with tool rows.
           const prevMsg = msgs[i - 1];
           const isResponseStart = !prevMsg || (prevMsg.role !== "assistant" && prevMsg.role !== "tool");
           // Per-message actions belong on the *final* answer of a response, not
@@ -3111,7 +3111,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           const isResponseEnd = !nextMsg || nextMsg.role === "user";
           return (
             <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
-              <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
+              {isResponseStart ? (
+                <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, borderRadius: "50%", display: "grid", placeItems: "center", color: "var(--accent)", background: "color-mix(in srgb, var(--accent-soft) 80%, transparent)" }}>
+                  <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>K</span>
+                </div>
+              ) : (
+                <div aria-hidden="true" style={{ flexShrink: 0, width: 22 }} />
+              )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive)}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
