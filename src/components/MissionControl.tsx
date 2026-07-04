@@ -4286,7 +4286,7 @@ export function MissionControl({
           </div>
 
           {/* Row 2 — source filter (agent logos) · search · archived.
-              Project selection has its own dedicated surface (TODO); until then
+              Project switching lives in the native macOS Projects menu;
               the board stays scoped to the current project by default. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div role="group" aria-label="Filter by agent" className="mc-srcscroll">

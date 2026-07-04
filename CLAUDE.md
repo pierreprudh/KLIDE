@@ -177,7 +177,7 @@ Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (
 
 ### v0.2 stabilization focus
 
-Current branch: `feat/harness-audit-and-inline-review`. v0.2 is functionally complete — provider smoke matrix verified, skill install/uninstall UI shipped, premium polish on the always-visible chrome shipped. Recent direction: deepen the agentic control panel (Mission Control + multi-CLI delegates), and make local models (Ollama + MLX) first-class — MLX now warms up at server start and runs the full tool harness, not chat-only.
+Current branch: `main`. v0.2 is functionally complete — provider smoke matrix verified, skill install/uninstall UI shipped, premium polish on the always-visible chrome shipped. Recent direction: deepen the agentic control panel (Mission Control + multi-CLI delegates), and make local models (Ollama + MLX) first-class — MLX now warms up at server start and runs the full tool harness, not chat-only.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.
