@@ -171,6 +171,31 @@ pub(crate) fn git_output(workspace_root: &str, args: &[&str]) -> Result<String, 
     }
 }
 
+fn gh_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("gh")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string()
+            } else {
+                format!("Failed to run gh: {e}")
+            }
+        })?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            Err(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            Err(stderr)
+        }
+    }
+}
+
 fn count_diff_lines(diff: &str) -> (usize, usize) {
     let mut additions = 0;
     let mut deletions = 0;
@@ -402,15 +427,32 @@ pub(crate) fn git_branch_diff(
     if branch.is_empty() {
         return Err("Branch to compare is required".to_string());
     }
+    // Base resolution: explicit caller choice → the fork point recorded at
+    // branch creation (`branch.<name>.base`, written by git_worktree_add) →
+    // the current checkout as a last guess. The recorded base is what makes
+    // a worktree run diff against what it actually forked from, not
+    // whatever branch the main checkout happens to be on today.
     let base_branch = match base_branch {
         Some(base) if !base.trim().is_empty() => base.trim().to_string(),
         _ => {
-            let current = git_output(&workspace_root, &["branch", "--show-current"])?;
-            let current = current.trim();
-            if current.is_empty() {
-                return Err("Current checkout is detached; choose a base branch first.".to_string());
+            let recorded = git_output(
+                &workspace_root,
+                &["config", "--get", &format!("branch.{branch}.base")],
+            )
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+            if !recorded.is_empty() {
+                recorded
+            } else {
+                let current = git_output(&workspace_root, &["branch", "--show-current"])?;
+                let current = current.trim();
+                if current.is_empty() {
+                    return Err(
+                        "Current checkout is detached; choose a base branch first.".to_string()
+                    );
+                }
+                current.to_string()
             }
-            current.to_string()
         }
     };
 
@@ -483,14 +525,47 @@ fn parse_porcelain_timestamp(s: &str) -> i64 {
     s.trim().parse::<i64>().unwrap_or(0)
 }
 
+fn parse_rev_list_ahead_behind(raw: &str) -> (i32, i32) {
+    let mut it = raw.split_whitespace();
+    let behind = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let ahead = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    (ahead, behind)
+}
+
+fn parse_tracking_ahead_behind(raw: &str) -> (i32, i32) {
+    let mut ahead = 0;
+    let mut behind = 0;
+    for part in raw.split(',').map(str::trim) {
+        if let Some(n) = part.strip_prefix("ahead ") {
+            ahead = n.parse().unwrap_or(0);
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            behind = n.parse().unwrap_or(0);
+        }
+    }
+    (ahead, behind)
+}
+
+fn ahead_behind_for_ref(workspace_root: &str, upstream: &str, reference: &str) -> (i32, i32) {
+    if upstream.is_empty() || reference.is_empty() {
+        return (0, 0);
+    }
+    let range = format!("{upstream}...{reference}");
+    git_output(
+        workspace_root,
+        &["rev-list", "--left-right", "--count", &range],
+    )
+    .map(|raw| parse_rev_list_ahead_behind(&raw))
+    .unwrap_or((0, 0))
+}
+
 fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String> {
-    // Branches — current, local, remote. We grab them with `for-each-ref` so
-    // we can pull ahead/behind and the subject of the tip commit in one shot.
+    // Branches — current, local, remote. Keep this format conservative: older
+    // Git builds do not support `%(ahead:integer)` / `%(behind:integer)`.
     let branch_out = git_output(
         workspace_root,
         &[
             "for-each-ref",
-            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(ahead:integer)/%(behind:integer)%00%(subject)",
+            "--format=%(HEAD)%00%(refname)%00%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)%00%(subject)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -501,22 +576,23 @@ fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String>
             continue;
         }
         let parts: Vec<&str> = line.split('\0').collect();
-        if parts.len() < 5 {
+        if parts.len() < 6 {
             continue;
         }
         let is_current = parts[0] == "*";
-        let name = parts[1].to_string();
+        let refname = parts[1];
+        if refname.starts_with("refs/remotes/") && refname.ends_with("/HEAD") {
+            continue;
+        }
+        let name = parts[2].to_string();
         // Skip the HEAD remote pointer (e.g. "origin/main" pointing to where
         // origin/main currently is on the remote); the user wants real refs.
-        let is_remote = name.contains('/');
-        let (ahead, behind) = if parts[3] == "-" {
+        let is_remote = refname.starts_with("refs/remotes/");
+        let tracking = parts[4].trim();
+        let (ahead, behind) = if is_remote {
             (0, 0)
         } else {
-            let mut split = parts[3].split('/');
-            (
-                split.next().and_then(|n| n.parse().ok()).unwrap_or(0),
-                split.next().and_then(|n| n.parse().ok()).unwrap_or(0),
-            )
+            parse_tracking_ahead_behind(tracking)
         };
         branches.push(GitBranch {
             name,
@@ -524,7 +600,7 @@ fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String>
             is_remote,
             ahead,
             behind,
-            last_subject: parts[4].to_string(),
+            last_subject: parts[5].to_string(),
         });
     }
     // Local branches first, then remotes — but keep the current branch pinned
@@ -598,23 +674,7 @@ fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String>
 
     // ahead/behind relative to upstream.
     let (ahead, behind) = match &upstream {
-        Some(up) => {
-            let ab = git_output(
-                workspace_root,
-                &[
-                    "rev-list",
-                    "--left-right",
-                    "--count",
-                    &format!("{up}...HEAD"),
-                ],
-            )
-            .unwrap_or_default();
-            let mut it = ab.split_whitespace();
-            (
-                it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
-                it.next().and_then(|n| n.parse().ok()).unwrap_or(0),
-            )
-        }
+        Some(up) => ahead_behind_for_ref(workspace_root, up, "HEAD"),
         None => (0, 0),
     };
 
@@ -834,7 +894,7 @@ pub(crate) fn git_stash_list(workspace_root: String) -> Result<Vec<GitStash>, St
 
 #[tauri::command]
 pub(crate) fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, String> {
-    let json = git_output(
+    let json = gh_output(
         &workspace_root,
         &[
             "pr",
@@ -934,7 +994,7 @@ pub(crate) fn git_pr_view(
     workspace_root: String,
     number: u32,
 ) -> Result<PullRequestDetails, String> {
-    let json = git_output(
+    let json = gh_output(
         &workspace_root,
         &[
             "pr",
@@ -1028,7 +1088,7 @@ pub(crate) fn git_pr_view(
 
 #[tauri::command]
 pub(crate) fn git_pr_checkout(workspace_root: String, number: u32) -> Result<String, String> {
-    let out = git_output(&workspace_root, &["pr", "checkout", &number.to_string()])?;
+    let out = gh_output(&workspace_root, &["pr", "checkout", &number.to_string()])?;
     Ok(out.trim().to_string())
 }
 
@@ -1045,7 +1105,7 @@ pub(crate) fn git_pr_merge(
         "rebase" => "--rebase",
         other => return Err(format!("Unknown merge method: {other}")),
     };
-    let out = git_output(
+    let out = gh_output(
         &workspace_root,
         &["pr", "merge", &number.to_string(), flag, "--delete-branch"],
     )?;
@@ -1056,7 +1116,7 @@ pub(crate) fn git_pr_merge(
 pub(crate) fn git_pr_open(workspace_root: String, number: u32) -> Result<String, String> {
     // `gh pr view --web` opens the PR in the default browser; we return the
     // resolved URL so the UI can show a toast.
-    let url = git_output(
+    let url = gh_output(
         &workspace_root,
         &[
             "pr",
@@ -1083,7 +1143,7 @@ pub(crate) fn git_pr_open(workspace_root: String, number: u32) -> Result<String,
 #[tauri::command]
 pub(crate) fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool, String> {
     // `gh pr view <n> --json merged -q .merged` is the cheapest signal.
-    let raw = git_output(
+    let raw = gh_output(
         &workspace_root,
         &[
             "pr",
@@ -1421,6 +1481,14 @@ mod tests {
     }
 
     #[test]
+    fn tracking_summary_parses_ahead_and_behind() {
+        assert_eq!(parse_tracking_ahead_behind("ahead 3"), (3, 0));
+        assert_eq!(parse_tracking_ahead_behind("behind 2"), (0, 2));
+        assert_eq!(parse_tracking_ahead_behind("ahead 3, behind 2"), (3, 2));
+        assert_eq!(parse_tracking_ahead_behind(""), (0, 0));
+    }
+
+    #[test]
     fn bootstrap_copies_only_missing_top_level_files() {
         let base = std::env::temp_dir().join(format!("klide-wt-bootstrap-{}", std::process::id()));
         let src = base.join("main");
@@ -1484,7 +1552,8 @@ detached
     /// A throwaway git repo with one commit on `main`, for exercising the
     /// worktree commands against real git.
     fn temp_repo(name: &str) -> (std::path::PathBuf, String) {
-        let base = std::env::temp_dir().join(format!("klide-git-test-{name}-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("klide-git-test-{name}-{}", std::process::id()));
         let repo = base.join("repo");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&repo).unwrap();
@@ -1527,12 +1596,39 @@ detached
         // A worktree dir deleted by hand leaves a stale registration that
         // claims the branch; the prune-before-add must revive it cleanly.
         std::fs::remove_dir_all(&wt.path).unwrap();
-        let revived = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        let revived =
+            git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
         assert_eq!(revived.path, wt.path);
         assert!(std::path::Path::new(&revived.path).join(".git").exists());
 
         // `<repo>-worktrees` is a sibling of the repo inside `base`, so this
         // sweeps the worktree checkouts too.
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn branch_diff_defaults_to_the_recorded_fork_base() {
+        let (base, repo) = temp_repo("wt-diff-base");
+        let wt = git_worktree_add(repo.clone(), "klide/diffed".into(), Some(vec![])).unwrap();
+        // Move main forward AFTER the fork, then commit a change in the
+        // worktree — the merge-base diff must contain only the worktree's
+        // change, and the base must come from branch.<name>.base, not from
+        // whatever main now looks like.
+        std::fs::write(std::path::Path::new(&repo).join("main-only.txt"), "m").unwrap();
+        run_git(&repo, &["add", "."]).unwrap();
+        run_git(&repo, &["commit", "-m", "main moves on"]).unwrap();
+        std::fs::write(std::path::Path::new(&wt.path).join("feature.txt"), "f").unwrap();
+        run_git(&wt.path, &["add", "."]).unwrap();
+        run_git(&wt.path, &["commit", "-m", "worktree change"]).unwrap();
+
+        let diff = git_branch_diff(repo.clone(), "klide/diffed".into(), None).unwrap();
+        assert_eq!(diff.base_branch, "main", "recorded fork base wins");
+        assert!(diff.diff.contains("feature.txt"));
+        assert!(
+            !diff.diff.contains("main-only.txt"),
+            "merge-base diff excludes base-branch drift"
+        );
+
         let _ = std::fs::remove_dir_all(&base);
     }
 
