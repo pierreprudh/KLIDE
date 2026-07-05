@@ -92,10 +92,26 @@ impl DelegateStatusState {
         let mut server = self.server.lock().unwrap();
         if server.is_none() {
             let app = app.clone();
-            let on_change = move |session_id: String, status: String| {
+            // Sessions whose external id is already on disk — hooks fire many
+            // times a turn and the mapping is a JSON file; record once.
+            let recorded: Mutex<std::collections::HashSet<String>> = Mutex::new(Default::default());
+            let on_change = move |signal: HookSignal| {
+                if signal.status == "end" {
+                    // A fresh conversation in the same PTY gets a fresh id —
+                    // let it re-record.
+                    recorded.lock().unwrap().remove(&signal.session_id);
+                } else if let Some(external) = &signal.external_id {
+                    if recorded.lock().unwrap().insert(signal.session_id.clone()) {
+                        let _ = crate::pty::set_delegate_external_id(
+                            &app,
+                            &signal.session_id,
+                            external,
+                        );
+                    }
+                }
                 let _ = app.emit(
                     "delegate-status:changed",
-                    serde_json::json!({ "sessionId": session_id, "status": status }),
+                    serde_json::json!({ "sessionId": signal.session_id, "status": signal.status }),
                 );
             };
             match start_hook_server(self.statuses.clone(), Box::new(on_change)) {
@@ -132,7 +148,18 @@ fn fresh_token() -> String {
     token
 }
 
-type OnChange = Box<dyn Fn(String, String) + Send>;
+/// One accepted hook post, delivered to the app through the server's
+/// callback: which session, its new normalized status ("end" = session
+/// over), and — when the hook body carried one — the CLI's *own* session id
+/// (Claude's hook JSON always includes `session_id`). That external id is
+/// what powers `--resume` and Mission Control's run linking.
+pub struct HookSignal {
+    pub session_id: String,
+    pub status: String,
+    pub external_id: Option<String>,
+}
+
+type OnChange = Box<dyn Fn(HookSignal) + Send>;
 
 /// Bind 127.0.0.1 on an ephemeral port and serve hook posts on one thread.
 /// The thread lives for the app's lifetime — delegate sessions come and go,
@@ -148,11 +175,22 @@ pub fn start_hook_server(statuses: StatusMap, on_change: OnChange) -> Result<Hoo
     let token = fresh_token();
     let thread_token = token.clone();
     std::thread::spawn(move || {
-        for request in server.incoming_requests() {
+        for mut request in server.incoming_requests() {
             let method = request.method().to_string();
+            // The body is the CLI's own event JSON (Claude pipes it through
+            // curl --data-binary @-; the Codex shim sends none). Capped read:
+            // a hook body is a few KB, anything huge is not for us.
+            let mut body = String::new();
+            use std::io::Read;
+            let _ = request
+                .as_reader()
+                .take(64 * 1024)
+                .read_to_string(&mut body);
+            let url = request.url().to_string();
             let code = handle_hook_request(
                 &method,
-                request.url(),
+                &url,
+                &body,
                 &thread_token,
                 &statuses,
                 on_change.as_ref(),
@@ -163,16 +201,33 @@ pub fn start_hook_server(statuses: StatusMap, on_change: OnChange) -> Result<Hoo
     Ok(HookServer { port, token })
 }
 
+/// Pull the CLI's own session id out of a hook body. Key names vary per CLI
+/// (Claude: `session_id`); accept the common spellings, top-level only.
+fn extract_external_session_id(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    for key in ["session_id", "sessionId", "sessionID", "conversationId"] {
+        if let Some(id) = value.get(key).and_then(|v| v.as_str()) {
+            let id = id.trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Apply one hook post: `POST /hook/<token>/<session_id>/<state>` where
-/// `<state>` is a normalized status or `end` (session over → forget it).
-/// Returns the HTTP status code; pure apart from the map + callback, so
-/// tests drive it directly without a socket.
+/// `<state>` is a normalized status or `end` (session over → forget it),
+/// and `body` is the CLI's own event JSON (may be empty). Returns the HTTP
+/// status code; pure apart from the map + callback, so tests drive it
+/// directly without a socket.
 fn handle_hook_request(
     method: &str,
     url: &str,
+    body: &str,
     token: &str,
     statuses: &StatusMap,
-    on_change: &(dyn Fn(String, String) + Send),
+    on_change: &(dyn Fn(HookSignal) + Send),
 ) -> u16 {
     if method != "POST" {
         return 405;
@@ -193,9 +248,14 @@ fn handle_hook_request(
     if session_id.is_empty() {
         return 400;
     }
+    let external_id = extract_external_session_id(body);
     if state == "end" {
         statuses.lock().unwrap().remove(&session_id);
-        on_change(session_id, "end".to_string());
+        on_change(HookSignal {
+            session_id,
+            status: "end".to_string(),
+            external_id,
+        });
         return 204;
     }
     match AgentStatus::parse(state) {
@@ -204,7 +264,11 @@ fn handle_hook_request(
                 .lock()
                 .unwrap()
                 .insert(session_id.clone(), (status, now_ms()));
-            on_change(session_id, status.as_str().to_string());
+            on_change(HookSignal {
+                session_id,
+                status: status.as_str().to_string(),
+                external_id,
+            });
             204
         }
         None => 400,
@@ -249,9 +313,7 @@ fn merge_klide_hooks(settings: &serde_json::Value) -> (serde_json::Value, bool) 
         serde_json::json!({})
     };
     let root = out.as_object_mut().unwrap();
-    let hooks = root
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
+    let hooks = root.entry("hooks").or_insert_with(|| serde_json::json!({}));
     if !hooks.is_object() {
         *hooks = serde_json::json!({});
     }
@@ -289,9 +351,7 @@ fn merge_klide_hooks(settings: &serde_json::Value) -> (serde_json::Value, bool) 
             "hooks".to_string(),
             serde_json::json!([{ "type": "command", "command": claude_hook_command(state) }]),
         );
-        let list = hooks
-            .entry(event)
-            .or_insert_with(|| serde_json::json!([]));
+        let list = hooks.entry(event).or_insert_with(|| serde_json::json!([]));
         if !list.is_array() {
             *list = serde_json::json!([]);
         }
@@ -463,12 +523,17 @@ pub fn install_opencode_hooks(home: &str) -> Result<bool, String> {
 mod tests {
     use super::*;
 
-    fn collecting() -> (Arc<Mutex<Vec<(String, String)>>>, OnChange) {
-        let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    fn collecting() -> (Arc<Mutex<Vec<(String, String, Option<String>)>>>, OnChange) {
+        let seen: Arc<Mutex<Vec<(String, String, Option<String>)>>> =
+            Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         (
             seen,
-            Box::new(move |id, status| sink.lock().unwrap().push((id, status))),
+            Box::new(move |signal: HookSignal| {
+                sink.lock()
+                    .unwrap()
+                    .push((signal.session_id, signal.status, signal.external_id))
+            }),
         )
     }
 
@@ -477,17 +542,28 @@ mod tests {
         let statuses: StatusMap = Default::default();
         let (seen, on_change) = collecting();
         let tok = "tok123";
-        let post = |url: &str| handle_hook_request("POST", url, tok, &statuses, on_change.as_ref());
+        let post =
+            |url: &str| handle_hook_request("POST", url, "", tok, &statuses, on_change.as_ref());
 
         // Working, then blocked, for a session id that contains a colon.
         assert_eq!(post("/hook/tok123/conv-1:claude-code/working"), 204);
         assert_eq!(
-            statuses.lock().unwrap().get("conv-1:claude-code").unwrap().0,
+            statuses
+                .lock()
+                .unwrap()
+                .get("conv-1:claude-code")
+                .unwrap()
+                .0,
             AgentStatus::Working
         );
         assert_eq!(post("/hook/tok123/conv-1:claude-code/blocked"), 204);
         assert_eq!(
-            statuses.lock().unwrap().get("conv-1:claude-code").unwrap().0,
+            statuses
+                .lock()
+                .unwrap()
+                .get("conv-1:claude-code")
+                .unwrap()
+                .0,
             AgentStatus::Blocked
         );
         // `end` forgets the session.
@@ -498,7 +574,14 @@ mod tests {
         assert_eq!(post("/hook/tok123/conv-1:claude-code/exploded"), 400);
         assert_eq!(post("/nothook/tok123/x/working"), 404);
         assert_eq!(
-            handle_hook_request("GET", "/hook/tok123/s/working", tok, &statuses, on_change.as_ref()),
+            handle_hook_request(
+                "GET",
+                "/hook/tok123/s/working",
+                "",
+                tok,
+                &statuses,
+                on_change.as_ref()
+            ),
             405
         );
         let seen = seen.lock().unwrap();
@@ -507,18 +590,61 @@ mod tests {
     }
 
     #[test]
+    fn hook_body_carries_the_external_session_id() {
+        let statuses: StatusMap = Default::default();
+        let (seen, on_change) = collecting();
+        // Claude's hook JSON shape: session_id at the top level.
+        let body = r#"{"session_id":"cc-uuid-42","hook_event_name":"Stop","cwd":"/x"}"#;
+        assert_eq!(
+            handle_hook_request(
+                "POST",
+                "/hook/t/conv:claude-code/waiting",
+                body,
+                "t",
+                &statuses,
+                on_change.as_ref()
+            ),
+            204
+        );
+        assert_eq!(
+            seen.lock().unwrap()[0].2.as_deref(),
+            Some("cc-uuid-42"),
+            "external id extracted from the body"
+        );
+        // No body (Codex shim), junk body, or unknown keys → None, still 204.
+        for body in ["", "not json", r#"{"other":"x"}"#, r#"{"session_id":"  "}"#] {
+            let before = seen.lock().unwrap().len();
+            assert_eq!(
+                handle_hook_request(
+                    "POST",
+                    "/hook/t/conv:claude-code/working",
+                    body,
+                    "t",
+                    &statuses,
+                    on_change.as_ref()
+                ),
+                204
+            );
+            assert_eq!(seen.lock().unwrap()[before].2, None);
+        }
+    }
+
+    #[test]
     fn server_round_trip_over_a_real_socket() {
         use std::io::{Read, Write};
         let statuses: StatusMap = Default::default();
-        let (_seen, on_change) = collecting();
+        let (seen, on_change) = collecting();
         let server = start_hook_server(statuses.clone(), on_change).unwrap();
 
         let mut stream =
             std::net::TcpStream::connect(("127.0.0.1", server.port)).expect("connect hook server");
+        let body = r#"{"session_id":"cc-real-1"}"#;
         write!(
             stream,
-            "POST /hook/{}/sess:claude-code/waiting HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            server.token
+            "POST /hook/{}/sess:claude-code/waiting HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            server.token,
+            body.len(),
+            body
         )
         .unwrap();
         let mut response = String::new();
@@ -527,6 +653,11 @@ mod tests {
         assert_eq!(
             statuses.lock().unwrap().get("sess:claude-code").unwrap().0,
             AgentStatus::Waiting
+        );
+        assert_eq!(
+            seen.lock().unwrap()[0].2.as_deref(),
+            Some("cc-real-1"),
+            "body survives the HTTP layer"
         );
     }
 
@@ -577,7 +708,10 @@ mod tests {
             .filter(|c| c.contains("KLIDE_HOOK_URL"))
             .collect();
         assert_eq!(klide.len(), 1, "exactly one Klide command after refresh");
-        assert!(klide[0].contains("/waiting"), "and it's the current template");
+        assert!(
+            klide[0].contains("/waiting"),
+            "and it's the current template"
+        );
     }
 
     #[test]
