@@ -33,6 +33,12 @@ impl Delegate for OpenCode {
         "opencode"
     }
 
+    /// OpenCode loads JS plugins — Klide drops a status plugin into
+    /// `~/.config/opencode/plugin/` (see status.rs).
+    fn ensure_status_hooks(&self, home: &str) -> Result<bool, String> {
+        super::status::install_opencode_hooks(home)
+    }
+
     fn spawn_prefix(&self, has_task: bool, resuming: bool) -> String {
         if has_task && !resuming {
             format!("{} run", self.binary())

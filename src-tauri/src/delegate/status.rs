@@ -333,6 +333,132 @@ pub fn install_claude_hooks(home: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+// ── Codex hook installer ────────────────────────────────────────────────
+//
+// Codex has no hooks system, but `~/.codex/config.toml` takes a `notify`
+// program invoked with one JSON argument per event (agent-turn-complete,
+// approval requests). Klide writes its own shim script under
+// `~/.klide/hooks/` — wholly Klide-owned, always safe to rewrite — and
+// points `notify` at it only when the user hasn't configured a notifier of
+// their own. Codex only announces turn ends and approvals (no turn-start
+// event), so "working" comes from the keystroke-clear in delegate_pty_write
+// plus the PTY activity timer, not from a hook.
+
+fn codex_shim_source() -> &'static str {
+    concat!(
+        "#!/bin/sh\n",
+        "# Klide delegate status shim — the `notify` target in ~/.codex/config.toml.\n",
+        "# Env-guarded: outside a Klide-spawned session (no KLIDE_HOOK_URL) it does\n",
+        "# nothing, so codex runs from a plain terminal are unaffected.\n",
+        "[ -n \"$KLIDE_HOOK_URL\" ] || exit 0\n",
+        "case \"$1\" in\n",
+        "  *agent-turn-complete*) state=waiting ;;\n",
+        "  *approval*) state=blocked ;;\n",
+        "  *) exit 0 ;;\n",
+        "esac\n",
+        "curl -sS --max-time 2 -X POST \"$KLIDE_HOOK_URL/$state\" >/dev/null 2>&1 || true\n",
+    )
+}
+
+/// Add a top-level `notify = ["<shim>"]` to a codex config. `None` when the
+/// config already names a notifier — the user's own stays; ours from a past
+/// install also matches here, which is what makes the merge idempotent.
+/// TOML only allows top-level keys before the first `[table]` header, so the
+/// scan stops there and the new line goes at the very top.
+fn merge_codex_config(text: &str, shim_path: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            break;
+        }
+        if let Some(rest) = trimmed.strip_prefix("notify") {
+            if rest.trim_start().starts_with('=') {
+                return None;
+            }
+        }
+    }
+    let line = format!("notify = [{shim_path:?}]");
+    Some(if text.trim().is_empty() {
+        format!("{line}\n")
+    } else {
+        format!("{line}\n\n{text}")
+    })
+}
+
+pub fn install_codex_hooks(home: &str) -> Result<bool, String> {
+    let hooks_dir = std::path::Path::new(home).join(".klide/hooks");
+    let shim = hooks_dir.join("codex-status.sh");
+    let mut changed = false;
+    if std::fs::read_to_string(&shim).ok().as_deref() != Some(codex_shim_source()) {
+        std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("create ~/.klide/hooks: {e}"))?;
+        std::fs::write(&shim, codex_shim_source()).map_err(|e| format!("write codex shim: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755));
+        }
+        changed = true;
+    }
+
+    let config_dir = std::path::Path::new(home).join(".codex");
+    let config_path = config_dir.join("config.toml");
+    let text = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let shim_str = shim.to_string_lossy();
+    if let Some(merged) = merge_codex_config(&text, &shim_str) {
+        std::fs::create_dir_all(&config_dir).map_err(|e| format!("create ~/.codex: {e}"))?;
+        let backup = config_dir.join("config.toml.klide-bak");
+        if config_path.exists() && !backup.exists() {
+            let _ = std::fs::copy(&config_path, &backup);
+        }
+        std::fs::write(&config_path, merged).map_err(|e| format!("write codex config: {e}"))?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+// ── OpenCode hook installer ─────────────────────────────────────────────
+//
+// OpenCode loads JS plugins from `~/.config/opencode/plugin/`. The file is
+// wholly Klide-owned (its name is the marker), so installing is a plain
+// content-compare-and-write. Same env guard as everything else, and the
+// plugin dedupes: it only posts when the state actually changes, since
+// message events fire on every streamed chunk.
+
+const OPENCODE_PLUGIN_SOURCE: &str = r#"// Klide delegate status plugin — auto-managed by Klide, safe to delete.
+// Env-guarded: outside a Klide-spawned session (no KLIDE_HOOK_URL) it is
+// inert, so opencode runs from a plain terminal are unaffected.
+export const KlideStatus = async () => {
+  const base = process.env.KLIDE_HOOK_URL
+  if (!base) return {}
+  let last = ""
+  const post = (state) => {
+    if (state === last) return
+    last = state
+    fetch(`${base}/${state}`, { method: "POST" }).catch(() => {})
+  }
+  return {
+    event: async ({ event }) => {
+      const type = event?.type ?? ""
+      if (type === "session.idle") post("waiting")
+      else if (type.startsWith("permission.")) post("blocked")
+      else if (type.startsWith("message.") || type === "session.status") post("working")
+    },
+  }
+}
+"#;
+
+pub fn install_opencode_hooks(home: &str) -> Result<bool, String> {
+    let dir = std::path::Path::new(home).join(".config/opencode/plugin");
+    let path = dir.join("klide-status.js");
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(OPENCODE_PLUGIN_SOURCE) {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create opencode plugin dir: {e}"))?;
+    std::fs::write(&path, OPENCODE_PLUGIN_SOURCE)
+        .map_err(|e| format!("write opencode plugin: {e}"))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,6 +578,83 @@ mod tests {
             .collect();
         assert_eq!(klide.len(), 1, "exactly one Klide command after refresh");
         assert!(klide[0].contains("/waiting"), "and it's the current template");
+    }
+
+    #[test]
+    fn merge_codex_config_prepends_respects_user_notify_and_is_idempotent() {
+        let shim = "/home/u/.klide/hooks/codex-status.sh";
+        // Empty config → just the notify line.
+        assert_eq!(
+            merge_codex_config("", shim).as_deref(),
+            Some("notify = [\"/home/u/.klide/hooks/codex-status.sh\"]\n")
+        );
+        // Existing top-level keys + sections → prepended above everything,
+        // even when a `notify` appears *inside* a section (that one belongs
+        // to the section, not the top level).
+        let config = "model = \"o4\"\n\n[profiles.fast]\nnotify = [\"sectional\"]\n";
+        let merged = merge_codex_config(config, shim).unwrap();
+        assert!(merged.starts_with("notify = ["));
+        assert!(merged.ends_with(config));
+        // A user-configured top-level notifier is never replaced…
+        assert_eq!(merge_codex_config("notify = [\"my-bell\"]\n", shim), None);
+        // …and neither is ours from a past install (idempotence).
+        assert_eq!(merge_codex_config(&merged, shim), None);
+        // A commented-out notify doesn't count as configured.
+        assert!(merge_codex_config("# notify = [\"x\"]\n", shim).is_some());
+    }
+
+    #[test]
+    fn install_codex_hooks_writes_shim_and_config_once() {
+        let home = std::env::temp_dir().join(format!("klide-codex-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/config.toml"), "model = \"o4\"\n").unwrap();
+        let home_s = home.to_str().unwrap();
+
+        assert_eq!(install_codex_hooks(home_s), Ok(true));
+        let shim = home.join(".klide/hooks/codex-status.sh");
+        assert!(std::fs::read_to_string(&shim)
+            .unwrap()
+            .contains("KLIDE_HOOK_URL"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111,
+                0,
+                "shim must be executable"
+            );
+        }
+        let config = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(config.starts_with("notify = ["));
+        assert!(config.contains("model = \"o4\""), "user config survives");
+        assert_eq!(
+            std::fs::read_to_string(home.join(".codex/config.toml.klide-bak")).unwrap(),
+            "model = \"o4\"\n",
+            "first touch snapshots the original"
+        );
+        // Second run: nothing left to do.
+        assert_eq!(install_codex_hooks(home_s), Ok(false));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_opencode_hooks_writes_the_plugin_once() {
+        let home = std::env::temp_dir().join(format!("klide-oc-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let home_s = home.to_str().unwrap();
+
+        assert_eq!(install_opencode_hooks(home_s), Ok(true));
+        let plugin = home.join(".config/opencode/plugin/klide-status.js");
+        let source = std::fs::read_to_string(&plugin).unwrap();
+        assert!(source.contains("KLIDE_HOOK_URL"));
+        assert_eq!(install_opencode_hooks(home_s), Ok(false));
+
+        // A stale/hand-edited copy is refreshed back to the current source.
+        std::fs::write(&plugin, "// old").unwrap();
+        assert_eq!(install_opencode_hooks(home_s), Ok(true));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

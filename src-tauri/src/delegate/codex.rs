@@ -20,6 +20,12 @@ impl Delegate for Codex {
         "codex"
     }
 
+    /// Codex has no hooks, but its `notify` program covers turn ends and
+    /// approvals — Klide's shim posts those (see status.rs).
+    fn ensure_status_hooks(&self, home: &str) -> Result<bool, String> {
+        super::status::install_codex_hooks(home)
+    }
+
     fn model_arg(&self, model: &str) -> String {
         format!(" -m {}", shell_quote(model))
     }

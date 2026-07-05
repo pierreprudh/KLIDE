@@ -340,6 +340,7 @@ pub fn delegate_pty_spawn(
 #[tauri::command]
 pub fn delegate_pty_write(
     state: State<DelegatePtyState>,
+    status_state: State<crate::delegate::status::DelegateStatusState>,
     session_id: String,
     data: String,
 ) -> Result<(), String> {
@@ -349,6 +350,12 @@ pub fn delegate_pty_write(
             .write_all(data.as_bytes())
             .map_err(|e| e.to_string())?;
         session.updated_ms.store(now_ms(), Ordering::Relaxed);
+        // Typing into the TUI answers whatever the agent was waiting on, so
+        // "Needs input" / "Turn done" no longer describe the session. Forget
+        // the hook status; the next hook (or the activity timer) re-derives
+        // it. This is also what flips Codex back to Active — its notify
+        // program has no turn-start event.
+        status_state.statuses.lock().unwrap().remove(&session_id);
     }
     Ok(())
 }
