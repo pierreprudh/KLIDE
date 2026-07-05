@@ -464,8 +464,21 @@ pub fn delegate_pty_live_sessions(
             }
         })
         .collect();
-    // Most recently active first, so the freshest agent is at the top.
-    out.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
+    // Urgency first — a session waiting on the user outranks a busy one, a
+    // finished turn outranks background churn — then freshest activity.
+    fn urgency(status: &str) -> u8 {
+        match status {
+            "blocked" => 0,
+            "waiting" => 1,
+            "working" | "running" => 2,
+            _ => 3, // idle
+        }
+    }
+    out.sort_by(|a, b| {
+        urgency(&a.status)
+            .cmp(&urgency(&b.status))
+            .then(b.updated_ms.cmp(&a.updated_ms))
+    });
     out
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
+import { watchDelegateStatus } from "../delegateStatusNotify";
 import {
   type Toast,
   type ToastTone,
@@ -144,6 +145,15 @@ export default function ToastHost() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   useEffect(() => subscribeToasts(setToasts), []);
+
+  // The delegate status watcher lives with the surface that renders its
+  // output: ToastHost is mounted exactly once at the App root, so this is
+  // the one place the app-wide "agent needs you / turn done" subscription
+  // can't be double-mounted or forgotten.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    return watchDelegateStatus();
+  }, []);
 
   if (toasts.length === 0) return null;
 
