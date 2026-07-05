@@ -1210,6 +1210,12 @@ pub(crate) fn git_worktree_add(
     }
     let copy_files = copy_files.unwrap_or_else(default_worktree_copy_files);
 
+    // A worktree dir deleted by hand (rm -rf, Finder) leaves a stale
+    // registration that keeps its branch claimed — re-creating a worktree on
+    // that branch then fails with "already checked out". Prune first so the
+    // add always starts from git's real on-disk state. Warn-only.
+    let _ = run_git(&toplevel, &["worktree", "prune"]);
+
     // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
     // it never trips a file watcher or shows up in the workspace tree.
     let dir =
@@ -1251,12 +1257,40 @@ pub(crate) fn git_worktree_add(
         ],
     )
     .is_ok();
+    // Capture what HEAD is on *before* the add, so a newly created branch can
+    // record what it forked from. None on a detached HEAD.
+    let base_branch = git_output(&toplevel, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|b| !b.is_empty() && b != "HEAD");
+
     let args: Vec<&str> = if branch_exists {
         vec!["worktree", "add", &path, branch]
     } else {
         vec!["worktree", "add", "-b", branch, &path]
     };
     run_git(&toplevel, &args)?;
+
+    // Post-create config — the recipe both Orca and Superset converged on
+    // (docs/competitors-orca-superset.md). Worktrees share the repo's config
+    // file, so both writes land once at repo scope. Warn-only: a run in a
+    // worktree without them still works, just less smoothly.
+    //
+    // - push.autoSetupRemote: a bare `git push` from the agent's terminal
+    //   publishes the branch and sets its upstream (no -u needed). Only set
+    //   when unset, so a user's explicit `false` is preserved.
+    // - branch.<name>.base: what the branch forked from, so review surfaces
+    //   can later diff against the right base. Only recorded for branches
+    //   this call created — an adopted existing branch keeps its history.
+    if git_output(&toplevel, &["config", "--get", "push.autoSetupRemote"]).is_err() {
+        let _ = run_git(&toplevel, &["config", "push.autoSetupRemote", "true"]);
+    }
+    if !branch_exists {
+        if let Some(base) = base_branch {
+            let key = format!("branch.{branch}.base");
+            let _ = run_git(&toplevel, &["config", &key, &base]);
+        }
+    }
 
     let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
     Ok(WorktreeInfo {
@@ -1445,6 +1479,76 @@ detached
         assert_eq!(list[1].branch, "klide/fix");
         assert_eq!(list[2].path, "/repo-worktrees/detached");
         assert_eq!(list[2].branch, ""); // detached → no branch
+    }
+
+    /// A throwaway git repo with one commit on `main`, for exercising the
+    /// worktree commands against real git.
+    fn temp_repo(name: &str) -> (std::path::PathBuf, String) {
+        let base = std::env::temp_dir().join(format!("klide-git-test-{name}-{}", std::process::id()));
+        let repo = base.join("repo");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo_s = repo.to_str().unwrap().to_string();
+        run_git(&repo_s, &["init", "-b", "main"]).unwrap();
+        run_git(&repo_s, &["config", "user.email", "test@klide.local"]).unwrap();
+        run_git(&repo_s, &["config", "user.name", "Klide Test"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "hi").unwrap();
+        run_git(&repo_s, &["add", "."]).unwrap();
+        run_git(&repo_s, &["commit", "-m", "init"]).unwrap();
+        (base, repo_s)
+    }
+
+    #[test]
+    fn worktree_add_applies_the_fleet_recipe() {
+        let (base, repo) = temp_repo("wt-recipe");
+
+        let wt = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        assert_eq!(wt.branch, "klide/test-run");
+        assert!(std::path::Path::new(&wt.path).join(".git").exists());
+        // New branch records what it forked from, and a bare `git push` from
+        // the worktree will publish the branch (autoSetupRemote).
+        assert_eq!(
+            git_output(&repo, &["config", "--get", "branch.klide/test-run.base"])
+                .unwrap()
+                .trim(),
+            "main"
+        );
+        assert_eq!(
+            git_output(&repo, &["config", "--get", "push.autoSetupRemote"])
+                .unwrap()
+                .trim(),
+            "true"
+        );
+
+        // Re-adding is idempotent: same path back, no error.
+        let again = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        assert_eq!(again.path, wt.path);
+
+        // A worktree dir deleted by hand leaves a stale registration that
+        // claims the branch; the prune-before-add must revive it cleanly.
+        std::fs::remove_dir_all(&wt.path).unwrap();
+        let revived = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        assert_eq!(revived.path, wt.path);
+        assert!(std::path::Path::new(&revived.path).join(".git").exists());
+
+        // `<repo>-worktrees` is a sibling of the repo inside `base`, so this
+        // sweeps the worktree checkouts too.
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn worktree_add_respects_an_explicit_autosetupremote_choice() {
+        let (base, repo) = temp_repo("wt-guard");
+        // The user explicitly opted out — the recipe must not clobber that.
+        run_git(&repo, &["config", "push.autoSetupRemote", "false"]).unwrap();
+        git_worktree_add(repo.clone(), "klide/guarded".into(), Some(vec![])).unwrap();
+        assert_eq!(
+            git_output(&repo, &["config", "--get", "push.autoSetupRemote"])
+                .unwrap()
+                .trim(),
+            "false"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
