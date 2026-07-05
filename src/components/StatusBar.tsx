@@ -1,4 +1,5 @@
 import { getThemeMeta, type ThemeId } from "../theme";
+import { keysFor } from "../shortcuts";
 import { LayoutBento } from "./LayoutBento";
 import { Tooltip } from "./Tooltip";
 import type { GridLayout } from "../gridLayouts";
@@ -205,7 +206,7 @@ export function StatusBar({
       {/* Focus mode has no terminal surface — the toggle would flip
           state with nothing to show, so it steps out entirely. */}
       {!focusMode && (
-        <Tooltip label="Toggle terminal (⌃`)">
+        <Tooltip label="Toggle terminal" keys={keysFor("toggle-terminal")}>
         <button
           onClick={onToggleTerminal}
           aria-label="Toggle terminal"

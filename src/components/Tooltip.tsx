@@ -10,6 +10,7 @@ import {
 import type { ReactElement, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
+import { Kbd } from "./Kbd";
 
 // A themed tooltip that replaces the native `title=` popup. Native tooltips
 // wait ~500ms, can't be styled, and float wherever the OS wants — they ignore
@@ -34,12 +35,19 @@ const MARGIN = 8; // keep-away from the viewport edges
 
 export function Tooltip({
   label,
+  keys,
+  description,
   placement = "top",
   delay = 0,
   children,
 }: {
   /** Tooltip content. When empty/null the child renders untouched. */
   label: ReactNode;
+  /** Optional shortcut keycaps shown after the label (from src/shortcuts.ts
+   *  via `keysFor(id)`) — the registry keeps chord displays from drifting. */
+  keys?: string[];
+  /** Optional muted second line — what the action does, not just its name. */
+  description?: ReactNode;
   /** Preferred side; auto-flips to the other if there's no room. */
   placement?: Placement;
   /** Hover delay (ms). 0 = appear immediately on hover. */
@@ -181,7 +189,19 @@ export function Tooltip({
               opacity: pos ? 1 : 0,
             }}
           >
-            {label}
+            {keys && keys.length > 0 ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                <span>{label}</span>
+                <Kbd keys={keys} />
+              </span>
+            ) : (
+              label
+            )}
+            {description != null && description !== "" && (
+              <div style={{ marginTop: 2, color: "var(--fg-subtle)", fontSize: 11 }}>
+                {description}
+              </div>
+            )}
           </div>,
           document.body
         )}

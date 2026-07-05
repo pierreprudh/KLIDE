@@ -418,6 +418,7 @@ textarea:focus-visible:not(.inputarea):not(.xterm-helper-textarea) {
 }
 
 .klide-field {
+  box-sizing: border-box;
   min-height: 32px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
@@ -1251,6 +1252,28 @@ select.klide-field {
 }
 @media (prefers-reduced-motion: reduce) {
   .klide-tooltip {
+    animation: none;
+  }
+}
+
+/* Generic quiet entrance — fade + 6px rise, the app's standard "content
+   arrives" move. Stagger a list by setting --enter-delay per item; `both`
+   keeps items hidden until their turn. Honours reduced-motion below. */
+.klide-enter-rise {
+  animation: klide-enter-rise var(--motion-slow) var(--ease-soft) var(--enter-delay, 0ms) both;
+}
+@keyframes klide-enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-enter-rise {
     animation: none;
   }
 }

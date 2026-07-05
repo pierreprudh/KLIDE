@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Tooltip } from "./Tooltip";
+import { Kbd } from "./Kbd";
+import { keysFor } from "../shortcuts";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -3671,7 +3673,7 @@ function LiveSessionsStrip({
   const scrolls = sessions.length > maxVisible;
 
   return (
-    <div style={{ padding: "14px 8px 12px 16px", borderBottom: "1px solid var(--border)" }}>
+    <div className="klide-enter-rise" style={{ padding: "14px 8px 12px 16px", borderBottom: "1px solid var(--border)" }}>
       <div
         style={{
           display: "flex",
@@ -3705,6 +3707,12 @@ function LiveSessionsStrip({
           const idle = s.status === "idle";
           const statusLabel = LIVE_STATUS_TEXT[s.status] ?? "Active";
           const statusColor = LIVE_STATUS_COLOR[s.status] ?? "var(--accent)";
+          // "Needs input" is the one state worth a resting wash — the agent is
+          // parked on the user. Everything else stays flat until hover.
+          const restBg =
+            s.status === "blocked"
+              ? "color-mix(in srgb, var(--warning) 6%, transparent)"
+              : "transparent";
           const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : statusLabel;
           const reattach = () =>
             canReattach &&
@@ -3719,6 +3727,7 @@ function LiveSessionsStrip({
               type="button"
               onClick={reattach}
               disabled={!canReattach}
+              className={`klide-enter-rise live-row${canReattach ? " has-act" : ""}`}
               title={canReattach ? `Reattach · ${title} · ${statusText}` : `${title} · ${statusText}`}
               style={{
                 display: "flex",
@@ -3731,7 +3740,7 @@ function LiveSessionsStrip({
                 margin: "0 -8px",
                 borderRadius: "var(--radius-sm)",
                 border: "none",
-                background: "transparent",
+                background: restBg,
                 cursor: canReattach ? "pointer" : "default",
                 font: "inherit",
                 transition: "background var(--motion-fast) var(--ease-out)",
@@ -3740,7 +3749,7 @@ function LiveSessionsStrip({
                 if (canReattach) e.currentTarget.style.background = "var(--bg-hover)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.background = restBg;
               }}
             >
               <span style={{ flexShrink: 0, display: "grid", placeItems: "center", opacity: 0.9 }}>
@@ -3772,10 +3781,18 @@ function LiveSessionsStrip({
               </span>
               <span
                 style={{
-                  flexShrink: 0, fontSize: 11, color: "var(--fg-dim)", fontFamily: "var(--font-mono)",
+                  flexShrink: 0,
+                  minWidth: 64,
+                  display: "inline-flex",
+                  justifyContent: "flex-end",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono)",
                 }}
               >
-                {relativeTime(s.startedMs)}
+                <span className="live-rest" style={{ color: "var(--fg-dim)" }}>
+                  {relativeTime(s.startedMs)}
+                </span>
+                {canReattach && <span className="live-act">Reattach</span>}
               </span>
             </button>
           );
@@ -3799,7 +3816,6 @@ export function MissionControl({
   pendingCheckpointRunId,
   onPendingCheckpointConsumed,
   summarizingFromRunId,
-  onBack,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
@@ -3841,7 +3857,6 @@ export function MissionControl({
    *  subtle spinner on the row so the user knows the model call is in
    *  flight. */
   summarizingFromRunId?: string | null;
-  onBack?: () => void;
 }) {
   const tasks = useSyncExternalStore(subscribeTasks, getTaskSessions);
   const convos = useSyncExternalStore(subscribeKlideConvos, getKlideConvos);
@@ -4265,6 +4280,12 @@ export function MissionControl({
         .mc-src:hover { opacity: 1; }
         .mc-src.active { opacity: 1; background: var(--bg-hover); color: var(--fg-strong); }
         .mc-srcdiv { width: 1px; height: 16px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+        /* Live-strip hover swap — the row rests as data (relative time) and
+           offers its action (Reattach) in the same footprint under the
+           pointer. Rows without an action keep the timestamp. */
+        .live-act { display: none; color: var(--accent); font-weight: 500; }
+        .live-row.has-act:hover .live-act { display: inline; }
+        .live-row.has-act:hover .live-rest { display: none; }
         @media (prefers-reduced-motion: reduce) {
           .mc-row { animation: none; }
           .mc-sec-head .mc-hint { transition: none; }
@@ -4282,21 +4303,9 @@ export function MissionControl({
         }}
       >
         <header style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Row 1 — title · status chips · refresh */}
+          {/* Row 1 — title · status chips · refresh. No back chevron: Esc
+              returns to the editor and the activity bar stays reachable. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {onBack && (
-              <button
-                onClick={onBack}
-                title="Back to workbench"
-                aria-label="Back to workbench"
-                className="mc-iconbtn"
-                style={{ width: 24, height: 24 }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M15 6l-6 6 6 6" />
-                </svg>
-              </button>
-            )}
             <h1 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-strong)", margin: 0, flexShrink: 0 }}>
               Mission Control
             </h1>
@@ -4308,9 +4317,11 @@ export function MissionControl({
               {projectOptions.length > 0 && (
                 <ProjectSwitcher value={projectFilter} options={projectOptions} onChange={setProjectFilter} />
               )}
-              <button onClick={() => void load()} title="Refresh" aria-label="Refresh runs" className="mc-iconbtn">
-                <RefreshIcon />
-              </button>
+              <Tooltip label="Refresh" description="Re-reads session logs and Klide conversations">
+                <button onClick={() => void load()} aria-label="Refresh runs" className="mc-iconbtn">
+                  <RefreshIcon />
+                </button>
+              </Tooltip>
             </div>
           </div>
 
@@ -4385,13 +4396,42 @@ export function MissionControl({
             onAdded={(id) => setSelectedId(id)}
           />
           {!loading && filtered.length === 0 && (
-            <div style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
-              <div style={{ color: "var(--fg-strong)", marginBottom: 5 }}>
-                No matching runs.
+            sessionQuery.trim() !== "" || sourceFilter !== "all" ? (
+              <div className="klide-enter-rise" style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
+                <div style={{ color: "var(--fg-strong)", marginBottom: 5 }}>
+                  No matching runs.
+                </div>
+                Mission Control reads local session logs and Klide conversations.
+                Adjust the search or source filter, or start a new agent run.
               </div>
-              Mission Control reads local session logs and Klide conversations.
-              Adjust the search or source filter, or start a new agent run.
-            </div>
+            ) : (
+              /* A genuinely empty board teaches the two ways runs appear,
+                 then hands the keyboard back — quiet furniture, not a card. */
+              <div className="klide-enter-rise" style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
+                <div style={{ color: "var(--fg-strong)", marginBottom: 5 }}>
+                  No runs yet.
+                </div>
+                Add a task above to queue work for an agent, or start a
+                conversation in the AI panel — every run lands on this board.
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                    marginTop: 16,
+                    color: "var(--fg-dim)",
+                    fontSize: 11.5,
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <Kbd keys={["Esc"]} /> Back to the editor
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <Kbd keys={keysFor("cheatsheet")} /> Shortcuts
+                  </span>
+                </div>
+              </div>
+            )
           )}
           {(() => {
             // Build parent → children map from ALL linked runs (not filtered).

@@ -4,6 +4,16 @@ import {
   getMonacoThemeId,
   type ThemeId,
 } from "../theme";
+import { keysFor } from "../shortcuts";
+import { Kbd } from "./Kbd";
+
+/** Actions the no-file launcher can fire; App maps them onto the same
+ *  handlers its global shortcuts use, so click and chord stay one code path. */
+export type EditorEmptyAction =
+  | "go-to-file"
+  | "command-palette"
+  | "find-in-files"
+  | "toggle-terminal";
 
 type Props = {
   code: string;
@@ -17,6 +27,8 @@ type Props = {
   minimap: boolean;
   /** App keeps a ref to the Monaco editor for goto-line / reveal commands. */
   onEditorMount?: (editor: Parameters<OnMount>[0]) => void;
+  /** Fired by the no-file launcher rows. */
+  onEmptyAction?: (action: EditorEmptyAction) => void;
 };
 
 export function EditorArea({
@@ -30,11 +42,15 @@ export function EditorArea({
   wordWrap,
   minimap,
   onEditorMount,
+  onEmptyAction,
 }: Props) {
   const editorTheme = getMonacoThemeId(theme);
 
   // A folder is always open by the time we render here (App shows the
-  // full-screen welcome otherwise); this is the "no file selected yet" hint.
+  // full-screen welcome otherwise). The "no file yet" state is a launcher,
+  // not a dead end: each row is a real action with its chord as a keycap —
+  // the empty screen doubles as the shortcut tutorial (the pattern Superset/
+  // Orca use for their empty tabs).
   if (!hasFile) {
     return (
       <div
@@ -57,6 +73,7 @@ export function EditorArea({
           }}
         >
           <div
+            className="klide-enter-rise"
             style={{
               fontSize: 13,
               color: "var(--fg-dim)",
@@ -68,23 +85,45 @@ export function EditorArea({
           >
             No file open
           </div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "7px 12px",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--border)",
-              background: "color-mix(in srgb, var(--bg-elevated) 80%, transparent)",
-              color: "var(--fg)",
-              fontSize: 12.5,
-            }}
-          >
-            <KeyCap>⌘</KeyCap>
-            <span style={{ color: "var(--fg-dim)" }}>+</span>
-            <KeyCap>P</KeyCap>
-            <span style={{ marginLeft: 4 }}>to open a file</span>
+          <div style={{ display: "flex", flexDirection: "column", textAlign: "left" }}>
+            {(
+              [
+                { action: "go-to-file", label: "Go to file" },
+                { action: "command-palette", label: "Command palette" },
+                { action: "find-in-files", label: "Find in files" },
+                { action: "toggle-terminal", label: "Toggle terminal" },
+              ] as const
+            ).map(({ action, label }, i) => (
+              <button
+                key={action}
+                type="button"
+                onClick={() => onEmptyAction?.(action)}
+                className="klide-enter-rise"
+                style={{
+                  ["--enter-delay" as string]: `${60 + i * 40}ms`,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  height: 34,
+                  padding: "0 10px",
+                  borderRadius: "var(--radius-md)",
+                  color: "var(--fg-subtle)",
+                  fontSize: 12.5,
+                  textAlign: "left",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--fg-strong)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "var(--fg-subtle)";
+                }}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+                <Kbd keys={keysFor(action)} />
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -127,29 +166,5 @@ export function EditorArea({
         }}
       />
     </div>
-  );
-}
-
-function KeyCap({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        display: "inline-grid",
-        placeItems: "center",
-        minWidth: 18,
-        height: 18,
-        padding: "0 5px",
-        borderRadius: 4,
-        border: "1px solid color-mix(in srgb, var(--border-strong) 80%, transparent)",
-        background: "color-mix(in srgb, var(--bg) 80%, var(--bg-elevated))",
-        color: "var(--fg)",
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        lineHeight: 1,
-        boxShadow: "inset 0 1px 0 var(--panel-highlight)",
-      }}
-    >
-      {children}
-    </span>
   );
 }

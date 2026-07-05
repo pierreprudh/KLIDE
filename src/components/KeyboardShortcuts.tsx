@@ -1,61 +1,13 @@
 import { useEffect, useRef } from "react";
 import { Z } from "../zLayers";
+import { SHORTCUTS, SHORTCUT_GROUPS } from "../shortcuts";
+import { Kbd } from "./Kbd";
 
 // The keyboard-shortcuts cheatsheet — a centered, read-only reference so
 // keyboard-only users can discover what's bound. Opened with ⌘/ or "?", closed
-// with Escape. Static content mirrors the bindings wired in App.tsx; keep the
-// two in sync when a shortcut changes.
-
-type Row = { keys: string[]; label: string };
-type Group = { title: string; rows: Row[] };
-
-const GROUPS: Group[] = [
-  {
-    title: "Move around",
-    rows: [
-      { keys: ["⌃", "Tab"], label: "Focus next region (Explorer → Editor → Terminal → AI) · or F6" },
-      { keys: ["⌃", "⇧", "Tab"], label: "Focus previous region · or ⇧F6" },
-      { keys: ["⌘", "P"], label: "Go to file" },
-      { keys: ["⌘", "⇧", "P"], label: "Command palette" },
-      { keys: ["⌘", "⇧", "F"], label: "Find in files" },
-      { keys: ["⌘", "⇧", "G"], label: "Git review" },
-      { keys: ["⌘", "N"], label: "Back to the editor" },
-      { keys: ["⌘", "Tab"], label: "Next tab" },
-      { keys: ["⌘", "⇧", "Tab"], label: "Previous tab" },
-    ],
-  },
-  {
-    title: "Files & editing",
-    rows: [
-      { keys: ["⌘", "S"], label: "Save file" },
-      { keys: ["⌘", "O"], label: "Open folder" },
-      { keys: ["⌘", "W"], label: "Close tab" },
-      { keys: ["⌘", "F"], label: "Find in file (editor)" },
-    ],
-  },
-  {
-    title: "Panels & views",
-    rows: [
-      { keys: ["⌘", "`"], label: "Toggle terminal" },
-      { keys: ["⌘", ","], label: "Settings" },
-      { keys: ["⌘", "."], label: "Profile" },
-      { keys: ["⌘", "/"], label: "This cheatsheet" },
-    ],
-  },
-  {
-    title: "AI panel",
-    rows: [
-      { keys: ["↵"], label: "Send message" },
-      { keys: ["⇧", "↵"], label: "New line" },
-      { keys: ["Tab"], label: "Toggle mode (Chat / Plan / Goal)" },
-      { keys: ["Esc"], label: "Stop a running turn" },
-    ],
-  },
-];
-
-function Keycap({ children }: { children: string }) {
-  return <kbd className="klide-kbd" style={{ marginLeft: 0 }}>{children}</kbd>;
-}
+// with Escape. Content comes from the shortcut registry (src/shortcuts.ts);
+// the handlers themselves live in App.tsx — keep registry and handlers in
+// sync when a binding changes.
 
 export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -143,7 +95,7 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
             alignContent: "start",
           }}
         >
-          {GROUPS.map((group) => (
+          {SHORTCUT_GROUPS.map((group) => (
             <section key={group.title} style={{ marginTop: 14, minWidth: 0 }}>
               <div
                 style={{
@@ -157,9 +109,9 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
               >
                 {group.title}
               </div>
-              {group.rows.map((row) => (
+              {group.ids.map((id) => (
                 <div
-                  key={row.label}
+                  key={id}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -169,12 +121,8 @@ export function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
                     color: "var(--fg)",
                   }}
                 >
-                  <span style={{ flex: 1, minWidth: 0 }}>{row.label}</span>
-                  <span style={{ flexShrink: 0, display: "flex", gap: 3 }}>
-                    {row.keys.map((k, i) => (
-                      <Keycap key={i}>{k}</Keycap>
-                    ))}
-                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>{SHORTCUTS[id].label}</span>
+                  <Kbd keys={SHORTCUTS[id].keys} />
                 </div>
               ))}
             </section>
