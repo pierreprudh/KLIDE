@@ -235,7 +235,11 @@ export function TodoStrip({
   const doneSignature = completionSignature(items, events);
 
   function dismissCompletedTodos() {
-    if (allDone) rememberCompletedTodosDismissed(workspaceRoot, conversationId, doneSignature);
+    // Persist the dismissal regardless of completion state — the persisted
+    // signature is compared on next mount so the strip doesn't reappear
+    // after an app restart. If items change later (agent resumes work) the
+    // signature no longer matches and the strip comes back.
+    rememberCompletedTodosDismissed(workspaceRoot, conversationId, doneSignature);
     setDismissed(true);
   }
 
@@ -248,11 +252,12 @@ export function TodoStrip({
   }, [allDone]);
 
   useEffect(() => {
-    if (!allDone) return;
+    // Restore a prior dismissal whether or not the plan finished — the
+    // signature comparison handles staleness (different items → show again).
     if (completedTodosWereDismissed(workspaceRoot, conversationId, doneSignature)) {
       setDismissed(true);
     }
-  }, [allDone, workspaceRoot, conversationId, doneSignature]);
+  }, [workspaceRoot, conversationId, doneSignature]);
 
   const visible = !dismissed && !(total === 0 && recentEvents.length === 0);
 
