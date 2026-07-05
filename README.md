@@ -2,12 +2,13 @@
 
 # Klide
 
-### A quiet agentic control surface for coding.
+### The local-first agent IDE that keeps you in control.
 
-Local models by default · online providers when you want them · real agent terminals built in.
+Run local models, steer Codex / Claude Code / OpenCode, review every change, and keep your coding agents visible.
 
 <br/>
 
+[![GitHub stars](https://img.shields.io/github/stars/pierreprudh/KLIDE?style=flat-square&logo=github)](https://github.com/pierreprudh/KLIDE/stargazers)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)](https://v2.tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
@@ -21,15 +22,29 @@ Local models by default · online providers when you want them · real agent ter
 
 <br/>
 
+[**Get started**](#build--run) &nbsp;&bull;&nbsp; [Features](#features) &nbsp;&bull;&nbsp; [Roadmap](#roadmap)
+
+<br/>
+
 <img src=".github/assets/welcome.png" alt="Klide welcome screen — a live ASCII globe rotating against a starfield" width="860" />
 
 </div>
 
 ---
 
-**Klide is a small, fast, AI-native coding control surface.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — but the center of gravity is the agent loop: modes, context, diffs, skills, and workspace state are available when needed instead of always shouting for attention. Local models run out of the box, and the agent doesn't just chat: it reads your code, drafts a plan, edits files behind a diff you approve, and runs commands — tests, builds, linters — behind an approval you grant. No Electron bloat, no busy chrome, no black-box autonomy.
+**Klide is a small, fast, AI-native coding workbench for developers who want agent speed without black-box autonomy.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — but the center of gravity is the agent loop: modes, context, diffs, skills, workspace state, and run evidence stay close to the work.
 
-> **VS Code's structure · Linear's aesthetic · agent harness transparency** — Tauri-light and local-model-first.
+Local models run out of the box through Ollama / MLX. Online providers and subscription CLIs are opt-in. Codex, Claude Code, and OpenCode run as real embedded terminals, while Klide's own Rust harness can read code, draft plans, propose diff-reviewed edits, and run approval-gated commands.
+
+| What you get | Why it matters |
+|---|---|
+| **Mission Control for agents** | See what is running, what needs you, and what changed across Klide runs and delegate CLIs. |
+| **Local-first model support** | Start with Ollama / MLX, then add hosted providers only when you want them. |
+| **Real delegate terminals** | Use Codex, Claude Code, and OpenCode without flattening their CLIs into a fake chat UI. |
+| **Review before trust** | File edits, commands, memory drafts, and validation evidence stay visible before they become durable. |
+| **Tauri-light desktop shell** | A native webview app with a small binary instead of Electron-scale overhead. |
+
+> **VS Code's structure · Linear's aesthetic · agent harness transparency** — built for people who want to steer coding agents, not babysit hidden automation.
 
 ---
 
@@ -85,8 +100,8 @@ No drop shadows. No gradients. Subtle motion only. Icons only when they earn the
 
 **AI panel**
 - **Streaming chat** — all providers stream token-by-token through a single Rust `ai_chat` command, so keys never enter the webview
-- **Multi-provider** — local Ollama/MLX, direct/API providers, OpenAI-compatible providers, and delegate subscription CLIs (Claude Code · Codex · OpenCode), all behind one switcher
-- **Real delegate terminals** — Claude Code, Codex, and OpenCode run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
+- **Multi-provider** — local Ollama/MLX, direct/API providers, OpenAI-compatible providers, and delegate subscription CLIs (Claude Code · Codex · OpenCode · custom CLI agents), all behind one switcher
+- **Real delegate terminals** — Claude Code, Codex, OpenCode, Oh My Pi, and user-defined CLI agents run inside embedded PTYs, preserving the actual CLI UI instead of a chat imitation
 - **Chat / Plan / Goal modes** — Chat has no tools, Plan is read-only, Goal can propose diff-reviewed edits and run approval-gated commands (`Tab` to switch)
 - **Quiet agent controls** — mode switching, provider selection, context pressure, history, skills, project rules, and diff review stay close to the work without becoming a dashboard
 - **Exact token counts** — each message shows its real token count from the model's own tokenizer (Ollama `/api/tokenize`, Anthropic `count_tokens`); providers without a tokenizer endpoint fall back to a clearly-marked (`~`) estimate
