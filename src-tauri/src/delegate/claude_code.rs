@@ -42,6 +42,12 @@ impl Delegate for ClaudeCode {
         ])
     }
 
+    /// Claude Code is the one delegate with a first-class hooks system —
+    /// Klide's status hooks ride `~/.claude/settings.json`.
+    fn ensure_status_hooks(&self, home: &str) -> Result<bool, String> {
+        super::status::install_claude_hooks(home)
+    }
+
     fn login_commands(&self) -> Vec<String> {
         ["--claudeai", "--console", "--sso"]
             .iter()

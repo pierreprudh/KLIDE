@@ -1,6 +1,7 @@
 mod accounts;
 mod adapters;
 mod agent;
+mod custom_cli;
 mod custom_providers;
 mod delegate;
 mod git;
@@ -297,8 +298,23 @@ fn custom_provider_remove(id: String) -> Result<(), String> {
     custom_providers::remove(&id)
 }
 
+#[tauri::command]
+fn custom_cli_list() -> Vec<custom_cli::CustomCli> {
+    custom_cli::list()
+}
+
+#[tauri::command]
+fn custom_cli_upsert(provider: custom_cli::CustomCli) -> Result<(), String> {
+    custom_cli::upsert(provider)
+}
+
+#[tauri::command]
+fn custom_cli_remove(id: String) -> Result<(), String> {
+    custom_cli::remove(&id)
+}
+
 pub(crate) fn is_subscription_provider(provider: &str) -> bool {
-    providers::is_subscription(provider)
+    providers::is_subscription(provider) || custom_cli::get(provider).is_some()
 }
 
 pub(crate) fn response_error(provider: &str, status: reqwest::StatusCode, body: &str) -> String {
@@ -328,6 +344,26 @@ pub(crate) fn response_error(provider: &str, status: reqwest::StatusCode, body: 
 
 #[tauri::command]
 fn ai_subscription_status(provider: String) -> Result<AiConnectionStatus, String> {
+    if let Some(custom) = custom_cli::get(&provider) {
+        let binary = custom.binary();
+        let resolved = resolve_command(&binary);
+        let command_path = resolved.as_ref().ok().cloned();
+        let installed = resolved.is_ok();
+        let login_options = custom.login_command.iter().cloned().collect();
+        return Ok(AiConnectionStatus {
+            provider,
+            installed,
+            connected: installed,
+            detail: if installed {
+                format!("{} is available for {}", binary, custom.label)
+            } else {
+                format!("{} is not installed or not on PATH", binary)
+            },
+            command_path,
+            login_options,
+        });
+    }
+
     let entry = providers::lookup(&provider)
         .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
     let spec = entry
@@ -714,6 +750,7 @@ pub fn run() {
         .manage(DelegatePtyState {
             sessions: Mutex::new(std::collections::HashMap::new()),
         })
+        .manage(delegate::status::DelegateStatusState::default())
         .manage(agent::AgentSupervisorState::default())
         .manage(local_servers::LocalServerState::default())
         .manage(models::ReflectionProbeCache::default())
@@ -902,6 +939,9 @@ pub fn run() {
             custom_provider_list,
             custom_provider_upsert,
             custom_provider_remove,
+            custom_cli_list,
+            custom_cli_upsert,
+            custom_cli_remove,
             accounts_list,
             account_save_current,
             account_activate,

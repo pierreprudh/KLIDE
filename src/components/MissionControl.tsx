@@ -79,6 +79,8 @@ import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
+import { isDelegateProvider, providerName } from "../agent/providers";
+import { refreshCustomCli } from "../customCli";
 import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
 import { buildRunHandoff } from "../agentHandoff";
@@ -3618,8 +3620,29 @@ type LiveDelegateSession = {
   model: string | null;
   startedMs: number;
   updatedMs: number;
-  status: "running" | "idle";
+  /** Hook-reported when the CLI has Klide's status hooks (working/blocked/
+   *  waiting — see Rust delegate/status.rs); otherwise the PTY idle-timer
+   *  heuristic (running/idle). */
+  status: "running" | "idle" | "working" | "blocked" | "waiting";
   bufferedBytes: number;
+};
+
+// Live-strip status rendering: hook states get precise language + a status
+// tone; timer states keep the old Active/Idle. No chips, no dots — the word
+// and its color carry the state.
+const LIVE_STATUS_TEXT: Record<LiveDelegateSession["status"], string> = {
+  running: "Active",
+  working: "Active",
+  idle: "Idle",
+  blocked: "Needs input",
+  waiting: "Turn done",
+};
+const LIVE_STATUS_COLOR: Record<LiveDelegateSession["status"], string> = {
+  running: "var(--accent)",
+  working: "var(--accent)",
+  idle: "var(--fg-subtle)",
+  blocked: "var(--warning)",
+  waiting: "var(--success)",
 };
 
 // "Live now" strip — the delegate sessions still running *in this Klide
@@ -3636,7 +3659,7 @@ function LiveSessionsStrip({
   sessions: LiveDelegateSession[];
   workspaceRoot: string | null;
   onReattach?: (opts: {
-    provider: DelegateId;
+    provider: ProviderId;
     conversationId: string;
     workspaceRoot: string | null;
   }) => void;
@@ -3676,14 +3699,17 @@ function LiveSessionsStrip({
         }}
       >
         {sessions.map((s) => {
-          const title = s.task?.trim() || `${SOURCE_LABEL[s.provider as DelegateId] ?? s.provider} session`;
-          const canReattach = isDelegateId(s.provider) && !!onReattach;
+          const providerId = s.provider as ProviderId;
+          const title = s.task?.trim() || `${providerName(providerId)} session`;
+          const canReattach = isDelegateProvider(providerId) && !!onReattach;
           const idle = s.status === "idle";
-          const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : "Active";
+          const statusLabel = LIVE_STATUS_TEXT[s.status] ?? "Active";
+          const statusColor = LIVE_STATUS_COLOR[s.status] ?? "var(--accent)";
+          const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : statusLabel;
           const reattach = () =>
             canReattach &&
             onReattach!({
-              provider: s.provider as DelegateId,
+              provider: providerId,
               conversationId: s.convoId,
               workspaceRoot: s.cwd ?? workspaceRoot,
             });
@@ -3736,13 +3762,13 @@ function LiveSessionsStrip({
                   gap: 5,
                   maxWidth: 88,
                   fontSize: 11,
-                  color: idle ? "var(--fg-subtle)" : "var(--accent)",
+                  color: statusColor,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                 }}
               >
-                {idle ? "Idle" : "Active"}
+                {statusLabel}
               </span>
               <span
                 style={{
@@ -3791,7 +3817,7 @@ export function MissionControl({
    *  process. Opens an AI panel bound to the session's conversation id so its
    *  terminal lands on the same PTY and replays its scrollback. */
   onReattachLiveSession?: (opts: {
-    provider: DelegateId;
+    provider: ProviderId;
     conversationId: string;
     workspaceRoot: string | null;
   }) => void;
@@ -3841,6 +3867,9 @@ export function MissionControl({
   // sections below, so it doesn't appear twice). Polled here, not in the strip,
   // so both consumers share one source.
   const [liveSessions, setLiveSessions] = useState<LiveDelegateSession[]>([]);
+  useEffect(() => {
+    void refreshCustomCli().catch(() => {});
+  }, []);
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {

@@ -47,3 +47,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Post-edit syntax verification for Rust files: `syn::parse_file` gives a fast,
 # in-process parse with no toolchain spawn. JSON is checked via serde_json.
 syn = { version = "2", features = ["full"] }
+# Loopback listener for delegate status hooks (delegate/status.rs): CLI
+# lifecycle hooks curl a tiny POST at Klide instead of Klide scraping TUI
+# output. Small sync server — one thread, no framework.
+tiny_http = "0.12"

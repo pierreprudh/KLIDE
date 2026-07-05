@@ -166,6 +166,7 @@ pub fn pty_write(state: State<PtyState>, data: String) -> Result<(), String> {
 pub fn delegate_pty_spawn(
     app: tauri::AppHandle,
     state: State<DelegatePtyState>,
+    status_state: State<crate::delegate::status::DelegateStatusState>,
     session_id: String,
     provider: String,
     workspace_root: Option<String>,
@@ -216,20 +217,44 @@ pub fn delegate_pty_spawn(
         .map_err(|e| e.to_string())?;
 
     // All per-CLI knowledge (spawn syntax, resume flags, model flags) lives
-    // behind the Delegate seam — this command only does PTY plumbing.
-    let adapter = delegate::lookup(&provider)
-        .ok_or_else(|| format!("No delegate PTY command for provider: {provider}"))?;
-    let command = adapter.spawn_command(
-        task.as_deref(),
-        model.as_deref(),
-        resume_session_id.as_deref(),
-    );
+    // behind the Delegate seam. Runtime custom CLIs use the same PTY plumbing
+    // with a user-authored shell template.
+    let adapter = delegate::lookup(&provider);
+    let command = if let Some(adapter) = adapter {
+        adapter.spawn_command(
+            task.as_deref(),
+            model.as_deref(),
+            resume_session_id.as_deref(),
+        )
+    } else if let Some(custom) = crate::custom_cli::get(&provider) {
+        custom.spawn_command(
+            task.as_deref(),
+            model.as_deref(),
+            resume_session_id.as_deref(),
+        )
+    } else {
+        return Err(format!("No delegate PTY command for provider: {provider}"));
+    };
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.arg("-lc");
     cmd.arg(command);
     if let Some(path) = cwd.as_deref() {
         cmd.cwd(path);
+    }
+    // Status hooks (see delegate/status.rs): refresh the CLI's env-guarded
+    // lifecycle hooks and hand this session its private callback URL through
+    // the PTY env. Both warn-only — a delegate without status hooks still
+    // runs, its status just falls back to the idle-timer heuristic. Custom
+    // CLIs (no adapter) have no hook installer but still get the URL, so a
+    // user-authored wrapper can post its own status.
+    if let (Some(adapter), Ok(home)) = (adapter, std::env::var("HOME")) {
+        if let Err(e) = adapter.ensure_status_hooks(&home) {
+            eprintln!("status hooks for {provider}: {e}");
+        }
+    }
+    if let Some(url) = status_state.hook_url_for(&app, &session_id) {
+        cmd.env("KLIDE_HOOK_URL", url);
     }
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
@@ -273,7 +298,7 @@ pub fn delegate_pty_spawn(
             // Try to detect the CLI's own session ID from startup output
             // (only OpenCode announces one today).
             if !matched_external_id {
-                if let Some(capt) = adapter.extract_session_id(&chunk) {
+                if let Some(capt) = adapter.and_then(|d| d.extract_session_id(&chunk)) {
                     let _ = set_delegate_external_id(&app, &session_id, &capt);
                     matched_external_id = true;
                 }
@@ -293,10 +318,16 @@ pub fn delegate_pty_spawn(
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
         let _ = child.wait();
-        // The CLI exited (finished, crashed, or was stopped). Drop our handle
-        // and tell the frontend so boards can flip the run from running → done.
+        // The CLI exited (finished, crashed, or was stopped). Drop our handle,
+        // forget its hook status, and tell the frontend so boards can flip the
+        // run from running → done.
         app.state::<DelegatePtyState>()
             .sessions
+            .lock()
+            .unwrap()
+            .remove(&session_id);
+        app.state::<crate::delegate::status::DelegateStatusState>()
+            .statuses
             .lock()
             .unwrap()
             .remove(&session_id);
@@ -376,16 +407,22 @@ pub struct LiveDelegateSession {
     model: Option<String>,
     started_ms: i64,
     updated_ms: i64,
-    /// `"running"` while output/input is fresh, `"idle"` when the PTY is still
-    /// live but has been quiet long enough that it needs human attention.
+    /// Hook-reported state when the CLI has status hooks installed —
+    /// `"working"` / `"blocked"` / `"waiting"` (see delegate/status.rs).
+    /// Otherwise the timer heuristic: `"running"` while output/input is
+    /// fresh, `"idle"` when the PTY has been quiet for a while.
     status: String,
     /// Bytes of replay buffer currently retained — a cheap "has output" signal.
     buffered_bytes: usize,
 }
 
 #[tauri::command]
-pub fn delegate_pty_live_sessions(state: State<DelegatePtyState>) -> Vec<LiveDelegateSession> {
+pub fn delegate_pty_live_sessions(
+    state: State<DelegatePtyState>,
+    status_state: State<crate::delegate::status::DelegateStatusState>,
+) -> Vec<LiveDelegateSession> {
     let sessions = state.sessions.lock().unwrap();
+    let hook_statuses = status_state.statuses.lock().unwrap();
     let now = now_ms();
     let mut out: Vec<LiveDelegateSession> = sessions
         .iter()
@@ -408,10 +445,13 @@ pub fn delegate_pty_live_sessions(state: State<DelegatePtyState>) -> Vec<LiveDel
                 model: s.model.clone(),
                 started_ms: s.started_ms,
                 updated_ms,
-                status: if now - updated_ms >= IDLE_SESSION_MS {
-                    "idle".to_string()
-                } else {
-                    "running".to_string()
+                // The CLI's own hooks are the truth when present (they know
+                // "blocked on a permission" from "thinking hard" — no amount
+                // of PTY-quietness timing does); the timer is the fallback.
+                status: match hook_statuses.get(session_id) {
+                    Some((hook_status, _)) => hook_status.as_str().to_string(),
+                    None if now - updated_ms >= IDLE_SESSION_MS => "idle".to_string(),
+                    None => "running".to_string(),
                 },
                 buffered_bytes: s.scrollback.lock().unwrap().buf.len(),
             }

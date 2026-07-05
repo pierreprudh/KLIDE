@@ -18,6 +18,7 @@ mod codex;
 mod omp;
 mod opencode;
 mod runs;
+pub mod status;
 
 pub use chat::run_subscription_chat;
 pub use claude_code::ClaudeCode;
@@ -138,6 +139,15 @@ pub trait Delegate: Sync {
     /// the user's home dir. Default: none — PATH is expected to be enough.
     fn install_paths(&self, _home: &str) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Install (or refresh) this CLI's Klide status hooks — env-guarded
+    /// lifecycle hooks in the CLI's own config that POST normalized state to
+    /// Klide's loopback hook server (see `status.rs`). Called before every
+    /// PTY dispatch; must be idempotent. Returns whether anything was
+    /// written. Default: the CLI has no hook mechanism — do nothing.
+    fn ensure_status_hooks(&self, _home: &str) -> Result<bool, String> {
+        Ok(false)
     }
 }
 
