@@ -125,6 +125,14 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
       </svg>
     );
   }
+  if (id.startsWith("cli:")) {
+    return (
+      <svg {...line} strokeWidth="1.8">
+        <rect x="3" y="4" width="18" height="16" rx="3" />
+        <path d="M7 9l3 3-3 3M12 15h5" />
+      </svg>
+    );
+  }
   switch (id) {
     case "lmstudio":
       return (

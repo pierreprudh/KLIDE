@@ -212,6 +212,9 @@ mod tests {
             models: vec![],
             login_command: None,
         };
-        assert_eq!(cli.spawn_command(Some("fix it"), None, None), "agent 'fix it'");
+        assert_eq!(
+            cli.spawn_command(Some("fix it"), None, None),
+            "agent 'fix it'"
+        );
     }
 }

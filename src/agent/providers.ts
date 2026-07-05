@@ -1,5 +1,6 @@
 import type { AgentMode, ProviderId } from "./types";
 import { customProviderSync } from "../customProviders";
+import { customCliSync, isCustomCli } from "../customCli";
 import { isDelegateId } from "../delegates";
 
 export type ProviderGroup = {
@@ -83,6 +84,9 @@ export function providerName(id: ProviderId): string {
   if (id.startsWith("custom:")) {
     return customProviderSync(id)?.label ?? (id.slice("custom:".length) || "Custom");
   }
+  if (id.startsWith("cli:")) {
+    return customCliSync(id)?.label ?? (id.slice("cli:".length) || "Custom CLI");
+  }
   return "Ollama";
 }
 
@@ -90,24 +94,35 @@ export function providerName(id: ProviderId): string {
  *  caller-supplied custom providers. Used by the AI panel's provider
  *  dropdown so user-added endpoints appear alongside the built-ins. */
 export function providerGroupsWithCustom(
-  custom: { id: string; label: string }[]
+  custom: { id: string; label: string }[],
+  customCli: { id: string; label: string }[] = []
 ): ProviderGroup[] {
-  if (custom.length === 0) return PROVIDER_GROUPS;
-  return [
-    ...PROVIDER_GROUPS,
-    {
+  const groups = [...PROVIDER_GROUPS];
+  if (customCli.length > 0) {
+    groups.splice(2, 0, {
+      label: "Custom CLIs",
+      items: customCli.map((c) => ({
+        id: c.id as ProviderId,
+        name: c.label,
+        available: true,
+      })),
+    });
+  }
+  if (custom.length > 0) {
+    groups.push({
       label: "Self-hosted",
       items: custom.map((c) => ({
         id: c.id as ProviderId,
         name: c.label,
         available: true,
       })),
-    },
-  ];
+    });
+  }
+  return groups;
 }
 
 export function isDelegateProvider(id: ProviderId): boolean {
-  return isDelegateId(id);
+  return isDelegateId(id) || isCustomCli(id);
 }
 
 export function normalizeAgentMode(value: string | null): AgentMode {

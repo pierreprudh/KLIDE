@@ -10,6 +10,8 @@ import {
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { usePortalMenu } from "../hooks/usePortalMenu";
+import { Kbd } from "./Kbd";
+import { keysFor } from "../shortcuts";
 import { InlineDiffReview } from "./InlineDiffReview";
 import { InlineCommandReview } from "./InlineCommandReview";
 import { deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -37,6 +39,11 @@ import {
   refreshCustomProviders,
   type CustomProvider,
 } from "../customProviders";
+import {
+  customCliDefaultModel,
+  refreshCustomCli,
+  type CustomCli,
+} from "../customCli";
 import type {
   AgentAttachment as Attachment,
   AgentEvent,
@@ -345,6 +352,7 @@ function normalizeReflectionLevel(level: string | undefined | null): string | un
 // since DEFAULT_MODELS has no entry for a runtime id.
 function defaultModelFor(id: ProviderId): string {
   if (isCustomProvider(id)) return customDefaultModel(id);
+  if (id.startsWith("cli:")) return customCliDefaultModel(id);
   return DEFAULT_MODELS[id] ?? "";
 }
 
@@ -687,10 +695,14 @@ export function AiPanel({
   // and whenever the picker opens, so endpoints added in Settings show up
   // without a panel reload.
   const [customProviders, setCustomProviders] = useState<CustomProvider[]>([]);
-  useEffect(() => { void refreshCustomProviders().then(setCustomProviders).catch(() => {}); }, []);
+  const [customCli, setCustomCli] = useState<CustomCli[]>([]);
+  useEffect(() => {
+    void refreshCustomProviders().then(setCustomProviders).catch(() => {});
+    void refreshCustomCli().then(setCustomCli).catch(() => {});
+  }, []);
   const providerGroups = useMemo(
-    () => providerGroupsWithCustom(customProviders),
-    [customProviders]
+    () => providerGroupsWithCustom(customProviders, customCli),
+    [customProviders, customCli]
   );
   // Hosted ("API") providers that have no key configured — badged in the picker
   // so a missing key is visible *before* selecting + sending, not after a failed
@@ -709,6 +721,7 @@ export function AiPanel({
   useEffect(() => {
     if (!providerOpen) return;
     void refreshCustomProviders().then(setCustomProviders).catch(() => {});
+    void refreshCustomCli().then(setCustomCli).catch(() => {});
     // Probe key status for hosted ("API") providers so we can badge the ones
     // that aren't configured yet. Best-effort; a failed probe just isn't badged.
     void (async () => {
@@ -2964,6 +2977,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             workspaceRoot={workspaceRoot}
             parentRunId={activeHarnessRunRef.current ?? currentId}
             resumeSessionId={initialResumeSessionId ?? null}
+            model={model}
             task={initialTask ?? null}
           />
         ) : (
@@ -2999,6 +3013,24 @@ This user request requires workspace inspection. Before answering, you MUST call
                   </button>
                 ))}
                 <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-dim)" }}>Type <b style={{ fontWeight: 600, color: "var(--fg-subtle)" }}>@</b> to attach a file · <b style={{ fontWeight: 600, color: "var(--fg-subtle)" }}>/</b> for commands</div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 12,
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "var(--fg-dim)",
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <Kbd keys={keysFor("ai-send")} /> Send
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <Kbd keys={keysFor("ai-toggle-mode")} /> Mode
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -3583,13 +3615,12 @@ This user request requires workspace inspection. Before answering, you MUST call
               )}
             </div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: width < 360 ? 1 : 2, flex: "1 1 auto", minWidth: 0 }}>
-              {conversationCostUsd > 0 && width >= 380 && (
+              {!isLocalProvider && conversationCostUsd > 0 && width >= 380 && (
                 <span
                   title={`This conversation has cost about $${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 4 : 2)} (${modelLabel(model)} list price)`}
                   style={{ height: 20, display: "inline-flex", alignItems: "center", gap: 5, padding: "0 4px", color: "var(--fg-subtle)", fontSize: 10.5, fontFamily: "var(--font-mono)", fontWeight: 500, whiteSpace: "nowrap" }}
                 >
                   {conversationCostUsd < 0.01 ? "<$0.01" : `$${conversationCostUsd.toFixed(conversationCostUsd < 1 ? 3 : 2)}`}
-                  <span aria-hidden style={{ color: "var(--fg-dim)", opacity: 0.6 }}>·</span>
                 </span>
               )}
               <ModelPicker

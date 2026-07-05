@@ -3,7 +3,6 @@ import type { ProviderId } from "../agent/types";
 import type { Conversation } from "./ai/types";
 import type { HarnessSettings } from "../App";
 import type { Skill } from "../skills";
-import type { DelegateId } from "../delegates";
 import type {
   Layout as PanelLayout,
   PanelRect,
@@ -101,7 +100,7 @@ type Props = {
   // Mission Control handoff
   pendingAiPanel: {
     panelId: string;
-    provider: DelegateId;
+    provider: ProviderId;
     resumeSessionId: string | null;
     initialTask: string | null;
   } | null;

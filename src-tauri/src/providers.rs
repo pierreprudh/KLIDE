@@ -359,7 +359,12 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         subscription: Some(SubscriptionSpec {
             cmd: "omp",
             label: "Oh My Pi",
-            default_models: &["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5", "gpt-5-mini"],
+            default_models: &[
+                "claude-sonnet-4-6",
+                "claude-opus-4-6",
+                "gpt-5",
+                "gpt-5-mini",
+            ],
             cached_models: crate::models::omp_cached_models,
         }),
         context_window: None,

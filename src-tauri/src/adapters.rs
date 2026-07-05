@@ -1530,7 +1530,10 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(on.body().and_then(|b| b.as_bytes()).unwrap()).unwrap();
         assert_eq!(body["usage"], serde_json::json!({ "include": true }));
-        assert_eq!(body["stream_options"], serde_json::json!({ "include_usage": true }));
+        assert_eq!(
+            body["stream_options"],
+            serde_json::json!({ "include_usage": true })
+        );
 
         let off = build_flagged_request(false, false);
         let body: serde_json::Value =
@@ -1542,7 +1545,10 @@ mod tests {
     #[test]
     fn attribution_flag_drives_headers_not_the_provider_id() {
         let on = build_flagged_request(false, true);
-        assert_eq!(on.headers().get("HTTP-Referer").unwrap(), "https://github.com/pierreprudh/KLIDE");
+        assert_eq!(
+            on.headers().get("HTTP-Referer").unwrap(),
+            "https://github.com/pierreprudh/KLIDE"
+        );
         assert_eq!(on.headers().get("X-Title").unwrap(), "Klide");
 
         let off = build_flagged_request(false, false);

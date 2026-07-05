@@ -15,7 +15,7 @@ import { OrchestratorConsole } from "./components/OrchestratorConsole";
 import { Sidebar } from "./components/Sidebar";
 import { FocusMode } from "./components/FocusMode";
 import { TabBar } from "./components/TabBar";
-import { EditorArea } from "./components/EditorArea";
+import { EditorArea, type EditorEmptyAction } from "./components/EditorArea";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
@@ -205,7 +205,7 @@ function App() {
   // clears the entry. One-at-a-time, key matched by panel id.
   const [pendingAiPanel, setPendingAiPanel] = useState<{
     panelId: string;
-    provider: DelegateId;
+    provider: ProviderId;
     resumeSessionId: string | null;
     initialTask: string | null;
     /** Set only for "Reattach" to a live session — binds the new panel to the
@@ -566,6 +566,7 @@ function App() {
               wordWrap={editorWordWrap}
               minimap={editorMinimap}
               onEditorMount={(editor) => { editorRef.current = editor; }}
+              onEmptyAction={handleEditorEmptyAction}
             />
           </div>
         );
@@ -1007,7 +1008,7 @@ function App() {
   // session's conversation id makes its terminal land on the same PTY, and the
   // scrollback buffer (Slice 1) replays everything it produced while detached.
   function reattachLiveSession(opts: {
-    provider: DelegateId;
+    provider: ProviderId;
     conversationId: string;
     workspaceRoot: string | null;
   }) {
@@ -1337,6 +1338,27 @@ function App() {
     }).then((u) => { unlisten = u; });
     return () => { unlisten?.(); };
   }, [workspaceRoot]);
+
+  // The editor's no-file launcher rows fire the same handlers as their
+  // keyboard chords below — click and shortcut stay one code path.
+  const handleEditorEmptyAction = useCallback((action: EditorEmptyAction) => {
+    switch (action) {
+      case "go-to-file":
+        setPaletteQuery("");
+        setPaletteOpen(true);
+        break;
+      case "command-palette":
+        setPaletteQuery("> ");
+        setPaletteOpen(true);
+        break;
+      case "find-in-files":
+        setSearchVisible(true);
+        break;
+      case "toggle-terminal":
+        setTerminalVisible((v) => !v);
+        break;
+    }
+  }, []);
 
   useEffect(() => {
     // Is the user currently typing? Used to keep bare "?" / ⌘/ from firing the
@@ -1718,7 +1740,6 @@ function App() {
                 pendingCheckpointRunId={pendingCheckpointRunId}
                 onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
                 summarizingFromRunId={summarizingFromRun}
-                onBack={() => setView("workbench")}
               />
             ) : view === "orchestrator" ? (
               // Real tier-board console. workspaceRoot enables real plan-mode
@@ -1963,6 +1984,7 @@ function App() {
                         wordWrap={editorWordWrap}
                         minimap={editorMinimap}
                         onEditorMount={(editor) => { editorRef.current = editor; }}
+                        onEmptyAction={handleEditorEmptyAction}
                       />
                     </div>
                   </div>

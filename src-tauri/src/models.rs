@@ -78,6 +78,9 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
     // those endpoints expose the OpenAI `/v1/models` listing, queried
     // with their (optional) keychain token.
     let Some(entry) = providers::lookup(&provider) else {
+        if let Some(cli) = crate::custom_cli::get(&provider) {
+            return Ok(cli.model_list());
+        }
         let cp = crate::custom_providers::get(&provider)
             .ok_or_else(|| format!("Provider \"{provider}\" is not wired yet"))?;
         let key = providers::custom_token(&cp.id);
@@ -135,7 +138,9 @@ pub struct ProviderCredits {
 /// Anthropic, OpenAI, Mistral and xAI don't expose a key balance over the
 /// API, so they return `Ok(None)` and the UI omits the gauge for them.
 #[tauri::command]
-pub(crate) async fn ai_provider_credits(provider: String) -> Result<Option<ProviderCredits>, String> {
+pub(crate) async fn ai_provider_credits(
+    provider: String,
+) -> Result<Option<ProviderCredits>, String> {
     match provider.as_str() {
         "openrouter" => fetch_openrouter_credits().await.map(Some),
         _ => Ok(None),
@@ -165,7 +170,11 @@ async fn fetch_openrouter_credits() -> Result<ProviderCredits, String> {
         (Some(t), Some(u)) => Some(t - u),
         _ => None,
     };
-    Ok(ProviderCredits { total, used, remaining })
+    Ok(ProviderCredits {
+        total,
+        used,
+        remaining,
+    })
 }
 
 /// `GET {OLLAMA_URL}/api/tags` with a 10-second in-process cache.
@@ -464,7 +473,9 @@ pub(crate) fn omp_cached_models() -> Option<Vec<String>> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
             continue;
         };
-        let Some(arr) = value.as_array() else { continue };
+        let Some(arr) = value.as_array() else {
+            continue;
+        };
         // omp's `--model` accepts the qualified "provider/model" form, which
         // also keeps same-named models from colliding across providers.
         let ids: Vec<String> = arr

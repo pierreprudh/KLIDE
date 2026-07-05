@@ -53,6 +53,7 @@ export function DelegateTerminalSurface({
   workspaceRoot,
   parentRunId,
   resumeSessionId,
+  model,
   task,
 }: {
   sessionId: string;
@@ -64,6 +65,9 @@ export function DelegateTerminalSurface({
    *  session (e.g. `claude --resume <id>` / `codex resume <id>` /
    *  `opencode -s <id>`). */
   resumeSessionId?: string | null;
+  /** Selected model for delegates that accept a model flag, and for custom
+   *  CLI templates using `{model}`. */
+  model?: string | null;
   /** Pass through to `delegate_pty_spawn` as the CLI's first prompt — used
    *  for Klide handoff so a fresh delegate session opens with the original
    *  user message already sent. */
@@ -133,6 +137,7 @@ export function DelegateTerminalSurface({
           workspaceRoot,
           parentRunId,
           resumeSessionId: resumeSessionId ?? null,
+          model: model ?? null,
           task: task ?? null,
         });
         if (cancelled) return;
@@ -172,7 +177,7 @@ export function DelegateTerminalSurface({
       resize.disconnect();
       term.dispose();
     };
-  }, [providerId, sessionId, workspaceRoot]);
+  }, [providerId, sessionId, workspaceRoot, model]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "color-mix(in srgb, var(--terminal-bg) 94%, var(--bg))" }}>

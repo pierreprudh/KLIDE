@@ -22,6 +22,13 @@ import {
   upsertCustomProvider,
   type CustomProvider,
 } from "../customProviders";
+import {
+  customCliIdFromLabel,
+  refreshCustomCli,
+  removeCustomCli,
+  upsertCustomCli,
+  type CustomCli,
+} from "../customCli";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 import { LayoutCanvas } from "./LayoutCanvas";
 import { GridLayoutBuilder } from "./GridLayoutBuilder";
@@ -121,7 +128,7 @@ type Props = {
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "omp";
+type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "omp" | `cli:${string}`;
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -2430,6 +2437,500 @@ function CustomEndpointsBlock({
   );
 }
 
+function parseModelList(value: string): string[] {
+  return value
+    .split(/[\n,]/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const cliControlBaseStyle: CSSProperties = {
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+};
+
+function CliDialogHeader({ editing }: { editing: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      <span style={{ display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: "var(--radius-md)", color: "var(--accent)", background: "var(--accent-soft)", flexShrink: 0 }}>
+        <ProviderLogo id={"cli:custom" as ProviderId} size={15} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg-strong)" }}>
+          {editing ? "Edit CLI agent" : "Add CLI agent"}
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--fg-subtle)", marginTop: 1 }}>
+          Run any terminal agent inside Klide.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CliField({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label style={{ display: "grid", gap: 5, minWidth: 0 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg-subtle)" }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function CliTextInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+  disabled,
+  autoFocus,
+  mono,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  autoFocus?: boolean;
+  mono?: boolean;
+}) {
+  return (
+    <CliField label={label}>
+      <input
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className="klide-field"
+        disabled={disabled}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        spellCheck={false}
+        style={{
+          ...cliControlBaseStyle,
+          height: 34,
+          padding: "0 11px",
+          fontFamily: mono ? "var(--font-mono)" : undefined,
+          fontSize: mono ? 12.5 : undefined,
+        }}
+      />
+    </CliField>
+  );
+}
+
+function CliTextarea({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <CliField label={label}>
+      <textarea
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className="klide-field"
+        spellCheck={false}
+        rows={2}
+        style={{
+          ...cliControlBaseStyle,
+          minHeight: 58,
+          padding: "8px 10px",
+          resize: "vertical",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12.5,
+          lineHeight: 1.45,
+        }}
+      />
+    </CliField>
+  );
+}
+
+function CliPlaceholderChips() {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", color: "var(--fg-dim)", fontSize: 10.5 }}>
+      <code>{"{task}"}</code>
+      <code>{"{model}"}</code>
+      <code>{"{resume}"}</code>
+    </div>
+  );
+}
+
+function CliOptionsSection({
+  defaultModel,
+  models,
+  loginCommand,
+  onDefaultModelChange,
+  onModelsChange,
+  onLoginCommandChange,
+}: {
+  defaultModel: string;
+  models: string;
+  loginCommand: string;
+  onDefaultModelChange: (value: string) => void;
+  onModelsChange: (value: string) => void;
+  onLoginCommandChange: (value: string) => void;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 10, minWidth: 0, padding: "10px 0 0", borderTop: "1px solid var(--border)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, minWidth: 0 }}>
+        <CliTextInput
+          label="Default model"
+          value={defaultModel}
+          placeholder="optional"
+          onChange={onDefaultModelChange}
+        />
+        <CliTextInput
+          label="Login command"
+          value={loginCommand}
+          placeholder="optional"
+          onChange={onLoginCommandChange}
+          mono
+        />
+      </div>
+      <CliTextarea
+        label="Model choices"
+        value={models}
+        placeholder="one per line or comma-separated"
+        onChange={onModelsChange}
+      />
+      <CliPlaceholderChips />
+    </div>
+  );
+}
+
+function CliAgentDialog({
+  editing,
+  label,
+  commandTemplate,
+  defaultModel,
+  models,
+  loginCommand,
+  showOptions,
+  busy,
+  error,
+  onLabelChange,
+  onCommandTemplateChange,
+  onDefaultModelChange,
+  onModelsChange,
+  onLoginCommandChange,
+  onToggleOptions,
+  onCancel,
+  onSave,
+}: {
+  editing: boolean;
+  label: string;
+  commandTemplate: string;
+  defaultModel: string;
+  models: string;
+  loginCommand: string;
+  showOptions: boolean;
+  busy: boolean;
+  error: string | null;
+  onLabelChange: (value: string) => void;
+  onCommandTemplateChange: (value: string) => void;
+  onDefaultModelChange: (value: string) => void;
+  onModelsChange: (value: string) => void;
+  onLoginCommandChange: (value: string) => void;
+  onToggleOptions: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const canSave = Boolean(label.trim() && commandTemplate.trim());
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={editing ? "Edit CLI agent" : "Add CLI agent"}
+      onClick={onCancel}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: Z.modalRaised,
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+        background: "rgba(0,0,0,0.30)",
+        backdropFilter: "blur(3px)",
+        overflowY: "auto",
+      }}
+    >
+      <div
+        className="floating-panel"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(460px, calc(100vw - 32px))",
+          maxWidth: "100%",
+          maxHeight: "calc(100vh - 32px)",
+          overflowY: "auto",
+          overflowX: "hidden",
+          boxSizing: "border-box",
+          borderRadius: "var(--radius-lg)",
+          display: "grid",
+          gap: 14,
+          padding: "18px",
+        }}
+      >
+        <CliDialogHeader editing={editing} />
+
+        <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+          <CliTextInput
+            label="Name"
+            value={label}
+            placeholder="Cursor Agent"
+            onChange={onLabelChange}
+            disabled={editing}
+            autoFocus
+          />
+          <CliTextInput
+            label="Command"
+            value={commandTemplate}
+            placeholder="cursor-agent {task}"
+            onChange={onCommandTemplateChange}
+            mono
+          />
+        </div>
+
+        <button
+          type="button"
+          aria-expanded={showOptions}
+          onClick={onToggleOptions}
+          style={{
+            width: "100%",
+            minWidth: 0,
+            boxSizing: "border-box",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            height: 30,
+            padding: "0 2px",
+            border: "none",
+            background: "transparent",
+            color: "var(--fg-subtle)",
+            cursor: "pointer",
+            font: "inherit",
+            fontSize: 12,
+          }}
+        >
+          <span>Options</span>
+          <span style={{ display: "grid", placeItems: "center", transform: showOptions ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 120ms ease" }}>
+            <ChevronDown />
+          </span>
+        </button>
+
+        {showOptions && (
+          <CliOptionsSection
+            defaultModel={defaultModel}
+            models={models}
+            loginCommand={loginCommand}
+            onDefaultModelChange={onDefaultModelChange}
+            onModelsChange={onModelsChange}
+            onLoginCommandChange={onLoginCommandChange}
+          />
+        )}
+
+        {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", paddingTop: 2 }}>
+          <GhostButton onClick={onCancel}>Cancel</GhostButton>
+          <LinkButton onClick={onSave} disabled={busy || !canSave}>
+            {busy ? "Saving" : editing ? "Save" : "Add"}
+          </LinkButton>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function CustomCliAgentsBlock({
+  onChange,
+}: {
+  onChange?: (agents: CustomCli[]) => void;
+}) {
+  const [agents, setAgents] = useState<CustomCli[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+  const [commandTemplate, setCommandTemplate] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
+  const [models, setModels] = useState("");
+  const [loginCommand, setLoginCommand] = useState("");
+  const [showOptions, setShowOptions] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const next = await refreshCustomCli();
+      setAgents(next);
+      onChange?.(next);
+    } catch {
+      setAgents([]);
+      onChange?.([]);
+    }
+  }, [onChange]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function resetForm() {
+    setAdding(false);
+    setEditingId(null);
+    setLabel("");
+    setCommandTemplate("");
+    setDefaultModel("");
+    setModels("");
+    setLoginCommand("");
+    setShowOptions(false);
+    setError(null);
+  }
+
+  const formOpen = adding || editingId !== null;
+
+  useEffect(() => {
+    if (!formOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") resetForm();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [formOpen]);
+
+  function startAdd() {
+    resetForm();
+    setAdding(true);
+  }
+
+  function startEdit(agent: CustomCli) {
+    resetForm();
+    setEditingId(agent.id);
+    setLabel(agent.label);
+    setCommandTemplate(agent.commandTemplate);
+    setDefaultModel(agent.defaultModel);
+    setModels((agent.models ?? []).join("\n"));
+    setLoginCommand(agent.loginCommand ?? "");
+    setShowOptions(Boolean(agent.defaultModel || agent.models?.length || agent.loginCommand));
+  }
+
+  async function save() {
+    if (busy || !label.trim() || !commandTemplate.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const id = editingId ?? customCliIdFromLabel(label);
+      await upsertCustomCli({
+        id,
+        label: label.trim(),
+        commandTemplate: commandTemplate.trim(),
+        defaultModel: defaultModel.trim(),
+        models: parseModelList(models),
+        loginCommand: loginCommand.trim() || undefined,
+      });
+      resetForm();
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await removeCustomCli(id);
+      if (editingId === id) resetForm();
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {agents.length > 0 && (
+        <Panel>
+          {agents.map((agent) => (
+            <div key={agent.id} className="klide-settings-row">
+              <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ color: "var(--fg-subtle)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                  <ProviderLogo id={agent.id as ProviderId} size={15} />
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="klide-row-title">{agent.label}</div>
+                  <div className="klide-row-description" style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {agent.commandTemplate}
+                    {agent.defaultModel ? ` · ${agent.defaultModel}` : ""}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <IconButton title="Edit CLI agent" onClick={() => startEdit(agent)}>
+                  <PencilIcon />
+                </IconButton>
+                <IconButton title="Remove CLI agent" danger onClick={() => void remove(agent.id)}>
+                  <TrashIcon />
+                </IconButton>
+              </div>
+            </div>
+          ))}
+        </Panel>
+      )}
+      <Panel>
+        <Row
+          title="Custom CLI agent"
+          description="Add any terminal coding agent with a command template. Use {task}, {model}, and {resume} placeholders."
+          control={<LinkButton onClick={startAdd}>Add agent</LinkButton>}
+          leading={<ProviderLogo id={"cli:custom" as ProviderId} />}
+        />
+      </Panel>
+      {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}
+
+      {formOpen && (
+        <CliAgentDialog
+          editing={editingId !== null}
+          label={label}
+          commandTemplate={commandTemplate}
+          defaultModel={defaultModel}
+          models={models}
+          loginCommand={loginCommand}
+          showOptions={showOptions}
+          busy={busy}
+          error={error}
+          onLabelChange={setLabel}
+          onCommandTemplateChange={setCommandTemplate}
+          onDefaultModelChange={setDefaultModel}
+          onModelsChange={setModels}
+          onLoginCommandChange={setLoginCommand}
+          onToggleOptions={() => setShowOptions((v) => !v)}
+          onCancel={resetForm}
+          onSave={() => void save()}
+        />
+      )}
+    </>
+  );
+}
+
 function LocalServerRow({
   provider,
   title,
@@ -2897,9 +3398,27 @@ export function SettingsPanel({
   const [subscriptionModels, setSubscriptionModels] = useState<
     Partial<Record<SubscriptionProviderId, string[]>>
   >({});
+  const [customCliAgents, setCustomCliAgents] = useState<CustomCli[]>([]);
   const [ollamaAccount, setOllamaAccount] = useState<OllamaAccountStatus | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
+
+  const subscriptionProviderEntries = useMemo(
+    () => [
+      ...subscriptionProviders,
+      ...customCliAgents.map((agent) => ({
+        id: agent.id as SubscriptionProviderId,
+        title: agent.label,
+        command: agent.loginCommand || agent.commandTemplate,
+        description: "Custom terminal coding agent, launched as a real delegate terminal.",
+        accounts: false,
+        modelNote: agent.models?.length
+          ? "Configured manually for this custom CLI agent."
+          : "Uses the default model configured for this custom CLI agent.",
+      })),
+    ],
+    [customCliAgents]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -2976,12 +3495,27 @@ export function SettingsPanel({
 
   async function refreshSubscriptionConnections() {
     setConnectionLoading(true);
+    const customAgents = await refreshCustomCli().catch(() => [] as CustomCli[]);
+    setCustomCliAgents(customAgents);
+    const providers = [
+      ...subscriptionProviders,
+      ...customAgents.map((agent) => ({
+        id: agent.id as SubscriptionProviderId,
+        title: agent.label,
+        command: agent.loginCommand || agent.commandTemplate,
+        description: "Custom terminal coding agent, launched as a real delegate terminal.",
+        accounts: false,
+        modelNote: agent.models?.length
+          ? "Configured manually for this custom CLI agent."
+          : "Uses the default model configured for this custom CLI agent.",
+      })),
+    ];
     const ollamaPromise = invoke<OllamaAccountStatus>("ollama_account_status").then(
       (status) => setOllamaAccount(status),
       () => setOllamaAccount(null)
     );
     const entries = await Promise.all(
-      subscriptionProviders.map(async (provider) => {
+      providers.map(async (provider) => {
         const [statusResult, modelsResult] = await Promise.allSettled([
           invoke<SubscriptionStatus>("ai_subscription_status", {
             provider: provider.id,
@@ -4149,7 +4683,7 @@ export function SettingsPanel({
               <>
               <SettingBlock title="Connections & Accounts">
                 <Panel>
-                  {subscriptionProviders.map((provider) => {
+                  {subscriptionProviderEntries.map((provider) => {
                     const status = subscriptionStatuses[provider.id];
                     return (
                       <Row
@@ -4198,10 +4732,12 @@ export function SettingsPanel({
               </SettingBlock>
               <SettingBlock title="Connection Options">
                 <Panel>
-                  {subscriptionProviders.map((provider) => {
+                  {subscriptionProviderEntries.map((provider) => {
                     const status = subscriptionStatuses[provider.id];
                     const options = status?.loginOptions.length
                       ? status.loginOptions
+                      : provider.id.startsWith("cli:")
+                      ? [provider.command]
                       : [`${provider.command} login`];
                     return (
                       <Row
@@ -4227,7 +4763,7 @@ export function SettingsPanel({
               </SettingBlock>
               <SettingBlock title="Model Options">
                 <Panel>
-                  {subscriptionProviders.map((provider) => {
+                  {subscriptionProviderEntries.map((provider) => {
                     const models = subscriptionModels[provider.id] ?? [];
                     return (
                       <Row
@@ -4246,6 +4782,9 @@ export function SettingsPanel({
                     );
                   })}
                 </Panel>
+              </SettingBlock>
+              <SettingBlock title="Custom CLI agents">
+                <CustomCliAgentsBlock onChange={setCustomCliAgents} />
               </SettingBlock>
               <SettingBlock title="Mode">
                 <Panel>

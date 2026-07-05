@@ -31,7 +31,10 @@ export type ProviderId =
   // Self-hosted (custom) OpenAI-compatible endpoints. The id is minted at
   // runtime (`custom:<slug>`); config lives in the Rust custom-provider
   // store, not the static registry. See src/customProviders.ts.
-  | `custom:${string}`;
+  | `custom:${string}`
+  // Runtime-configured CLI agents. They run in the delegate PTY surface using
+  // a user-authored command template. See src/customCli.ts.
+  | `cli:${string}`;
 
 export type AgentAttachment = {
   path: string;
