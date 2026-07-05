@@ -354,10 +354,58 @@ pub fn delegate_pty_write(
         // "Needs input" / "Turn done" no longer describe the session. Forget
         // the hook status; the next hook (or the activity timer) re-derives
         // it. This is also what flips Codex back to Active — its notify
-        // program has no turn-start event.
-        status_state.statuses.lock().unwrap().remove(&session_id);
+        // program has no turn-start event. Housekeeping the TUI asked the
+        // terminal to report (focus in/out on every panel switch, mouse
+        // wheel scrolls) is NOT the user answering — see `is_user_input` —
+        // or a freshly finished turn would flip back to Active the moment
+        // the panel changes focus.
+        if is_user_input(&data) {
+            status_state.statuses.lock().unwrap().remove(&session_id);
+        }
     }
     Ok(())
+}
+
+/// Does a PTY input chunk contain something the user actually did (keys,
+/// enter, paste, arrows) rather than terminal reports the TUI subscribed to?
+/// Focus reports (`ESC[I`/`ESC[O`) fire on every panel switch and SGR mouse
+/// reports (`ESC[<…M/m`) on every wheel notch; cursor-position (`…R`) and
+/// device-attribute (`…c`) replies answer the TUI's own queries. None of
+/// those mean "the user responded".
+fn is_user_input(data: &str) -> bool {
+    let bytes = data.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Anything that isn't a CSI escape sequence is typing.
+        if bytes[i] != 0x1b {
+            return true;
+        }
+        if i + 1 >= bytes.len() || bytes[i + 1] != b'[' {
+            return true; // bare ESC key or an alt-modified key
+        }
+        // Scan to the CSI final byte (0x40..=0x7E) and classify by it.
+        let mut j = i + 2;
+        while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
+            j += 1;
+        }
+        let Some(&fin) = bytes.get(j) else {
+            // Sequence split across chunks — err on not clearing; a real
+            // key will follow if the user is actually here.
+            return false;
+        };
+        let params = &bytes[i + 2..j];
+        let is_report = match fin {
+            b'I' | b'O' => params.is_empty(),          // focus in/out
+            b'M' | b'm' => params.first() == Some(&b'<'), // SGR mouse
+            b'R' | b'c' | b'n' => true,                // CPR / DA / DSR replies
+            _ => false, // arrows (A–D), keys (~), kitty (u)… — the user
+        };
+        if !is_report {
+            return true;
+        }
+        i = j + 1;
+    }
+    false
 }
 
 /// Replay buffer for a delegate session: the retained TUI bytes plus the
@@ -657,6 +705,28 @@ mod tests {
 
     fn bytes(sb: &Scrollback) -> String {
         String::from_utf8_lossy(&sb.buf.iter().copied().collect::<Vec<u8>>()).to_string()
+    }
+
+    #[test]
+    fn user_input_ignores_terminal_reports_but_keeps_real_keys() {
+        // Housekeeping that must NOT clear a waiting/blocked status:
+        assert!(!is_user_input("\x1b[I"), "focus in");
+        assert!(!is_user_input("\x1b[O"), "focus out");
+        assert!(!is_user_input("\x1b[I\x1b[O\x1b[I"), "focus churn on panel switches");
+        assert!(!is_user_input("\x1b[<65;10;5M"), "mouse wheel (SGR)");
+        assert!(!is_user_input("\x1b[<0;3;7m"), "mouse release (SGR)");
+        assert!(!is_user_input("\x1b[24;80R"), "cursor position report");
+        assert!(!is_user_input("\x1b[?1;2c"), "device attributes reply");
+        assert!(!is_user_input("\x1b[<65;10"), "report split across chunks");
+        assert!(!is_user_input(""), "empty chunk");
+        // Real interaction that must clear it:
+        assert!(is_user_input("y"));
+        assert!(is_user_input("\r"), "enter");
+        assert!(is_user_input("\x1b[A"), "arrow key");
+        assert!(is_user_input("\x1b[5~"), "page up");
+        assert!(is_user_input("\x1b"), "bare escape key");
+        assert!(is_user_input("\x1b[Iy"), "typing after a focus report");
+        assert!(is_user_input("\x1b[200~hello\x1b[201~"), "bracketed paste");
     }
 
     #[test]
