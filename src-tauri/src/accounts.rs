@@ -258,7 +258,10 @@ impl AccountProvider for CodexProvider {
         name: &str,
         existing: Option<&Account>,
     ) -> Result<(Vec<String>, Option<String>), String> {
-        Ok((capture_files(&self.live_files(), dir, name, existing)?, None))
+        Ok((
+            capture_files(&self.live_files(), dir, name, existing)?,
+            None,
+        ))
     }
     fn restore(&self, dir: &Path, account: &Account) -> Result<(), String> {
         restore_files(&self.live_files(), self.label(), dir, account)
@@ -292,7 +295,10 @@ impl AccountProvider for OpenCodeProvider {
         name: &str,
         existing: Option<&Account>,
     ) -> Result<(Vec<String>, Option<String>), String> {
-        Ok((capture_files(&self.live_files(), dir, name, existing)?, None))
+        Ok((
+            capture_files(&self.live_files(), dir, name, existing)?,
+            None,
+        ))
     }
     fn restore(&self, dir: &Path, account: &Account) -> Result<(), String> {
         restore_files(&self.live_files(), self.label(), dir, account)
@@ -505,7 +511,9 @@ pub fn save_current(provider_id: &str, name: &str) -> Result<Account, String> {
     }
     let p = provider(provider_id).ok_or_else(|| format!("Unknown provider \"{provider_id}\""))?;
 
-    let identity = p.live_identity().ok_or_else(|| not_logged_in_msg(p.as_ref()))?;
+    let identity = p
+        .live_identity()
+        .ok_or_else(|| not_logged_in_msg(p.as_ref()))?;
     if !identity.is_recognised() {
         return Err(format!(
             "Couldn't recognise {}'s login shape — not saving, to avoid storing \

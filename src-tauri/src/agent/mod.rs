@@ -665,7 +665,14 @@ fn finish_cancelled<E: FnMut(AgentEvent) -> Result<(), String>>(
         },
         ts: now_ms(),
     })?;
-    settle_run(sup, runs_dir, id, summary, message_count, AgentRunStatus::Cancelled)
+    settle_run(
+        sup,
+        runs_dir,
+        id,
+        summary,
+        message_count,
+        AgentRunStatus::Cancelled,
+    )
 }
 
 /// What a pause settled to: the user's reply, or cancellation while waiting.
@@ -1692,7 +1699,14 @@ async fn run_agent_loop(
                     error,
                     ts: now_ms(),
                 })?;
-                settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Error)?;
+                settle_run(
+                    sup,
+                    &runs_dir,
+                    &id,
+                    &summary,
+                    message_count,
+                    AgentRunStatus::Error,
+                )?;
                 completed = true;
                 break;
             }
@@ -1738,7 +1752,14 @@ async fn run_agent_loop(
                     result: serde_json::json!({ "status": "done" }),
                     ts: now_ms(),
                 })?;
-                settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Done)?;
+                settle_run(
+                    sup,
+                    &runs_dir,
+                    &id,
+                    &summary,
+                    message_count,
+                    AgentRunStatus::Done,
+                )?;
                 completed = true;
                 break;
             }
@@ -1889,7 +1910,14 @@ async fn run_agent_loop(
             error,
             ts: now_ms(),
         })?;
-        settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Error)?;
+        settle_run(
+            sup,
+            &runs_dir,
+            &id,
+            &summary,
+            message_count,
+            AgentRunStatus::Error,
+        )?;
     }
 
     Ok(())
@@ -3188,7 +3216,10 @@ mod run_supervisor_tests {
         );
         assert!(matches!(outcome, Ok(PauseOutcome::Resolved(r)) if r == "approved"));
         // Status was restored to Running after the pause resolved.
-        assert_eq!(with_run_handle(&sup, "run-1", |h| h.status), Some(AgentRunStatus::Running));
+        assert_eq!(
+            with_run_handle(&sup, "run-1", |h| h.status),
+            Some(AgentRunStatus::Running)
+        );
     }
 
     #[tokio::test]
