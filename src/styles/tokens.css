@@ -57,6 +57,19 @@
   --chart-6: color-mix(in srgb, var(--accent) 28%, var(--bg));
   --chart-7: color-mix(in srgb, var(--accent) 20%, var(--bg));
 
+  /* Git graph branch lanes — unlike the chart ramp, lanes are 1.5px lines
+     that MUST be tellable apart, so this is the one place with hue variety:
+     sage first (brand), then muted mid-tone hues that read on light and
+     dark surfaces alike. Graph lanes only — never for UI chrome. */
+  --lane-1: var(--accent);
+  --lane-2: #7A93BE;  /* muted blue   */
+  --lane-3: #B9896B;  /* muted copper */
+  --lane-4: #9A80B5;  /* muted violet */
+  --lane-5: #6FA9A4;  /* muted teal   */
+  --lane-6: #B47F99;  /* muted rose   */
+  --lane-7: #A3A06B;  /* muted olive  */
+  --lane-8: #808C9A;  /* slate        */
+
   /* Code syntax (theme-agnostic mid-tones; block surface uses --bg-elevated) */
   --code-keyword: #7A5AF5;
   --code-string:  #2F9E64;

@@ -11,7 +11,14 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ThemeId } from "../theme";
 import type { GitFile, GitStatus } from "../gitTypes";
-import { GitHistoryGraph } from "./GitHistoryGraph";
+import {
+  clampDetailPct,
+  CommitDetailPane,
+  DETAIL_PCT_DEFAULT,
+  DETAIL_PCT_KEY,
+  GitHistoryGraph,
+  type CommitDetails,
+} from "./GitHistoryGraph";
 
 type GitCommit = {
   hash: string;
@@ -83,7 +90,6 @@ type Props = {
   workspaceRoot: string | null;
   gitStatus: GitStatus | null;
   onRefreshGitStatus: () => Promise<void> | void;
-  onBack: () => void;
   theme: ThemeId;
 };
 
@@ -435,9 +441,12 @@ const iconButtonStyle: React.CSSProperties = {
   color: "var(--fg-subtle)", border: "none", background: "none", cursor: "pointer", fontSize: 14, lineHeight: 1,
 };
 
-function SectionHeader({ title, count, onAction, actionLabel }: {
-  title: string; count: number; onAction?: () => void; actionLabel?: string;
+function SectionHeader({ title, count, onAction, actionLabel, actionIcon }: {
+  title: string; count: number; onAction?: () => void; actionLabel?: string; actionIcon?: React.ReactNode;
 }) {
+  // Icon-only action, but hover reveals its label inline in the header —
+  // the Klide hover-reveal pattern, so the icon never has to be guessed.
+  const [hover, setHover] = useState(false);
   return (
     <div style={{
       height: 28, padding: "0 10px", display: "flex", alignItems: "center", gap: 6,
@@ -449,16 +458,28 @@ function SectionHeader({ title, count, onAction, actionLabel }: {
       {onAction && actionLabel && (
         <button
           aria-label={actionLabel}
-          title={actionLabel}
           onClick={onAction}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
           style={{
-            fontSize: 10, padding: "2px 7px", borderRadius: "var(--radius-xs)", border: "none", cursor: "pointer",
-            background: "transparent", color: "var(--fg-subtle)", fontWeight: 500, letterSpacing: "0.03em",
+            height: 22, padding: actionIcon ? "0 5px" : "2px 7px",
+            display: "inline-flex", alignItems: "center", gap: hover && actionIcon ? 5 : 0,
+            fontSize: 10, borderRadius: "var(--radius-xs)", border: "none", cursor: "pointer",
+            background: hover ? "var(--bg-hover)" : "transparent",
+            color: hover ? "var(--fg-strong)" : "var(--fg-subtle)",
+            fontWeight: 500, letterSpacing: "0.03em",
+            transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
         >
-          {actionLabel}
+          {actionIcon && (
+            <span style={{
+              maxWidth: hover ? 90 : 0, opacity: hover ? 1 : 0, overflow: "hidden", whiteSpace: "nowrap",
+              transition: "max-width var(--motion-med) var(--ease-soft), opacity var(--motion-fast) var(--ease-out)",
+            }}>
+              {actionLabel}
+            </span>
+          )}
+          {actionIcon ?? actionLabel}
         </button>
       )}
     </div>
@@ -885,7 +906,7 @@ function BranchMenu({ branches, current, onSelect, onClose }: {
   );
 }
 
-export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack, theme: _theme }: Props) {
+export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme: _theme }: Props) {
   const [log, setLog] = useState<GitLog | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [localStatus, setLocalStatus] = useState<GitStatus | null>(null);
@@ -906,6 +927,42 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
+
+  // Commit selection lives here (not in the graph) so the detail pane can
+  // span the FULL window width at the bottom — under the file list and the
+  // GitHub pane, SourceTree-style — instead of being boxed into the center
+  // column. The side panes shrink and scroll when it opens.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
+  const [commitDetail, setCommitDetail] = useState<CommitDetails | null>(null);
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
+  const [detailPct, setDetailPct] = useState(() => {
+    const raw = Number(localStorage.getItem(DETAIL_PCT_KEY));
+    return Number.isFinite(raw) && raw > 0 ? clampDetailPct(raw) : DETAIL_PCT_DEFAULT;
+  });
+  const resizeDetail = useCallback((pct: number) => {
+    const next = clampDetailPct(pct);
+    setDetailPct(next);
+    localStorage.setItem(DETAIL_PCT_KEY, String(next));
+  }, []);
+
+  // A newly opened commit always presents fully open — a collapse from an
+  // earlier look must not carry over.
+  useEffect(() => {
+    if (selectedCommit) setDetailCollapsed(false);
+  }, [selectedCommit]);
+
+  useEffect(() => {
+    if (!workspaceRoot || !selectedCommit) {
+      setCommitDetail(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<CommitDetails>("git_commit_details", { workspaceRoot, hash: selectedCommit })
+      .then((d) => { if (!cancelled) setCommitDetail(d); })
+      .catch(() => { if (!cancelled) setCommitDetail(null); });
+    return () => { cancelled = true; };
+  }, [workspaceRoot, selectedCommit]);
 
   // Tick "now" once a minute so the relative timestamps on PRs and the last
   // fetch chip don't go stale. We only need minute granularity.
@@ -952,6 +1009,16 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     }
   }, [workspaceRoot]);
 
+  // Read the parent's refresh callback through a ref: App passes an inline
+  // arrow, so its identity changes on every App render — and calling it SETS
+  // App state. If refreshStatus depended on it directly, the mount effect
+  // below would refire on each new identity → refresh → App re-render → new
+  // identity → an infinite refetch loop (the "flickering to fetched" bug).
+  const onRefreshGitStatusRef = useRef(onRefreshGitStatus);
+  useEffect(() => {
+    onRefreshGitStatusRef.current = onRefreshGitStatus;
+  });
+
   const refreshStatus = useCallback(async () => {
     if (!workspaceRoot) {
       setLocalStatus(null);
@@ -960,16 +1027,17 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
     try {
       const next = await invoke<GitStatus>("git_status", { workspaceRoot });
       setLocalStatus(next);
-      await onRefreshGitStatus();
+      await onRefreshGitStatusRef.current();
     } catch (e) {
       setLocalStatus(null);
       setActionMessage({ kind: "err", text: e instanceof Error ? e.message : String(e) });
     }
-  }, [workspaceRoot, onRefreshGitStatus]);
+  }, [workspaceRoot]);
 
   useEffect(() => {
     if (workspaceRoot) {
       setOpen(null);
+      setSelectedCommit(null);
       void refreshStatus();
       void refreshLog();
       void refreshStashes();
@@ -1238,6 +1306,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
 
   return (
     <div
+      ref={rootRef}
       className="shell-enter"
       style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "var(--bg)" }}
     >
@@ -1246,14 +1315,6 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
         height: 56, padding: "0 16px", display: "flex", alignItems: "center", gap: 12,
         position: "relative", zIndex: 2,
       }}>
-        <button onClick={onBack} style={{
-          width: 28, height: 28, display: "grid", placeItems: "center", borderRadius: "var(--radius-xs)",
-          border: "none", background: "transparent", color: "var(--fg-subtle)", cursor: "pointer",
-        }} title="Back to workbench">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 6l-6 6 6 6" />
-          </svg>
-        </button>
         <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <span style={{ fontSize: 11, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Git Review</span>
@@ -1326,9 +1387,22 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           </button>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <TopAction onClick={() => void fetch()} disabled={actionLoading === "Fetched"} title="Fetch from all remotes">Fetch</TopAction>
-          <TopAction onClick={() => void pull()} disabled={actionLoading === "Pulled"} title="Pull (fast-forward only)">Pull</TopAction>
-          <TopAction onClick={() => void push()} disabled={actionLoading === "Pushed"} title="Push to upstream">Push</TopAction>
+          <TopAction onClick={() => void fetch()} disabled={actionLoading === "Fetched"} title="Fetch from all remotes" iconOnly>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M20 6v5h-5" /><path d="M4 18v-5h5" />
+              <path d="M18.3 9A7 7 0 0 0 6.4 6.4L4 9" /><path d="M5.7 15A7 7 0 0 0 17.6 17.6L20 15" />
+            </svg>
+          </TopAction>
+          <TopAction onClick={() => void pull()} disabled={actionLoading === "Pulled"} title="Pull (fast-forward only)" iconOnly>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 3v13" /><path d="M6 11l6 6 6-6" /><path d="M5 21h14" />
+            </svg>
+          </TopAction>
+          <TopAction onClick={() => void push()} disabled={actionLoading === "Pushed"} title="Push to upstream" iconOnly>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 21V8" /><path d="M6 13l6-6 6 6" /><path d="M5 3h14" />
+            </svg>
+          </TopAction>
           <button
             onClick={() => void createPr()}
             disabled={stagedFiles.length === 0}
@@ -1349,35 +1423,45 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
         </div>
       </div>
 
-      {/* Action toast */}
-      {actionMessage && (
-        <div
-          key={actionMessage.text}
-          className="glass-toast toast-enter"
-          style={{
-            padding: "9px 16px", fontSize: 12, fontWeight: 500,
-            display: "flex", alignItems: "center", gap: 8,
-            color: actionMessage.kind === "ok" ? "var(--fg-strong)" : "var(--danger)",
-          }}
-        >
-          <span
-            aria-hidden
-            style={{
-              color: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)",
-              fontWeight: 600, flexShrink: 0,
-            }}
-          >
-            {actionMessage.kind === "ok" ? "✓" : "×"}
-          </span>
-          {actionMessage.text}
-        </div>
-      )}
-
-      {/* Body — 3 panes */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+      {/* Body — 3 panes. overflow:hidden matters: when the commit detail
+          pane below squeezes this row, the side panes' fixed-height content
+          (GitHub summary card, empty states) must clip at the row edge
+          instead of painting over the detail pane. */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         {/* Left: files */}
-        <div style={{ width: leftWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--border)" }}>
-          <SectionHeader title="Staged" count={stagedFiles.length} onAction={unstageAll} actionLabel="Unstage all" />
+        <div style={{ width: leftWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--border)", position: "relative" }}>
+          {/* Action feedback — floats over the files column only; these are
+              file/sync actions, so the message belongs where they happen. */}
+          {actionMessage && (
+            <div
+              key={actionMessage.text}
+              className="floating-panel toast-enter"
+              style={{
+                position: "absolute", top: 8, left: 10, right: 10, zIndex: 3,
+                padding: "8px 12px", fontSize: 12, fontWeight: 500, borderRadius: 10,
+                display: "flex", alignItems: "center", gap: 8,
+                color: actionMessage.kind === "ok" ? "var(--fg-strong)" : "var(--danger)",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  color: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)",
+                  fontWeight: 600, flexShrink: 0,
+                }}
+              >
+                {actionMessage.kind === "ok" ? "✓" : "×"}
+              </span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{actionMessage.text}</span>
+            </div>
+          )}
+          <SectionHeader
+            title="Staged"
+            count={stagedFiles.length}
+            onAction={unstageAll}
+            actionLabel="Unstage all"
+            actionIcon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><path d="M5 12h14" /></svg>}
+          />
           <div style={{ overflow: "auto", maxHeight: stagedFiles.length > 0 ? "40%" : 0, minHeight: 0 }}>
             {stagedFiles.map((f) => (
               <FileRow
@@ -1390,7 +1474,13 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
               />
             ))}
           </div>
-          <SectionHeader title="Changes" count={changedFiles.length} onAction={stageAll} actionLabel="Stage all" />
+          <SectionHeader
+            title="Changes"
+            count={changedFiles.length}
+            onAction={stageAll}
+            actionLabel="Stage all"
+            actionIcon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><path d="M12 5v14" /><path d="M5 12h14" /></svg>}
+          />
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             {changedFiles.length === 0 && stagedFiles.length === 0 ? (
               <div style={{ padding: "20px 14px", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center" }}>
@@ -1440,7 +1530,12 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
               <DiffViewer workspaceRoot={workspaceRoot} open={open} />
             </>
           ) : (
-            <GitHistoryGraph workspaceRoot={workspaceRoot} refreshToken={log} />
+            <GitHistoryGraph
+              workspaceRoot={workspaceRoot}
+              refreshToken={log}
+              selectedCommit={selectedCommit}
+              onSelectCommit={setSelectedCommit}
+            />
           )}
         </div>
 
@@ -1534,6 +1629,20 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
           )}
         </div>
       </div>
+
+      {/* Full-width commit detail — spans under all three panes, so the
+          file list and GitHub pane shrink and scroll while it's open. */}
+      {commitDetail && (
+        <CommitDetailPane
+          detail={commitDetail}
+          heightPct={detailPct}
+          collapsed={detailCollapsed}
+          containerRef={rootRef}
+          onResize={resizeDetail}
+          onToggleCollapsed={() => setDetailCollapsed((v) => !v)}
+          onClose={() => setSelectedCommit(null)}
+        />
+      )}
 
       {/* Bottom: stashes + recent history + last fetch */}
       <div className="glass-chrome-bottom" style={{
@@ -1637,14 +1746,17 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
   );
 }
 
-function TopAction({ onClick, disabled, title, children }: { onClick: () => void; disabled?: boolean; title: string; children: React.ReactNode }) {
+function TopAction({ onClick, disabled, title, iconOnly, children }: { onClick: () => void; disabled?: boolean; title: string; iconOnly?: boolean; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={title}
       style={{
-        height: 32, padding: "0 10px", borderRadius: "var(--radius-sm)", cursor: "pointer",
+        height: 32, padding: iconOnly ? 0 : "0 10px", width: iconOnly ? 32 : undefined,
+        display: iconOnly ? "grid" : undefined, placeItems: iconOnly ? "center" : undefined,
+        borderRadius: "var(--radius-sm)", cursor: "pointer",
         background: "transparent", color: "var(--fg)",
         border: "1px solid var(--border)", fontWeight: 500, fontSize: 12,
         boxShadow: "inset 0 1px 0 var(--panel-highlight)",

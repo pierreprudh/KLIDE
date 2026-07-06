@@ -1719,10 +1719,6 @@ function App() {
                     ? refreshGitStatus(effectiveGitReviewRoot)
                     : Promise.resolve()
                 }
-                onBack={() => {
-                  setGitReviewRoot(null);
-                  setView("workbench");
-                }}
                 theme={theme}
               />
             ) : view === "runs" ? (

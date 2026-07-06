@@ -18,6 +18,8 @@ export type GraphCommit = {
   parents: string[];
   subject: string;
   author: string;
+  /** Drives the author avatar lookup (GitHub noreply / Gravatar). */
+  authorEmail: string;
   /** Unix seconds. */
   timestamp: number;
   /** Decorations: "HEAD -> main", "origin/main", "tag: v1". */

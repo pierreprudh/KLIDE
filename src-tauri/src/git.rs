@@ -749,6 +749,8 @@ pub(crate) struct GraphCommit {
     parents: Vec<String>,
     subject: String,
     author: String,
+    /// Drives the author avatar lookup (GitHub noreply / Gravatar).
+    author_email: String,
     timestamp: i64,
     /// Decorations on this commit: "HEAD -> main", "origin/main", "tag: v1".
     refs: Vec<String>,
@@ -761,10 +763,10 @@ fn parse_graph_log(out: &str) -> Vec<GraphCommit> {
             continue;
         }
         let parts: Vec<&str> = line.split('\0').collect();
-        if parts.len() < 7 {
+        if parts.len() < 8 {
             continue;
         }
-        let refs: Vec<String> = parts[6]
+        let refs: Vec<String> = parts[7]
             .trim()
             .trim_matches('(')
             .trim_matches(')')
@@ -778,7 +780,8 @@ fn parse_graph_log(out: &str) -> Vec<GraphCommit> {
             parents: parts[2].split_whitespace().map(str::to_string).collect(),
             subject: parts[3].to_string(),
             author: parts[4].to_string(),
-            timestamp: parse_porcelain_timestamp(parts[5]),
+            author_email: parts[5].to_string(),
+            timestamp: parse_porcelain_timestamp(parts[6]),
             refs,
         });
     }
@@ -804,10 +807,209 @@ pub(crate) async fn git_graph(
                 &format!("-n{limit}"),
                 "--date=unix",
                 "--decorate=short",
-                "--format=%H%x00%h%x00%P%x00%s%x00%an%x00%ct%x00%d",
+                "--format=%H%x00%h%x00%P%x00%s%x00%an%x00%ae%x00%ct%x00%d",
             ],
         )?;
         Ok(parse_graph_log(&out))
+    })
+    .await
+}
+
+/// One changed file inside a commit.
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommitFile {
+    path: String,
+    /// Single-letter git status: M, A, D, R…
+    status: String,
+    additions: i64,
+    deletions: i64,
+}
+
+/// Everything the history graph's detail pane shows for one commit.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommitDetails {
+    hash: String,
+    short_hash: String,
+    subject: String,
+    /// Commit message body after the subject line; may be empty.
+    body: String,
+    author: String,
+    author_email: String,
+    /// Seconds since unix epoch.
+    timestamp: i64,
+    refs: Vec<String>,
+    files: Vec<CommitFile>,
+    diff: String,
+    additions: usize,
+    deletions: usize,
+}
+
+/// Zip `--name-status` (status letter + path) with `--numstat` (per-file
+/// +/- counts). Both list files in the same diff order, so they merge by
+/// index; numstat shows "-" for binary files, which becomes 0.
+fn merge_commit_files(name_status: &str, numstat: &str) -> Vec<CommitFile> {
+    let counts: Vec<(i64, i64)> = numstat
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut cols = l.split('\t');
+            let add = cols.next().and_then(|c| c.parse().ok()).unwrap_or(0);
+            let del = cols.next().and_then(|c| c.parse().ok()).unwrap_or(0);
+            (add, del)
+        })
+        .collect();
+    name_status
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let mut cols = l.split('\t');
+            let status = cols.next()?.trim();
+            // Renames carry two paths (old, new) — show the new one.
+            let path = cols.last()?.trim();
+            let (additions, deletions) = counts.get(i).copied().unwrap_or((0, 0));
+            Some(CommitFile {
+                path: path.to_string(),
+                status: status.chars().next().unwrap_or('M').to_string(),
+                additions,
+                deletions,
+            })
+        })
+        .collect()
+}
+
+/// One (commit, author-email) pair the frontend wants an avatar for.
+#[derive(serde::Deserialize)]
+pub(crate) struct AvatarQuery {
+    hash: String,
+    email: String,
+}
+
+/// Resolve commit authors to their REAL GitHub account pictures. GitHub is
+/// the only party that can map a commit to an account (it works even when
+/// the author's email is private), via the commit endpoint's `author` field.
+/// Results — including misses — are cached per email for the app's lifetime,
+/// so each unique author costs one `gh api` call ever.
+#[tauri::command]
+pub(crate) async fn github_commit_avatars(
+    workspace_root: String,
+    queries: Vec<AvatarQuery>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    blocking(move || {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+        let mut out = HashMap::new();
+        let mut misses: Vec<(String, String)> = Vec::new();
+        {
+            let cache = cache.lock().map_err(|_| "avatar cache poisoned")?;
+            let mut seen = std::collections::HashSet::new();
+            for q in &queries {
+                let email = q.email.trim().to_lowercase();
+                if email.is_empty() || !seen.insert(email.clone()) {
+                    continue;
+                }
+                match cache.get(&email) {
+                    Some(Some(url)) => {
+                        out.insert(email, url.clone());
+                    }
+                    Some(None) => {}
+                    None => misses.push((email, q.hash.clone())),
+                }
+            }
+        }
+
+        // Each lookup is a network round-trip (~0.5s); cap the batch so one
+        // giant repo can't stall this blocking task for a minute. Uncached
+        // stragglers resolve on a later call.
+        for (email, hash) in misses.into_iter().take(12) {
+            let url = gh_output(
+                &workspace_root,
+                &[
+                    "api",
+                    &format!("repos/{{owner}}/{{repo}}/commits/{hash}"),
+                    "--jq",
+                    ".author.avatar_url",
+                ],
+            )
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "null");
+            if let Some(url) = &url {
+                out.insert(email.clone(), url.clone());
+            }
+            if let Ok(mut cache) = cache.lock() {
+                cache.insert(email, url);
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+/// Full detail for one commit: metadata, changed files with counts, and the
+/// patch. `-m --first-parent` makes merge commits show their diff against
+/// the first parent instead of an (empty) combined diff.
+#[tauri::command]
+pub(crate) async fn git_commit_details(
+    workspace_root: String,
+    hash: String,
+) -> Result<CommitDetails, String> {
+    blocking(move || {
+        let meta = git_output(
+            &workspace_root,
+            &[
+                "show",
+                "-s",
+                "--date=unix",
+                "--decorate=short",
+                "--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ct%x00%d%x00%b",
+                &hash,
+            ],
+        )?;
+        // %b (the body) goes last because it can span lines; splitn keeps it whole.
+        let parts: Vec<&str> = meta.splitn(8, '\0').collect();
+        if parts.len() < 8 {
+            return Err("Unexpected `git show` output".to_string());
+        }
+        let refs: Vec<String> = parts[6]
+            .trim()
+            .trim_matches('(')
+            .trim_matches(')')
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "HEAD")
+            .collect();
+
+        let show = |extra: &str| {
+            git_output(
+                &workspace_root,
+                &["show", extra, "--format=", "-m", "--first-parent", &hash],
+            )
+        };
+        let name_status = show("--name-status")?;
+        let numstat = show("--numstat")?;
+        let diff = show("--patch")?;
+        let (additions, deletions) = count_diff_lines(&diff);
+
+        Ok(CommitDetails {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            subject: parts[2].to_string(),
+            body: parts[7].trim().to_string(),
+            author: parts[3].to_string(),
+            author_email: parts[4].to_string(),
+            timestamp: parse_porcelain_timestamp(parts[5]),
+            refs,
+            files: merge_commit_files(&name_status, &numstat),
+            diff,
+            additions,
+            deletions,
+        })
     })
     .await
 }
@@ -1659,17 +1861,48 @@ mod tests {
     }
 
     #[test]
+    fn commit_files_zip_status_with_counts() {
+        let name_status = "M\tsrc/a.rs\nR100\told.txt\tnew.txt\nA\tassets/logo.png\n";
+        let numstat = "10\t2\tsrc/a.rs\n0\t0\tnew.txt\n-\t-\tassets/logo.png\n";
+        let files = merge_commit_files(name_status, numstat);
+        assert_eq!(
+            files,
+            vec![
+                CommitFile {
+                    path: "src/a.rs".into(),
+                    status: "M".into(),
+                    additions: 10,
+                    deletions: 2
+                },
+                CommitFile {
+                    path: "new.txt".into(),
+                    status: "R".into(),
+                    additions: 0,
+                    deletions: 0
+                },
+                CommitFile {
+                    path: "assets/logo.png".into(),
+                    status: "A".into(),
+                    additions: 0,
+                    deletions: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn graph_log_parses_parents_and_refs() {
         // NUL-separated %H %h %P %s %an %ct %d — a merge commit with two
         // parents and decorations, then a root commit with none.
         let out = concat!(
-            "aaa\0aa1\0bbb ccc\0Merge branch 'x'\0Pierre\01700000000\0 (HEAD -> main, origin/main)\n",
-            "bbb\0bb1\0\0first\0Pierre\01690000000\0\n",
+            "aaa\0aa1\0bbb ccc\0Merge branch 'x'\0Pierre\0p@x.dev\01700000000\0 (HEAD -> main, origin/main)\n",
+            "bbb\0bb1\0\0first\0Pierre\0p@x.dev\01690000000\0\n",
         );
         let commits = parse_graph_log(out);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].parents, vec!["bbb", "ccc"]);
         assert_eq!(commits[0].refs, vec!["HEAD -> main", "origin/main"]);
+        assert_eq!(commits[0].author_email, "p@x.dev");
         assert_eq!(commits[0].timestamp, 1_700_000_000);
         assert!(commits[1].parents.is_empty());
         assert!(commits[1].refs.is_empty());
