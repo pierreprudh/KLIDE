@@ -185,7 +185,16 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
             Err(_) => break,
         };
         if line.len() > MAX_PARSE_LINE {
-            count += 1; // oversized line = a tool-output response_item
+            // Codex Desktop can put a full base-instructions blob on the
+            // opening session_meta line. That line still carries cwd/id/branch,
+            // so parse it; keep skipping oversized response_item tool output.
+            if is_session_meta_line(&line) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                    capture_session_meta(v.get("payload"), &mut id, &mut cwd, &mut branch);
+                }
+            } else {
+                count += 1; // oversized line = a tool-output response_item
+            }
             continue;
         }
         let v: serde_json::Value = match serde_json::from_str(&line) {
@@ -195,21 +204,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         let payload = v.get("payload");
         match v.get("type").and_then(|t| t.as_str()) {
             Some("session_meta") => {
-                if let Some(p) = payload {
-                    if id.is_none() {
-                        id = p.get("id").and_then(|x| x.as_str()).map(str::to_string);
-                    }
-                    if cwd.is_none() {
-                        cwd = p.get("cwd").and_then(|x| x.as_str()).map(str::to_string);
-                    }
-                    if branch.is_none() {
-                        branch = p
-                            .get("git")
-                            .and_then(|g| g.get("branch"))
-                            .and_then(|b| b.as_str())
-                            .map(str::to_string);
-                    }
-                }
+                capture_session_meta(payload, &mut id, &mut cwd, &mut branch);
             }
             Some("turn_context") if model.is_none() => {
                 if let Some(m) = payload
@@ -301,6 +296,34 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
         last_event,
         parent_id: None,
     })
+}
+
+fn is_session_meta_line(line: &str) -> bool {
+    line.contains(r#""type":"session_meta""#) || line.contains(r#""type": "session_meta""#)
+}
+
+fn capture_session_meta(
+    payload: Option<&serde_json::Value>,
+    id: &mut Option<String>,
+    cwd: &mut Option<String>,
+    branch: &mut Option<String>,
+) {
+    let Some(p) = payload else {
+        return;
+    };
+    if id.is_none() {
+        *id = p.get("id").and_then(|x| x.as_str()).map(str::to_string);
+    }
+    if cwd.is_none() {
+        *cwd = p.get("cwd").and_then(|x| x.as_str()).map(str::to_string);
+    }
+    if branch.is_none() {
+        *branch = p
+            .get("git")
+            .and_then(|g| g.get("branch"))
+            .and_then(|b| b.as_str())
+            .map(str::to_string);
+    }
 }
 
 fn load_index(home: &str) -> HashMap<String, String> {
@@ -416,6 +439,26 @@ mod tests {
         // gpt-5.4 at 600 input + 55 output = 0.0015 + 0.00055.
         let c = run.cost_usd.expect("gpt-5.4 has a known price");
         assert!((c - 0.00205).abs() < 1e-6, "got {c}");
+    }
+
+    #[test]
+    fn parses_oversized_session_meta_for_desktop_threads() {
+        let home = temp_home("oversized-meta");
+        let p = home.join("rollout-1.jsonl");
+        let meta = format!(
+            r#"{{"type":"session_meta","payload":{{"id":"sess-big","cwd":"/Users/x/proj","git":{{"branch":"main"}},"base_instructions":{{"text":"{}"}}}}}}"#,
+            "x".repeat(40 * 1024)
+        );
+        let item = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"hello"}]}}"#;
+        std::fs::write(&p, format!("{meta}\n{item}\n")).unwrap();
+
+        let run = parse_run(&p, &HashMap::new()).unwrap();
+
+        assert_eq!(run.id, "sess-big");
+        assert_eq!(run.cwd.as_deref(), Some("/Users/x/proj"));
+        assert_eq!(run.project.as_deref(), Some("proj"));
+        assert_eq!(run.git_branch.as_deref(), Some("main"));
+        assert_eq!(run.message_count, 1);
     }
 
     #[test]

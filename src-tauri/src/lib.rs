@@ -684,9 +684,17 @@ fn list_agent_runs(
     app: tauri::AppHandle,
     limit: Option<usize>,
     offset: Option<usize>,
+    workspace_root: Option<String>,
 ) -> Result<Vec<AgentRun>, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let mut runs = delegate::list_runs(&home, limit.unwrap_or(10), offset.unwrap_or(0));
+    let limit = limit.unwrap_or(10);
+    let offset = offset.unwrap_or(0);
+    let mut runs = workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+        .map(|root| delegate::list_runs_for_workspace(&home, limit, offset, root))
+        .unwrap_or_else(|| delegate::list_runs(&home, limit, offset));
 
     // Inject parent ids from the spawn mappings recorded at dispatch time.
     // Try by Klide's internal ID first, then by the external session ID (for

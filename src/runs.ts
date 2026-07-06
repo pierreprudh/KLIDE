@@ -517,10 +517,11 @@ function fromDto(a: AgentRunDto): Run {
 // the seed. Pages are offset-based so loading more never re-parses earlier runs.
 export async function fetchAgentRuns(
   limit = 10,
-  offset = 0
+  offset = 0,
+  workspaceRoot: string | null = null,
 ): Promise<{ runs: Run[]; hasMore: boolean }> {
   const [external, klide] = await Promise.allSettled([
-    invoke<AgentRunDto[]>("list_agent_runs", { limit, offset }),
+    invoke<AgentRunDto[]>("list_agent_runs", { limit, offset, workspaceRoot }),
     invoke<AgentRunDto[]>("agent_list_runs", { limit, offset }),
   ]);
   if (external.status === "rejected" && klide.status === "rejected") {
@@ -538,6 +539,38 @@ export async function fetchAgentRuns(
   // There's another page to pull if either source filled this one.
   const hasMore = externalRows.length === limit || klideRows.length === limit;
   return { runs, hasMore };
+}
+
+function runPageKey(run: Pick<Run, "source" | "id">): string {
+  return `${run.source}:${run.id}`;
+}
+
+/** Merge a refreshed newest page into an existing paged run list.
+ * Incoming rows replace stale copies and any older pages already loaded stay
+ * resident, so background refreshes don't collapse the user's scroll history.
+ */
+export function mergeRunPages(existing: Run[], incoming: Run[]): Run[] {
+  const seen = new Set<string>();
+  const merged: Run[] = [];
+  for (const run of incoming) {
+    const key = runPageKey(run);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(run);
+  }
+  for (const run of existing) {
+    const key = runPageKey(run);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(run);
+  }
+  return merged.sort((a, b) => {
+    const byTime = b.updatedMs - a.updatedMs;
+    if (byTime !== 0) return byTime;
+    const ak = runPageKey(a);
+    const bk = runPageKey(b);
+    return ak < bk ? -1 : ak > bk ? 1 : 0;
+  });
 }
 
 // ── Stats panel cache ──────────────────────────────────────────────────────

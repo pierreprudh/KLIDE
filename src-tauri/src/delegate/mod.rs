@@ -182,6 +182,38 @@ pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
 /// is cheap; only the requested page (offset..offset+limit) is parsed, so big
 /// histories stay fast and the UI can lazily page in older runs.
 pub fn list_runs(home: &str, limit: usize, offset: usize) -> Vec<AgentRun> {
+    list_runs_matching(home, limit, offset, None)
+}
+
+/// One page of recent runs constrained to a workspace. Unlike frontend
+/// filtering after `list_runs`, this pages AFTER matching, so a busy different
+/// project cannot push older current-workspace runs out of the first page.
+pub fn list_runs_for_workspace(
+    home: &str,
+    limit: usize,
+    offset: usize,
+    workspace_root: &str,
+) -> Vec<AgentRun> {
+    list_runs_matching(home, limit, offset, Some(workspace_root))
+}
+
+fn normalize_path(path: &str) -> String {
+    path.trim().trim_end_matches('/').to_string()
+}
+
+fn run_matches_workspace(run: &AgentRun, workspace_root: &str) -> bool {
+    run.cwd
+        .as_deref()
+        .map(normalize_path)
+        .is_some_and(|cwd| cwd == normalize_path(workspace_root))
+}
+
+fn list_runs_matching(
+    home: &str,
+    limit: usize,
+    offset: usize,
+    workspace_root: Option<&str>,
+) -> Vec<AgentRun> {
     let mut candidates: Vec<(usize, RunCandidate)> = Vec::new();
     for (i, delegate) in ALL.iter().enumerate() {
         for c in delegate.discover_runs(home) {
@@ -191,16 +223,30 @@ pub fn list_runs(home: &str, limit: usize, offset: usize) -> Vec<AgentRun> {
     candidates.sort_by_key(|(_, c)| std::cmp::Reverse(c.mtime_ms));
 
     let mut parsers: Vec<Option<Box<dyn RunParser>>> = ALL.iter().map(|_| None).collect();
-    let mut runs: Vec<AgentRun> = candidates
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .filter_map(|(i, c)| {
-            parsers[i]
-                .get_or_insert_with(|| ALL[i].run_parser(home))
-                .parse(&c.key)
-        })
-        .collect();
+    let mut runs: Vec<AgentRun> = Vec::new();
+    let mut matched = 0usize;
+    for (i, c) in candidates {
+        let Some(run) = parsers[i]
+            .get_or_insert_with(|| ALL[i].run_parser(home))
+            .parse(&c.key)
+        else {
+            continue;
+        };
+        if let Some(root) = workspace_root {
+            if !run_matches_workspace(&run, root) {
+                continue;
+            }
+        }
+        if matched < offset {
+            matched += 1;
+            continue;
+        }
+        runs.push(run);
+        matched += 1;
+        if runs.len() >= limit {
+            break;
+        }
+    }
     runs.sort_by_key(|r| std::cmp::Reverse(r.updated_ms));
     runs
 }
@@ -400,6 +446,64 @@ mod tests {
         let rest = list_runs(home_str, 10, 2);
         assert_eq!(rest.len(), 1);
         assert_eq!(rest[0].id, "oss-old");
+    }
+
+    #[test]
+    fn list_runs_for_workspace_pages_after_filtering() {
+        let home = std::env::temp_dir().join("klide-delegate-test-scoped-runs");
+        let workspace = std::env::temp_dir().join("klide-delegate-test-scoped-workspace");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let proj = home.join(".claude/projects/-tmp-klide-delegate-test-scoped-workspace");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join("c-scoped.jsonl"),
+            format!(
+                r#"{{"type":"user","ts":1,"cwd":"{}","message":{{"content":"scoped claude run"}}}}"#,
+                workspace.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let oc = home.join(".local/share/opencode");
+        std::fs::create_dir_all(&oc).unwrap();
+        let conn = rusqlite::Connection::open(oc.join("opencode.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT, title TEXT, directory TEXT, model TEXT, \
+                 time_updated INTEGER, time_created INTEGER, parent_id TEXT);
+             CREATE TABLE message (id TEXT, session_id TEXT, data TEXT, time_created INTEGER);
+             CREATE TABLE part (id TEXT, session_id TEXT, message_id TEXT, data TEXT, time_created INTEGER);",
+        )
+        .unwrap();
+        for i in 0..25 {
+            conn.execute(
+                "INSERT INTO session VALUES (?1, ?2, '/tmp/not-kide', NULL, ?3, ?3, NULL)",
+                (
+                    format!("oss-{i}"),
+                    format!("other {i}"),
+                    2_000_000_000_000i64 - i,
+                ),
+            )
+            .unwrap();
+        }
+
+        let home_str = home.to_str().unwrap();
+        let global_first_page = list_runs(home_str, 20, 0);
+        assert!(
+            global_first_page.iter().all(|r| r.source != "claude-code"),
+            "the old global-first page would miss the KIDE Claude run"
+        );
+
+        let scoped = list_runs_for_workspace(home_str, 20, 0, workspace.to_str().unwrap());
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, "c-scoped");
+        assert_eq!(scoped[0].source, "claude-code");
+        assert_eq!(scoped[0].cwd.as_deref(), workspace.to_str());
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 
     #[test]

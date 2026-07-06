@@ -39,6 +39,7 @@ import {
   formatFilesTouched,
   formatValidationStatus,
   formatValidationTitle,
+  mergeRunPages,
   runAttentionReason,
   runBoardReason,
   runRoutineInfo,
@@ -3611,6 +3612,7 @@ function ProjectOption({ label, active, muted, onClick }: { label: string; activ
 }
 
 const PAGE = 20;
+const RUN_REFRESH_MS = 7_500;
 
 // One live delegate PTY, mirror of Rust's `LiveDelegateSession`.
 type LiveDelegateSession = {
@@ -3875,6 +3877,8 @@ export function MissionControl({
   // ProjectSwitcher lets you change it (or see "All projects").
   const currentProject = projectName(workspaceRoot);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>(() => currentProject ?? "all");
+  const runWorkspaceScope =
+    workspaceRoot && currentProject && projectFilter === currentProject ? workspaceRoot : null;
   const [sessionQuery, setSessionQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   // Delegate PTYs still live in this process — drives the "Live now" strip and
@@ -3951,7 +3955,7 @@ export function MissionControl({
   async function load() {
     setLoading(true);
     try {
-      const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, 0);
+      const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, 0, runWorkspaceScope);
       setRuns(rows);
       setHasMore(hasMore);
       setNextOffset(PAGE);
@@ -3971,11 +3975,8 @@ export function MissionControl({
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, nextOffset);
-      setRuns((prev) => {
-        const seen = new Set(prev.map((r) => r.id));
-        return [...prev, ...rows.filter((r) => !seen.has(r.id))];
-      });
+      const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, nextOffset, runWorkspaceScope);
+      setRuns((prev) => mergeRunPages(prev, rows));
       setHasMore(hasMore);
       setNextOffset((o) => o + PAGE);
     } catch {
@@ -3987,7 +3988,36 @@ export function MissionControl({
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [runWorkspaceScope]);
+
+  // External delegate logs (Claude Code, Codex Desktop, OpenCode) are not
+  // live PTYs unless Klide spawned them, so keep the newest durable page warm
+  // while Mission Control is open. This is what makes a Codex/Claude session
+  // started elsewhere appear on the board while it is still working.
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const refreshLatest = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const { runs: rows, hasMore } = await fetchAgentRuns(PAGE, 0, runWorkspaceScope);
+        if (cancelled) return;
+        setRuns((prev) => mergeRunPages(prev, rows));
+        setHasMore(hasMore);
+        setError(false);
+      } catch {
+        // Keep the last good board; the initial load path owns the fallback UI.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const t = setInterval(refreshLatest, RUN_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [runWorkspaceScope]);
 
   // The run ledger is the canonical Mission Control projection: todos,
   // live/durable Klide conversations, and on-disk transcripts all become
@@ -4040,10 +4070,10 @@ export function MissionControl({
         // also list it in the board sections below.
         !liveConvoIds.has(r.id) &&
         sourceMatchesFilter(r, sourceFilter) &&
-        projectMatchesFilter(r, projectFilter) &&
+        projectMatchesFilter(r, projectFilter, workspaceRoot) &&
         runMatchesLedgerQuery(r, sessionQuery)
     );
-  }, [linkedRuns, liveConvoIds, sourceFilter, projectFilter, sessionQuery]);
+  }, [linkedRuns, liveConvoIds, sourceFilter, projectFilter, workspaceRoot, sessionQuery]);
 
   const grouped = useMemo(() => {
     const by: Record<RunBoardSection, RunLedgerEntry[]> = {

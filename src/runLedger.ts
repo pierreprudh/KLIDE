@@ -89,6 +89,13 @@ export function projectName(cwd: string | null): string | null {
   return cwd ? cwd.split("/").filter(Boolean).pop() ?? null : null;
 }
 
+function normalizePath(path: string | null): string | null {
+  if (!path) return null;
+  const trimmed = path.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, "");
+}
+
 function capabilitiesFor(run: Run, origin: RunLedgerOrigin, lifecycle = runLifecycleStatus(run)): RunCapabilities {
   const delegate = isDelegateId(run.source);
   const hasContent = run.kind === "convo" || run.kind === "run";
@@ -245,17 +252,27 @@ export function presentRunSources(entries: Pick<RunLedgerEntry, "source">[]): Ru
 export type ProjectFilter = string | "all";
 
 export function projectMatchesFilter(
-  run: Pick<RunLedgerEntry, "project">,
+  run: Pick<RunLedgerEntry, "project" | "cwd">,
   filter: ProjectFilter,
+  workspaceRoot?: string | null,
 ): boolean {
   if (filter === "all") return true;
+  const workspace = normalizePath(workspaceRoot ?? null);
+  const runCwd = normalizePath(run.cwd);
+  if (workspace && runCwd && filter === projectName(workspace) && runCwd === workspace) {
+    return true;
+  }
+  if (projectName(run.cwd) === filter) return true;
   return run.project === filter;
 }
 
 /** Unique, sorted project names present across the given runs (skips unscoped runs). */
-export function presentProjects(entries: Pick<RunLedgerEntry, "project">[]): string[] {
+export function presentProjects(entries: Pick<RunLedgerEntry, "project" | "cwd">[]): string[] {
   const set = new Set<string>();
-  for (const entry of entries) if (entry.project) set.add(entry.project);
+  for (const entry of entries) {
+    const name = entry.project ?? projectName(entry.cwd);
+    if (name) set.add(name);
+  }
   return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 

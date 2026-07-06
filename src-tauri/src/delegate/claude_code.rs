@@ -289,6 +289,9 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     if created_ms == 0 {
         created_ms = updated_ms;
     }
+    if cwd.is_none() {
+        cwd = claude_project_cwd(path);
+    }
     let cost_usd =
         crate::pricing::cost_for_run(model.as_deref().unwrap_or(""), input_tokens, output_tokens);
     Some(AgentRun {
@@ -325,6 +328,22 @@ fn claude_subagent_parent_id(path: &std::path::Path) -> Option<String> {
         .file_name()
         .map(|id| id.to_string_lossy().to_string())
         .filter(|id| !id.is_empty())
+}
+
+fn claude_project_cwd(path: &std::path::Path) -> Option<String> {
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component.as_os_str() != "projects" {
+            continue;
+        }
+        let encoded = components.next()?.as_os_str().to_string_lossy();
+        let rest = encoded.strip_prefix('-')?;
+        let cwd = format!("/{}", rest.replace('-', "/"));
+        return std::path::Path::new(&cwd)
+            .is_dir()
+            .then_some(cwd);
+    }
+    None
 }
 
 // Walk a message's content into readable text plus structured tool calls: text
@@ -442,6 +461,31 @@ mod tests {
         // Claude Sonnet 4.6 at 100+50=150 input + 20 output = 0.00045 + 0.0003.
         let c = run.cost_usd.expect("sonnet has a known price");
         assert!((c - 0.00075).abs() < 1e-6, "got {c}");
+    }
+
+    #[test]
+    fn falls_back_to_encoded_project_directory_for_cwd() {
+        let home = temp_home("cwd-fallback");
+        let workspace = std::env::temp_dir()
+            .join("klideclaudecwdfallback")
+            .join("workspace");
+        let _ = std::fs::remove_dir_all(workspace.parent().unwrap());
+        std::fs::create_dir_all(&workspace).unwrap();
+        let encoded = workspace.to_string_lossy().replace('/', "-");
+        let dir = home.join(".claude/projects").join(encoded);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("session.jsonl");
+        std::fs::write(
+            &p,
+            r#"{"type":"user","ts":1000,"message":{"content":"missing cwd"}}"#,
+        )
+        .unwrap();
+
+        let run = parse_run(&p).unwrap();
+
+        assert_eq!(run.cwd.as_deref(), workspace.to_str());
+        assert_eq!(run.project.as_deref(), Some("workspace"));
+        let _ = std::fs::remove_dir_all(workspace.parent().unwrap());
     }
 
     #[test]
