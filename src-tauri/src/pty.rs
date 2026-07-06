@@ -395,9 +395,9 @@ fn is_user_input(data: &str) -> bool {
         };
         let params = &bytes[i + 2..j];
         let is_report = match fin {
-            b'I' | b'O' => params.is_empty(),          // focus in/out
+            b'I' | b'O' => params.is_empty(),             // focus in/out
             b'M' | b'm' => params.first() == Some(&b'<'), // SGR mouse
-            b'R' | b'c' | b'n' => true,                // CPR / DA / DSR replies
+            b'R' | b'c' | b'n' => true,                   // CPR / DA / DSR replies
             _ => false, // arrows (A–D), keys (~), kitty (u)… — the user
         };
         if !is_report {
@@ -712,7 +712,10 @@ mod tests {
         // Housekeeping that must NOT clear a waiting/blocked status:
         assert!(!is_user_input("\x1b[I"), "focus in");
         assert!(!is_user_input("\x1b[O"), "focus out");
-        assert!(!is_user_input("\x1b[I\x1b[O\x1b[I"), "focus churn on panel switches");
+        assert!(
+            !is_user_input("\x1b[I\x1b[O\x1b[I"),
+            "focus churn on panel switches"
+        );
         assert!(!is_user_input("\x1b[<65;10;5M"), "mouse wheel (SGR)");
         assert!(!is_user_input("\x1b[<0;3;7m"), "mouse release (SGR)");
         assert!(!is_user_input("\x1b[24;80R"), "cursor position report");

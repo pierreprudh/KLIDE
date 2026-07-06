@@ -141,6 +141,18 @@ pub(crate) struct PullRequestDetails {
     updated_at_ms: i64,
 }
 
+/// Run a blocking git/gh shell-out off the main thread. Synchronous Tauri
+/// commands execute ON the main thread — a 2-second `gh pr list` there
+/// freezes the whole window (input, rendering, every other invoke). Every
+/// command in this module wraps its body in this.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("Git task failed: {e}"))?
+}
+
 fn run_git(workspace_root: &str, args: &[&str]) -> Result<(), String> {
     let output = Command::new("git")
         .arg("-C")
@@ -215,305 +227,320 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 }
 
 #[tauri::command]
-pub(crate) fn git_status(workspace_root: String) -> Result<GitStatus, String> {
-    let output = Command::new("git")
-        .args(["-C", &workspace_root, "status", "--short", "--branch"])
-        .output()
-        .map_err(|e| format!("Failed to run git: {e}"))?;
+pub(crate) async fn git_status(workspace_root: String) -> Result<GitStatus, String> {
+    blocking(move || {
+        let output = Command::new("git")
+            .args(["-C", &workspace_root, "status", "--short", "--branch"])
+            .output()
+            .map_err(|e| format!("Failed to run git: {e}"))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut branch = "unknown".to_string();
-    let mut files = Vec::new();
-
-    for line in stdout.lines() {
-        if let Some(rest) = line.strip_prefix("## ") {
-            branch = rest.split("...").next().unwrap_or(rest).trim().to_string();
-            continue;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
 
-        if line.len() < 4 {
-            continue;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut branch = "unknown".to_string();
+        let mut files = Vec::new();
+
+        for line in stdout.lines() {
+            if let Some(rest) = line.strip_prefix("## ") {
+                branch = rest.split("...").next().unwrap_or(rest).trim().to_string();
+                continue;
+            }
+
+            if line.len() < 4 {
+                continue;
+            }
+
+            let staged = &line[0..1] != " " && &line[0..1] != "?";
+            let status = line[0..2].trim().to_string();
+            let path = line[3..].trim().to_string();
+            files.push(GitFile {
+                path,
+                status,
+                staged,
+            });
         }
 
-        let staged = &line[0..1] != " " && &line[0..1] != "?";
-        let status = line[0..2].trim().to_string();
-        let path = line[3..].trim().to_string();
-        files.push(GitFile {
-            path,
-            status,
-            staged,
-        });
-    }
-
-    Ok(GitStatus { branch, files })
+        Ok(GitStatus { branch, files })
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_stage(workspace_root: String, path: String) -> Result<(), String> {
-    run_git(&workspace_root, &["add", "--", &path])
+pub(crate) async fn git_stage(workspace_root: String, path: String) -> Result<(), String> {
+    blocking(move || run_git(&workspace_root, &["add", "--", &path])).await
 }
 
 #[tauri::command]
-pub(crate) fn git_unstage(workspace_root: String, path: String) -> Result<(), String> {
-    run_git(&workspace_root, &["restore", "--staged", "--", &path])
+pub(crate) async fn git_unstage(workspace_root: String, path: String) -> Result<(), String> {
+    blocking(move || run_git(&workspace_root, &["restore", "--staged", "--", &path])).await
 }
 
 #[tauri::command]
-pub(crate) fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return Err("Commit message cannot be empty".to_string());
-    }
-    run_git(&workspace_root, &["commit", "-m", trimmed])
+pub(crate) async fn git_commit(workspace_root: String, message: String) -> Result<(), String> {
+    blocking(move || {
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return Err("Commit message cannot be empty".to_string());
+        }
+        run_git(&workspace_root, &["commit", "-m", trimmed])
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn create_pr(
+pub(crate) async fn create_pr(
     workspace_root: String,
     title: String,
     body: Option<String>,
 ) -> Result<String, String> {
-    // Create a branch from the current changes. Cap the name at 50 chars —
-    // truncate() takes a BYTE index and panics mid-char on non-ASCII titles
-    // (is_alphanumeric keeps accented/Unicode letters), so count chars instead.
-    let branch: String = format!(
-        "klide/{}",
-        title
-            .to_lowercase()
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-            .trim_matches('-')
-    )
-    .chars()
-    .take(50)
-    .collect();
+    blocking(move || {
+        // Create a branch from the current changes. Cap the name at 50 chars —
+        // truncate() takes a BYTE index and panics mid-char on non-ASCII titles
+        // (is_alphanumeric keeps accented/Unicode letters), so count chars instead.
+        let branch: String = format!(
+            "klide/{}",
+            title
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+                .trim_matches('-')
+        )
+        .chars()
+        .take(50)
+        .collect();
 
-    // Check if gh CLI is available
-    let gh_check = Command::new("gh").arg("--version").output();
-    if gh_check.is_err() || !gh_check.unwrap().status.success() {
-        return Err(
-            "GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string(),
-        );
-    }
+        // Check if gh CLI is available
+        let gh_check = Command::new("gh").arg("--version").output();
+        if gh_check.is_err() || !gh_check.unwrap().status.success() {
+            return Err(
+                "GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string(),
+            );
+        }
 
-    // Commit exactly what the user staged in the Git Review UI — do NOT
-    // `git add -A`. A blanket add sweeps every untracked/unstaged file in the
-    // tree (scratch files, copied worktree config) into the PR commit, which is
-    // the worktree-bootstrap pollution bug. The commit/PR flow is staging-driven
-    // everywhere else; keep it that way here.
-    let status = Command::new("git")
-        .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
-        .status()
-        .map_err(|e| format!("Failed to check git status: {e}"))?;
-    if status.success() {
-        return Err("No staged changes — stage files before opening a PR.".to_string());
-    }
+        // Commit exactly what the user staged in the Git Review UI — do NOT
+        // `git add -A`. A blanket add sweeps every untracked/unstaged file in the
+        // tree (scratch files, copied worktree config) into the PR commit, which is
+        // the worktree-bootstrap pollution bug. The commit/PR flow is staging-driven
+        // everywhere else; keep it that way here.
+        let status = Command::new("git")
+            .args(["-C", &workspace_root, "diff", "--cached", "--quiet"])
+            .status()
+            .map_err(|e| format!("Failed to check git status: {e}"))?;
+        if status.success() {
+            return Err("No staged changes — stage files before opening a PR.".to_string());
+        }
 
-    // Create and switch to new branch
-    run_git(&workspace_root, &["checkout", "-b", &branch])?;
+        // Create and switch to new branch
+        run_git(&workspace_root, &["checkout", "-b", &branch])?;
 
-    // Commit the staged changes before pushing; otherwise the PR branch has no
-    // new commits for GitHub to compare against the base branch.
-    run_git(&workspace_root, &["commit", "-m", title.trim()])?;
+        // Commit the staged changes before pushing; otherwise the PR branch has no
+        // new commits for GitHub to compare against the base branch.
+        run_git(&workspace_root, &["commit", "-m", title.trim()])?;
 
-    let push = Command::new("git")
-        .args([
-            "-C",
-            &workspace_root,
-            "push",
-            "-u",
-            "origin",
-            branch.as_str(),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to push: {e}"))?;
-    if !push.status.success() {
-        let err = String::from_utf8_lossy(&push.stderr);
-        let _ = Command::new("git")
-            .args(["-C", &workspace_root, "checkout", "-"])
-            .status();
-        let _ = Command::new("git")
-            .args(["-C", &workspace_root, "branch", "-D", branch.as_str()])
-            .status();
-        return Err(format!("Push failed: {}", err.trim()));
-    }
+        let push = Command::new("git")
+            .args([
+                "-C",
+                &workspace_root,
+                "push",
+                "-u",
+                "origin",
+                branch.as_str(),
+            ])
+            .output()
+            .map_err(|e| format!("Failed to push: {e}"))?;
+        if !push.status.success() {
+            let err = String::from_utf8_lossy(&push.stderr);
+            let _ = Command::new("git")
+                .args(["-C", &workspace_root, "checkout", "-"])
+                .status();
+            let _ = Command::new("git")
+                .args(["-C", &workspace_root, "branch", "-D", branch.as_str()])
+                .status();
+            return Err(format!("Push failed: {}", err.trim()));
+        }
 
-    let mut gh_args = vec!["pr", "create", "--title", &title, "--head", branch.as_str()];
-    let body_str;
-    if let Some(b) = &body {
-        body_str = b.clone();
-        gh_args.push("--body");
-        gh_args.push(&body_str);
-    }
+        let mut gh_args = vec!["pr", "create", "--title", &title, "--head", branch.as_str()];
+        let body_str;
+        if let Some(b) = &body {
+            body_str = b.clone();
+            gh_args.push("--body");
+            gh_args.push(&body_str);
+        }
 
-    let pr = Command::new("gh")
-        .args(gh_args)
-        .current_dir(&workspace_root)
-        .output()
-        .map_err(|e| format!("Failed to create PR: {e}"))?;
+        let pr = Command::new("gh")
+            .args(gh_args)
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|e| format!("Failed to create PR: {e}"))?;
 
-    if pr.status.success() {
-        let url = String::from_utf8_lossy(&pr.stdout).trim().to_string();
-        Ok(if url.is_empty() {
-            format!("PR created on branch '{branch}'")
+        if pr.status.success() {
+            let url = String::from_utf8_lossy(&pr.stdout).trim().to_string();
+            Ok(if url.is_empty() {
+                format!("PR created on branch '{branch}'")
+            } else {
+                url
+            })
         } else {
-            url
-        })
-    } else {
-        let err = String::from_utf8_lossy(&pr.stderr);
-        Err(format!("PR creation failed: {}", err.trim()))
-    }
+            let err = String::from_utf8_lossy(&pr.stderr);
+            Err(format!("PR creation failed: {}", err.trim()))
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_diff(
+pub(crate) async fn git_diff(
     workspace_root: String,
     path: String,
     staged: bool,
 ) -> Result<GitDiff, String> {
-    let diff = if staged {
-        git_output(&workspace_root, &["diff", "--cached", "--", &path])?
-    } else {
-        git_output(&workspace_root, &["diff", "--", &path])?
-    };
+    blocking(move || {
+        let diff = if staged {
+            git_output(&workspace_root, &["diff", "--cached", "--", &path])?
+        } else {
+            git_output(&workspace_root, &["diff", "--", &path])?
+        };
 
-    let diff = if diff.trim().is_empty() && !staged {
-        let untracked = git_output(
-            &workspace_root,
-            &["ls-files", "--others", "--exclude-standard", "--", &path],
-        )?;
-        if untracked.lines().any(|line| line == path) {
-            let full_path = std::path::Path::new(&workspace_root).join(&path);
-            let content = std::fs::read_to_string(&full_path)
-                .map_err(|e| format!("Unable to read untracked file: {e}"))?;
-            let mut out = format!(
+        let diff = if diff.trim().is_empty() && !staged {
+            let untracked = git_output(
+                &workspace_root,
+                &["ls-files", "--others", "--exclude-standard", "--", &path],
+            )?;
+            if untracked.lines().any(|line| line == path) {
+                let full_path = std::path::Path::new(&workspace_root).join(&path);
+                let content = std::fs::read_to_string(&full_path)
+                    .map_err(|e| format!("Unable to read untracked file: {e}"))?;
+                let mut out = format!(
                 "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
             );
-            for line in content.lines() {
-                out.push('+');
-                out.push_str(line);
-                out.push('\n');
+                for line in content.lines() {
+                    out.push('+');
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                if content.ends_with('\n') {
+                    // content.lines() omits the final empty segment; no extra line is needed.
+                }
+                out
+            } else {
+                diff
             }
-            if content.ends_with('\n') {
-                // content.lines() omits the final empty segment; no extra line is needed.
-            }
-            out
         } else {
             diff
-        }
-    } else {
-        diff
-    };
+        };
 
-    let (additions, deletions) = count_diff_lines(&diff);
-    Ok(GitDiff {
-        path,
-        diff,
-        additions,
-        deletions,
+        let (additions, deletions) = count_diff_lines(&diff);
+        Ok(GitDiff {
+            path,
+            diff,
+            additions,
+            deletions,
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_branch_diff(
+pub(crate) async fn git_branch_diff(
     workspace_root: String,
     branch: String,
     base_branch: Option<String>,
 ) -> Result<GitBranchDiff, String> {
-    let branch = branch.trim();
-    if branch.is_empty() {
-        return Err("Branch to compare is required".to_string());
-    }
-    // Base resolution: explicit caller choice → the fork point recorded at
-    // branch creation (`branch.<name>.base`, written by git_worktree_add) →
-    // the current checkout as a last guess. The recorded base is what makes
-    // a worktree run diff against what it actually forked from, not
-    // whatever branch the main checkout happens to be on today.
-    let base_branch = match base_branch {
-        Some(base) if !base.trim().is_empty() => base.trim().to_string(),
-        _ => {
-            let recorded = git_output(
-                &workspace_root,
-                &["config", "--get", &format!("branch.{branch}.base")],
-            )
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-            if !recorded.is_empty() {
-                recorded
-            } else {
-                let current = git_output(&workspace_root, &["branch", "--show-current"])?;
-                let current = current.trim();
-                if current.is_empty() {
-                    return Err(
-                        "Current checkout is detached; choose a base branch first.".to_string()
-                    );
+    blocking(move || {
+        let branch = branch.trim();
+        if branch.is_empty() {
+            return Err("Branch to compare is required".to_string());
+        }
+        // Base resolution: explicit caller choice → the fork point recorded at
+        // branch creation (`branch.<name>.base`, written by git_worktree_add) →
+        // the current checkout as a last guess. The recorded base is what makes
+        // a worktree run diff against what it actually forked from, not
+        // whatever branch the main checkout happens to be on today.
+        let base_branch = match base_branch {
+            Some(base) if !base.trim().is_empty() => base.trim().to_string(),
+            _ => {
+                let recorded = git_output(
+                    &workspace_root,
+                    &["config", "--get", &format!("branch.{branch}.base")],
+                )
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+                if !recorded.is_empty() {
+                    recorded
+                } else {
+                    let current = git_output(&workspace_root, &["branch", "--show-current"])?;
+                    let current = current.trim();
+                    if current.is_empty() {
+                        return Err(
+                            "Current checkout is detached; choose a base branch first.".to_string()
+                        );
+                    }
+                    current.to_string()
                 }
-                current.to_string()
+            }
+        };
+
+        let merge_base = git_output(&workspace_root, &["merge-base", &base_branch, branch])?;
+        let merge_base = merge_base.trim().to_string();
+        if merge_base.is_empty() {
+            return Err(format!(
+                "No merge base found between {base_branch} and {branch}."
+            ));
+        }
+
+        let range = format!("{merge_base}..{branch}");
+        let diff = git_output(&workspace_root, &["diff", "--find-renames", &range])?;
+        let (additions, deletions) = count_diff_lines(&diff);
+
+        let numstat = git_output(&workspace_root, &["diff", "--numstat", &range])?;
+        let name_status = git_output(&workspace_root, &["diff", "--name-status", &range])?;
+        let mut statuses = std::collections::HashMap::<String, String>::new();
+        for line in name_status.lines() {
+            let mut parts = line.split('\t');
+            let Some(status) = parts.next() else { continue };
+            let path = if status.starts_with('R') || status.starts_with('C') {
+                let _old = parts.next();
+                parts.next()
+            } else {
+                parts.next()
+            };
+            if let Some(path) = path {
+                statuses.insert(path.to_string(), status.to_string());
             }
         }
-    };
 
-    let merge_base = git_output(&workspace_root, &["merge-base", &base_branch, branch])?;
-    let merge_base = merge_base.trim().to_string();
-    if merge_base.is_empty() {
-        return Err(format!(
-            "No merge base found between {base_branch} and {branch}."
-        ));
-    }
-
-    let range = format!("{merge_base}..{branch}");
-    let diff = git_output(&workspace_root, &["diff", "--find-renames", &range])?;
-    let (additions, deletions) = count_diff_lines(&diff);
-
-    let numstat = git_output(&workspace_root, &["diff", "--numstat", &range])?;
-    let name_status = git_output(&workspace_root, &["diff", "--name-status", &range])?;
-    let mut statuses = std::collections::HashMap::<String, String>::new();
-    for line in name_status.lines() {
-        let mut parts = line.split('\t');
-        let Some(status) = parts.next() else { continue };
-        let path = if status.starts_with('R') || status.starts_with('C') {
-            let _old = parts.next();
-            parts.next()
-        } else {
-            parts.next()
-        };
-        if let Some(path) = path {
-            statuses.insert(path.to_string(), status.to_string());
+        let mut files = Vec::new();
+        for line in numstat.lines() {
+            let mut parts = line.split('\t');
+            let Some(adds) = parts.next() else { continue };
+            let Some(dels) = parts.next() else { continue };
+            let path = parts.collect::<Vec<_>>().join("\t");
+            if path.is_empty() {
+                continue;
+            }
+            files.push(GitBranchDiffFile {
+                status: statuses
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| "M".to_string()),
+                additions: adds.parse::<usize>().unwrap_or(0),
+                deletions: dels.parse::<usize>().unwrap_or(0),
+                path,
+            });
         }
-    }
 
-    let mut files = Vec::new();
-    for line in numstat.lines() {
-        let mut parts = line.split('\t');
-        let Some(adds) = parts.next() else { continue };
-        let Some(dels) = parts.next() else { continue };
-        let path = parts.collect::<Vec<_>>().join("\t");
-        if path.is_empty() {
-            continue;
-        }
-        files.push(GitBranchDiffFile {
-            status: statuses
-                .get(&path)
-                .cloned()
-                .unwrap_or_else(|| "M".to_string()),
-            additions: adds.parse::<usize>().unwrap_or(0),
-            deletions: dels.parse::<usize>().unwrap_or(0),
-            path,
-        });
-    }
-
-    Ok(GitBranchDiff {
-        base_branch,
-        branch: branch.to_string(),
-        merge_base,
-        diff,
-        additions,
-        deletions,
-        files,
+        Ok(GitBranchDiff {
+            base_branch,
+            branch: branch.to_string(),
+            merge_base,
+            diff,
+            additions,
+            deletions,
+            files,
+        })
     })
+    .await
 }
 
 // -----------------------------------------------------------------------------
@@ -701,30 +728,124 @@ fn resolve_git_log(workspace_root: &str, limit: usize) -> Result<GitLog, String>
 }
 
 #[tauri::command]
-pub(crate) fn git_log(workspace_root: String, limit: Option<usize>) -> Result<GitLog, String> {
-    let limit = limit.unwrap_or(60).clamp(5, 500);
-    resolve_git_log(&workspace_root, limit)
+pub(crate) async fn git_log(
+    workspace_root: String,
+    limit: Option<usize>,
+) -> Result<GitLog, String> {
+    blocking(move || {
+        let limit = limit.unwrap_or(60).clamp(5, 500);
+        resolve_git_log(&workspace_root, limit)
+    })
+    .await
 }
 
-#[tauri::command]
-pub(crate) fn git_checkout_branch(workspace_root: String, branch: String) -> Result<(), String> {
-    if branch.is_empty() {
-        return Err("Branch name is required".to_string());
+/// One commit in the history graph — like [`GitCommit`] but with parent
+/// hashes, which is what lets the frontend lay out branch/merge lanes.
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GraphCommit {
+    hash: String,
+    short_hash: String,
+    parents: Vec<String>,
+    subject: String,
+    author: String,
+    timestamp: i64,
+    /// Decorations on this commit: "HEAD -> main", "origin/main", "tag: v1".
+    refs: Vec<String>,
+}
+
+fn parse_graph_log(out: &str) -> Vec<GraphCommit> {
+    let mut commits = Vec::new();
+    for line in out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        let refs: Vec<String> = parts[6]
+            .trim()
+            .trim_matches('(')
+            .trim_matches(')')
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "HEAD")
+            .collect();
+        commits.push(GraphCommit {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            parents: parts[2].split_whitespace().map(str::to_string).collect(),
+            subject: parts[3].to_string(),
+            author: parts[4].to_string(),
+            timestamp: parse_porcelain_timestamp(parts[5]),
+            refs,
+        });
     }
-    run_git(&workspace_root, &["checkout", &branch])
+    commits
+}
+
+/// Commit history across ALL refs in topological order, with parent hashes —
+/// the input for the Git Review history graph. `--topo-order` keeps each
+/// branch's commits contiguous so the lane layout stays stable.
+#[tauri::command]
+pub(crate) async fn git_graph(
+    workspace_root: String,
+    limit: Option<usize>,
+) -> Result<Vec<GraphCommit>, String> {
+    blocking(move || {
+        let limit = limit.unwrap_or(200).clamp(10, 1000);
+        let out = git_output(
+            &workspace_root,
+            &[
+                "log",
+                "--all",
+                "--topo-order",
+                &format!("-n{limit}"),
+                "--date=unix",
+                "--decorate=short",
+                "--format=%H%x00%h%x00%P%x00%s%x00%an%x00%ct%x00%d",
+            ],
+        )?;
+        Ok(parse_graph_log(&out))
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_fetch(workspace_root: String, remote: Option<String>) -> Result<String, String> {
-    let remote = remote.unwrap_or_else(|| "--all".to_string());
-    run_git(&workspace_root, &["fetch", &remote])?;
-    Ok(format!("Fetched {remote}"))
+pub(crate) async fn git_checkout_branch(
+    workspace_root: String,
+    branch: String,
+) -> Result<(), String> {
+    blocking(move || {
+        if branch.is_empty() {
+            return Err("Branch name is required".to_string());
+        }
+        run_git(&workspace_root, &["checkout", &branch])
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pull(workspace_root: String) -> Result<String, String> {
-    run_git(&workspace_root, &["pull", "--ff-only"])?;
-    Ok("Pulled (fast-forward)".to_string())
+pub(crate) async fn git_fetch(
+    workspace_root: String,
+    remote: Option<String>,
+) -> Result<String, String> {
+    blocking(move || {
+        let remote = remote.unwrap_or_else(|| "--all".to_string());
+        run_git(&workspace_root, &["fetch", &remote])?;
+        Ok(format!("Fetched {remote}"))
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn git_pull(workspace_root: String) -> Result<String, String> {
+    blocking(move || {
+        run_git(&workspace_root, &["pull", "--ff-only"])?;
+        Ok("Pulled (fast-forward)".to_string())
+    })
+    .await
 }
 
 /// The folder name git would create when cloning `url`: the last path segment
@@ -739,97 +860,109 @@ fn repo_dir_name(url: &str) -> String {
 /// git repo, and return the new folder's absolute path. The name is restricted
 /// to a single path segment so we never write outside the chosen location.
 #[tauri::command]
-pub(crate) fn project_create(parent_dir: String, name: String) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("Project name can't be empty".into());
-    }
-    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
-        return Err("Project name can't contain slashes".into());
-    }
-    let parent = std::path::Path::new(&parent_dir);
-    if !parent.is_dir() {
-        return Err("That location isn't a folder".into());
-    }
-    let target = parent.join(name);
-    if target.exists() {
-        return Err(format!("\"{name}\" already exists here"));
-    }
-    std::fs::create_dir(&target).map_err(|e| format!("Couldn't create the folder: {e}"))?;
-    // Best-effort `git init` — a missing git binary shouldn't fail the create.
-    let _ = run_git(&target.to_string_lossy(), &["init"]);
-    Ok(target.to_string_lossy().to_string())
+pub(crate) async fn project_create(parent_dir: String, name: String) -> Result<String, String> {
+    blocking(move || {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Project name can't be empty".into());
+        }
+        if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+            return Err("Project name can't contain slashes".into());
+        }
+        let parent = std::path::Path::new(&parent_dir);
+        if !parent.is_dir() {
+            return Err("That location isn't a folder".into());
+        }
+        let target = parent.join(name);
+        if target.exists() {
+            return Err(format!("\"{name}\" already exists here"));
+        }
+        std::fs::create_dir(&target).map_err(|e| format!("Couldn't create the folder: {e}"))?;
+        // Best-effort `git init` — a missing git binary shouldn't fail the create.
+        let _ = run_git(&target.to_string_lossy(), &["init"]);
+        Ok(target.to_string_lossy().to_string())
+    })
+    .await
 }
 
 /// Clone `url` into `parent_dir` and return the path of the created repo.
 #[tauri::command]
-pub(crate) fn project_clone(url: String, parent_dir: String) -> Result<String, String> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("Repository URL can't be empty".into());
-    }
-    let parent = std::path::Path::new(&parent_dir);
-    if !parent.is_dir() {
-        return Err("That location isn't a folder".into());
-    }
-    let target = parent.join(repo_dir_name(url));
-    if target.exists() {
-        return Err(format!(
-            "\"{}\" already exists here",
-            target
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("repo")
-        ));
-    }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(parent)
-        .args(["clone", url])
-        .output()
-        .map_err(|e| format!("Failed to run git: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    if target.is_dir() {
-        Ok(target.to_string_lossy().to_string())
-    } else {
-        Err("Clone finished but the new folder couldn't be located".into())
-    }
+pub(crate) async fn project_clone(url: String, parent_dir: String) -> Result<String, String> {
+    blocking(move || {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err("Repository URL can't be empty".into());
+        }
+        let parent = std::path::Path::new(&parent_dir);
+        if !parent.is_dir() {
+            return Err("That location isn't a folder".into());
+        }
+        let target = parent.join(repo_dir_name(url));
+        if target.exists() {
+            return Err(format!(
+                "\"{}\" already exists here",
+                target
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("repo")
+            ));
+        }
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(parent)
+            .args(["clone", url])
+            .output()
+            .map_err(|e| format!("Failed to run git: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        if target.is_dir() {
+            Ok(target.to_string_lossy().to_string())
+        } else {
+            Err("Clone finished but the new folder couldn't be located".into())
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_push(workspace_root: String) -> Result<String, String> {
-    // `git push` follows the upstream if configured; if not, this errors and
-    // the UI surfaces a clear message. The user can set upstream via
-    // `git push -u origin <branch>` if needed.
-    run_git(&workspace_root, &["push"])?;
-    Ok("Pushed".to_string())
+pub(crate) async fn git_push(workspace_root: String) -> Result<String, String> {
+    blocking(move || {
+        // `git push` follows the upstream if configured; if not, this errors and
+        // the UI surfaces a clear message. The user can set upstream via
+        // `git push -u origin <branch>` if needed.
+        run_git(&workspace_root, &["push"])?;
+        Ok("Pushed".to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_discard(workspace_root: String, path: String) -> Result<(), String> {
-    if path.is_empty() {
-        return Err("Path is required".to_string());
-    }
-    // `git checkout -- <path>` restores the working tree to the index. For
-    // untracked files we just remove them.
-    if path == "." {
-        run_git(&workspace_root, &["checkout", "--", "."])?;
-        run_git(&workspace_root, &["clean", "-fd"])?;
-    } else {
-        run_git(&workspace_root, &["checkout", "--", &path])?;
-    }
-    Ok(())
+pub(crate) async fn git_discard(workspace_root: String, path: String) -> Result<(), String> {
+    blocking(move || {
+        if path.is_empty() {
+            return Err("Path is required".to_string());
+        }
+        // `git checkout -- <path>` restores the working tree to the index. For
+        // untracked files we just remove them.
+        if path == "." {
+            run_git(&workspace_root, &["checkout", "--", "."])?;
+            run_git(&workspace_root, &["clean", "-fd"])?;
+        } else {
+            run_git(&workspace_root, &["checkout", "--", &path])?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_stash(
+pub(crate) async fn git_stash(
     workspace_root: String,
     action: String,
     message: Option<String>,
 ) -> Result<String, String> {
-    match action.as_str() {
+    blocking(move || match action.as_str() {
         "push" => {
             let msg = message.unwrap_or_else(|| "WIP".to_string());
             run_git(&workspace_root, &["stash", "push", "-m", &msg])?;
@@ -849,51 +982,56 @@ pub(crate) fn git_stash(
         }
         "list" => git_output(&workspace_root, &["stash", "list"]),
         _ => Err(format!("Unknown stash action: {action}")),
-    }
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_stash_list(workspace_root: String) -> Result<Vec<GitStash>, String> {
-    // Format: "stash@{0}|branch|message" — but messages can contain pipes, so
-    // we use a 0x1f separator (unit separator) which is never in a commit
-    // subject.
-    let out = git_output(&workspace_root, &["stash", "list", "--format=%gd|%s|%ct"])?;
-    let mut stashes: Vec<GitStash> = Vec::new();
-    for line in out.lines() {
-        if line.is_empty() {
-            continue;
+pub(crate) async fn git_stash_list(workspace_root: String) -> Result<Vec<GitStash>, String> {
+    blocking(move || {
+        // Format: "stash@{0}|branch|message" — but messages can contain pipes, so
+        // we use a 0x1f separator (unit separator) which is never in a commit
+        // subject.
+        let out = git_output(&workspace_root, &["stash", "list", "--format=%gd|%s|%ct"])?;
+        let mut stashes: Vec<GitStash> = Vec::new();
+        for line in out.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.splitn(3, '|');
+            let ref_name = parts.next().unwrap_or("").to_string();
+            let subject = parts.next().unwrap_or("").to_string();
+            let ts = parts.next().unwrap_or("0");
+            let index = ref_name
+                .trim_start_matches("stash@{")
+                .trim_end_matches('}')
+                .parse::<u32>()
+                .unwrap_or(0);
+            // The "branch" half is everything before the first ":" in the
+            // default stash subject ("WIP on main: abc1234 subject").
+            let branch = subject
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .replace("WIP on ", "")
+                .replace("On ", "")
+                .trim()
+                .to_string();
+            stashes.push(GitStash {
+                index,
+                branch,
+                message: subject,
+                timestamp: ts.parse().unwrap_or(0),
+            });
         }
-        let mut parts = line.splitn(3, '|');
-        let ref_name = parts.next().unwrap_or("").to_string();
-        let subject = parts.next().unwrap_or("").to_string();
-        let ts = parts.next().unwrap_or("0");
-        let index = ref_name
-            .trim_start_matches("stash@{")
-            .trim_end_matches('}')
-            .parse::<u32>()
-            .unwrap_or(0);
-        // The "branch" half is everything before the first ":" in the
-        // default stash subject ("WIP on main: abc1234 subject").
-        let branch = subject
-            .split(':')
-            .next()
-            .unwrap_or("")
-            .replace("WIP on ", "")
-            .replace("On ", "")
-            .trim()
-            .to_string();
-        stashes.push(GitStash {
-            index,
-            branch,
-            message: subject,
-            timestamp: ts.parse().unwrap_or(0),
-        });
-    }
-    Ok(stashes)
+        Ok(stashes)
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, String> {
+pub(crate) async fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, String> {
+    blocking(move || {
     let json = gh_output(
         &workspace_root,
         &[
@@ -987,13 +1125,16 @@ pub(crate) fn git_pr_list(workspace_root: String) -> Result<Vec<PullRequest>, St
         });
     }
     Ok(prs)
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pr_view(
+pub(crate) async fn git_pr_view(
     workspace_root: String,
     number: u32,
 ) -> Result<PullRequestDetails, String> {
+    blocking(move || {
     let json = gh_output(
         &workspace_root,
         &[
@@ -1084,78 +1225,92 @@ pub(crate) fn git_pr_view(
             .map(|d| d.timestamp_millis())
             .unwrap_or(0),
     })
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pr_checkout(workspace_root: String, number: u32) -> Result<String, String> {
-    let out = gh_output(&workspace_root, &["pr", "checkout", &number.to_string()])?;
-    Ok(out.trim().to_string())
+pub(crate) async fn git_pr_checkout(workspace_root: String, number: u32) -> Result<String, String> {
+    blocking(move || {
+        let out = gh_output(&workspace_root, &["pr", "checkout", &number.to_string()])?;
+        Ok(out.trim().to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pr_merge(
+pub(crate) async fn git_pr_merge(
     workspace_root: String,
     number: u32,
     method: Option<String>,
 ) -> Result<String, String> {
-    let method = method.unwrap_or_else(|| "merge".to_string());
-    let flag = match method.as_str() {
-        "merge" => "--merge",
-        "squash" => "--squash",
-        "rebase" => "--rebase",
-        other => return Err(format!("Unknown merge method: {other}")),
-    };
-    let out = gh_output(
-        &workspace_root,
-        &["pr", "merge", &number.to_string(), flag, "--delete-branch"],
-    )?;
-    Ok(out.trim().to_string())
+    blocking(move || {
+        let method = method.unwrap_or_else(|| "merge".to_string());
+        let flag = match method.as_str() {
+            "merge" => "--merge",
+            "squash" => "--squash",
+            "rebase" => "--rebase",
+            other => return Err(format!("Unknown merge method: {other}")),
+        };
+        let out = gh_output(
+            &workspace_root,
+            &["pr", "merge", &number.to_string(), flag, "--delete-branch"],
+        )?;
+        Ok(out.trim().to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pr_open(workspace_root: String, number: u32) -> Result<String, String> {
-    // `gh pr view --web` opens the PR in the default browser; we return the
-    // resolved URL so the UI can show a toast.
-    let url = gh_output(
-        &workspace_root,
-        &[
-            "pr",
-            "view",
-            &number.to_string(),
-            "--json",
-            "url",
-            "-q",
-            ".url",
-        ],
-    )?;
-    let url = url.trim().to_string();
-    if url.is_empty() {
-        return Err(format!("PR #{number} has no URL"));
-    }
-    Command::new("open")
-        .arg(&url)
-        .output()
-        .or_else(|_| Command::new("xdg-open").arg(&url).output())
-        .map_err(|e| format!("Failed to open browser: {e}"))?;
-    Ok(url)
+pub(crate) async fn git_pr_open(workspace_root: String, number: u32) -> Result<String, String> {
+    blocking(move || {
+        // `gh pr view --web` opens the PR in the default browser; we return the
+        // resolved URL so the UI can show a toast.
+        let url = gh_output(
+            &workspace_root,
+            &[
+                "pr",
+                "view",
+                &number.to_string(),
+                "--json",
+                "url",
+                "-q",
+                ".url",
+            ],
+        )?;
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            return Err(format!("PR #{number} has no URL"));
+        }
+        Command::new("open")
+            .arg(&url)
+            .output()
+            .or_else(|_| Command::new("xdg-open").arg(&url).output())
+            .map_err(|e| format!("Failed to open browser: {e}"))?;
+        Ok(url)
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool, String> {
-    // `gh pr view <n> --json merged -q .merged` is the cheapest signal.
-    let raw = gh_output(
-        &workspace_root,
-        &[
-            "pr",
-            "view",
-            &number.to_string(),
-            "--json",
-            "merged",
-            "-q",
-            ".merged",
-        ],
-    )?;
-    Ok(raw.trim().eq_ignore_ascii_case("true"))
+pub(crate) async fn git_pr_merged(workspace_root: String, number: u32) -> Result<bool, String> {
+    blocking(move || {
+        // `gh pr view <n> --json merged -q .merged` is the cheapest signal.
+        let raw = gh_output(
+            &workspace_root,
+            &[
+                "pr",
+                "view",
+                &number.to_string(),
+                "--json",
+                "merged",
+                "-q",
+                ".merged",
+            ],
+        )?;
+        Ok(raw.trim().eq_ignore_ascii_case("true"))
+    })
+    .await
 }
 
 // ── Worktrees (the "fleet" primitive) ───────────────────────────────────
@@ -1253,119 +1408,125 @@ fn worktree_dir_name(branch: &str) -> String {
 /// HEAD. Idempotent on the directory: an existing checkout at the target path
 /// is returned as-is rather than re-added.
 #[tauri::command]
-pub(crate) fn git_worktree_add(
+pub(crate) async fn git_worktree_add(
     workspace_root: String,
     branch: String,
     copy_files: Option<Vec<String>>,
 ) -> Result<WorktreeInfo, String> {
-    let branch = branch.trim();
-    if branch.is_empty() {
-        return Err("Worktree branch name is required".to_string());
-    }
-    let toplevel = git_output(&workspace_root, &["rev-parse", "--show-toplevel"])?
-        .trim()
-        .to_string();
-    if toplevel.is_empty() {
-        return Err("Not inside a git repository".to_string());
-    }
-    let copy_files = copy_files.unwrap_or_else(default_worktree_copy_files);
-
-    // A worktree dir deleted by hand (rm -rf, Finder) leaves a stale
-    // registration that keeps its branch claimed — re-creating a worktree on
-    // that branch then fails with "already checked out". Prune first so the
-    // add always starts from git's real on-disk state. Warn-only.
-    let _ = run_git(&toplevel, &["worktree", "prune"]);
-
-    // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
-    // it never trips a file watcher or shows up in the workspace tree.
-    let dir =
-        std::path::PathBuf::from(format!("{toplevel}-worktrees")).join(worktree_dir_name(branch));
-    let path = dir.to_string_lossy().to_string();
-
-    // Already checked out here → reuse, so the action is safe to re-trigger.
-    // Report the branch actually on disk, not the requested name: two distinct
-    // branch names can sanitise to the same dir, so echoing the request could
-    // mislabel the existing checkout. Still top up any config files missing
-    // from the reused checkout.
-    if dir.join(".git").exists() {
-        let actual = git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| branch.to_string());
-        let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
-        return Ok(WorktreeInfo {
-            path,
-            branch: if actual == "HEAD" {
-                String::new()
-            } else {
-                actual
-            },
-            bootstrapped,
-        });
-    }
-    if let Some(parent) = dir.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create worktrees dir: {e}"))?;
-    }
-
-    // Does the branch already exist? Decides -b (create) vs plain (check out).
-    let branch_exists = run_git(
-        &toplevel,
-        &[
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
-    )
-    .is_ok();
-    // Capture what HEAD is on *before* the add, so a newly created branch can
-    // record what it forked from. None on a detached HEAD.
-    let base_branch = git_output(&toplevel, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .ok()
-        .filter(|b| !b.is_empty() && b != "HEAD");
-
-    let args: Vec<&str> = if branch_exists {
-        vec!["worktree", "add", &path, branch]
-    } else {
-        vec!["worktree", "add", "-b", branch, &path]
-    };
-    run_git(&toplevel, &args)?;
-
-    // Post-create config — the recipe both Orca and Superset converged on
-    // (docs/competitors-orca-superset.md). Worktrees share the repo's config
-    // file, so both writes land once at repo scope. Warn-only: a run in a
-    // worktree without them still works, just less smoothly.
-    //
-    // - push.autoSetupRemote: a bare `git push` from the agent's terminal
-    //   publishes the branch and sets its upstream (no -u needed). Only set
-    //   when unset, so a user's explicit `false` is preserved.
-    // - branch.<name>.base: what the branch forked from, so review surfaces
-    //   can later diff against the right base. Only recorded for branches
-    //   this call created — an adopted existing branch keeps its history.
-    if git_output(&toplevel, &["config", "--get", "push.autoSetupRemote"]).is_err() {
-        let _ = run_git(&toplevel, &["config", "push.autoSetupRemote", "true"]);
-    }
-    if !branch_exists {
-        if let Some(base) = base_branch {
-            let key = format!("branch.{branch}.base");
-            let _ = run_git(&toplevel, &["config", &key, &base]);
+    blocking(move || {
+        let branch = branch.trim();
+        if branch.is_empty() {
+            return Err("Worktree branch name is required".to_string());
         }
-    }
+        let toplevel = git_output(&workspace_root, &["rev-parse", "--show-toplevel"])?
+            .trim()
+            .to_string();
+        if toplevel.is_empty() {
+            return Err("Not inside a git repository".to_string());
+        }
+        let copy_files = copy_files.unwrap_or_else(default_worktree_copy_files);
 
-    let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
-    Ok(WorktreeInfo {
-        path,
-        branch: branch.to_string(),
-        bootstrapped,
+        // A worktree dir deleted by hand (rm -rf, Finder) leaves a stale
+        // registration that keeps its branch claimed — re-creating a worktree on
+        // that branch then fails with "already checked out". Prune first so the
+        // add always starts from git's real on-disk state. Warn-only.
+        let _ = run_git(&toplevel, &["worktree", "prune"]);
+
+        // Sibling of the checkout: `<repo>-worktrees/<name>`. Outside the repo so
+        // it never trips a file watcher or shows up in the workspace tree.
+        let dir = std::path::PathBuf::from(format!("{toplevel}-worktrees"))
+            .join(worktree_dir_name(branch));
+        let path = dir.to_string_lossy().to_string();
+
+        // Already checked out here → reuse, so the action is safe to re-trigger.
+        // Report the branch actually on disk, not the requested name: two distinct
+        // branch names can sanitise to the same dir, so echoing the request could
+        // mislabel the existing checkout. Still top up any config files missing
+        // from the reused checkout.
+        if dir.join(".git").exists() {
+            let actual = git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| branch.to_string());
+            let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
+            return Ok(WorktreeInfo {
+                path,
+                branch: if actual == "HEAD" {
+                    String::new()
+                } else {
+                    actual
+                },
+                bootstrapped,
+            });
+        }
+        if let Some(parent) = dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("create worktrees dir: {e}"))?;
+        }
+
+        // Does the branch already exist? Decides -b (create) vs plain (check out).
+        let branch_exists = run_git(
+            &toplevel,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+        .is_ok();
+        // Capture what HEAD is on *before* the add, so a newly created branch can
+        // record what it forked from. None on a detached HEAD.
+        let base_branch = git_output(&toplevel, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map(|s| s.trim().to_string())
+            .ok()
+            .filter(|b| !b.is_empty() && b != "HEAD");
+
+        let args: Vec<&str> = if branch_exists {
+            vec!["worktree", "add", &path, branch]
+        } else {
+            vec!["worktree", "add", "-b", branch, &path]
+        };
+        run_git(&toplevel, &args)?;
+
+        // Post-create config — the recipe both Orca and Superset converged on
+        // (docs/competitors-orca-superset.md). Worktrees share the repo's config
+        // file, so both writes land once at repo scope. Warn-only: a run in a
+        // worktree without them still works, just less smoothly.
+        //
+        // - push.autoSetupRemote: a bare `git push` from the agent's terminal
+        //   publishes the branch and sets its upstream (no -u needed). Only set
+        //   when unset, so a user's explicit `false` is preserved.
+        // - branch.<name>.base: what the branch forked from, so review surfaces
+        //   can later diff against the right base. Only recorded for branches
+        //   this call created — an adopted existing branch keeps its history.
+        if git_output(&toplevel, &["config", "--get", "push.autoSetupRemote"]).is_err() {
+            let _ = run_git(&toplevel, &["config", "push.autoSetupRemote", "true"]);
+        }
+        if !branch_exists {
+            if let Some(base) = base_branch {
+                let key = format!("branch.{branch}.base");
+                let _ = run_git(&toplevel, &["config", &key, &base]);
+            }
+        }
+
+        let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
+        Ok(WorktreeInfo {
+            path,
+            branch: branch.to_string(),
+            bootstrapped,
+        })
     })
+    .await
 }
 
 /// List the repo's worktrees (parsed from `git worktree list --porcelain`),
 /// main checkout included.
 #[tauri::command]
-pub(crate) fn git_worktree_list(workspace_root: String) -> Result<Vec<WorktreeInfo>, String> {
-    let out = git_output(&workspace_root, &["worktree", "list", "--porcelain"])?;
-    Ok(parse_worktree_list(&out))
+pub(crate) async fn git_worktree_list(workspace_root: String) -> Result<Vec<WorktreeInfo>, String> {
+    blocking(move || {
+        let out = git_output(&workspace_root, &["worktree", "list", "--porcelain"])?;
+        Ok(parse_worktree_list(&out))
+    })
+    .await
 }
 
 /// Merge a worktree's `branch` into the branch currently checked out in the
@@ -1375,7 +1536,11 @@ pub(crate) fn git_worktree_list(workspace_root: String) -> Result<Vec<WorktreeIn
 /// returns the conflicted files so resolving stays an explicit next step
 /// rather than a half-finished merge sitting in the tree.
 #[tauri::command]
-pub(crate) fn git_worktree_merge(workspace_root: String, branch: String) -> Result<String, String> {
+pub(crate) async fn git_worktree_merge(
+    workspace_root: String,
+    branch: String,
+) -> Result<String, String> {
+    blocking(move || {
     let branch = branch.trim();
     if branch.is_empty() {
         return Err("Branch to merge is required".to_string());
@@ -1409,22 +1574,27 @@ pub(crate) fn git_worktree_merge(workspace_root: String, branch: String) -> Resu
             }
         }
     }
+    })
+    .await
 }
 
 /// Remove a worktree checkout. Fails (surfacing git's message) if it has
 /// uncommitted changes, unless `force`.
 #[tauri::command]
-pub(crate) fn git_worktree_remove(
+pub(crate) async fn git_worktree_remove(
     workspace_root: String,
     path: String,
     force: Option<bool>,
 ) -> Result<(), String> {
-    let mut args = vec!["worktree", "remove"];
-    if force.unwrap_or(false) {
-        args.push("--force");
-    }
-    args.push(&path);
-    run_git(&workspace_root, &args)
+    blocking(move || {
+        let mut args = vec!["worktree", "remove"];
+        if force.unwrap_or(false) {
+            args.push("--force");
+        }
+        args.push(&path);
+        run_git(&workspace_root, &args)
+    })
+    .await
 }
 
 /// Parse `git worktree list --porcelain`: records separated by blank lines,
@@ -1486,6 +1656,23 @@ mod tests {
         assert_eq!(parse_tracking_ahead_behind("behind 2"), (0, 2));
         assert_eq!(parse_tracking_ahead_behind("ahead 3, behind 2"), (3, 2));
         assert_eq!(parse_tracking_ahead_behind(""), (0, 0));
+    }
+
+    #[test]
+    fn graph_log_parses_parents_and_refs() {
+        // NUL-separated %H %h %P %s %an %ct %d — a merge commit with two
+        // parents and decorations, then a root commit with none.
+        let out = concat!(
+            "aaa\0aa1\0bbb ccc\0Merge branch 'x'\0Pierre\01700000000\0 (HEAD -> main, origin/main)\n",
+            "bbb\0bb1\0\0first\0Pierre\01690000000\0\n",
+        );
+        let commits = parse_graph_log(out);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].parents, vec!["bbb", "ccc"]);
+        assert_eq!(commits[0].refs, vec!["HEAD -> main", "origin/main"]);
+        assert_eq!(commits[0].timestamp, 1_700_000_000);
+        assert!(commits[1].parents.is_empty());
+        assert!(commits[1].refs.is_empty());
     }
 
     #[test]
@@ -1567,11 +1754,13 @@ detached
         (base, repo_s)
     }
 
-    #[test]
-    fn worktree_add_applies_the_fleet_recipe() {
+    #[tokio::test]
+    async fn worktree_add_applies_the_fleet_recipe() {
         let (base, repo) = temp_repo("wt-recipe");
 
-        let wt = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        let wt = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![]))
+            .await
+            .unwrap();
         assert_eq!(wt.branch, "klide/test-run");
         assert!(std::path::Path::new(&wt.path).join(".git").exists());
         // New branch records what it forked from, and a bare `git push` from
@@ -1590,14 +1779,17 @@ detached
         );
 
         // Re-adding is idempotent: same path back, no error.
-        let again = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        let again = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![]))
+            .await
+            .unwrap();
         assert_eq!(again.path, wt.path);
 
         // A worktree dir deleted by hand leaves a stale registration that
         // claims the branch; the prune-before-add must revive it cleanly.
         std::fs::remove_dir_all(&wt.path).unwrap();
-        let revived =
-            git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![])).unwrap();
+        let revived = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![]))
+            .await
+            .unwrap();
         assert_eq!(revived.path, wt.path);
         assert!(std::path::Path::new(&revived.path).join(".git").exists());
 
@@ -1606,10 +1798,12 @@ detached
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[test]
-    fn branch_diff_defaults_to_the_recorded_fork_base() {
+    #[tokio::test]
+    async fn branch_diff_defaults_to_the_recorded_fork_base() {
         let (base, repo) = temp_repo("wt-diff-base");
-        let wt = git_worktree_add(repo.clone(), "klide/diffed".into(), Some(vec![])).unwrap();
+        let wt = git_worktree_add(repo.clone(), "klide/diffed".into(), Some(vec![]))
+            .await
+            .unwrap();
         // Move main forward AFTER the fork, then commit a change in the
         // worktree — the merge-base diff must contain only the worktree's
         // change, and the base must come from branch.<name>.base, not from
@@ -1621,7 +1815,9 @@ detached
         run_git(&wt.path, &["add", "."]).unwrap();
         run_git(&wt.path, &["commit", "-m", "worktree change"]).unwrap();
 
-        let diff = git_branch_diff(repo.clone(), "klide/diffed".into(), None).unwrap();
+        let diff = git_branch_diff(repo.clone(), "klide/diffed".into(), None)
+            .await
+            .unwrap();
         assert_eq!(diff.base_branch, "main", "recorded fork base wins");
         assert!(diff.diff.contains("feature.txt"));
         assert!(
@@ -1632,12 +1828,14 @@ detached
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[test]
-    fn worktree_add_respects_an_explicit_autosetupremote_choice() {
+    #[tokio::test]
+    async fn worktree_add_respects_an_explicit_autosetupremote_choice() {
         let (base, repo) = temp_repo("wt-guard");
         // The user explicitly opted out — the recipe must not clobber that.
         run_git(&repo, &["config", "push.autoSetupRemote", "false"]).unwrap();
-        git_worktree_add(repo.clone(), "klide/guarded".into(), Some(vec![])).unwrap();
+        git_worktree_add(repo.clone(), "klide/guarded".into(), Some(vec![]))
+            .await
+            .unwrap();
         assert_eq!(
             git_output(&repo, &["config", "--get", "push.autoSetupRemote"])
                 .unwrap()

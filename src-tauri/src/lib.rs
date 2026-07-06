@@ -972,6 +972,7 @@ pub fn run() {
             memory_read,
             git::create_pr,
             git::git_log,
+            git::git_graph,
             git::git_checkout_branch,
             git::git_fetch,
             git::git_pull,

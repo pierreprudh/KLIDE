@@ -11,6 +11,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ThemeId } from "../theme";
 import type { GitFile, GitStatus } from "../gitTypes";
+import { GitHistoryGraph } from "./GitHistoryGraph";
 
 type GitCommit = {
   hash: string;
@@ -983,12 +984,8 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
 
   const reviewStatus = localStatus ?? gitStatus;
 
-  // Auto-select the first file when the status changes.
-  useEffect(() => {
-    if (open || !reviewStatus) return;
-    const first = reviewStatus.files[0];
-    if (first) setOpen({ path: first.path, staged: first.staged });
-  }, [reviewStatus, open]);
+  // No auto-selected diff: the center pane defaults to the history graph
+  // (SourceTree-style); a diff shows only when the user picks a file.
 
   // Toast-style messages auto-clear after a few seconds.
   useEffect(() => {
@@ -1417,23 +1414,34 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, onBack
 
         <PaneDivider width={leftWidth} setWidth={setLeftWidth} side="left" min={LEFT_MIN} max={MAX_PANE} />
 
-        {/* Center: diff */}
+        {/* Center: diff for the open file, commit graph otherwise */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-          {open && (
-            <div
-              className="pane-inset-top"
-              style={{
-                height: 36, padding: "0 14px", display: "flex", alignItems: "center", gap: 8,
-                borderBottom: "1px solid var(--border)",
-                fontSize: 12, color: "var(--fg-subtle)",
-              }}
-            >
-              <StatusLetter label={statusLabel(reviewStatus?.files.find((f) => f.path === open.path)?.status ?? "")} />
-              <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
-              <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)" }}>{open.staged ? "staged" : "working"}</span>
-            </div>
+          {open ? (
+            <>
+              <div
+                className="pane-inset-top"
+                style={{
+                  height: 36, padding: "0 14px", display: "flex", alignItems: "center", gap: 8,
+                  borderBottom: "1px solid var(--border)",
+                  fontSize: 12, color: "var(--fg-subtle)",
+                }}
+              >
+                <StatusLetter label={statusLabel(reviewStatus?.files.find((f) => f.path === open.path)?.status ?? "")} />
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-strong)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{open.path}</span>
+                <span style={{ color: open.staged ? "var(--accent)" : "var(--fg-dim)" }}>{open.staged ? "staged" : "working"}</span>
+                <button
+                  onClick={() => setOpen(null)}
+                  title="Close diff — back to history"
+                  style={{ ...iconButtonStyle, width: 22, height: 22 }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              </div>
+              <DiffViewer workspaceRoot={workspaceRoot} open={open} />
+            </>
+          ) : (
+            <GitHistoryGraph workspaceRoot={workspaceRoot} refreshToken={log} />
           )}
-          <DiffViewer workspaceRoot={workspaceRoot} open={open} />
         </div>
 
         <PaneDivider width={rightWidth} setWidth={setRightWidth} side="right" min={RIGHT_MIN} max={MAX_PANE} />
