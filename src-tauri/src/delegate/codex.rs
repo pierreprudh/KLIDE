@@ -37,10 +37,11 @@ impl Delegate for Codex {
     /// Headless: `exec … -` reads the prompt from stdin. `workspace-write`
     /// sandboxes edits to the workspace; the cwd rides in via `-C`.
     fn chat_args(&self, cwd: &str, model: &str) -> Result<Vec<String>, String> {
-        Ok(vec![
-            "exec".into(),
-            "-m".into(),
-            model.into(),
+        let mut args: Vec<String> = vec!["exec".into()];
+        if !model.is_empty() {
+            args.extend(["-m".into(), model.into()]);
+        }
+        args.extend([
             "-s".into(),
             "workspace-write".into(),
             "-C".into(),
@@ -49,7 +50,8 @@ impl Delegate for Codex {
             "--color".into(),
             "never".into(),
             "-".into(),
-        ])
+        ]);
+        Ok(args)
     }
 
     fn login_commands(&self) -> Vec<String> {

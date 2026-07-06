@@ -32,7 +32,15 @@ pub async fn run_subscription_chat(
 ) -> Result<AiChatResponse, String> {
     let prompt = prompt_from_messages(&messages);
     let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
-    let command = adapter.chat_invocation(&cwd, &model)?;
+    // The "default" sentinel means "no model picked" — hand the adapter an
+    // empty model so it omits its model flag and the CLI uses its own default.
+    let model = model.trim();
+    let model = if model.eq_ignore_ascii_case(super::CLI_DEFAULT_MODEL) {
+        ""
+    } else {
+        model
+    };
+    let command = adapter.chat_invocation(&cwd, model)?;
     let content = run_cli_with_stdin(command, prompt, label, on_chunk).await?;
     Ok(AiChatResponse {
         content,

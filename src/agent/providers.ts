@@ -51,16 +51,22 @@ export const MLX_MODEL_PRESETS = [
   "mlx-community/gemma-4-12B-it-qat-4bit",
 ] as const;
 
+/** Sentinel model for delegate CLIs meaning "no model picked" — the Rust
+ *  side (delegate::CLI_DEFAULT_MODEL) omits the model flag when it sees this,
+ *  so the CLI opens on whatever default its own settings choose. Forcing a
+ *  hardcoded model here made every Claude Code session open on Sonnet. */
+export const CLI_DEFAULT_MODEL = "default";
+
 export const DEFAULT_MODELS: Record<ProviderId, string> = {
   ollama: "llama3.1:8b",
   mlx: MLX_MODEL_PRESETS[0],
   lmstudio: "local-model",
   llamacpp: "local-model",
   vllm: "local-model",
-  "claude-code": "claude-sonnet-4-6",
-  codex: "gpt-5",
-  opencode: "opencode",
-  omp: "claude-sonnet-4-6",
+  "claude-code": CLI_DEFAULT_MODEL,
+  codex: CLI_DEFAULT_MODEL,
+  opencode: CLI_DEFAULT_MODEL,
+  omp: CLI_DEFAULT_MODEL,
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-4.1",
   gemini: "gemini-2.5-pro",

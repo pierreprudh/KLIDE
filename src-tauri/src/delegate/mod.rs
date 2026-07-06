@@ -28,6 +28,13 @@ pub use opencode::OpenCode;
 pub(crate) use runs::worktree_label;
 pub use runs::{AgentRun, RunCandidate, RunMessage};
 
+/// The frontend's "no model picked" sentinel (`DEFAULT_MODELS` in
+/// src/agent/providers.ts). A delegate spawned or chatted with this model
+/// gets NO model flag, so the CLI falls back to its own configured default —
+/// forcing a hardcoded model here was overriding what the user set up in the
+/// CLI itself (e.g. Claude Code sessions always opening on Sonnet).
+pub const CLI_DEFAULT_MODEL: &str = "default";
+
 pub trait Delegate: Sync {
     /// Klide's provider id for this delegate, e.g. "claude-code". This is the
     /// `source` field on every Run the adapter parses.
@@ -61,7 +68,9 @@ pub trait Delegate: Sync {
     /// Build the full shell command for a PTY dispatch. Provided once for all
     /// adapters: `{prefix}{resume}{model} {task}`, every value shell-quoted.
     /// Flags are only inserted when the caller actually picked a value, so
-    /// each CLI falls back to its own default otherwise.
+    /// each CLI falls back to its own default otherwise. The frontend's
+    /// [`CLI_DEFAULT_MODEL`] sentinel counts as "no value" — it means "let
+    /// the CLI use whatever its own settings choose".
     fn spawn_command(
         &self,
         task: Option<&str>,
@@ -69,7 +78,9 @@ pub trait Delegate: Sync {
         resume_session_id: Option<&str>,
     ) -> String {
         let task = task.map(str::trim).filter(|t| !t.is_empty());
-        let model = model.map(str::trim).filter(|m| !m.is_empty());
+        let model = model
+            .map(str::trim)
+            .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case(CLI_DEFAULT_MODEL));
         let resume = resume_session_id.map(str::trim).filter(|s| !s.is_empty());
 
         let prefix = self.spawn_prefix(task.is_some(), resume.is_some());
@@ -83,7 +94,9 @@ pub trait Delegate: Sync {
 
     /// Argument vector for a one-shot headless chat invocation — prompt on
     /// stdin, plain text on stdout (the AI panel's subscription chat path).
-    /// Err for CLIs that only work as interactive PTY delegates.
+    /// `model` may be empty — then the adapter must omit its model flag so
+    /// the CLI uses its own default. Err for CLIs that only work as
+    /// interactive PTY delegates.
     fn chat_args(&self, cwd: &str, model: &str) -> Result<Vec<String>, String>;
 
     /// Build the runnable one-shot command: resolve the binary (PATH plus
@@ -255,6 +268,16 @@ mod tests {
     fn blank_values_are_treated_as_absent() {
         let cmd = ClaudeCode.spawn_command(Some("  "), Some(""), Some(" \t"));
         assert_eq!(cmd, "claude");
+    }
+
+    #[test]
+    fn default_model_sentinel_omits_the_model_flag() {
+        // "default" means "the CLI's own configured default" — forcing a
+        // --model here would override what the user set up in the CLI.
+        let cmd = ClaudeCode.spawn_command(Some("fix the bug"), Some("default"), None);
+        assert_eq!(cmd, "claude 'fix the bug'");
+        let cmd = Codex.spawn_command(None, Some("Default"), None);
+        assert_eq!(cmd, "codex");
     }
 
     #[test]

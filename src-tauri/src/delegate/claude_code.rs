@@ -31,15 +31,17 @@ impl Delegate for ClaudeCode {
     /// `acceptEdits` lets Goal-mode runs touch files without an interactive
     /// permission prompt nobody is there to answer.
     fn chat_args(&self, _cwd: &str, model: &str) -> Result<Vec<String>, String> {
-        Ok(vec![
-            "-p".into(),
-            "--model".into(),
-            model.into(),
+        let mut args: Vec<String> = vec!["-p".into()];
+        if !model.is_empty() {
+            args.extend(["--model".into(), model.into()]);
+        }
+        args.extend([
             "--permission-mode".into(),
             "acceptEdits".into(),
             "--output-format".into(),
             "text".into(),
-        ])
+        ]);
+        Ok(args)
     }
 
     /// Claude Code is the one delegate with a first-class hooks system —
@@ -402,6 +404,15 @@ mod tests {
         assert_eq!(
             args.join(" "),
             "-p --model claude-sonnet-4-6 --permission-mode acceptEdits --output-format text"
+        );
+    }
+
+    #[test]
+    fn chat_args_without_model_leave_the_cli_default() {
+        let args = ClaudeCode.chat_args("/tmp/ws", "").unwrap();
+        assert_eq!(
+            args.join(" "),
+            "-p --permission-mode acceptEdits --output-format text"
         );
     }
 

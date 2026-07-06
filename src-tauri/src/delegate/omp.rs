@@ -38,14 +38,12 @@ impl Delegate for Omp {
     /// `acceptEdits` and Codex's `workspace-write`). The cwd rides in via the
     /// trait's `chat_invocation`, which sets the child's working directory.
     fn chat_args(&self, _cwd: &str, model: &str) -> Result<Vec<String>, String> {
-        Ok(vec![
-            "-p".into(),
-            "--model".into(),
-            model.into(),
-            "--auto-approve".into(),
-            "--mode".into(),
-            "text".into(),
-        ])
+        let mut args: Vec<String> = vec!["-p".into()];
+        if !model.is_empty() {
+            args.extend(["--model".into(), model.into()]);
+        }
+        args.extend(["--auto-approve".into(), "--mode".into(), "text".into()]);
+        Ok(args)
     }
 
     /// omp has no login command — it reads provider keys straight from the

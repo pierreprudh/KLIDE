@@ -88,7 +88,12 @@ pub(crate) async fn ai_provider_models(provider: String) -> Result<Vec<String>, 
     };
 
     if let Some(spec) = entry.subscription {
-        return subscription_models(&spec);
+        // Blocking work (login-shell PATH resolution, transcript scans) must
+        // not run on the async runtime — a slow scan here stalls every other
+        // pending invoke() and the whole app feels frozen.
+        return tokio::task::spawn_blocking(move || subscription_models(&spec))
+            .await
+            .map_err(|e| format!("Model listing task failed: {e}"))?;
     }
 
     match entry.models {
@@ -496,11 +501,28 @@ pub(crate) fn omp_cached_models() -> Option<Vec<String>> {
     }
 }
 
+/// How many of the most recent Claude Code transcripts to scan for model
+/// ids, and how much of each. `~/.claude/projects` can run to hundreds of
+/// megabytes — reading ALL of it (the old behaviour) blocked the runtime
+/// for seconds every time the model list loaded.
+const CLAUDE_RECENT_TRANSCRIPTS: usize = 12;
+const CLAUDE_TRANSCRIPT_SCAN_BYTES: u64 = 256 * 1024;
+
 pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
     let home = std::env::var("HOME").ok()?;
     let claude_dir = std::path::Path::new(&home).join(".claude");
     let mut models = Vec::new();
 
+    // Recent transcripts first — the models the user actually runs today.
+    let mut transcripts: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    collect_jsonl_paths(&claude_dir.join("projects"), &mut transcripts, 0);
+    transcripts.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
+    for (_, path) in transcripts.into_iter().take(CLAUDE_RECENT_TRANSCRIPTS) {
+        scan_for_claude_models(&path, &mut models);
+    }
+
+    // Then the stats cache — it can lag months behind, so it only fills in
+    // models the recent transcripts didn't mention.
     let stats_path = claude_dir.join("stats-cache.json");
     if let Ok(text) = std::fs::read_to_string(stats_path) {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -515,13 +537,10 @@ pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
         }
     }
 
-    collect_claude_models_from_dir(&claude_dir.join("projects"), &mut models, 0);
-    models.sort_by(|a, b| {
-        claude_model_rank(a)
-            .cmp(&claude_model_rank(b))
-            .then(b.cmp(a))
-    });
-    models.dedup();
+    // Dedup keeping first-seen order, so recency (not a hardcoded family
+    // ranking) decides what tops the picker.
+    let mut seen = std::collections::HashSet::new();
+    models.retain(|m| seen.insert(m.clone()));
     if models.is_empty() {
         None
     } else {
@@ -529,7 +548,11 @@ pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
     }
 }
 
-fn collect_claude_models_from_dir(path: &std::path::Path, models: &mut Vec<String>, depth: usize) {
+fn collect_jsonl_paths(
+    path: &std::path::Path,
+    out: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>,
+    depth: usize,
+) {
     if depth > 4 {
         return;
     }
@@ -539,19 +562,38 @@ fn collect_claude_models_from_dir(path: &std::path::Path, models: &mut Vec<Strin
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_claude_models_from_dir(&path, models, depth + 1);
+            collect_jsonl_paths(&path, out, depth + 1);
             continue;
         }
         if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        for token in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
-            if is_claude_model_id(token) {
-                models.push(token.to_string());
-            }
+        let Ok(meta) = entry.metadata() else { continue };
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        out.push((mtime, path));
+    }
+}
+
+/// Scan the head of one transcript for Claude model ids. Model ids repeat on
+/// every assistant message, so the first chunk is enough — never read whole
+/// files here (transcripts can be tens of megabytes each).
+fn scan_for_claude_models(path: &std::path::Path, models: &mut Vec<String>) {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    let mut buf = Vec::new();
+    if file
+        .take(CLAUDE_TRANSCRIPT_SCAN_BYTES)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    for token in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+        if is_claude_model_id(token) {
+            models.push(token.to_string());
         }
     }
 }
@@ -561,28 +603,18 @@ fn is_claude_model_id(model: &str) -> bool {
         return false;
     };
     let family = rest.split('-').next().unwrap_or_default();
-    if !matches!(family, "sonnet" | "opus" | "haiku") {
+    // Fable/Mythos ids carry a single version digit ("claude-fable-5"), the
+    // older families two ("claude-sonnet-4-6") — require at least one.
+    if !matches!(family, "sonnet" | "opus" | "haiku" | "fable" | "mythos") {
         return false;
     }
     let parts: Vec<&str> = rest.split('-').skip(1).collect();
-    if parts.len() < 2 {
+    if parts.is_empty() {
         return false;
     }
     parts
         .iter()
         .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-}
-
-fn claude_model_rank(model: &str) -> usize {
-    if model.contains("sonnet") {
-        0
-    } else if model.contains("opus") {
-        1
-    } else if model.contains("haiku") {
-        2
-    } else {
-        3
-    }
 }
 
 pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
@@ -1034,24 +1066,19 @@ mod tests {
 
     #[test]
     fn claude_model_id_accepts_the_modern_naming_only() {
-        // Modern: claude-<family>-<num>-<num>.
+        // Modern: claude-<family>-<num>[-<num>…].
         assert!(is_claude_model_id("claude-sonnet-4-6"));
         assert!(is_claude_model_id("claude-opus-4-6"));
         assert!(is_claude_model_id("claude-haiku-4-5"));
+        assert!(is_claude_model_id("claude-sonnet-4-6-20251114")); // dated build
+        assert!(is_claude_model_id("claude-fable-5")); // single version digit
+        assert!(is_claude_model_id("claude-mythos-5"));
         // Old date-style / 3.x naming and non-Claude ids are rejected.
         assert!(!is_claude_model_id("claude-3-5-sonnet")); // family slot is "3"
         assert!(!is_claude_model_id("gpt-5")); // no claude- prefix
-        assert!(!is_claude_model_id("claude-sonnet-4")); // needs two numeric parts
+        assert!(!is_claude_model_id("claude-fable")); // no version at all
         assert!(!is_claude_model_id("claude-sonnet-latest")); // non-numeric tail
         assert!(!is_claude_model_id("claude-sonnet-4-x"));
-    }
-
-    #[test]
-    fn claude_rank_orders_sonnet_opus_haiku() {
-        assert_eq!(claude_model_rank("claude-sonnet-4-6"), 0);
-        assert_eq!(claude_model_rank("claude-opus-4-6"), 1);
-        assert_eq!(claude_model_rank("claude-haiku-4-5"), 2);
-        assert_eq!(claude_model_rank("claude-mystery-9"), 3);
     }
 
     #[test]

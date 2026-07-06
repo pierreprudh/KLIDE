@@ -27,12 +27,14 @@ import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { TodoStrip } from "./TodoStrip";
 import {
+  CLI_DEFAULT_MODEL,
   DEFAULT_MODELS,
   isDelegateProvider,
   normalizeAgentMode,
   providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
+import { isDelegateId } from "../delegates";
 import {
   customDefaultModel,
   isCustomProvider,
@@ -365,6 +367,44 @@ function defaultModelFor(id: ProviderId): string {
 function switchModelForProvider(id: ProviderId): string {
   return favModelsFor(id)[0] ?? storedModelForProvider(id);
 }
+
+// One-time migration, v2 (2026-07): delegate CLIs used to force a --model on
+// every spawn, and Klide itself auto-wrote models into storage (the old
+// "clobber to list head" effect picked dated ids like
+// "claude-sonnet-4-6-20251114" without the user ever touching the picker —
+// which is why v1's exact-match against the seed missed). No stored delegate
+// model predating the sentinel can be trusted as a deliberate pick, so reset
+// them ALL to "default" once. A model picked after this sticks: the flag
+// never lets this run again.
+(() => {
+  const FLAG = "klide.model.delegate-default-migrated-v2";
+  if (localStorage.getItem(FLAG)) return;
+  const delegates = ["claude-code", "codex", "opencode", "omp"];
+  for (const id of delegates) {
+    if (localStorage.getItem(`klide.model.${id}`)) {
+      localStorage.setItem(`klide.model.${id}`, CLI_DEFAULT_MODEL);
+    }
+  }
+  // Panels persist their own provider+model in the layout store — reset
+  // those too, or a saved Claude Code panel would keep its seeded model.
+  try {
+    const raw = localStorage.getItem("klide-panel-layouts");
+    if (raw) {
+      const layouts = JSON.parse(raw) as Record<string, { ai?: { provider?: string; model?: string }[] }>;
+      for (const layout of Object.values(layouts)) {
+        for (const panel of layout?.ai ?? []) {
+          if (panel.provider && delegates.includes(panel.provider) && panel.model) {
+            panel.model = CLI_DEFAULT_MODEL;
+          }
+        }
+      }
+      localStorage.setItem("klide-panel-layouts", JSON.stringify(layouts));
+    }
+  } catch {
+    // Malformed store — the layout loader tolerates it; so do we.
+  }
+  localStorage.setItem(FLAG, "1");
+})();
 
 function storedModelForProvider(id: ProviderId): string {
   const stored = localStorage.getItem(`klide.model.${id}`);
@@ -1912,7 +1952,12 @@ This user request requires workspace inspection. Before answering, you MUST call
         if (cancelled) return;
         if (!isLocalProvider) setConnected(true);
         const fallbackModel = defaultModelFor(provider);
-        const next = names.length > 0 ? names : fallbackModel ? [fallbackModel] : [];
+        const next = names.length > 0 ? [...names] : fallbackModel ? [fallbackModel] : [];
+        // Built-in delegate CLIs always offer "default" first: spawn with no
+        // model flag, so the CLI opens on its own configured default model.
+        if (isDelegateId(provider) && !next.includes(CLI_DEFAULT_MODEL)) {
+          next.unshift(CLI_DEFAULT_MODEL);
+        }
         onAvailableModelsChange(next);
         // Current model isn't available on this provider — prefer the first
         // starred favourite that is, then fall back to the list head.
