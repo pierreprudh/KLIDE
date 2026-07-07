@@ -1,8 +1,8 @@
 [package]
 name = "klide"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.5.0"
+description = "A local-first agent IDE"
+authors = ["Pierre Prudh"]
 edition = "2021"
 default-run = "klide"
 

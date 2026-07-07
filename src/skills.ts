@@ -9,6 +9,9 @@
 // command — the FS plugin in Tauri 2 is path-scope-restricted, so the
 // webview can't read arbitrary home-directory paths on its own.
 
+import { invoke } from "@tauri-apps/api/core";
+import { listAllTools } from "./agent/tools";
+
 export type Skill = {
   id: string;
   name: string;
@@ -55,7 +58,6 @@ export const ALL_TOOL_IDS = SKILL_TOOLS.map((t) => t.id);
 // is unavailable.
 export async function getAvailableTools(): Promise<{ id: string; label: string; description: string }[]> {
   try {
-    const { listAllTools } = await import("./agent/tools");
     const raw = await listAllTools();
     if (!Array.isArray(raw) || raw.length === 0) return SKILL_TOOLS;
     const mapped = raw
@@ -304,7 +306,6 @@ export async function loadFilesystemSkills(workspaceRoot: string | null): Promis
   };
   let raw: FileSystemSkill[] = [];
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
     raw = await invoke<FileSystemSkill[]>("list_filesystem_skills", { workspaceRoot });
   } catch {
     return [];

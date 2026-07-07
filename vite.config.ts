@@ -29,4 +29,25 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    // Keep the app shell readable in production output. Monaco's workers stay
+    // as their own emitted assets; these chunks separate the biggest shared
+    // browser-side libraries from Klide's application code.
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("monaco-editor") || id.includes("@monaco-editor")) return "vendor-monaco";
+          if (id.includes("@xterm")) return "vendor-terminal";
+          if (id.includes("@tauri-apps")) return "vendor-tauri";
+          if (id.includes("react")) return "vendor-react";
+          if (id.includes("/diff/") || id.endsWith("/diff/lib/index.es6.js")) return "vendor-diff";
+          return "vendor";
+        },
+      },
+    },
+    // Monaco's TypeScript worker is intentionally large and loaded as a worker
+    // asset. Warn on genuinely surprising chunks above that size.
+    chunkSizeWarningLimit: 8_000,
+  },
 }));

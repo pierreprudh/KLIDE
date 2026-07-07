@@ -25,6 +25,7 @@ import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolveP
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
+import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { TodoStrip } from "./TodoStrip";
 import {
   CLI_DEFAULT_MODEL,
@@ -951,7 +952,7 @@ export function AiPanel({
 
   async function ensureFileList() {
     if (!workspaceRoot || fileList.length > 0) return;
-    try { setFileList(await (await import("./ai/workspaceFiles")).listWorkspaceFiles(workspaceRoot)); } catch {}
+    try { setFileList(await listWorkspaceFiles(workspaceRoot)); } catch {}
   }
 
   function handleComposerChange(value: string, caret: number) {

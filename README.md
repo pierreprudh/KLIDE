@@ -13,7 +13,7 @@ Run local models, steer Codex / Claude Code / OpenCode, review every change, and
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Ollama](https://img.shields.io/badge/Ollama-local_first-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com)
-![Status](https://img.shields.io/badge/status-v0.4-7A9F4A?style=flat-square)
+![Status](https://img.shields.io/badge/status-v0.5-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 
 <br/>
@@ -71,8 +71,9 @@ Most editors fall into two camps: heavy (VS Code, JetBrains — powerful, but bu
 
 **Agent operations**
 
-- Mission Control: a run board across Klide and delegate CLIs — what's running, what needs you, what changed — with evidence per run (branch, files touched, tokens/cost, sub-agents), transcript preview, resume, and cross-CLI handoff
+- Mission Control: a run board across Klide and delegate CLIs — what's running, what needs you, what changed — with evidence per run (branch, files touched, tokens/cost, sub-agents), transcript preview, resume, cross-CLI handoff, and workspace-scoped history
 - Live session reattach: delegate PTYs survive panel switches; hook-based status reports working / waiting / blocked without scraping terminal output
+- Git Review: branch diff, PR workbench, commit graph, and a structured commit-detail pane with avatars and full-width diffs
 - Project Memory: durable handoff notes in `.klide/memory/` — completed runs draft a note you accept, edit, or skip (git-ignored by default; teams can opt in to sharing)
 
 ## Getting started
@@ -92,7 +93,7 @@ npm install
 npm run tauri dev
 ```
 
-The first Rust build takes 3–5 minutes; subsequent builds are seconds. Leave `tauri dev` running — frontend changes hot-reload. See [`GETTING_STARTED.md`](./GETTING_STARTED.md) for the step-by-step guide.
+The first Rust build takes 3–5 minutes; subsequent builds are seconds. Leave `tauri dev` running — frontend changes hot-reload.
 
 **First steps**
 
@@ -108,8 +109,7 @@ Two halves, two languages. The frontend (`src/`) is React + TypeScript and owns 
 Klide/
 ├── src/             React + TypeScript frontend (the UI)
 ├── src-tauri/       Rust backend (agent harness, PTYs, git, keychain, fs)
-├── CLAUDE.md        Architecture map + working conventions
-└── GETTING_STARTED.md
+└── CLAUDE.md        Architecture map + working conventions
 ```
 
 | Layer | Tech |
@@ -123,9 +123,9 @@ Klide/
 
 Shipped milestones live in the [changelog](./CHANGELOG.md). Ahead:
 
-- Worktree-per-run isolation for parallel agent fleets
-- Orchestrator: delegate-tier dispatch and mission chaining across CLIs
+- Worktree-per-run isolation polished into the default parallel-agent flow
 - Deeper review queue — diff comments sent back to the running agent
+- Natural-language scheduling and proactive suggestions, still parked until the evidence loop has more daily mileage
 - Packaged releases (signed macOS builds), then cross-platform validation
 
 ## Development

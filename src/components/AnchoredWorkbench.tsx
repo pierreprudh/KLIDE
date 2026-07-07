@@ -1,4 +1,4 @@
-import { useRef, type ReactNode, type RefObject, type ComponentProps } from "react";
+import { lazy, Suspense, useRef, type ReactNode, type RefObject, type ComponentProps } from "react";
 import type { ProviderId } from "../agent/types";
 import type { Conversation } from "./ai/types";
 import type { HarnessSettings } from "../App";
@@ -13,10 +13,11 @@ import { EditorArea } from "./EditorArea";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { AiPanel } from "./AiPanel";
-import { FileViewerPanel } from "./FileViewerPanel";
-import { SkillsModal } from "./SkillsModal";
 import { SplitPane } from "./SplitPane";
 import type { ThemeId } from "../theme";
+
+const FileViewerPanel = lazy(() => import("./FileViewerPanel").then((m) => ({ default: m.FileViewerPanel })));
+const SkillsModal = lazy(() => import("./SkillsModal").then((m) => ({ default: m.SkillsModal })));
 
 type Tab = {
   path: string;
@@ -227,13 +228,15 @@ export function AnchoredWorkbench(props: Props) {
         <SplitPane
           top={explorer}
           bottom={
-            <SkillsModal
-              open
-              skills={skills}
-              onChange={setSkills}
-              onReloadFilesystemSkills={reloadFilesystemSkills}
-              onClose={() => setSidebarSlot2(null)}
-            />
+            <Suspense fallback={null}>
+              <SkillsModal
+                open
+                skills={skills}
+                onChange={setSkills}
+                onReloadFilesystemSkills={reloadFilesystemSkills}
+                onClose={() => setSidebarSlot2(null)}
+              />
+            </Suspense>
           }
           defaultSplit={(sidePanelWidth) * 0.55}
           minPane={80}
@@ -469,12 +472,14 @@ export function AnchoredWorkbench(props: Props) {
             overflow: "hidden",
           }}
         >
-          <FileViewerPanel
-            key={previewPath}
-            filePath={previewPath}
-            workspaceRoot={workspaceRoot}
-            onClose={onClosePreview}
-          />
+          <Suspense fallback={null}>
+            <FileViewerPanel
+              key={previewPath}
+              filePath={previewPath}
+              workspaceRoot={workspaceRoot}
+              onClose={onClosePreview}
+            />
+          </Suspense>
         </div>
       )}
     </div>

@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -9,11 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { ActivityBar } from "./components/ActivityBar";
-import { MissionControl } from "./components/MissionControl";
-// The real tier-board console (built from the prototype's winning variant C).
-import { OrchestratorConsole } from "./components/OrchestratorConsole";
 import { Sidebar } from "./components/Sidebar";
-import { FocusMode } from "./components/FocusMode";
 import { TabBar } from "./components/TabBar";
 import { EditorArea, type EditorEmptyAction } from "./components/EditorArea";
 import { WelcomeScreen } from "./components/WelcomeScreen";
@@ -31,15 +29,7 @@ import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
 import type { DelegateId } from "./delegates";
 import type { GitStatus } from "./gitTypes";
-import { GitReview } from "./components/GitReview";
-import { MemoryModal } from "./components/MemoryModal";
-import { WorktreesModal } from "./components/WorktreesModal";
-import { FileViewerPanel } from "./components/FileViewerPanel";
-import { DiffViewerPanel } from "./components/DiffViewerPanel";
-import { SkillsModal } from "./components/SkillsModal";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { ProfileModal } from "./components/ProfileModal";
-import { KeyboardShortcuts } from "./components/KeyboardShortcuts";
 import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
 import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
 import {
@@ -59,6 +49,18 @@ import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { readWorkspaceTextFile } from "./workspaceFs";
 import "./styles/tokens.css";
+
+const MissionControl = lazy(() => import("./components/MissionControl").then((m) => ({ default: m.MissionControl })));
+const OrchestratorConsole = lazy(() => import("./components/OrchestratorConsole").then((m) => ({ default: m.OrchestratorConsole })));
+const FocusMode = lazy(() => import("./components/FocusMode").then((m) => ({ default: m.FocusMode })));
+const GitReview = lazy(() => import("./components/GitReview").then((m) => ({ default: m.GitReview })));
+const MemoryModal = lazy(() => import("./components/MemoryModal").then((m) => ({ default: m.MemoryModal })));
+const WorktreesModal = lazy(() => import("./components/WorktreesModal").then((m) => ({ default: m.WorktreesModal })));
+const FileViewerPanel = lazy(() => import("./components/FileViewerPanel").then((m) => ({ default: m.FileViewerPanel })));
+const DiffViewerPanel = lazy(() => import("./components/DiffViewerPanel").then((m) => ({ default: m.DiffViewerPanel })));
+const SkillsModal = lazy(() => import("./components/SkillsModal").then((m) => ({ default: m.SkillsModal })));
+const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
+const KeyboardShortcuts = lazy(() => import("./components/KeyboardShortcuts").then((m) => ({ default: m.KeyboardShortcuts })));
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
 type ActivityPanel = Panel | "orchestrator" | "home";
@@ -1640,67 +1642,69 @@ function App() {
     >
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         {view === "settings" ? (
-          <SettingsPanel
-            key={settingsInitial ?? "default"}
-            initialSection={settingsInitial}
-            theme={theme}
-            onThemeChange={setTheme}
-            autoTheme={autoTheme}
-            onAutoThemeChange={setAutoTheme}
-            lightTheme={lightTheme}
-            onLightThemeChange={setLightTheme}
-            darkTheme={darkTheme}
-            onDarkThemeChange={setDarkTheme}
-            aiVisible={aiVisible}
-            onAiVisibleChange={setAiVisible}
-            terminalVisible={terminalVisible}
-            onTerminalVisibleChange={setTerminalVisible}
-            panelLayout={panelLayout}
-            onPanelWidthChange={(panel, w) => {
-              if (panel === "explorer" && panelLayout.explorer) {
-                updatePanelRect("explorer", { ...panelLayout.explorer, w });
-              } else if (panel === "ai" && aiPanels[0]) {
-                updateAiRect(aiPanels[0].id, { ...aiPanels[0].rect, w });
-              }
-            }}
-            onPanelHeightChange={(panel, h) => {
-              if (panel === "terminal" && panelLayout.terminal) {
-                updatePanelRect("terminal", { ...panelLayout.terminal, h });
-              }
-            }}
-            editorFontSize={editorFontSize}
-            onEditorFontSizeChange={setEditorFontSize}
-            editorLineNumbers={editorLineNumbers}
-            onEditorLineNumbersChange={setEditorLineNumbers}
-            editorWordWrap={editorWordWrap}
-            onEditorWordWrapChange={setEditorWordWrap}
-            editorMinimap={editorMinimap}
-            onEditorMinimapChange={setEditorMinimap}
-            aiModel={aiModel}
-            onAiModelChange={setAiModel}
-            availableAiModels={panelModels["ai-main"] ?? [aiModel]}
-            requireDiffReview={requireDiffReview}
-            onRequireDiffReviewChange={setRequireDiffReview}
-            stopAfterRejection={stopAfterRejection}
-            onStopAfterRejectionChange={setStopAfterRejection}
-            harnessSettings={harnessSettings}
-            onHarnessSettingsChange={setHarnessSettings}
-            explorerVisible={explorerVisible}
-            onExplorerVisibleChange={setExplorerVisible}
-            restoreLastProject={restoreLastProject}
-            onRestoreLastProjectChange={setRestoreLastProject}
-            autoSaveMode={autoSaveMode}
-            onAutoSaveModeChange={setAutoSaveMode}
-            showHiddenFiles={showHiddenFiles}
-            onShowHiddenFilesChange={setShowHiddenFiles}
-            confirmCloseDirty={confirmCloseDirty}
-            onConfirmCloseDirtyChange={setConfirmCloseDirty}
-            customLayouts={customLayouts}
-            onCustomLayoutsChange={updateCustomLayouts}
-            onApplyLayout={applyLayout}
-            onProviderKeyChange={() => setApiKeyVersion((version) => version + 1)}
-            onBack={() => setView("workbench")}
-          />
+          <Suspense fallback={null}>
+            <SettingsPanel
+              key={settingsInitial ?? "default"}
+              initialSection={settingsInitial}
+              theme={theme}
+              onThemeChange={setTheme}
+              autoTheme={autoTheme}
+              onAutoThemeChange={setAutoTheme}
+              lightTheme={lightTheme}
+              onLightThemeChange={setLightTheme}
+              darkTheme={darkTheme}
+              onDarkThemeChange={setDarkTheme}
+              aiVisible={aiVisible}
+              onAiVisibleChange={setAiVisible}
+              terminalVisible={terminalVisible}
+              onTerminalVisibleChange={setTerminalVisible}
+              panelLayout={panelLayout}
+              onPanelWidthChange={(panel, w) => {
+                if (panel === "explorer" && panelLayout.explorer) {
+                  updatePanelRect("explorer", { ...panelLayout.explorer, w });
+                } else if (panel === "ai" && aiPanels[0]) {
+                  updateAiRect(aiPanels[0].id, { ...aiPanels[0].rect, w });
+                }
+              }}
+              onPanelHeightChange={(panel, h) => {
+                if (panel === "terminal" && panelLayout.terminal) {
+                  updatePanelRect("terminal", { ...panelLayout.terminal, h });
+                }
+              }}
+              editorFontSize={editorFontSize}
+              onEditorFontSizeChange={setEditorFontSize}
+              editorLineNumbers={editorLineNumbers}
+              onEditorLineNumbersChange={setEditorLineNumbers}
+              editorWordWrap={editorWordWrap}
+              onEditorWordWrapChange={setEditorWordWrap}
+              editorMinimap={editorMinimap}
+              onEditorMinimapChange={setEditorMinimap}
+              aiModel={aiModel}
+              onAiModelChange={setAiModel}
+              availableAiModels={panelModels["ai-main"] ?? [aiModel]}
+              requireDiffReview={requireDiffReview}
+              onRequireDiffReviewChange={setRequireDiffReview}
+              stopAfterRejection={stopAfterRejection}
+              onStopAfterRejectionChange={setStopAfterRejection}
+              harnessSettings={harnessSettings}
+              onHarnessSettingsChange={setHarnessSettings}
+              explorerVisible={explorerVisible}
+              onExplorerVisibleChange={setExplorerVisible}
+              restoreLastProject={restoreLastProject}
+              onRestoreLastProjectChange={setRestoreLastProject}
+              autoSaveMode={autoSaveMode}
+              onAutoSaveModeChange={setAutoSaveMode}
+              showHiddenFiles={showHiddenFiles}
+              onShowHiddenFilesChange={setShowHiddenFiles}
+              confirmCloseDirty={confirmCloseDirty}
+              onConfirmCloseDirtyChange={setConfirmCloseDirty}
+              customLayouts={customLayouts}
+              onCustomLayoutsChange={updateCustomLayouts}
+              onApplyLayout={applyLayout}
+              onProviderKeyChange={() => setApiKeyVersion((version) => version + 1)}
+              onBack={() => setView("workbench")}
+            />
+          </Suspense>
         ) : (
           <>
             {/* Focus is chat-first: the icon rail steps back while the focus
@@ -1711,36 +1715,42 @@ function App() {
             <ActivityBar active={activityState} onToggle={togglePanel} />
             )}
             {view === "git-review" ? (
-              <GitReview
-                workspaceRoot={effectiveGitReviewRoot}
-                gitStatus={effectiveGitReviewRoot === workspaceRoot ? gitStatus : null}
-                onRefreshGitStatus={() =>
-                  effectiveGitReviewRoot && effectiveGitReviewRoot === workspaceRoot
-                    ? refreshGitStatus(effectiveGitReviewRoot)
-                    : Promise.resolve()
-                }
-                theme={theme}
-              />
+              <Suspense fallback={null}>
+                <GitReview
+                  workspaceRoot={effectiveGitReviewRoot}
+                  gitStatus={effectiveGitReviewRoot === workspaceRoot ? gitStatus : null}
+                  onRefreshGitStatus={() =>
+                    effectiveGitReviewRoot && effectiveGitReviewRoot === workspaceRoot
+                      ? refreshGitStatus(effectiveGitReviewRoot)
+                      : Promise.resolve()
+                  }
+                  theme={theme}
+                />
+              </Suspense>
             ) : view === "runs" ? (
-              <MissionControl
-                workspaceRoot={workspaceRoot}
-                theme={theme}
-                onResumeKlideRun={resumeKlideRun}
-                onOpenInAiPanel={openRunInAiPanel}
-                onReattachLiveSession={reattachLiveSession}
-                onReviewDiff={reviewDiffFromRun}
-                onSaveMemory={saveMemoryFromRun}
-                onForkRun={forkRun}
-                onForkRunInWorktree={forkRunInWorktree}
-                onMergeWorktreeRun={mergeWorktreeRun}
-                pendingCheckpointRunId={pendingCheckpointRunId}
-                onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
-                summarizingFromRunId={summarizingFromRun}
-              />
+              <Suspense fallback={null}>
+                <MissionControl
+                  workspaceRoot={workspaceRoot}
+                  theme={theme}
+                  onResumeKlideRun={resumeKlideRun}
+                  onOpenInAiPanel={openRunInAiPanel}
+                  onReattachLiveSession={reattachLiveSession}
+                  onReviewDiff={reviewDiffFromRun}
+                  onSaveMemory={saveMemoryFromRun}
+                  onForkRun={forkRun}
+                  onForkRunInWorktree={forkRunInWorktree}
+                  onMergeWorktreeRun={mergeWorktreeRun}
+                  pendingCheckpointRunId={pendingCheckpointRunId}
+                  onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
+                  summarizingFromRunId={summarizingFromRun}
+                />
+              </Suspense>
             ) : view === "orchestrator" ? (
               // Real tier-board console. workspaceRoot enables real plan-mode
               // dispatch through the slice-1 dispatcher seam.
-              <OrchestratorConsole workspaceRoot={workspaceRoot} />
+              <Suspense fallback={null}>
+                <OrchestratorConsole workspaceRoot={workspaceRoot} />
+              </Suspense>
             ) : activeGrid && !focusMode ? (
               <GridWorkbench layout={activeGrid} renderPanel={renderPanel} />
             ) : null}
@@ -1765,72 +1775,74 @@ function App() {
                  for the live conversation the same fully-wired AiPanel in
                  its fullscreen "focus" design variant (centered reading
                  column). One agent surface, two designs. */
-              <FocusMode
-                workspaceRoot={workspaceRoot}
-                branch={gitStatus?.branch ?? null}
-                projects={recentFolders}
-                chatActive={focusChatActive}
-                onSwitchProject={(root) => {
-                  setFocusChatActive(false);
-                  changeRoot(root);
-                }}
-                onNewChat={() => setFocusChatActive(false)}
-                onOpenConversation={(convo) => {
-                  // A conversation from another project's history brings its
-                  // project along — resuming it against the wrong workspace
-                  // would point every tool at the wrong tree.
-                  if (convo.cwd && convo.cwd !== workspaceRoot) changeRoot(convo.cwd);
-                  setResumeTarget({ panelId: aiPanels[0]?.id ?? "ai-main", convo });
-                  setFocusChatActive(true);
-                }}
-                onSubmit={(text) => {
-                  setFocusInitialMessage(text);
-                  setFocusChatActive(true);
-                }}
-                onOpenMissionControl={() => setView("runs")}
-                renderChat={() => renderPanel("ai", "focus-ai", { aiVariant: "focus" })}
-                provider={
-                  aiPanels[0]?.provider ??
-                  ((localStorage.getItem("klide.provider") as ProviderId) || "ollama")
-                }
-                onProviderChange={(p) => {
-                  const panelId = aiPanels[0]?.id ?? "ai-main";
-                  setAiPanelProvider(panelId, p);
-                  // The panel keeps its model across provider switches, but a
-                  // hero pick means "start on this provider" — reset to its
-                  // default so the pair is never mismatched.
-                  updateAiPanelModel(panelId, DEFAULT_MODELS[p] ?? "");
-                }}
-                model={aiPanels[0]?.model ?? aiModel}
-                onModelChange={(m) => updateAiPanelModel(aiPanels[0]?.id ?? "ai-main", m)}
-                effort={harnessSettings?.reflectionLevels?.[aiPanels[0]?.model ?? aiModel]}
-                onEffortChange={(v) => {
-                  const m = aiPanels[0]?.model ?? aiModel;
-                  const next = { ...(harnessSettings?.reflectionLevels ?? {}) };
-                  if (v === undefined) delete next[m];
-                  else next[m] = v;
-                  setHarnessSettings({ ...harnessSettings, reflectionLevels: next });
-                  // The AI panel prefers its own per-panel override when one
-                  // was set from its composer — drop it so the value picked
-                  // here is what the next run actually uses.
-                  const panelId = aiPanels[0]?.id ?? "ai-main";
-                  const prov =
-                    aiPanels[0]?.provider ?? localStorage.getItem("klide.provider") ?? "ollama";
-                  try {
-                    localStorage.removeItem(`klide.reflectionLevel.${panelId}.${prov}.${m}`);
-                  } catch {
-                    /* storage unavailable */
+              <Suspense fallback={null}>
+                <FocusMode
+                  workspaceRoot={workspaceRoot}
+                  branch={gitStatus?.branch ?? null}
+                  projects={recentFolders}
+                  chatActive={focusChatActive}
+                  onSwitchProject={(root) => {
+                    setFocusChatActive(false);
+                    changeRoot(root);
+                  }}
+                  onNewChat={() => setFocusChatActive(false)}
+                  onOpenConversation={(convo) => {
+                    // A conversation from another project's history brings its
+                    // project along — resuming it against the wrong workspace
+                    // would point every tool at the wrong tree.
+                    if (convo.cwd && convo.cwd !== workspaceRoot) changeRoot(convo.cwd);
+                    setResumeTarget({ panelId: aiPanels[0]?.id ?? "ai-main", convo });
+                    setFocusChatActive(true);
+                  }}
+                  onSubmit={(text) => {
+                    setFocusInitialMessage(text);
+                    setFocusChatActive(true);
+                  }}
+                  onOpenMissionControl={() => setView("runs")}
+                  renderChat={() => renderPanel("ai", "focus-ai", { aiVariant: "focus" })}
+                  provider={
+                    aiPanels[0]?.provider ??
+                    ((localStorage.getItem("klide.provider") as ProviderId) || "ollama")
                   }
-                }}
-                contextWindow={harnessSettings?.contextWindows?.[aiPanels[0]?.model ?? aiModel]}
-                onContextWindowChange={(w) => {
-                  const m = aiPanels[0]?.model ?? aiModel;
-                  const next = { ...(harnessSettings?.contextWindows ?? {}) };
-                  if (w === undefined) delete next[m];
-                  else next[m] = w;
-                  setHarnessSettings({ ...harnessSettings, contextWindows: next });
-                }}
-              />
+                  onProviderChange={(p) => {
+                    const panelId = aiPanels[0]?.id ?? "ai-main";
+                    setAiPanelProvider(panelId, p);
+                    // The panel keeps its model across provider switches, but a
+                    // hero pick means "start on this provider" — reset to its
+                    // default so the pair is never mismatched.
+                    updateAiPanelModel(panelId, DEFAULT_MODELS[p] ?? "");
+                  }}
+                  model={aiPanels[0]?.model ?? aiModel}
+                  onModelChange={(m) => updateAiPanelModel(aiPanels[0]?.id ?? "ai-main", m)}
+                  effort={harnessSettings?.reflectionLevels?.[aiPanels[0]?.model ?? aiModel]}
+                  onEffortChange={(v) => {
+                    const m = aiPanels[0]?.model ?? aiModel;
+                    const next = { ...(harnessSettings?.reflectionLevels ?? {}) };
+                    if (v === undefined) delete next[m];
+                    else next[m] = v;
+                    setHarnessSettings({ ...harnessSettings, reflectionLevels: next });
+                    // The AI panel prefers its own per-panel override when one
+                    // was set from its composer — drop it so the value picked
+                    // here is what the next run actually uses.
+                    const panelId = aiPanels[0]?.id ?? "ai-main";
+                    const prov =
+                      aiPanels[0]?.provider ?? localStorage.getItem("klide.provider") ?? "ollama";
+                    try {
+                      localStorage.removeItem(`klide.reflectionLevel.${panelId}.${prov}.${m}`);
+                    } catch {
+                      /* storage unavailable */
+                    }
+                  }}
+                  contextWindow={harnessSettings?.contextWindows?.[aiPanels[0]?.model ?? aiModel]}
+                  onContextWindowChange={(w) => {
+                    const m = aiPanels[0]?.model ?? aiModel;
+                    const next = { ...(harnessSettings?.contextWindows ?? {}) };
+                    if (w === undefined) delete next[m];
+                    else next[m] = w;
+                    setHarnessSettings({ ...harnessSettings, contextWindows: next });
+                  }}
+                />
+              </Suspense>
             ) : panelLayout.anchored ? (
               <AnchoredWorkbench
                 workbenchRef={workbenchRef}
@@ -2014,13 +2026,15 @@ function App() {
                         }
                         bottom={
                           sidebarSlot2 === "skills" ? (
-                            <SkillsModal
-                              open
-                              skills={skills}
-                              onChange={setSkills}
-                              onReloadFilesystemSkills={reloadFilesystemSkills}
-                              onClose={() => setSidebarSlot2(null)}
-                            />
+                            <Suspense fallback={null}>
+                              <SkillsModal
+                                open
+                                skills={skills}
+                                onChange={setSkills}
+                                onReloadFilesystemSkills={reloadFilesystemSkills}
+                                onClose={() => setSidebarSlot2(null)}
+                              />
+                            </Suspense>
                           ) : null
                         }
                         defaultSplit={explorerRect.h * 0.45}
@@ -2061,12 +2075,14 @@ function App() {
                       overflow: "hidden",
                     }}
                   >
-                    <FileViewerPanel
-                      key={previewPath}
-                      filePath={previewPath}
-                      workspaceRoot={workspaceRoot}
-                      onClose={() => setPreviewPath(null)}
-                    />
+                    <Suspense fallback={null}>
+                      <FileViewerPanel
+                        key={previewPath}
+                        filePath={previewPath}
+                        workspaceRoot={workspaceRoot}
+                        onClose={() => setPreviewPath(null)}
+                      />
+                    </Suspense>
                   </div>
                 )}
                 {diffView && (
@@ -2087,16 +2103,18 @@ function App() {
                       overflow: "hidden",
                     }}
                   >
-                    <DiffViewerPanel
-                      key={diffView.path}
-                      path={diffView.path}
-                      original={diffView.oldContent}
-                      modified={diffView.newContent}
-                      language={detectLanguage(diffView.path)}
-                      isCreate={diffView.isCreate}
-                      theme={theme}
-                      onClose={() => setDiffView(null)}
-                    />
+                    <Suspense fallback={null}>
+                      <DiffViewerPanel
+                        key={diffView.path}
+                        path={diffView.path}
+                        original={diffView.oldContent}
+                        modified={diffView.newContent}
+                        language={detectLanguage(diffView.path)}
+                        isCreate={diffView.isCreate}
+                        theme={theme}
+                        onClose={() => setDiffView(null)}
+                      />
+                    </Suspense>
                   </div>
                 )}
                 {terminalVisible && (
@@ -2238,43 +2256,59 @@ function App() {
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
         onResetLayout={resetPanelLayout}
       />
-      <SkillsModal
-        open={skillsVisible && sidebarSlot2 !== "skills"}
-        skills={skills}
-        onChange={updateSkills}
-        onReloadFilesystemSkills={reloadFilesystemSkills}
-        onClose={() => setSkillsVisible(false)}
-      />
-      <MemoryModal
-        open={memoryVisible}
-        workspaceRoot={workspaceRoot}
-        refreshKey={memoryRefreshKey}
-        onOpenInEditor={(path: string, content: string) => openFile(path, content)}
-        onOpenTouchedFile={async (path: string) => {
-          if (!workspaceRoot) return;
-          try {
-            const content = await readWorkspaceTextFile(workspaceRoot, path);
-            openFile(path, content);
-            setMemoryVisible(false);
-          } catch (err) {
-            setFileNotice(err instanceof Error ? err.message : String(err));
-          }
-        }}
-        onClose={() => setMemoryVisible(false)}
-      />
-      <WorktreesModal
-        open={worktreesVisible}
-        workspaceRoot={workspaceRoot}
-        onOpenWorktree={openExistingWorktree}
-        onNotice={setFileNotice}
-        onClose={() => setWorktreesVisible(false)}
-      />
+      {skillsVisible && sidebarSlot2 !== "skills" && (
+        <Suspense fallback={null}>
+          <SkillsModal
+            open
+            skills={skills}
+            onChange={updateSkills}
+            onReloadFilesystemSkills={reloadFilesystemSkills}
+            onClose={() => setSkillsVisible(false)}
+          />
+        </Suspense>
+      )}
+      {memoryVisible && (
+        <Suspense fallback={null}>
+          <MemoryModal
+            open
+            workspaceRoot={workspaceRoot}
+            refreshKey={memoryRefreshKey}
+            onOpenInEditor={(path: string, content: string) => openFile(path, content)}
+            onOpenTouchedFile={async (path: string) => {
+              if (!workspaceRoot) return;
+              try {
+                const content = await readWorkspaceTextFile(workspaceRoot, path);
+                openFile(path, content);
+                setMemoryVisible(false);
+              } catch (err) {
+                setFileNotice(err instanceof Error ? err.message : String(err));
+              }
+            }}
+            onClose={() => setMemoryVisible(false)}
+          />
+        </Suspense>
+      )}
+      {worktreesVisible && (
+        <Suspense fallback={null}>
+          <WorktreesModal
+            open
+            workspaceRoot={workspaceRoot}
+            onOpenWorktree={openExistingWorktree}
+            onNotice={setFileNotice}
+            onClose={() => setWorktreesVisible(false)}
+          />
+        </Suspense>
+      )}
       <ProfileModal
         open={profileVisible}
         workspaceRoot={workspaceRoot}
         onClose={() => setProfileVisible(false)}
       />
-      {shortcutsOpen && <KeyboardShortcuts onClose={() => setShortcutsOpen(false)} />}
+      {shortcutsOpen && (
+        <Suspense fallback={null}>
+          <KeyboardShortcuts onClose={() => setShortcutsOpen(false)} />
+        </Suspense>
+      )}
       {paletteOpen && (
         <CommandPalette
           workspaceRoot={workspaceRoot}

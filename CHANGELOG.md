@@ -2,6 +2,17 @@
 
 Notable changes per milestone. Dates are completion dates.
 
+## v0.5 — Git Review + Delegate Live Ops
+
+- Git Review grew into a full workbench: branch diff against the recorded fork base, PR list/create/open/checkout/merge actions, a commit history graph, and a structured commit-detail pane with avatars and full-width diffs.
+- Delegate live status moved to hooks for Claude Code, Codex, and OpenCode, so Mission Control can show working/waiting/blocked state without scraping terminal output.
+- Live-strip urgency and needs-you toasts make active delegate sessions visible while keeping the main workbench quiet.
+- Subscription and custom CLI providers now share a cleaner default-model path: the "default" sentinel lets each CLI use its own configured default instead of forcing a stale model flag.
+- Custom CLI agents are first-class in Settings, the AI panel, and dispatch.
+- Mission Control now scopes delegate run history to the current workspace, keeping old runs from other projects out of the operator view.
+- Production build splits the heaviest browser libraries (Monaco, xterm, Tauri, React) into named vendor chunks, and the main screens and modals now lazy-load on demand instead of shipping in the initial bundle.
+- Docs were refreshed for the production README and changelog.
+
 ## v0.4 — Review Queue + Evidence Layer
 
 - Mission Control answers "what is running?", "what needs me?", and "what changed?" at a glance — quiet rows, attention queue, per-run reasons + one next action.
