@@ -15,6 +15,7 @@
 import { Component, memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { layoutGraph, splitRefs, type GraphCommit, type GraphRow } from "../gitGraph";
+import { parseDiffBlocks, DiffView, FileStatusIcon } from "./diffView";
 import { renderMarkdown } from "./markdown";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
@@ -338,193 +339,6 @@ export type CommitDetails = {
 
 const DETAIL_DIFF_LIMIT = 1200;
 
-/** File change status as a small stroke icon (Pierre: no bare letters) —
- *  pencil/plus/minus/arrow, colored like GitReview's status letters. */
-function FileStatusIcon({ status }: { status: string }) {
-  const s = status[0] ?? "M";
-  const color =
-    s === "A" ? "var(--success)"
-    : s === "D" ? "var(--danger)"
-    : s === "R" || s === "C" ? "var(--fg-subtle)"
-    : "var(--warning)";
-  const title =
-    s === "A" ? "Added" : s === "D" ? "Deleted" : s === "R" ? "Renamed" : s === "C" ? "Copied" : "Modified";
-  return (
-    <span title={title} style={{ display: "inline-flex", width: 14, flexShrink: 0, color, justifyContent: "center" }}>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        {s === "A" ? (
-          <><path d="M12 5v14" /><path d="M5 12h14" /></>
-        ) : s === "D" ? (
-          <path d="M5 12h14" />
-        ) : s === "R" || s === "C" ? (
-          <><path d="M5 12h14" /><path d="M13 6l6 6-6 6" /></>
-        ) : (
-          // Modified: filled dot — VS Code's convention, quieter than a pencil.
-          <circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none" />
-        )}
-      </svg>
-    </span>
-  );
-}
-
-// ---- Structured diff rendering --------------------------------------------
-//
-// Modeled on what makes GitHub / Tower / Fork diffs digestible: dual
-// line-number gutters, a separated sign column so code indentation aligns,
-// word-level highlighting inside changed line pairs, collapsible per-file
-// sections, and hunk gaps as quiet "···" bands instead of raw @@ noise.
-// Row tinting keeps GitReview's 12% success/danger vocabulary.
-
-type DiffBlock =
-  | { kind: "file"; path: string }
-  | { kind: "hunk"; text: string }
-  | {
-      kind: "line";
-      /** Code without the leading +/-/space sign. */
-      code: string;
-      tone: "add" | "del" | "ctx";
-      oldNo: number | null;
-      newNo: number | null;
-      /** Word-level changed span [start, end) within `code`. */
-      hi?: [number, number];
-    };
-
-type DiffCodeBlock = Extract<DiffBlock, { kind: "line" }>;
-
-const DIFF_META_RE =
-  /^(index |--- |\+\+\+ |new file mode|deleted file mode|old mode|new mode|similarity index|dissimilarity index|rename from|rename to|copy from|copy to|Binary files)/;
-
-export function parseDiffBlocks(lines: string[]): DiffBlock[] {
-  const blocks: DiffBlock[] = [];
-  let oldNo = 0;
-  let newNo = 0;
-  for (const line of lines) {
-    if (line.startsWith("diff --git")) {
-      const m = line.match(/ b\/(.+)$/);
-      blocks.push({ kind: "file", path: m ? m[1] : line.slice("diff --git ".length) });
-      continue;
-    }
-    if (DIFF_META_RE.test(line)) continue;
-    if (line.startsWith("@@")) {
-      const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (m) {
-        oldNo = Number(m[1]);
-        newNo = Number(m[2]);
-      }
-      blocks.push({ kind: "hunk", text: line.replace(/^@@ .*? @@ ?/, "") });
-      continue;
-    }
-    const tone = line.startsWith("+") ? "add" as const : line.startsWith("-") ? "del" as const : "ctx" as const;
-    blocks.push({
-      kind: "line",
-      code: line.slice(1),
-      tone,
-      oldNo: tone === "add" ? null : oldNo++,
-      newNo: tone === "del" ? null : newNo++,
-    });
-  }
-  markInlineChanges(blocks);
-  return blocks;
-}
-
-/** Tower-style word-level highlighting: when a run of removed lines is
- *  followed by an equally long run of added lines, each pair almost always
- *  differs in one span — mark it via common prefix/suffix so the eye lands
- *  on what actually changed. */
-function markInlineChanges(blocks: DiffBlock[]): void {
-  let i = 0;
-  while (i < blocks.length) {
-    const b = blocks[i];
-    if (b.kind !== "line" || b.tone !== "del") {
-      i++;
-      continue;
-    }
-    let delEnd = i;
-    while (delEnd < blocks.length) {
-      const d = blocks[delEnd];
-      if (d.kind === "line" && d.tone === "del") delEnd++;
-      else break;
-    }
-    let addEnd = delEnd;
-    while (addEnd < blocks.length) {
-      const a = blocks[addEnd];
-      if (a.kind === "line" && a.tone === "add") addEnd++;
-      else break;
-    }
-    if (delEnd - i === addEnd - delEnd) {
-      for (let k = 0; k < delEnd - i; k++) {
-        const del = blocks[i + k] as DiffCodeBlock;
-        const add = blocks[delEnd + k] as DiffCodeBlock;
-        const spans = changedSpan(del.code, add.code);
-        if (spans) {
-          del.hi = spans[0];
-          add.hi = spans[1];
-        }
-      }
-    }
-    i = addEnd > i ? addEnd : i + 1;
-  }
-}
-
-/** Common prefix/suffix trim: the changed middle of each side, or null when
- *  the lines are identical or share no shell at all (highlighting everything
- *  is the same as highlighting nothing). */
-function changedSpan(a: string, b: string): [[number, number], [number, number]] | null {
-  if (a === b) return null;
-  const max = Math.min(a.length, b.length);
-  let p = 0;
-  while (p < max && a[p] === b[p]) p++;
-  let s = 0;
-  while (s < max - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
-  if (p === 0 && s === 0) return null;
-  return [
-    [p, a.length - s],
-    [p, b.length - s],
-  ];
-}
-
-/** One diff code row: [old№ | new№ | sign | code], tinted by tone, with
- *  the word-level changed span on a stronger tint. */
-const DiffCodeRow = memo(function DiffCodeRow({ block }: { block: DiffCodeBlock }) {
-  const bg =
-    block.tone === "add" ? "color-mix(in srgb, var(--success) 12%, transparent)"
-    : block.tone === "del" ? "color-mix(in srgb, var(--danger) 12%, transparent)"
-    : "transparent";
-  const fg =
-    block.tone === "add" ? "var(--success)"
-    : block.tone === "del" ? "var(--danger)"
-    : "var(--fg-subtle)";
-  const hiBg =
-    block.tone === "add" ? "color-mix(in srgb, var(--success) 30%, transparent)"
-    : "color-mix(in srgb, var(--danger) 30%, transparent)";
-  const code = block.code || " ";
-  const hi = block.hi;
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "36px 36px 18px 1fr", minHeight: 18, background: bg, color: fg }}>
-      <span style={{ textAlign: "right", paddingRight: 8, userSelect: "none", fontSize: 10, color: "var(--fg-dim)", lineHeight: "18px" }}>
-        {block.oldNo ?? ""}
-      </span>
-      <span style={{ textAlign: "right", paddingRight: 8, userSelect: "none", fontSize: 10, color: "var(--fg-dim)", lineHeight: "18px" }}>
-        {block.newNo ?? ""}
-      </span>
-      <span style={{ userSelect: "none", textAlign: "center" }}>
-        {block.tone === "add" ? "+" : block.tone === "del" ? "−" : ""}
-      </span>
-      <span style={{ whiteSpace: "pre", paddingRight: 16 }}>
-        {hi && hi[0] < hi[1] ? (
-          <>
-            {code.slice(0, hi[0])}
-            <span style={{ background: hiBg, borderRadius: 2 }}>{code.slice(hi[0], hi[1])}</span>
-            {code.slice(hi[1])}
-          </>
-        ) : (
-          code
-        )}
-      </span>
-    </div>
-  );
-});
-
 const fullDateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 
@@ -694,9 +508,7 @@ export function CommitDetailPane({
   onToggleCollapsed: () => void;
   onClose: () => void;
 }) {
-  const [showFullDiff, setShowFullDiff] = useState(false);
   const [hashCopied, setHashCopied] = useState(false);
-  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   // Open animation: mount at height 0, then transition to the real height on
   // the next frame — the graph above shrinks in the same glide, so the pane
   // feels like it slides up out of the shelf. The transition also covers
@@ -707,25 +519,11 @@ export function CommitDetailPane({
     const raf = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(raf);
   }, []);
-  useEffect(() => {
-    setCollapsedFiles(new Set());
-    setShowFullDiff(false);
-  }, [detail.hash]);
-  const toggleFileCollapsed = (path: string) => {
-    setCollapsedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
   const blocks = useMemo(
     () => (detail.diff.trim() ? parseDiffBlocks(detail.diff.replace(/\n$/, "").split("\n")) : []),
     [detail.diff]
   );
   const fileCounts = useMemo(() => new Map(detail.files.map((f) => [f.path, f])), [detail.files]);
-  const visible = showFullDiff ? blocks : blocks.slice(0, DETAIL_DIFF_LIMIT);
-  const hidden = blocks.length - visible.length;
 
   const copyHash = () => {
     void navigator.clipboard.writeText(detail.hash);
@@ -842,7 +640,7 @@ export function CommitDetailPane({
             </div>
           ))}
         </div>
-        {visible.length > 0 && (
+        {blocks.length > 0 && (
           <>
             <DetailSection
               icon={sectionIcon.diff}
@@ -854,67 +652,7 @@ export function CommitDetailPane({
                 </span>
               }
             />
-            <div style={{ padding: "0 0 8px", fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6 }}>
-              {(() => {
-                const out: ReactNode[] = [];
-                let fileCollapsed = false;
-                visible.forEach((block, i) => {
-                  if (block.kind === "file") {
-                    const counts = fileCounts.get(block.path);
-                    const collapsed = collapsedFiles.has(block.path);
-                    fileCollapsed = collapsed;
-                    out.push(
-                      <div
-                        key={i}
-                        onClick={() => toggleFileCollapsed(block.path)}
-                        title={collapsed ? "Expand file" : "Collapse file"}
-                        style={{ height: 26, display: "flex", alignItems: "center", gap: 8, padding: "0 16px", marginTop: i > 0 ? 8 : 0, borderTop: i > 0 ? "1px solid var(--border)" : "none", borderBottom: "1px solid var(--border)", background: "color-mix(in srgb, var(--bg-hover) 45%, transparent)", cursor: "pointer", userSelect: "none" }}
-                      >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0, transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform var(--motion-fast) var(--ease-out)" }}>
-                          <path d="M6 9l6 6 6-6" />
-                        </svg>
-                        {counts && <FileStatusIcon status={counts.status} />}
-                        <span style={{ color: "var(--fg-strong)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {block.path}
-                        </span>
-                        <span style={{ flex: 1 }} />
-                        {counts && (
-                          <span style={{ fontSize: 10.5, flexShrink: 0 }}>
-                            <span style={{ color: "var(--diff-add)" }}>+{counts.additions}</span>{" "}
-                            <span style={{ color: "var(--diff-remove)" }}>−{counts.deletions}</span>
-                          </span>
-                        )}
-                      </div>
-                    );
-                    return;
-                  }
-                  if (fileCollapsed) return;
-                  if (block.kind === "hunk") {
-                    out.push(
-                      <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 1fr", minHeight: 18, color: "var(--fg-dim)", background: "color-mix(in srgb, var(--bg-hover) 60%, transparent)", fontSize: 10.5 }}>
-                        <span style={{ textAlign: "center", userSelect: "none", letterSpacing: "2px" }}>···</span>
-                        <span style={{ paddingLeft: 18, whiteSpace: "pre", overflow: "hidden", textOverflow: "ellipsis", opacity: 0.8 }}>{block.text}</span>
-                      </div>
-                    );
-                    return;
-                  }
-                  out.push(<DiffCodeRow key={i} block={block} />);
-                });
-                return out;
-              })()}
-              {hidden > 0 && (
-                <div style={{ padding: "10px 16px 2px", color: "var(--fg-subtle)", fontFamily: "var(--font-ui)", fontSize: 12 }}>
-                  {hidden} more lines hidden.{" "}
-                  <button
-                    type="button"
-                    onClick={() => setShowFullDiff(true)}
-                    style={{ border: "none", background: "transparent", color: "var(--accent)", cursor: "pointer", font: "inherit", padding: 0 }}
-                  >
-                    Show full diff
-                  </button>
-                </div>
-              )}
-            </div>
+            <DiffView key={detail.hash} blocks={blocks} limit={DETAIL_DIFF_LIMIT} fileCounts={fileCounts} />
           </>
         )}
       </div>

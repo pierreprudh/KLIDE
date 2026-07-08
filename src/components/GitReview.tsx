@@ -19,6 +19,7 @@ import {
   GitHistoryGraph,
   type CommitDetails,
 } from "./GitHistoryGraph";
+import { parseDiffBlocks, DiffView } from "./diffView";
 import { renderMarkdown } from "./markdown";
 
 type GitCommit = {
@@ -179,24 +180,6 @@ function StatusLetter({ label }: { label: string }) {
   );
 }
 
-const DiffLine = memo(function DiffLine({ line, index }: { line: string; index: number }) {
-  const isMeta = line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("@@") || line.startsWith("new file") || line.startsWith("deleted file");
-  const isAdded = line.startsWith("+") && !line.startsWith("+++");
-  const isRemoved = line.startsWith("-") && !line.startsWith("---");
-  const bg = isAdded ? "color-mix(in srgb, var(--success) 12%, transparent)"
-    : isRemoved ? "color-mix(in srgb, var(--danger) 12%, transparent)"
-    : "transparent";
-  const fg = isMeta ? "var(--accent)" : isAdded ? "var(--success)" : isRemoved ? "var(--danger)" : "var(--fg)";
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "44px 1fr", minHeight: 19, background: bg, color: fg, fontSize: 12, lineHeight: 1.55 }}>
-      <span style={{ color: "var(--fg-dim)", textAlign: "right", paddingRight: 12, userSelect: "none", fontSize: 11 }}>
-        {index + 1}
-      </span>
-      <span style={{ whiteSpace: "pre", overflow: "visible" }}>{line || " "}</span>
-    </div>
-  );
-});
-
 type DiffViewerProps = {
   workspaceRoot: string | null;
   open: OpenFile | null;
@@ -206,7 +189,6 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
   const [diff, setDiff] = useState<{ path: string; diff: string; additions: number; deletions: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showFullDiff, setShowFullDiff] = useState(false);
   const lastLoadedRef = useRef<string>("");
   const openPath = open?.path ?? null;
   const openStaged = open?.staged ?? false;
@@ -221,7 +203,6 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
     const key = `${openPath}::${openStaged ? "staged" : "work"}`;
     if (key === lastLoadedRef.current) return;
     lastLoadedRef.current = key;
-    setShowFullDiff(false);
     setLoading(true);
     setError(null);
     let cancelled = false;
@@ -246,15 +227,10 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
     };
   }, [openPath, openStaged, workspaceRoot]);
 
-  const lines = useMemo(
-    () => {
-      if (!diff) return [];
-      return diff.diff.trim() ? diff.diff.replace(/\n$/, "").split("\n") : ["No diff available."];
-    },
+  const blocks = useMemo(
+    () => (diff && diff.diff.trim() ? parseDiffBlocks(diff.diff.replace(/\n$/, "").split("\n")) : []),
     [diff]
   );
-  const visibleLines = showFullDiff ? lines : lines.slice(0, DIFF_RENDER_LIMIT);
-  const hiddenLines = Math.max(0, lines.length - visibleLines.length);
 
   if (!open) {
     return (
@@ -284,23 +260,16 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
     );
   }
   if (!diff) return null;
+  if (blocks.length === 0) {
+    return (
+      <div style={{ flex: 1, display: "grid", placeItems: "center", color: "var(--fg-subtle)", fontSize: 13 }}>
+        No diff available.
+      </div>
+    );
+  }
   return (
-    <div style={{ flex: 1, overflow: "auto", background: "var(--bg)", padding: "8px 0", fontFamily: "var(--font-mono)" }}>
-      {visibleLines.map((line, i) => (
-        <DiffLine key={i} line={line} index={i} />
-      ))}
-      {hiddenLines > 0 && (
-        <div style={{ padding: "12px 44px", color: "var(--fg-subtle)", fontSize: 12, borderTop: "1px solid var(--border)" }}>
-          {hiddenLines} more lines hidden for smoother scrolling.{" "}
-          <button
-            type="button"
-            onClick={() => setShowFullDiff(true)}
-            style={{ border: "none", background: "transparent", color: "var(--accent)", cursor: "pointer", font: "inherit", padding: 0 }}
-          >
-            Show full diff
-          </button>
-        </div>
-      )}
+    <div style={{ flex: 1, overflow: "auto", background: "var(--bg)", padding: "8px 0" }}>
+      <DiffView key={lastLoadedRef.current} blocks={blocks} limit={DIFF_RENDER_LIMIT} />
     </div>
   );
 });
