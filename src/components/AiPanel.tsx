@@ -69,7 +69,7 @@ import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summar
 import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
 import { eventsToMsgs } from "./ai/eventsToMsgs";
-import { locateAssistant as locateAssistantPure, appendDelta, startToolCall, finishToolCall, finalizeAssistantMessage } from "./ai/transcriptReducer";
+import { createTurnDriver } from "./ai/turnDriver";
 import { buildRunHandoff, type HandoffSummary } from "../agentHandoff";
 import {
   genId,
@@ -2119,64 +2119,31 @@ This user request requires workspace inspection. Before answering, you MUST call
     // auto-summarize cancelled runs — the user already knows they stopped
     // the run, and a half-finished note is more noise than signal.
     let abortedByUser = false;
-    let nextAssistantIdx = assistantIndex;
-    // Wall-clock start of the current turn, for the per-message meta footer.
-    // Reset after each assistant_message so multi-turn runs time each turn.
-    let turnStartedAt = Date.now();
-    // First streamed token of the current turn → TTFT. Null until the first
-    // assistant_delta of the turn arrives.
-    let firstTokenAt: number | null = null;
-
-    // Throttle assistant_delta state updates to ~20 fps — avoids flooding
-    // React with one setState per token (60+/s), which clones the whole msgs
-    // array and re-renders the entire message list on every chunk.
-    let pendingDelta = { content: "", thinking: "" };
-    let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
     // All event handling transforms msgsRef.current (the single source of
     // truth, kept in sync by enqueueTurn too) and pushes plain values via
     // commit(). Never use functional setMsgs updaters with side effects
     // here: StrictMode double-invokes updaters, which double-incremented
-    // nextAssistantIdx and left tool rows stuck on "Running…" forever.
+    // the turn cursor and left tool rows stuck on "Running…" forever.
     const commit = (next: Msg[]) => {
       msgsRef.current = next;
       setMsgs(next);
     };
 
-    // Locate the assistant bubble for the current turn inside `next`,
-    // creating one when the previous turn ended in tool calls. After a
-    // tool_call_started splice, nextAssistantIdx points at a tool card —
-    // the old guard (`role !== "assistant" → drop`) silently discarded
-    // every assistant update from that point on, so multi-turn tool runs
-    // never showed their final answer (the transcript had it; the live
-    // view threw it away). Walk past tool cards and insert a fresh bubble
-    // for the new turn instead.
     const delegate = { delegateConsole, delegateProvider };
 
-    // Thin wrapper: the pure locateAssistant returns the resolved index; the
-    // component stores it back into the mutable turn cursor.
-    const ensureAssistant = (): { msgs: Msg[]; index: number } => {
-      const located = locateAssistantPure(msgsRef.current, nextAssistantIdx, delegate);
-      nextAssistantIdx = located.index;
-      return located;
-    };
-
-    const appendPendingDelta = (c: string, t: string) => {
-      const { msgs: next, index } = appendDelta(msgsRef.current, nextAssistantIdx, c, t, delegate);
-      nextAssistantIdx = index;
-      commit(next);
-    };
-
-    const flushDelta = () => {
-      if (flushTimer) return;
-      flushTimer = setTimeout(() => {
-        flushTimer = null;
-        const c = pendingDelta.content;
-        const t = pendingDelta.thinking;
-        pendingDelta = { content: "", thinking: "" };
-        if (c || t) appendPendingDelta(c, t);
-      }, 50);
-    };
+    // The streaming state machine for this turn — delta batching, TTFT/turn
+    // timing, the assistant-index cursor, flush-before-finalize. See
+    // ai/turnDriver.ts; fixture-tested there without React or Tauri.
+    const driver = createTurnDriver({
+      assistantIndex,
+      delegate,
+      pricing,
+      read: () => msgsRef.current,
+      commit,
+      onMeasuredPromptTokens: setMeasuredPromptTokens,
+      onMeasuredUsage: setMeasuredUsageTokens,
+    });
 
     // The main run called `spawn_subagent` and is parked on a oneshot. Run the
     // named read-only subagent as a nested child run (Mission Control nests it
@@ -2251,53 +2218,11 @@ This user request requires workspace inspection. Before answering, you MUST call
 
     const handleEvent = (event: AgentEvent) => {
       if (queueGenerationRef.current !== generation) return;
+      // Transcript events (deltas, finalized messages, tool cards) belong to
+      // the turn driver; everything below is panel behaviour.
+      if (driver.handleEvent(event)) return;
 
       switch (event.type) {
-        case "assistant_delta": {
-          if (firstTokenAt === null) firstTokenAt = Date.now();
-          pendingDelta.content += event.text;
-          pendingDelta.thinking += event.thinking ?? "";
-          flushDelta();
-          break;
-        }
-        case "assistant_message": {
-          if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-          // Flush any pending delta before finalising
-          if (pendingDelta.content || pendingDelta.thinking) {
-            appendPendingDelta(pendingDelta.content, pendingDelta.thinking);
-          }
-          pendingDelta = { content: "", thinking: "" };
-          const now = Date.now();
-          const result = finalizeAssistantMessage({
-            msgs: msgsRef.current,
-            nextAssistantIdx,
-            event,
-            timing: { turnStartedAt, firstTokenAt },
-            now,
-            pricing,
-            delegate,
-          });
-          // Reset per-turn timing so multi-turn runs time each turn.
-          turnStartedAt = now;
-          firstTokenAt = null;
-          nextAssistantIdx = result.index;
-          // Capture the real context size for the gauge: the prompt the model
-          // just saw (system + tools + full history) plus the reply it added.
-          if (result.measuredPromptTokens !== undefined) setMeasuredPromptTokens(result.measuredPromptTokens);
-          if (result.measuredUsage !== undefined) setMeasuredUsageTokens(result.measuredUsage);
-          commit(result.msgs);
-          break;
-        }
-        case "tool_call_started": {
-          const { msgs: next, index } = startToolCall(msgsRef.current, nextAssistantIdx, event.name, event.toolCallId);
-          nextAssistantIdx = index;
-          commit(next);
-          break;
-        }
-        case "tool_call_finished": {
-          commit(finishToolCall(msgsRef.current, event.toolCallId, event.result.content));
-          break;
-        }
         case "diff_proposed": {
           setPendingDiff(event.proposal);
           break;
@@ -2486,7 +2411,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (harnessError) throw harnessError;
     } catch (e) {
       if (queueGenerationRef.current !== generation) return;
-      const located = ensureAssistant();
+      const located = driver.ensureAssistant();
       const next = [...located.msgs];
       const i = located.index;
       const failedUser = next[userIndex];
@@ -2500,11 +2425,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     // still re-attaches to this conversation on remount (so the answer stays on
     // screen); starting a brand-new chat is the explicit "+" action.
     if (panelId) savePanelSession(panelId, currentId, false);
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    // Flush any pending delta that hasn't been rendered yet
-    if (pendingDelta.content || pendingDelta.thinking) {
-      appendPendingDelta(pendingDelta.content, pendingDelta.thinking);
-    }
+    // Cancel the batch timer + render any delta still pending.
+    driver.finish();
     setStreaming(false);
     setActivity(null);
     setPendingDiff(null);
