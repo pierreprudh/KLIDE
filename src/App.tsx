@@ -30,7 +30,8 @@ import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from
 import type { DelegateId } from "./delegates";
 import type { GitStatus } from "./gitTypes";
 import { ProfileModal } from "./components/ProfileModal";
-import { getNextThemeId, normalizeThemeId, type ThemeId } from "./theme";
+import { getNextThemeId } from "./theme";
+import { SETTINGS, useSetting } from "./settingsStore";
 import { loadSkills, saveSkills, loadFilesystemSkills, type Skill } from "./skills";
 import {
   loadCustomPresets,
@@ -64,62 +65,7 @@ const KeyboardShortcuts = lazy(() => import("./components/KeyboardShortcuts").th
 
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
 type ActivityPanel = Panel | "orchestrator" | "home";
-export type HarnessSettings = {
-  chatPrompt?: string;
-  planPrompt?: string;
-  goalPrompt?: string;
-  toolOverrides?: Record<string, boolean>;
-  /** Per-model context window (num_ctx) override for local models. Absent →
-   *  use the model's detected trained window. Keyed by model id. */
-  contextWindows?: Record<string, number>;
-  /** Per-model reply budget (num_predict) for local models. Absent → provider default. */
-  effortBudgets?: Record<string, number>;
-  /** Per-model thinking/reflection level for models that advertise thinking. */
-  reflectionLevels?: Record<string, string>;
-  /** Max read-only tool calls to run concurrently within a turn (1 = off). */
-  maxParallelTools?: number;
-  /** Advisor strategy: which provider/model answers a `consult_advisor` call.
-   *  The executor (the run's own model, typically small/local) escalates a hard
-   *  decision to this stronger model. Absent → the default advisor (Anthropic
-   *  Opus). See src/agent/advisor.ts. */
-  advisorProvider?: string;
-  advisorModel?: string;
-  /** Max tool turns per run before handing back to the user. Absent → harness
-   *  default (50). A runaway-loop guard; raise it for big multi-file / multi-
-   *  agent tasks. The conversation can always be continued past the cap. */
-  maxTurns?: number;
-  /** Seconds a run_command may run before it's killed. Absent → 180. Raise it
-   *  for slow builds; a hang guard, not a task limit. */
-  commandTimeoutSecs?: number;
-  /** Optional command to run after accepted edits/creates. Empty/absent means off. */
-  testAfterEditCommand?: string;
-  /** OLLAMA_NUM_PARALLEL for Klide-launched Ollama servers (concurrent
-   *  request slots). Absent → Ollama's own default. */
-  serverConcurrency?: number;
-  /** When a Klide agent run settles with status "done", automatically write
-   *  a project-memory note from the conversation. Default ON (undefined /
-   *  missing field is treated as true). Off silences the auto-save — the
-   *  manual Summarize header action still works. */
-  autoMemoryOnRunDone?: boolean;
-};
-const DEFAULT_AI_MODEL = "llama3.1:8b";
-
-function readNumberSetting(key: string, fallback: number, min: number, max: number): number {
-  const stored = localStorage.getItem(key);
-  if (stored === null) return fallback;
-  const raw = Number(stored);
-  return Number.isFinite(raw) ? clamp(raw, min, max) : fallback;
-}
-
-function readBoolSetting(key: string, fallback: boolean): boolean {
-  const stored = localStorage.getItem(key);
-  return stored === null ? fallback : stored === "true";
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
+export type { HarnessSettings } from "./settingsStore";
 function detectLanguage(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   return (
@@ -148,20 +94,12 @@ function App() {
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
-  // General settings — startup, files, and tab behaviour.
-  const [restoreLastProject, setRestoreLastProject] = useState(
-    () => localStorage.getItem("klide-restore-project") === "true"
-  );
-  const [autoSaveMode, setAutoSaveMode] = useState<"off" | "delay" | "blur">(() => {
-    const v = localStorage.getItem("klide-autosave");
-    return v === "delay" || v === "blur" ? v : "off";
-  });
-  const [showHiddenFiles, setShowHiddenFiles] = useState(
-    () => localStorage.getItem("klide-show-hidden") !== "false"
-  );
-  const [confirmCloseDirty, setConfirmCloseDirty] = useState(
-    () => localStorage.getItem("klide-confirm-close") !== "false"
-  );
+  // General settings — startup, files, and tab behaviour. Durable settings
+  // live in the settings store (src/settingsStore.ts); the Settings panel
+  // reads/writes the same store, so none of these need prop threading.
+  const [autoSaveMode] = useSetting(SETTINGS.autoSaveMode);
+  const [showHiddenFiles] = useSetting(SETTINGS.showHiddenFiles);
+  const [confirmCloseDirty] = useSetting(SETTINGS.confirmCloseDirty);
   // Third main screen next to Anchored and Free: a single centered AI
   // conversation (the Claude Code / Codex desktop pattern). The editor,
   // explorer, and terminal step back; the chat column is the workbench.
@@ -313,21 +251,10 @@ function App() {
   const [activeGridId, setActiveGridId] = useState<string | null>(
     () => localStorage.getItem("klide-active-grid") || null
   );
-  const [theme, setTheme] = useState<ThemeId>(() =>
-    normalizeThemeId(localStorage.getItem("klide-theme"))
-  );
-  const [autoTheme, setAutoTheme] = useState(() => {
-    // Default ON for first-run users so Klide matches their OS theme out of
-    // the box. Users can disable the toggle in Settings → Appearance.
-    const stored = localStorage.getItem("klide-auto-theme");
-    return stored === null ? true : stored === "true";
-  });
-  const [lightTheme, setLightTheme] = useState<ThemeId>(() =>
-    normalizeThemeId(localStorage.getItem("klide-light-theme") || "klide-light")
-  );
-  const [darkTheme, setDarkTheme] = useState<ThemeId>(() =>
-    normalizeThemeId(localStorage.getItem("klide-dark-theme") || "cursor-dark")
-  );
+  const [theme, setTheme] = useSetting(SETTINGS.theme);
+  const [autoTheme] = useSetting(SETTINGS.autoTheme);
+  const [lightTheme] = useSetting(SETTINGS.lightTheme);
+  const [darkTheme] = useSetting(SETTINGS.darkTheme);
   // Listen for system color-scheme changes and auto-switch if enabled.
   useEffect(() => {
     if (!autoTheme) return;
@@ -340,31 +267,16 @@ function App() {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [autoTheme, lightTheme, darkTheme]);
-  const [editorFontSize, setEditorFontSize] = useState(() =>
-    readNumberSetting("klide-editor-font-size", 13, 11, 20)
-  );
-  const [editorLineNumbers, setEditorLineNumbers] = useState(() =>
-    readBoolSetting("klide-editor-line-numbers", true)
-  );
-  const [editorWordWrap, setEditorWordWrap] = useState(() =>
-    readBoolSetting("klide-editor-word-wrap", false)
-  );
-  const [editorMinimap, setEditorMinimap] = useState(() =>
-    readBoolSetting("klide-editor-minimap", true)
-  );
-  const [aiModel, setAiModel] = useState(
-    () =>
-      localStorage.getItem("klide-ai-model") ||
-      localStorage.getItem("klide-ollama-model") ||
-      DEFAULT_AI_MODEL
-  );
+  const [editorFontSize] = useSetting(SETTINGS.editorFontSize);
+  const [editorLineNumbers, setEditorLineNumbers] = useSetting(SETTINGS.editorLineNumbers);
+  const [editorWordWrap, setEditorWordWrap] = useSetting(SETTINGS.editorWordWrap);
+  const [editorMinimap, setEditorMinimap] = useSetting(SETTINGS.editorMinimap);
+  const [aiModel, setAiModel] = useSetting(SETTINGS.aiModel);
   const [panelModels, setPanelModels] = useState<Record<string, string[]>>({});
   // Global default for "require diff review" (auto-accept off). Settings edits
   // this. Each AI panel keeps its own override below — toggling auto-accept in
   // one conversation must NOT leak into the others.
-  const [requireDiffReview, setRequireDiffReview] = useState(() =>
-    readBoolSetting("klide-confirm-agent-edits", true)
-  );
+  const [requireDiffReview] = useSetting(SETTINGS.requireDiffReview);
   // Per-panel overrides, keyed by panelId (same pattern as `panelModels`).
   // A panel with no entry falls back to the global default. In-memory only:
   // on reload every panel reverts to the safe global default.
@@ -373,18 +285,8 @@ function App() {
     id in panelReviewOverrides ? panelReviewOverrides[id] : requireDiffReview;
   const setPanelReview = (id: string, value: boolean) =>
     setPanelReviewOverrides((prev) => ({ ...prev, [id]: value }));
-  const [stopAfterRejection, setStopAfterRejection] = useState(() =>
-    readBoolSetting("klide.stopAfterRejection", false)
-  );
-  const [harnessSettings, setHarnessSettings] = useState<HarnessSettings>(() => {
-    try {
-      const raw = localStorage.getItem("klide.harnessSettings");
-      return raw ? JSON.parse(raw) : {};
-    } catch { return {}; }
-  });
-  useEffect(() => {
-    localStorage.setItem("klide.harnessSettings", JSON.stringify(harnessSettings));
-  }, [harnessSettings]);
+  const [stopAfterRejection] = useSetting(SETTINGS.stopAfterRejection);
+  const [harnessSettings, setHarnessSettings] = useSetting(SETTINGS.harnessSettings);
   // Free-mode floating panels fall back to a default rect when the persisted
   // layout never stored one. Anchored mode renders the explorer/terminal from
   // their visibility flag alone (width falls back to a constant), so a
@@ -1166,18 +1068,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("klide-theme", theme);
   }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-auto-theme", String(autoTheme));
-  }, [autoTheme]);
-  useEffect(() => {
-    localStorage.setItem("klide-light-theme", lightTheme);
-  }, [lightTheme]);
-  useEffect(() => {
-    localStorage.setItem("klide-dark-theme", darkTheme);
-  }, [darkTheme]);
 
   // Grids are edited in Settings; refresh App's copy when returning to the
   // workbench so the status-bar Layout picker shows the latest.
@@ -1220,22 +1111,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("klide-restore-project", String(restoreLastProject));
-  }, [restoreLastProject]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-autosave", autoSaveMode);
-  }, [autoSaveMode]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-show-hidden", String(showHiddenFiles));
-  }, [showHiddenFiles]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-confirm-close", String(confirmCloseDirty));
-  }, [confirmCloseDirty]);
-
-  useEffect(() => {
     localStorage.setItem("klide-focus-mode", String(focusMode));
   }, [focusMode]);
 
@@ -1261,34 +1136,6 @@ function App() {
     setSkills(next);
   }
   void updateSkills;
-
-  useEffect(() => {
-    localStorage.setItem("klide-editor-font-size", String(editorFontSize));
-  }, [editorFontSize]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-editor-line-numbers", String(editorLineNumbers));
-  }, [editorLineNumbers]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-editor-word-wrap", String(editorWordWrap));
-  }, [editorWordWrap]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-editor-minimap", String(editorMinimap));
-  }, [editorMinimap]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-ai-model", aiModel);
-  }, [aiModel]);
-
-  useEffect(() => {
-    localStorage.setItem("klide-confirm-agent-edits", String(requireDiffReview));
-  }, [requireDiffReview]);
-
-  useEffect(() => {
-    localStorage.setItem("klide.stopAfterRejection", String(stopAfterRejection));
-  }, [stopAfterRejection]);
 
   // Record every opened workspace as most-recent — covers folders opened from
   // the welcome screen, the sidebar, or restored sessions alike. Capped at 8.
@@ -1652,14 +1499,6 @@ function App() {
             <SettingsPanel
               key={settingsInitial ?? "default"}
               initialSection={settingsInitial}
-              theme={theme}
-              onThemeChange={setTheme}
-              autoTheme={autoTheme}
-              onAutoThemeChange={setAutoTheme}
-              lightTheme={lightTheme}
-              onLightThemeChange={setLightTheme}
-              darkTheme={darkTheme}
-              onDarkThemeChange={setDarkTheme}
               aiVisible={aiVisible}
               onAiVisibleChange={setAiVisible}
               terminalVisible={terminalVisible}
@@ -1677,33 +1516,9 @@ function App() {
                   updatePanelRect("terminal", { ...panelLayout.terminal, h });
                 }
               }}
-              editorFontSize={editorFontSize}
-              onEditorFontSizeChange={setEditorFontSize}
-              editorLineNumbers={editorLineNumbers}
-              onEditorLineNumbersChange={setEditorLineNumbers}
-              editorWordWrap={editorWordWrap}
-              onEditorWordWrapChange={setEditorWordWrap}
-              editorMinimap={editorMinimap}
-              onEditorMinimapChange={setEditorMinimap}
-              aiModel={aiModel}
-              onAiModelChange={setAiModel}
               availableAiModels={panelModels["ai-main"] ?? [aiModel]}
-              requireDiffReview={requireDiffReview}
-              onRequireDiffReviewChange={setRequireDiffReview}
-              stopAfterRejection={stopAfterRejection}
-              onStopAfterRejectionChange={setStopAfterRejection}
-              harnessSettings={harnessSettings}
-              onHarnessSettingsChange={setHarnessSettings}
               explorerVisible={explorerVisible}
               onExplorerVisibleChange={setExplorerVisible}
-              restoreLastProject={restoreLastProject}
-              onRestoreLastProjectChange={setRestoreLastProject}
-              autoSaveMode={autoSaveMode}
-              onAutoSaveModeChange={setAutoSaveMode}
-              showHiddenFiles={showHiddenFiles}
-              onShowHiddenFilesChange={setShowHiddenFiles}
-              confirmCloseDirty={confirmCloseDirty}
-              onConfirmCloseDirtyChange={setConfirmCloseDirty}
               customLayouts={customLayouts}
               onCustomLayoutsChange={updateCustomLayouts}
               onApplyLayout={applyLayout}
