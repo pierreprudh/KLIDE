@@ -76,6 +76,8 @@ pub fn append_event(
         | AgentEvent::UserQuestionResolved { ts, .. }
         | AgentEvent::SubagentRequested { ts, .. }
         | AgentEvent::SubagentResolved { ts, .. }
+        | AgentEvent::AdvisorRequested { ts, .. }
+        | AgentEvent::AdvisorResolved { ts, .. }
         | AgentEvent::ContextCompacted { ts, .. } => *ts,
     };
     let line = TranscriptLine {

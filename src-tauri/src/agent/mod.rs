@@ -908,6 +908,73 @@ where
     }))
 }
 
+/// Advisor consult tool (`consult_advisor`): a Pause tool that escalates one
+/// hard decision to a stronger advisor model. The loop emits `AdvisorRequested`
+/// and parks on the shared question oneshot; the frontend asks a bigger model
+/// (or a Claude Code session) the executor's question and resolves through
+/// `agent_resolve_question` with the advice, which becomes this tool's result.
+/// Distinct from `spawn_subagent`: the advisor gives *guidance*, not a nested
+/// agentic run — the executor stays in control and applies the advice itself.
+/// Cancelling during the wait bubbles up as `Cancelled`.
+async fn process_advisor_tool<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    emit: &mut E,
+) -> Result<ToolOutcome, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let question = call
+        .input
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // Fold optional `context` into the question so the advisor sees one
+    // self-contained prompt — the frontend forwards this verbatim.
+    let question = match call.input.get("context").and_then(|v| v.as_str()) {
+        Some(c) if !c.trim().is_empty() => format!("{question}\n\nContext:\n{}", c.trim()),
+        _ => question,
+    };
+    let request_id = format!("adv_{}_{}", ctx.id, call.id);
+
+    let advice = match pause_for_user(
+        ctx.sup,
+        ctx.id,
+        AgentRunStatus::WaitingForPermission,
+        AgentEvent::AdvisorRequested {
+            run_id: ctx.id.to_string(),
+            request_id: request_id.clone(),
+            question: question.clone(),
+            ts: now_ms(),
+        },
+        "(advisor produced no output)",
+        ctx.cancel,
+        emit,
+        |handle, tx| {
+            *handle.pending_question.lock().unwrap() = Some(tx);
+        },
+    )
+    .await?
+    {
+        PauseOutcome::Cancelled => return Ok(ToolOutcome::Cancelled),
+        PauseOutcome::Resolved(advice) => advice,
+    };
+
+    emit(AgentEvent::AdvisorResolved {
+        run_id: ctx.id.to_string(),
+        request_id,
+        advice: advice.clone(),
+        ts: now_ms(),
+    })?;
+
+    Ok(ToolOutcome::Produced(ToolResult {
+        ok: true,
+        content: format!("Advisor guidance:\n{advice}"),
+        metadata: Some(serde_json::json!({ "advisor": true })),
+    }))
+}
+
 /// Command tool (`run_command` and dynamic command-capability tools): run a
 /// shell command, but only after the user approves it through the permission
 /// gate. Approvals/rejections are remembered per-run (and project-scoped ones
@@ -1843,6 +1910,9 @@ async fn run_agent_loop(
             let outcome = match kind {
                 Some(ToolKind::Pause) if call.name == "spawn_subagent" => {
                     process_subagent_tool(&ctx, &call, &mut emit).await?
+                }
+                Some(ToolKind::Pause) if call.name == "consult_advisor" => {
+                    process_advisor_tool(&ctx, &call, &mut emit).await?
                 }
                 Some(ToolKind::Pause) => process_pause_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Command) => process_command_tool(&ctx, &call, &mut emit).await?,
@@ -3220,6 +3290,97 @@ mod run_supervisor_tests {
             with_run_handle(&sup, "run-1", |h| h.status),
             Some(AgentRunStatus::Running)
         );
+    }
+
+    /// Poll the run's stashed question sender and answer it — stands in for the
+    /// agent_resolve_question command (which the frontend calls after the
+    /// advisor consult / subagent finishes) in a headless drive of the pause.
+    async fn answer_question(sup: &FakeSupervisor, id: &str, reply: &str) {
+        loop {
+            let mut answered = false;
+            sup.with_handle(id, &mut |h| {
+                if let Some(tx) = h.pending_question.lock().unwrap().take() {
+                    let _ = tx.send(reply.to_string());
+                    answered = true;
+                }
+            });
+            if answered {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// The advisor strategy end-to-end through the real tool code: the executor
+    /// calls `consult_advisor`, the harness folds question+context into one
+    /// prompt, emits `AdvisorRequested`, parks on the shared question oneshot,
+    /// and (once the "frontend" resolves it) folds the advice back into the tool
+    /// result and emits `AdvisorResolved`.
+    #[tokio::test]
+    async fn consult_advisor_folds_context_pauses_and_returns_guidance() {
+        let sup = FakeSupervisor::with_run("adv-run");
+        let cancel = CancellationToken::new();
+        let request: StartRunRequest = serde_json::from_value(serde_json::json!({
+            "workspaceRoot": null, "mode": "goal", "provider": "mock", "model": "mock",
+            "initialText": "t", "context": null, "systemPrompt": null,
+        }))
+        .unwrap();
+        let tmp = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "adv-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: tmp.as_path(),
+        };
+        let call = NormalizedToolCall {
+            id: "c1".to_string(),
+            name: "consult_advisor".to_string(),
+            input: serde_json::json!({
+                "question": "Use a queue or a channel here?",
+                "context": "tried a Mutex, it deadlocked"
+            }),
+        };
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<AgentEvent>::new()));
+        let sink = events.clone();
+        let mut emit =
+            move |e: AgentEvent| -> Result<(), String> {
+                sink.lock().unwrap().push(e);
+                Ok(())
+            };
+
+        let (outcome, _) = tokio::join!(
+            process_advisor_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "adv-run", "Use a channel; it fits the ownership model."),
+        );
+
+        // Tool result wraps the advice as guidance for the executor.
+        match outcome.expect("advisor tool ok") {
+            ToolOutcome::Produced(r) => {
+                assert!(r.ok);
+                assert!(r.content.contains("Advisor guidance:"), "got: {}", r.content);
+                assert!(r.content.contains("Use a channel"), "got: {}", r.content);
+            }
+            _ => panic!("expected Produced outcome"),
+        }
+
+        let evs = events.lock().unwrap();
+        // AdvisorRequested carries the folded prompt (question + context section).
+        let question = evs
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::AdvisorRequested { question, .. } => Some(question.clone()),
+                _ => None,
+            })
+            .expect("AdvisorRequested emitted");
+        assert!(question.contains("Use a queue or a channel here?"));
+        assert!(question.contains("Context:"));
+        assert!(question.contains("deadlocked"));
+        // AdvisorResolved captures the advice for the transcript.
+        assert!(evs.iter().any(|e| matches!(
+            e,
+            AgentEvent::AdvisorResolved { advice, .. } if advice.contains("Use a channel")
+        )));
     }
 
     #[tokio::test]

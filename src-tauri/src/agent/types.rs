@@ -453,6 +453,25 @@ pub enum AgentEvent {
         result: String,
         ts: i64,
     },
+    /// The model called `consult_advisor` and is paused waiting for guidance
+    /// from a stronger advisor model. Unlike a subagent (a nested *agentic*
+    /// run with tools), the advisor is a one-shot consultation: the frontend
+    /// asks a bigger model (or a Claude Code session) the executor's question
+    /// and resolves through `agent_resolve_question` (shared oneshot) with the
+    /// advice, which becomes the tool result. A paired `AdvisorResolved` is
+    /// emitted so the transcript captures both halves.
+    AdvisorRequested {
+        run_id: String,
+        request_id: String,
+        question: String,
+        ts: i64,
+    },
+    AdvisorResolved {
+        run_id: String,
+        request_id: String,
+        advice: String,
+        ts: i64,
+    },
 }
 
 #[cfg(test)]

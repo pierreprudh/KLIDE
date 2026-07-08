@@ -23,6 +23,7 @@ import {
 } from "../contextTray";
 import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
+import { resolveAdvisor, buildAdvisorSystemPrompt } from "../agent/advisor";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
@@ -156,6 +157,8 @@ type AiHarnessSettings = {
   testAfterEditCommand?: string;
   serverConcurrency?: number;
   autoMemoryOnRunDone?: boolean;
+  advisorProvider?: string;
+  advisorModel?: string;
 };
 
 type ContextBreakdownRow = {
@@ -2212,6 +2215,40 @@ This user request requires workspace inspection. Before answering, you MUST call
       await resolveUserQuestion({ runId: event.runId, requestId: event.requestId, answer: report.trim() || "(subagent produced no output)" });
     };
 
+    // The executor (this run's model) called `consult_advisor` and is parked on
+    // the shared question oneshot. Put its question to a STRONGER advisor model
+    // as a one-shot chat run (no tools), nested by parentId, and resolve the
+    // parent with the advice — that text becomes the tool result. The executor
+    // then continues its own loop. This is the advisor strategy: small model
+    // drives, big model advises only at the fork it flagged.
+    const runAdvisorConsult = async (event: Extract<AgentEvent, { type: "advisor_requested" }>) => {
+      const advisor = resolveAdvisor(harnessSettings);
+      const systemPrompt = buildAdvisorSystemPrompt(workspaceRoot);
+      let advice = "";
+      try {
+        const session = await startAgentRun({
+          runId: event.requestId,
+          workspaceRoot, mode: "chat", provider: advisor.provider as ProviderId, model: advisor.model,
+          text: event.question, attachments: [],
+          context: { workspaceRoot, attachments: [], lensItems: [], estimatedTokens: 0, omitted: [] },
+          systemPrompt,
+          parentId: event.runId,
+          maxTurns: 1,
+        }, (ev) => {
+          if (ev.type === "assistant_message") {
+            const text = ev.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+            if (text.trim()) advice = text;
+          } else if (ev.type === "run_error") {
+            advice = `Advisor unavailable (${advisor.provider}/${advisor.model}): ${ev.error.message}`;
+          }
+        });
+        await session.done;
+      } catch (e) {
+        advice = `Advisor consult failed: ${(e as Error).message}`;
+      }
+      await resolveUserQuestion({ runId: event.runId, requestId: event.requestId, answer: advice.trim() || "(advisor produced no output)" });
+    };
+
     const handleEvent = (event: AgentEvent) => {
       if (queueGenerationRef.current !== generation) return;
 
@@ -2289,6 +2326,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           break;
         }
         case "subagent_resolved": {
+          break;
+        }
+        case "advisor_requested": {
+          void runAdvisorConsult(event);
+          break;
+        }
+        case "advisor_resolved": {
           break;
         }
         case "permission_requested": {

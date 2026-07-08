@@ -78,6 +78,12 @@ export type HarnessSettings = {
   reflectionLevels?: Record<string, string>;
   /** Max read-only tool calls to run concurrently within a turn (1 = off). */
   maxParallelTools?: number;
+  /** Advisor strategy: which provider/model answers a `consult_advisor` call.
+   *  The executor (the run's own model, typically small/local) escalates a hard
+   *  decision to this stronger model. Absent → the default advisor (Anthropic
+   *  Opus). See src/agent/advisor.ts. */
+  advisorProvider?: string;
+  advisorModel?: string;
   /** Max tool turns per run before handing back to the user. Absent → harness
    *  default (50). A runaway-loop guard; raise it for big multi-file / multi-
    *  agent tasks. The conversation can always be continued past the cap. */

@@ -294,6 +294,11 @@ pub(super) fn plan_tool_step(
     call: &NormalizedToolCall,
     kind: Option<ToolKind>,
 ) -> ToolStepPlan {
+    // consult_advisor is a side-effect-free Pause tool allowed in Plan and Goal
+    // (see tools::ADVISOR_TOOL) — bypass the generic Pause-is-Goal-only gate.
+    if call.name == super::tools::ADVISOR_TOOL && !matches!(mode, AgentMode::Chat) {
+        return ToolStepPlan::Execute { kind };
+    }
     if let Some(kind) = kind {
         if !tool_allowed_in_mode(mode, kind) {
             return ToolStepPlan::Blocked {

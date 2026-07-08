@@ -50,6 +50,11 @@ const MAX_SEARCH_RESULTS: usize = 200;
 const MAX_WALK_FILES: usize = 6_000;
 const MAX_WRITE_BYTES: u64 = 220_000;
 
+/// The advisor-consult tool name. A side-effect-free Pause tool available in
+/// both Plan and Goal (unlike other Pause tools, which are Goal-only). Named
+/// once here so the offer filter, the mode gate, and the loop dispatch agree.
+pub const ADVISOR_TOOL: &str = "consult_advisor";
+
 #[derive(Clone, Debug)]
 pub struct NormalizedToolCall {
     pub id: String,
@@ -470,6 +475,31 @@ fn registry() -> Vec<ToolEntry> {
             summary: |call| call.input.get("subagent").and_then(|v| v.as_str())
                 .map(|s| format!("delegate → @{s}")).unwrap_or_else(|| "spawn_subagent".to_string()),
         },
+        // `consult_advisor` is a Pause tool, like spawn_subagent: it does not
+        // execute in Rust. The loop dispatches it to `process_advisor_tool`,
+        // which emits AdvisorRequested and parks on the shared question oneshot.
+        // The frontend puts the question to a stronger advisor model (or a
+        // Claude Code session) and resolves with the advice as the tool result.
+        // This is the "advisor strategy": a cheap executor drives the task and
+        // escalates a hard decision to a bigger model only when it needs to.
+        ToolEntry {
+            kind: ToolKind::Pause,
+            schema: schema("consult_advisor", "Consult a stronger advisor model for guidance on a hard decision, WITHOUT handing off the whole task. Use SPARINGLY, at genuine forks: before committing to an approach you're unsure of, when the same error keeps recurring, or before declaring the task done. The advisor sees only what you write here, so make the question self-contained. It returns advice (a plan, a correction, or a stop signal) — you stay in control and apply it yourself.",
+                serde_json::json!({
+                    "question": { "type": "string", "description": "The specific decision or blocker to get advice on. Be concrete and self-contained." },
+                    "context": { "type": "string", "description": "Optional: what you've already tried or observed, relevant file paths, and the constraints — so the advisor can answer without re-deriving everything." }
+                }),
+                &["question"]),
+            run_read: None,
+            run_write_preview: None,
+            summary: |call| call.input.get("question").and_then(|v| v.as_str())
+                .map(|q| {
+                    let q = q.trim();
+                    let short: String = q.chars().take(60).collect();
+                    format!("consult advisor: {}{}", short, if q.chars().count() > 60 { "…" } else { "" })
+                })
+                .unwrap_or_else(|| "consult_advisor".to_string()),
+        },
     ]
 }
 
@@ -491,11 +521,16 @@ pub fn list_tools_for_workspace(
     let mut tools: Vec<serde_json::Value> = reg
         .iter()
         .filter(|e| {
-            let kind_ok = kind_filter.is_none_or(|k| e.kind == k);
+            let name = e.schema["function"]["name"].as_str().unwrap_or("");
+            let kind_ok = kind_filter.is_none_or(|k| e.kind == k)
+                // consult_advisor is a side-effect-free Pause tool — escalating
+                // a hard decision to a stronger model is as useful while
+                // planning as while executing. Offer it in Plan too, even
+                // though other Pause tools stay Goal-only.
+                || (matches!(mode, AgentMode::Plan) && name == ADVISOR_TOOL);
             if !kind_ok {
                 return false;
             }
-            let name = e.schema["function"]["name"].as_str().unwrap_or("");
             !disabled.iter().any(|d| d == name)
         })
         .map(|e| e.schema.clone())
@@ -2968,6 +3003,29 @@ mod tests {
                 .any(|schema| schema["function"]["name"] == "web_search"),
             "Plan mode must not advertise network tools"
         );
+        // consult_advisor is the one Pause tool available while planning; its
+        // Goal-only sibling spawn_subagent must stay hidden in Plan.
+        assert!(
+            plan.iter()
+                .any(|schema| schema["function"]["name"] == ADVISOR_TOOL),
+            "Plan mode must advertise consult_advisor"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|schema| schema["function"]["name"] == "spawn_subagent"),
+            "Plan mode must not advertise spawn_subagent"
+        );
+        // …and it's actually executable in Plan, not just advertised.
+        let advisor_call = NormalizedToolCall {
+            id: "c1".to_string(),
+            name: ADVISOR_TOOL.to_string(),
+            input: serde_json::json!({ "question": "A or B?" }),
+        };
+        assert!(matches!(
+            crate::agent::run_core::plan_tool_step(&AgentMode::Plan, &advisor_call, Some(ToolKind::Pause)),
+            crate::agent::run_core::ToolStepPlan::Execute { .. }
+        ));
     }
 
     #[test]
