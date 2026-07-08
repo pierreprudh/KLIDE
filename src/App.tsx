@@ -2255,6 +2255,7 @@ function App() {
         autoTheme={autoTheme}
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
         onResetLayout={resetPanelLayout}
+        showLayoutControls={view === "workbench"}
       />
       {skillsVisible && sidebarSlot2 !== "skills" && (
         <Suspense fallback={null}>

@@ -7,7 +7,7 @@
 // Top bar carries the branch selector, commit composer, and sync actions.
 // A bottom shelf shows stashes and history at a glance.
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ThemeId } from "../theme";
 import type { GitFile, GitStatus } from "../gitTypes";
@@ -19,6 +19,7 @@ import {
   GitHistoryGraph,
   type CommitDetails,
 } from "./GitHistoryGraph";
+import { renderMarkdown } from "./markdown";
 
 type GitCommit = {
   hash: string;
@@ -71,20 +72,39 @@ type PullRequest = {
   additions: number;
   deletions: number;
   changedFiles: number;
+  comments: number;
+  commentAuthors: string[];
   /** Unix millis. */
   updatedAtMs: number;
   badge: "open" | "merged" | "closed" | "draft";
   isCurrentBranch: boolean;
 };
 
-type PullRequestDetails = PullRequest & {
+type PrComment = {
+  author: string;
   body: string;
-  mergeable: string;
   /** Unix millis. */
   createdAtMs: number;
 };
 
-type PullRequestFilter = "open" | "draft" | "all";
+type PrCommit = {
+  shortHash: string;
+  headline: string;
+  author: string;
+  /** Unix millis. */
+  createdAtMs: number;
+};
+
+type PullRequestDetails = PullRequest & {
+  body: string;
+  mergeable: string;
+  commentThread: PrComment[];
+  commits: PrCommit[];
+  /** Unix millis. */
+  createdAtMs: number;
+};
+
+type PullRequestFilter = "open" | "draft" | "merged" | "all";
 
 type Props = {
   workspaceRoot: string | null;
@@ -98,7 +118,7 @@ type OpenFile = { path: string; staged: boolean };
 // Sub-pane widths live in the parent state so the user can resize and
 // we keep both halves animated with the workbench resize transition.
 const LEFT_DEFAULT = 280;
-const RIGHT_DEFAULT = 360;
+const RIGHT_DEFAULT = 460;
 const LEFT_MIN = 220;
 const RIGHT_MIN = 280;
 const MAX_PANE = 720;
@@ -486,30 +506,20 @@ function SectionHeader({ title, count, onAction, actionLabel, actionIcon }: {
   );
 }
 
+const PR_STATUS: Record<PullRequest["badge"], { color: string; label: string }> = {
+  open: { color: "var(--success)", label: "Open" },
+  merged: { color: "var(--accent)", label: "Merged" },
+  closed: { color: "var(--danger)", label: "Closed" },
+  draft: { color: "var(--fg-subtle)", label: "Draft" },
+};
+
+// Status reads as a quiet colored word, not a pill — chips/dots are off-brand
+// here. The colour carries the state; the type stays flat and hairline-clean.
 type PRBadgeProps = { badge: PullRequest["badge"] };
 function PRBadge({ badge }: PRBadgeProps) {
-  const map: Record<PullRequest["badge"], { color: string; label: string }> = {
-    open: { color: "var(--success)", label: "Open" },
-    merged: { color: "var(--accent)", label: "Merged" },
-    closed: { color: "var(--danger)", label: "Closed" },
-    draft: { color: "var(--fg-subtle)", label: "Draft" },
-  };
-  const m = map[badge];
+  const m = PR_STATUS[badge];
   return (
-    <span
-      style={{
-        height: 20,
-        padding: "0 7px",
-        borderRadius: 999,
-        display: "inline-flex",
-        alignItems: "center",
-        border: "1px solid color-mix(in srgb, currentColor 32%, transparent)",
-        background: "color-mix(in srgb, currentColor 10%, transparent)",
-        fontSize: 10.5,
-        fontWeight: 700,
-        color: m.color,
-      }}
-    >
+    <span style={{ color: m.color, fontSize: 11.5, fontWeight: 600, letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>
       {m.label}
     </span>
   );
@@ -529,6 +539,151 @@ function PRMetric({
     <span title={label} style={{ color, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "nowrap" }}>
       {value}
     </span>
+  );
+}
+
+// Small line-icons so counts read as glyphs, not sentences. currentColor keeps
+// them tinting with whatever text colour the row sets.
+function GlyphFile() {
+  return (
+    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+      <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2Z" />
+    </svg>
+  );
+}
+function GlyphCommitNode() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="3.5" />
+      <path d="M3 12h5.5" /><path d="M15.5 12H21" />
+    </svg>
+  );
+}
+function GlyphAlert() {
+  return (
+    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+      <path d="M12 9v4" /><path d="M12 17h.01" />
+    </svg>
+  );
+}
+
+// GitHub logins resolve straight to a profile picture — github.com/<login>.png,
+// no API/auth. Falls back to an initial disc if the image 404s.
+function GhAvatar({ login, size = 18 }: { login: string; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  const ring = { boxShadow: "0 0 0 1.5px var(--bg-elevated)" };
+  if (failed) {
+    return (
+      <span
+        title={login}
+        style={{
+          width: size, height: size, borderRadius: "50%", flexShrink: 0,
+          display: "grid", placeItems: "center",
+          background: "var(--bg-hover)", color: "var(--fg-subtle)",
+          fontSize: Math.max(8, size * 0.5), fontWeight: 600, ...ring,
+        }}
+      >
+        {(login[0] ?? "?").toUpperCase()}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={`https://github.com/${login}.png?size=64`}
+      alt={login}
+      title={login}
+      width={size}
+      height={size}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0, ...ring }}
+    />
+  );
+}
+
+// Overlapping avatar stack + "Commented" — who weighed in, at a glance.
+function CommenterStack({ authors }: { authors: string[] }) {
+  const shown = authors.slice(0, 3);
+  const title = authors.length > 3 ? `${authors.slice(0, 3).join(", ")} +${authors.length - 3} more` : authors.join(", ");
+  return (
+    <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ display: "inline-flex" }}>
+        {shown.map((login, i) => (
+          <span key={login} style={{ marginLeft: i === 0 ? 0 : -6, zIndex: shown.length - i, display: "inline-flex" }}>
+            <GhAvatar login={login} />
+          </span>
+        ))}
+      </span>
+      <span style={{ color: "var(--fg-subtle)", fontSize: 11.5 }}>Commented</span>
+    </span>
+  );
+}
+
+function GlyphMetric({ icon, value, title, highlight }: { icon: React.ReactNode; value: number; title: string; highlight?: boolean }) {
+  return (
+    <span
+      title={title}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        color: highlight ? "var(--fg-subtle)" : "var(--fg-dim)",
+        fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "nowrap",
+      }}
+    >
+      {icon}
+      {value}
+    </span>
+  );
+}
+
+// Bare "open on GitHub" glyph — no container, no hover fill; just the mark,
+// brightening on hover. The link out shouldn't compete with the Merge CTA.
+function PRGithubLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title="Open on GitHub"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
+      style={{
+        display: "inline-grid", placeItems: "center",
+        padding: 0, border: "none", background: "transparent",
+        color: "var(--fg-subtle)", cursor: "pointer",
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+    >
+      <svg width={15} height={15} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+      </svg>
+    </button>
+  );
+}
+
+// Bare "check out locally" glyph — a git-branch mark, same quiet icon treatment
+// as the GitHub link so it doesn't compete with Merge.
+function PRCheckoutLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title="Check out branch locally"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
+      style={{
+        display: "inline-grid", placeItems: "center",
+        padding: 0, border: "none", background: "transparent",
+        color: "var(--fg-subtle)", cursor: "pointer",
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+    >
+      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <line x1="6" y1="3" x2="6" y2="15" />
+        <circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
+        <path d="M18 9a9 9 0 0 1-9 9" />
+      </svg>
+    </button>
   );
 }
 
@@ -554,19 +709,29 @@ function PRActionButton({
       }}
       disabled={disabled}
       title={title}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        // Primary is a real button (fill deepens); ghost is bare text (colour only).
+        if (primary) e.currentTarget.style.background = "var(--accent-hover)";
+        else e.currentTarget.style.color = "var(--fg-strong)";
+      }}
+      onMouseLeave={(e) => {
+        if (primary) e.currentTarget.style.background = "var(--accent)";
+        else e.currentTarget.style.color = "var(--fg-subtle)";
+      }}
       style={{
-        height: 26,
-        padding: "0 9px",
+        height: 24,
+        padding: primary ? "0 10px" : "0 4px",
         borderRadius: "var(--radius-sm)",
-        border: `1px solid ${primary ? "color-mix(in srgb, var(--accent) 70%, var(--border))" : "var(--border)"}`,
-        background: primary ? "var(--accent)" : "var(--bg-elevated)",
-        color: primary ? "var(--control-primary-fg)" : "var(--fg)",
+        border: "1px solid transparent",
+        background: primary ? "var(--accent)" : "transparent",
+        color: primary ? "var(--control-primary-fg)" : "var(--fg-subtle)",
         cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.55 : 1,
-        fontSize: 11,
-        fontWeight: 650,
+        opacity: disabled ? 0.4 : 1,
+        fontSize: 11.5,
+        fontWeight: primary ? 600 : 550,
         whiteSpace: "nowrap",
-        boxShadow: primary ? "inset 0 1px 0 var(--inset-highlight), 0 1px 2px var(--inset-drop)" : "inset 0 1px 0 var(--panel-highlight)",
+        transition: "background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
       }}
     >
       {children}
@@ -574,29 +739,94 @@ function PRActionButton({
   );
 }
 
-function PRBranchLine({ pr }: { pr: Pick<PullRequest, "headRef" | "baseRef" | "author"> }) {
+function PRBranchLine({ pr }: { pr: Pick<PullRequest, "headRef" | "baseRef"> }) {
   return (
     <div style={{ minWidth: 0, color: "var(--fg-dim)", fontSize: 11, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-      {pr.headRef} <span style={{ color: "var(--fg-subtle)" }}>→</span> {pr.baseRef} · {pr.author}
+      {pr.headRef}<span style={{ color: "var(--fg-subtle)", margin: "0 6px" }}>→</span>{pr.baseRef}
     </div>
   );
 }
 
-function mergeabilityLabel(value: string): string {
-  if (value === "MERGEABLE") return "No conflicts";
-  if (value === "CONFLICTING") return "Conflicts";
-  if (value === "UNKNOWN") return "Checking";
-  return value.toLowerCase();
+// A big number over a quiet uppercase label — the fintech-card hierarchy: the
+// value leads, the caption whispers.
+function HeroStat({ value, label, tone }: { value: string | number; label: string; tone?: "good" | "bad" }) {
+  const color = tone === "good" ? "var(--success)" : tone === "bad" ? "var(--danger)" : "var(--fg-strong)";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+      <span style={{ fontSize: 21, fontWeight: 600, fontFamily: "var(--font-mono)", color, lineHeight: 1, letterSpacing: "-0.02em" }}>{value}</span>
+      <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--fg-dim)" }}>{label}</span>
+    </div>
+  );
 }
 
-function PRCard({ pr, selected, nowMs, onSelect, onOpen, onCheckout, onMerge }: {
+// Premium "opened" header — the reference fintech card translated to KIDE's
+// brand: an uppercase eyebrow, the title as the hero, then big diff stats with
+// whispered captions. Status stays type-only (no pills), spacing does the work.
+function PRHero({ pr, canCheckout, canMerge, onOpen, onCheckout, onMerge }: {
+  pr: PullRequest;
+  canCheckout: boolean;
+  canMerge: boolean;
+  onOpen: (n: number) => void;
+  onCheckout: (n: number) => void;
+  onMerge: (n: number) => void;
+}) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginBottom: 11, minWidth: 0 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--fg-dim)" }}>Pull request</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>#{pr.number}</span>
+        {pr.badge !== "open" && <PRBadge badge={pr.badge} />}
+        <span style={{ flex: 1 }} />
+        <PRGithubLink onClick={() => onOpen(pr.number)} />
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.3, color: "var(--fg-strong)", marginBottom: 7, letterSpacing: "-0.01em" }}>{pr.title}</div>
+      <PRBranchLine pr={pr} />
+      <div style={{ display: "flex", gap: 26, marginTop: 18, flexWrap: "wrap" }}>
+        <HeroStat value={`+${pr.additions}`} label="Added" tone="good" />
+        <HeroStat value={`−${pr.deletions}`} label="Removed" tone="bad" />
+        <HeroStat value={pr.changedFiles} label="Files" />
+        <HeroStat value={pr.comments} label="Comments" />
+      </div>
+      {(canCheckout || canMerge) && (
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 16 }}>
+          {canCheckout && <PRCheckoutLink onClick={() => onCheckout(pr.number)} />}
+          {canMerge && <PRActionButton title="Merge pull request" onClick={() => onMerge(pr.number)} primary>Merge</PRActionButton>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function PRCard({ pr, selected, detail, detailLoading, nowMs, onSelect, onOpen, onCheckout, onMerge }: {
   pr: PullRequest; selected: boolean;
+  detail: PullRequestDetails | null;
+  detailLoading: boolean;
   nowMs: number;
   onSelect: (n: number) => void;
   onOpen: (n: number) => void;
   onCheckout: (n: number) => void;
   onMerge: (n: number) => void;
 }) {
+  const [hovered, setHovered] = useState(false);
+  const canCheckout = !pr.isCurrentBranch && pr.badge === "open";
+  const canMerge = pr.badge === "open";
+  const lift = hovered && !selected;
+  const current = pr.isCurrentBranch;
+  // Highlight, not colour: selected reads as a brighter, lifted surface (solid
+  // elevated + inset sheen + ring), current branch as a glossy sheen, and the
+  // rest as plain translucent cards. No accent wash anywhere.
+  const border = selected || current || lift ? "var(--border-strong)" : "var(--border)";
+  const background = selected
+    ? "var(--bg-elevated)"
+    : current
+      ? "linear-gradient(180deg, color-mix(in srgb, var(--fg-strong) 7%, var(--bg-elevated)), var(--bg-elevated) 62%)"
+      : "color-mix(in srgb, var(--bg-elevated) 82%, transparent)";
+  const boxShadow = selected
+    ? "0 0 0 1px var(--border-strong), var(--shadow-raised), inset 0 1px 0 var(--panel-highlight)"
+    : current
+      ? "var(--shadow-raised), inset 0 1px 0 var(--panel-highlight)"
+      : lift ? "var(--shadow-raised)" : "none";
   return (
     <div
       role="button"
@@ -608,167 +838,289 @@ function PRCard({ pr, selected, nowMs, onSelect, onOpen, onCheckout, onMerge }: 
           onSelect(pr.number);
         }
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
-        padding: "11px 12px",
-        borderRadius: "var(--radius-sm)",
-        border: `1px solid ${selected ? "color-mix(in srgb, var(--accent) 46%, var(--border))" : "transparent"}`,
-        background: selected ? "color-mix(in srgb, var(--accent-soft) 72%, transparent)" : "transparent",
+        padding: selected ? 16 : "11px 12px",
+        borderRadius: selected ? "var(--radius-lg)" : "var(--radius-md)",
+        border: `1px solid ${border}`,
+        // Translucent elevated surface — layered depth without literal frost
+        // (backdrop-filter breaks high-z panels in the webview).
+        background,
+        boxShadow,
+        transform: lift ? "translateY(-1px)" : "translateY(0)",
         cursor: "pointer",
         outline: "none",
-        transition: "background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
+        transition: "border-color 160ms var(--ease-out), background 160ms var(--ease-out), box-shadow 160ms var(--ease-out), transform 160ms var(--ease-out), padding 160ms var(--ease-out)",
       }}
-      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "var(--bg-hover)"; }}
-      onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = "transparent"; }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7, minWidth: 0 }}>
-        <span style={{ color: "var(--fg-dim)", fontSize: 11.5, fontFamily: "var(--font-mono)" }}>#{pr.number}</span>
-        <PRBadge badge={pr.badge} />
-        {pr.isCurrentBranch && (
-          <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--accent)" }}>
-            Current
-          </span>
-        )}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{relativeTime(pr.updatedAtMs, nowMs)}</span>
-      </div>
-      <div style={{ color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.35, fontWeight: 500, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-        {pr.title}
-      </div>
-      <PRBranchLine pr={pr} />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 9, minWidth: 0 }}>
-        <PRMetric value={`+${pr.additions}`} tone="good" label="Additions" />
-        <PRMetric value={`−${pr.deletions}`} tone="bad" label="Deletions" />
-        <PRMetric value={`${pr.changedFiles} files`} label="Changed files" />
-        <span style={{ flex: 1 }} />
-        <PRActionButton title="Open pull request in browser" onClick={() => onOpen(pr.number)}>Open</PRActionButton>
-        {!pr.isCurrentBranch && pr.badge === "open" && (
-          <PRActionButton title="Checkout pull request locally" onClick={() => onCheckout(pr.number)}>Checkout</PRActionButton>
-        )}
-        {pr.badge === "open" && (
-          <PRActionButton title="Merge pull request" onClick={() => onMerge(pr.number)} primary>Merge</PRActionButton>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function PRDetail({ pr, onClose, onOpen, onCheckout, onMerge }: {
-  pr: PullRequestDetails; onClose: () => void;
-  onOpen: (n: number) => void;
-  onCheckout: (n: number) => void;
-  onMerge: (n: number) => void;
-}) {
-  return (
-    <div style={{ borderTop: "1px solid var(--border)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 9, maxHeight: "42%", minHeight: 168, flexShrink: 0, overflow: "auto", background: "color-mix(in srgb, var(--bg-elevated) 62%, transparent)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ color: "var(--fg-dim)", fontSize: 12, fontFamily: "var(--font-mono)" }}>#{pr.number}</span>
-        <PRBadge badge={pr.badge} />
-        <span style={{ flex: 1 }} />
-        <button onClick={onClose} style={iconButtonStyle} title="Close detail">×</button>
-      </div>
-      <div style={{ color: "var(--fg-strong)", fontSize: 14, fontWeight: 600, lineHeight: 1.3 }}>{pr.title}</div>
-      <PRBranchLine pr={pr} />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-        <PRMetric value={`+${pr.additions}`} tone="good" label="Additions" />
-        <PRMetric value={`−${pr.deletions}`} tone="bad" label="Deletions" />
-        <PRMetric value={`${pr.changedFiles} files`} label="Changed files" />
-        <span style={{ color: "var(--fg-dim)" }}>·</span>
-        <span style={{ color: pr.mergeable === "CONFLICTING" ? "var(--danger)" : "var(--fg-dim)" }}>{mergeabilityLabel(pr.mergeable)}</span>
-      </div>
-      <div style={{ display: "flex", gap: 6 }}>
-        <PRActionButton title="Open pull request in browser" onClick={() => onOpen(pr.number)}>Open</PRActionButton>
-        {!pr.isCurrentBranch && pr.badge === "open" && (
-          <PRActionButton title="Checkout pull request locally" onClick={() => onCheckout(pr.number)}>Checkout</PRActionButton>
-        )}
-        {pr.badge === "open" && (
-          <PRActionButton title="Merge pull request" onClick={() => onMerge(pr.number)} primary>Merge</PRActionButton>
-        )}
-      </div>
-      {pr.body && (
-        <pre style={{
-          font: "inherit", fontSize: 12, lineHeight: 1.55, color: "var(--fg-subtle)",
-          whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0, padding: "8px 0 0",
-        }}>{pr.body}</pre>
+      {selected ? (
+        // Opened: the premium fintech-style hero, then the conversation timeline.
+        <>
+          <PRHero pr={pr} canCheckout={canCheckout} canMerge={canMerge} onOpen={onOpen} onCheckout={onCheckout} onMerge={onMerge} />
+          <PRExpandedDetail detail={detail} loading={detailLoading} nowMs={nowMs} />
+        </>
+      ) : (
+        // Resting: the compact list row.
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, minWidth: 0 }}>
+            <span style={{ color: "var(--fg-dim)", fontSize: 11.5, fontFamily: "var(--font-mono)" }}>#{pr.number}</span>
+            {pr.badge !== "open" && <PRBadge badge={pr.badge} />}
+            <span style={{ flex: 1 }} />
+            <span style={{ fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{relativeTime(pr.updatedAtMs, nowMs)}</span>
+          </div>
+          <div style={{ color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.4, fontWeight: 500, marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+            {pr.title}
+          </div>
+          <PRBranchLine pr={pr} />
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10, minWidth: 0, minHeight: 24 }}>
+            <PRMetric value={`+${pr.additions}`} tone="good" label="Additions" />
+            <PRMetric value={`−${pr.deletions}`} tone="bad" label="Deletions" />
+            <GlyphMetric icon={<GlyphFile />} value={pr.changedFiles} title="Changed files" />
+            <span style={{ flex: 1 }} />
+            <PRGithubLink onClick={() => onOpen(pr.number)} />
+            {hovered && canCheckout && (
+              <PRCheckoutLink onClick={() => onCheckout(pr.number)} />
+            )}
+            {canMerge && (
+              <PRActionButton title="Merge pull request" onClick={() => onMerge(pr.number)} primary>Merge</PRActionButton>
+            )}
+          </div>
+          {pr.commentAuthors.length > 0 && (
+            <div style={{ marginTop: 9 }}>
+              <CommenterStack authors={pr.commentAuthors} />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
+// One row of the conversation timeline: a node (avatar / commit glyph) at the
+// top of a fixed gutter, with a connector that drops from *below* the node to
+// the next row — so the rail visibly stops around each node instead of running
+// through it. `last` omits the trailing connector.
+const TL_NODE_TOP = 3;
+const TL_NODE = 20;
+const TL_GAP = 6;
+const TL_ROW_GAP = 14;
+function TimelineRow({ node, children, last }: { node: React.ReactNode; children: React.ReactNode; last?: boolean }) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <div style={{ width: 22, flexShrink: 0, position: "relative", alignSelf: "stretch" }}>
+        {!last && (
+          <span
+            aria-hidden
+            style={{
+              position: "absolute", left: 10, width: 1, background: "var(--border)",
+              // Start below this node and stop above the next one, so there's a
+              // gap around BOTH ends of the connector, not just the bottom.
+              top: TL_NODE_TOP + TL_NODE + TL_GAP,
+              bottom: -(TL_ROW_GAP + TL_NODE_TOP - TL_GAP),
+            }}
+          />
+        )}
+        <div style={{ position: "absolute", top: TL_NODE_TOP, left: "50%", transform: "translateX(-50%)" }}>{node}</div>
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>{children}</div>
+    </div>
+  );
+}
+
+// A small commit node — sits on the rail like GitHub's commit dots.
+function CommitNode() {
+  return (
+    <span
+      style={{
+        width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
+        display: "grid", placeItems: "center",
+        background: "var(--bg-elevated)", border: "1px solid var(--border)",
+        color: "var(--fg-subtle)",
+      }}
+    >
+      <GlyphCommitNode />
+    </span>
+  );
+}
+
+// A comment/description as a flat hairline "note card" — the header bar carries
+// who + when, the body holds markdown. Cards make the human replies stand out
+// from the thin commit rows without any heavy chrome.
+function TimelineCard({ author, action, at, nowMs, children }: {
+  author: string; action: string; at: number; nowMs: number; children: React.ReactNode;
+}) {
+  return (
+    <div style={{ minWidth: 0, border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "color-mix(in srgb, var(--bg-elevated) 55%, transparent)", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "7px 11px", borderBottom: "1px solid var(--border)", background: "color-mix(in srgb, var(--bg-hover) 45%, transparent)" }}>
+        <span style={{ fontSize: 12, fontWeight: 650, color: "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{author}</span>
+        <span style={{ fontSize: 11.5, color: "var(--fg-subtle)" }}>{action}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>{relativeTime(at, nowMs)}</span>
+      </div>
+      {/* minWidth:0 lets code blocks scroll internally; wrapping catches long
+          tokens/URLs so the card never widens past the pane and spills off-screen. */}
+      <div style={{ minWidth: 0, padding: "9px 11px", fontSize: 12.5, lineHeight: 1.6, color: "var(--fg)", overflowWrap: "anywhere", wordBreak: "break-word" }}>{children}</div>
+    </div>
+  );
+}
+
+// GitHub-style conversation: the opening description, then commits + comments
+// interleaved in time, threaded on a single rail.
+function PRTimeline({ detail, nowMs }: { detail: PullRequestDetails; nowMs: number }) {
+  const events = useMemo(() => {
+    const rest = [
+      ...detail.commits.map((c) => ({ kind: "commit" as const, at: c.createdAtMs, commit: c })),
+      ...detail.commentThread.map((c) => ({ kind: "comment" as const, at: c.createdAtMs, comment: c })),
+    ];
+    rest.sort((a, b) => a.at - b.at);
+    return rest;
+  }, [detail]);
+  const body = detail.body?.trim();
+  return (
+    <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: TL_ROW_GAP }}>
+      {/* Opening = the PR description. */}
+      <TimelineRow node={<GhAvatar login={detail.author} size={20} />} last={events.length === 0}>
+        <TimelineCard author={detail.author} action="opened" at={detail.createdAtMs} nowMs={nowMs}>
+          {body ? renderMarkdown(body) : <span style={{ color: "var(--fg-subtle)", fontStyle: "italic" }}>No description</span>}
+        </TimelineCard>
+      </TimelineRow>
+      {events.map((e, i) =>
+        e.kind === "commit" ? (
+          <TimelineRow key={`c${i}`} node={<CommitNode />} last={i === events.length - 1}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, minHeight: 20 }}>
+              <span title={e.commit.headline} style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {e.commit.headline}
+              </span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)", flexShrink: 0 }}>{e.commit.shortHash}</span>
+            </div>
+          </TimelineRow>
+        ) : (
+          <TimelineRow key={`m${i}`} node={<GhAvatar login={e.comment.author} size={20} />} last={i === events.length - 1}>
+            <TimelineCard author={e.comment.author} action="commented" at={e.comment.createdAtMs} nowMs={nowMs}>
+              {renderMarkdown(e.comment.body)}
+            </TimelineCard>
+          </TimelineRow>
+        )
+      )}
+    </div>
+  );
+}
+
+// Inline body — the PR conversation timeline, rendered as markdown.
+// Mounts inside the expanded card; fades/slides in so opening feels smooth.
+// Collapsed height for a freshly opened PR — a few lines, then "Show more".
+const PR_DETAIL_PEEK = 104;
+// Expanded cap — past this the body scrolls in place instead of stretching
+// the card down the whole list.
+const PR_DETAIL_MAX = 360;
+
+function PRExpandedDetail({ detail, loading, nowMs }: {
+  detail: PullRequestDetails | null;
+  loading: boolean;
+  nowMs: number;
+}) {
+  const [shown, setShown] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  const toggleExpanded = () => {
+    setExpanded((v) => {
+      // Collapsing: snap back to the top so it reopens at the start of the text.
+      if (v && scrollRef.current) scrollRef.current.scrollTop = 0;
+      return !v;
+    });
+  };
+  // Measure once the detail lands: is there more than the peek height?
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    setOverflowing(el.scrollHeight > PR_DETAIL_PEEK + 12);
+  }, [detail]);
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)",
+        opacity: shown ? 1 : 0,
+        transform: shown ? "translateY(0)" : "translateY(4px)",
+        transition: "opacity 200ms var(--ease-out), transform 200ms var(--ease-out)",
+      }}
+    >
+      {loading && !detail && (
+        <div style={{ color: "var(--fg-subtle)", fontSize: 11.5 }}>Loading…</div>
+      )}
+      {detail && (
+        <>
+          <div
+            ref={scrollRef}
+            style={{
+              position: "relative",
+              maxHeight: expanded ? PR_DETAIL_MAX : (overflowing ? PR_DETAIL_PEEK : undefined),
+              overflowY: expanded ? "auto" : "hidden",
+              // Never let wide content (code, long tokens) bleed off the pane —
+              // it wraps or scrolls inside its own block instead.
+              overflowX: "hidden",
+              transition: "max-height 220ms var(--ease-out)",
+              // Fade the last peeked line so the truncation reads as intentional.
+              maskImage: !expanded && overflowing ? "linear-gradient(to bottom, #000 62%, transparent)" : undefined,
+              WebkitMaskImage: !expanded && overflowing ? "linear-gradient(to bottom, #000 62%, transparent)" : undefined,
+            }}
+          >
+            <div ref={contentRef} style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+              {detail.badge === "open" && detail.mergeable === "CONFLICTING" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-subtle)", fontSize: 11.5, fontWeight: 550 }}>
+                  <GlyphAlert /> Merge conflicts
+                </div>
+              )}
+              <PRTimeline detail={detail} nowMs={nowMs} />
+            </div>
+          </div>
+          {overflowing && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); toggleExpanded(); }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                style={{
+                  padding: 0, border: "none", background: "transparent",
+                  color: "var(--fg-subtle)", cursor: "pointer", fontSize: 11.5, fontWeight: 600,
+                  transition: "color var(--motion-fast) var(--ease-out)",
+                }}
+              >
+                {expanded ? "Show less" : "Show more"}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Just the section header now — the current-branch PR lives in the list like
+// any other, marked inline. No pinned, colour-washed "main" card on top.
 function GitHubSummaryCard({
-  currentPr,
-  currentBranch,
   counts,
   canCreate,
-  nowMs,
   onCreate,
-  onSelect,
-  onOpen,
-  onCheckout,
-  onMerge,
 }: {
-  currentPr: PullRequest | null;
-  currentBranch: string;
   counts: { open: number; draft: number; all: number };
   canCreate: boolean;
-  nowMs: number;
   onCreate: () => void;
-  onSelect: (n: number) => void;
-  onOpen: (n: number) => void;
-  onCheckout: (n: number) => void;
-  onMerge: (n: number) => void;
 }) {
+  const summary = counts.draft > 0 ? `${counts.open} open, ${counts.draft} draft` : `${counts.open} open`;
   return (
-    <div style={{ margin: "8px 8px 6px", padding: 12, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)", boxShadow: "inset 0 1px 0 var(--panel-highlight)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-        <div style={{ color: "var(--fg-strong)", fontSize: 12, fontWeight: 700 }}>GitHub</div>
-        <span style={{ color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{counts.open} open</span>
-        {counts.draft > 0 && <span style={{ color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{counts.draft} draft</span>}
-        <span style={{ flex: 1 }} />
-        <PRActionButton title={canCreate ? "Create pull request" : "Stage changes before creating a pull request"} onClick={onCreate} disabled={!canCreate}>New PR</PRActionButton>
-      </div>
-
-      {currentPr ? (
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(currentPr.number)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onSelect(currentPr.number);
-            }
-          }}
-          style={{ display: "grid", gap: 7, cursor: "pointer", outline: "none" }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <span style={{ color: "var(--accent)", fontSize: 11, fontWeight: 700 }}>Current branch</span>
-            <span style={{ color: "var(--fg-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>#{currentPr.number}</span>
-            <PRBadge badge={currentPr.badge} />
-            <span style={{ marginLeft: "auto", color: "var(--fg-dim)", fontSize: 11 }}>{relativeTime(currentPr.updatedAtMs, nowMs)}</span>
-          </div>
-          <div style={{ color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.35, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{currentPr.title}</div>
-          <PRBranchLine pr={currentPr} />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
-            <PRMetric value={`+${currentPr.additions}`} tone="good" label="Additions" />
-            <PRMetric value={`−${currentPr.deletions}`} tone="bad" label="Deletions" />
-            <PRMetric value={`${currentPr.changedFiles} files`} label="Changed files" />
-            <span style={{ flex: 1 }} />
-            <PRActionButton title="Open pull request in browser" onClick={() => onOpen(currentPr.number)}>Open</PRActionButton>
-            {!currentPr.isCurrentBranch && currentPr.badge === "open" && (
-              <PRActionButton title="Checkout pull request locally" onClick={() => onCheckout(currentPr.number)}>Checkout</PRActionButton>
-            )}
-            {currentPr.badge === "open" && (
-              <PRActionButton title="Merge pull request" onClick={() => onMerge(currentPr.number)} primary>Merge</PRActionButton>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ color: "var(--fg-subtle)", fontSize: 11, fontWeight: 700 }}>Current branch</div>
-          <div title={currentBranch} style={{ color: "var(--fg-dim)", fontSize: 12, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {currentBranch || "No branch"} has no linked PR
-          </div>
-        </div>
-      )}
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "12px 12px 8px" }}>
+      <span style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 650, letterSpacing: "-0.01em" }}>Pull requests</span>
+      <span style={{ color: "var(--fg-dim)", fontSize: 11.5 }}>{summary}</span>
+      <span style={{ flex: 1 }} />
+      <PRActionButton title={canCreate ? "Create pull request" : "Stage changes before creating a pull request"} onClick={onCreate} disabled={!canCreate}>New PR</PRActionButton>
     </div>
   );
 }
@@ -779,16 +1131,27 @@ function PRFilterTabs({
   onChange,
 }: {
   value: PullRequestFilter;
-  counts: { open: number; draft: number; all: number };
+  counts: { open: number; draft: number; merged: number; all: number };
   onChange: (value: PullRequestFilter) => void;
 }) {
   const options: { id: PullRequestFilter; label: string; count: number }[] = [
     { id: "open", label: "Open", count: counts.open },
     { id: "draft", label: "Draft", count: counts.draft },
+    { id: "merged", label: "Merged", count: counts.merged },
     { id: "all", label: "All", count: counts.all },
   ];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4, padding: "0 8px 6px" }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        gap: 2,
+        margin: "0 12px 8px",
+        padding: 3,
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-hover)",
+      }}
+    >
       {options.map((option) => {
         const active = value === option.id;
         return (
@@ -796,18 +1159,27 @@ function PRFilterTabs({
             key={option.id}
             type="button"
             onClick={() => onChange(option.id)}
+            onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = "var(--fg-strong)"; }}
+            onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = "var(--fg-subtle)"; }}
             style={{
-              height: 28,
+              height: 26,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
               borderRadius: "var(--radius-sm)",
-              border: `1px solid ${active ? "color-mix(in srgb, var(--accent) 52%, var(--border))" : "var(--border)"}`,
-              background: active ? "var(--accent-soft)" : "transparent",
-              color: active ? "var(--accent)" : "var(--fg-subtle)",
+              border: "none",
+              background: active ? "var(--bg-elevated)" : "transparent",
+              color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
+              boxShadow: active ? "var(--shadow-raised)" : "none",
               cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 700,
+              fontSize: 11.5,
+              fontWeight: active ? 650 : 550,
+              transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
             }}
           >
-            {option.label} <span style={{ color: active ? "var(--accent)" : "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>{option.count}</span>
+            {option.label}
+            <span style={{ color: active ? "var(--fg-dim)" : "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 10.5 }}>{option.count}</span>
           </button>
         );
       })}
@@ -915,6 +1287,9 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
   const [prError, setPrError] = useState<string | null>(null);
   const [stashes, setStashes] = useState<GitStash[] | null>(null);
   const [selectedPr, setSelectedPr] = useState<PullRequestDetails | null>(null);
+  // Which card is expanded. Tracked separately from the fetched detail so the
+  // card highlights + expands instantly on click while `git pr view` loads.
+  const [expandedPr, setExpandedPr] = useState<number | null>(null);
   const [prDetailLoading, setPrDetailLoading] = useState(false);
   const [open, setOpen] = useState<OpenFile | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -1069,23 +1444,20 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
     return changedFiles.length + stagedFiles.length;
   }, [changedFiles.length, stagedFiles.length]);
   const prList = prs ?? [];
-  const currentBranchPr = useMemo(
-    () => prList.find((pr) => pr.isCurrentBranch) ?? null,
-    [prList]
-  );
   const prCounts = useMemo(() => ({
     open: prList.filter((pr) => pr.badge === "open").length,
     draft: prList.filter((pr) => pr.badge === "draft").length,
+    merged: prList.filter((pr) => pr.badge === "merged").length,
     all: prList.length,
   }), [prList]);
   const visiblePrs = useMemo(() => {
-    const filtered = prList.filter((pr) => {
+    return prList.filter((pr) => {
       if (prFilter === "open") return pr.badge === "open";
       if (prFilter === "draft") return pr.badge === "draft";
+      if (prFilter === "merged") return pr.badge === "merged";
       return true;
     });
-    return filtered.filter((pr) => pr.number !== currentBranchPr?.number);
-  }, [currentBranchPr?.number, prFilter, prList]);
+  }, [prFilter, prList]);
 
   async function withAction<T>(label: string, fn: () => Promise<T>) {
     setActionLoading(label);
@@ -1206,13 +1578,21 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
 
   async function selectPr(n: number) {
     if (!workspaceRoot) return;
+    // Toggle: clicking the open card closes it.
+    if (expandedPr === n) {
+      setExpandedPr(null);
+      setSelectedPr(null);
+      return;
+    }
+    setExpandedPr(n);
+    setSelectedPr(null);
     setPrDetailLoading(true);
     try {
       const detail = await invoke<PullRequestDetails>("git_pr_view", { workspaceRoot, number: n });
       setSelectedPr(detail);
     } catch (e) {
       setActionMessage({ kind: "err", text: e instanceof Error ? e.message : String(e) });
-      setSelectedPr(null);
+      setExpandedPr(null);
     } finally {
       setPrDetailLoading(false);
     }
@@ -1231,7 +1611,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
       await refreshLog();
       await refreshStatus();
       await refreshPrs();
-      if (selectedPr?.number === n) setSelectedPr(null);
+      if (expandedPr === n) { setExpandedPr(null); setSelectedPr(null); }
     } catch { /* message already shown */ }
   }
   async function mergePr(n: number) {
@@ -1242,7 +1622,7 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
       await refreshPrs();
       await refreshLog();
       await refreshStatus();
-      if (selectedPr?.number === n) setSelectedPr(null);
+      if (expandedPr === n) { setExpandedPr(null); setSelectedPr(null); }
     } catch { /* message already shown */ }
   }
   // Inline composer instead of window.prompt() — Tauri's macOS webview returns
@@ -1308,8 +1688,27 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
     <div
       ref={rootRef}
       className="shell-enter"
-      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "var(--bg)" }}
+      style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "var(--bg)" }}
     >
+      {/* Action feedback — a notification tucked into the bottom-right corner,
+          clear of the panes so it doesn't cover file/PR content. */}
+      {actionMessage && (
+        <div
+          key={actionMessage.text}
+          className="floating-panel toast-enter"
+          style={{
+            position: "absolute", bottom: 16, right: 16, zIndex: 50, maxWidth: 340,
+            padding: "9px 13px", fontSize: 12, fontWeight: 500, borderRadius: 10,
+            display: "flex", alignItems: "center", gap: 8,
+            color: actionMessage.kind === "ok" ? "var(--fg-strong)" : "var(--danger)",
+          }}
+        >
+          <span aria-hidden style={{ color: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)", fontWeight: 600, flexShrink: 0 }}>
+            {actionMessage.kind === "ok" ? "✓" : "×"}
+          </span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{actionMessage.text}</span>
+        </div>
+      )}
       {/* Top bar */}
       <div className="glass-chrome" style={{
         height: 56, padding: "0 16px", display: "flex", alignItems: "center", gap: 12,
@@ -1430,31 +1829,6 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         {/* Left: files */}
         <div style={{ width: leftWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--border)", position: "relative" }}>
-          {/* Action feedback — floats over the files column only; these are
-              file/sync actions, so the message belongs where they happen. */}
-          {actionMessage && (
-            <div
-              key={actionMessage.text}
-              className="floating-panel toast-enter"
-              style={{
-                position: "absolute", top: 8, left: 10, right: 10, zIndex: 3,
-                padding: "8px 12px", fontSize: 12, fontWeight: 500, borderRadius: 10,
-                display: "flex", alignItems: "center", gap: 8,
-                color: actionMessage.kind === "ok" ? "var(--fg-strong)" : "var(--danger)",
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  color: actionMessage.kind === "ok" ? "var(--success)" : "var(--danger)",
-                  fontWeight: 600, flexShrink: 0,
-                }}
-              >
-                {actionMessage.kind === "ok" ? "✓" : "×"}
-              </span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{actionMessage.text}</span>
-            </div>
-          )}
           <SectionHeader
             title="Staged"
             count={stagedFiles.length}
@@ -1568,21 +1942,11 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
             </button>
           </div>
           <GitHubSummaryCard
-            currentPr={currentBranchPr}
-            currentBranch={log?.branch ?? reviewStatus?.branch ?? ""}
             counts={prCounts}
             canCreate={stagedFiles.length > 0}
-            nowMs={nowMs}
             onCreate={createPr}
-            onSelect={selectPr}
-            onOpen={openPrInBrowser}
-            onCheckout={checkoutPr}
-            onMerge={mergePr}
           />
           <PRFilterTabs value={prFilter} counts={prCounts} onChange={setPrFilter} />
-          {prDetailLoading && (
-            <div style={{ padding: "6px 14px", color: "var(--fg-subtle)", fontSize: 11 }}>Loading PR…</div>
-          )}
           {prError && (
             <GitHubPanelState
               tone="danger"
@@ -1598,9 +1962,11 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
               icon={<img src="./github-invertocat.svg" alt="" width={34} height={34} />}
             />
           )}
-          <div style={{ flex: 1, overflow: "auto", minHeight: 0, padding: 4 }}>
-            {prsLoading && !prError && (
-              <GitHubPanelState title="Loading GitHub" detail="Refreshing pull requests." />
+          <div style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Only the first load takes over the panel; background refreshes
+                keep the existing cards on screen so nothing flashes. */}
+            {prsLoading && !prs && !prError && (
+              <GitHubPanelState title="Loading GitHub" detail="Fetching pull requests." />
             )}
             {!prsLoading && !prError && prs && prs.length > 0 && visiblePrs.length === 0 && (
               <GitHubPanelState title={prFilter === "all" ? "No pull requests" : `No ${prFilter} pull requests`} />
@@ -1610,7 +1976,9 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
                 key={pr.number}
                 pr={pr}
                 nowMs={nowMs}
-                selected={selectedPr?.number === pr.number}
+                selected={expandedPr === pr.number}
+                detail={selectedPr?.number === pr.number ? selectedPr : null}
+                detailLoading={prDetailLoading}
                 onSelect={selectPr}
                 onOpen={openPrInBrowser}
                 onCheckout={checkoutPr}
@@ -1618,15 +1986,6 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
               />
             ))}
           </div>
-          {selectedPr && (
-            <PRDetail
-              pr={selectedPr}
-              onClose={() => setSelectedPr(null)}
-              onOpen={openPrInBrowser}
-              onCheckout={checkoutPr}
-              onMerge={mergePr}
-            />
-          )}
         </div>
       </div>
 
@@ -1747,6 +2106,28 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
 }
 
 function TopAction({ onClick, disabled, title, iconOnly, children }: { onClick: () => void; disabled?: boolean; title: string; iconOnly?: boolean; children: React.ReactNode }) {
+  // Icon-only actions are bare marks — no container, just a hover brighten,
+  // matching the quiet icon buttons in the PR list.
+  if (iconOnly) {
+    return (
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        title={title}
+        aria-label={title}
+        style={{
+          width: 30, height: 30, display: "grid", placeItems: "center",
+          border: "none", background: "transparent", color: "var(--fg-subtle)",
+          cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.4 : 1,
+          transition: "color var(--motion-fast) var(--ease-out)",
+        }}
+        onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.color = "var(--fg-strong)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; }}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
     <button
       onClick={onClick}
@@ -1754,8 +2135,7 @@ function TopAction({ onClick, disabled, title, iconOnly, children }: { onClick: 
       title={title}
       aria-label={title}
       style={{
-        height: 32, padding: iconOnly ? 0 : "0 10px", width: iconOnly ? 32 : undefined,
-        display: iconOnly ? "grid" : undefined, placeItems: iconOnly ? "center" : undefined,
+        height: 32, padding: "0 10px",
         borderRadius: "var(--radius-sm)", cursor: "pointer",
         background: "transparent", color: "var(--fg)",
         border: "1px solid var(--border)", fontWeight: 500, fontSize: 12,

@@ -26,6 +26,9 @@ type Props = {
   autoTheme: boolean;
   onToggleTheme: () => void;
   onResetLayout: () => void;
+  /** Terminal / layout / reset controls only make sense on the workbench —
+   *  full-screen surfaces (Git Review, Mission Control) hide them. */
+  showLayoutControls?: boolean;
 };
 
 function TerminalIcon() {
@@ -96,6 +99,7 @@ export function StatusBar({
   autoTheme,
   onToggleTheme,
   onResetLayout,
+  showLayoutControls = true,
 }: Props) {
   const display = relativePath(path, workspaceRoot);
   const filename = path?.split("/").pop() ?? null;
@@ -203,9 +207,10 @@ export function StatusBar({
         {autoTheme ? "Auto" : "Theme"} · {themeMeta.name}
       </button>
       </Tooltip>
-      {/* Focus mode has no terminal surface — the toggle would flip
-          state with nothing to show, so it steps out entirely. */}
-      {!focusMode && (
+      {/* Terminal / layout / reset are workbench-only — hidden on full-screen
+          surfaces like Git Review. Focus mode also hides the terminal toggle
+          (no terminal surface there). */}
+      {showLayoutControls && !focusMode && (
         <Tooltip label="Toggle terminal" keys={keysFor("toggle-terminal")}>
         <button
           onClick={onToggleTerminal}
@@ -219,26 +224,30 @@ export function StatusBar({
         </button>
         </Tooltip>
       )}
-      <LayoutBento
-        gridLayouts={gridLayouts}
-        activeGridId={activeGridId}
-        anchored={anchoredLayout}
-        focused={focusMode}
-        onSetFocus={onSetFocusMode}
-        onApplyGrid={onApplyGrid}
-        onExitGrid={onExitGrid}
-        onSetAnchored={onSetAnchored}
-        onOpenGrid={onOpenGrid}
-      />
-      <Tooltip label="Reset panel layout to default">
-      <button
-        onClick={onResetLayout}
-        aria-label="Reset panel layout"
-        className="klide-status-chip-btn"
-      >
-        Reset
-      </button>
-      </Tooltip>
+      {showLayoutControls && (
+        <LayoutBento
+          gridLayouts={gridLayouts}
+          activeGridId={activeGridId}
+          anchored={anchoredLayout}
+          focused={focusMode}
+          onSetFocus={onSetFocusMode}
+          onApplyGrid={onApplyGrid}
+          onExitGrid={onExitGrid}
+          onSetAnchored={onSetAnchored}
+          onOpenGrid={onOpenGrid}
+        />
+      )}
+      {showLayoutControls && (
+        <Tooltip label="Reset panel layout to default">
+        <button
+          onClick={onResetLayout}
+          aria-label="Reset panel layout"
+          className="klide-status-chip-btn"
+        >
+          Reset
+        </button>
+        </Tooltip>
+      )}
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-subtle)" }}>UTF-8</span>
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-subtle)" }}>LF</span>
     </footer>

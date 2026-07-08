@@ -111,12 +111,33 @@ pub(crate) struct PullRequest {
     additions: i64,
     deletions: i64,
     changed_files: i32,
+    /// Number of issue comments on the PR (drives the comment glyph).
+    comments: i32,
+    /// Distinct commenter logins, in first-seen order (drives the avatar stack).
+    comment_authors: Vec<String>,
     /// ISO-8601 updated timestamp.
     updated_at_ms: i64,
     /// "open" | "merged" | "closed" | "draft" — derived for the badge.
     badge: String,
     /// True if this PR targets the current branch.
     is_current_branch: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PrComment {
+    author: String,
+    body: String,
+    created_at_ms: i64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PrCommit {
+    short_hash: String,
+    headline: String,
+    author: String,
+    created_at_ms: i64,
 }
 
 #[derive(serde::Serialize)]
@@ -134,6 +155,13 @@ pub(crate) struct PullRequestDetails {
     additions: i64,
     deletions: i64,
     changed_files: i32,
+    /// Issue-comment count (mirrors PullRequest so the detail glyph matches).
+    comments: i32,
+    /// The actual comment thread, author + markdown body, oldest first.
+    comment_thread: Vec<PrComment>,
+    /// Commits on the PR, oldest first — interleaved with comments into a
+    /// GitHub-style conversation timeline on the frontend.
+    commits: Vec<PrCommit>,
     /// "open" | "merged" | "closed" | "draft" — derived for the badge.
     badge: String,
     mergeable: String,
@@ -183,8 +211,23 @@ pub(crate) fn git_output(workspace_root: &str, args: &[&str]) -> Result<String, 
     }
 }
 
+/// Resolve the `gh` binary once per session. A Finder-launched macOS `.app`
+/// inherits only a minimal PATH (no `/opt/homebrew/bin`), so a bare
+/// `Command::new("gh")` fails in the production bundle even when `gh` is
+/// installed — which is why author avatars fell back to the initial disc and
+/// the PR panel went quiet after v0.5 shipped. We resolve through the login
+/// shell (the same `resolve_command` helper the delegate + MLX paths use) and
+/// cache the result. Falls back to the bare name so dev (full PATH) still works
+/// if the shell lookup ever fails.
+fn gh_bin() -> String {
+    use std::sync::OnceLock;
+    static GH: OnceLock<String> = OnceLock::new();
+    GH.get_or_init(|| crate::resolve_command("gh").unwrap_or_else(|_| "gh".to_string()))
+        .clone()
+}
+
 fn gh_output(workspace_root: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("gh")
+    let output = Command::new(gh_bin())
         .args(args)
         .current_dir(workspace_root)
         .output()
@@ -311,7 +354,7 @@ pub(crate) async fn create_pr(
         .collect();
 
         // Check if gh CLI is available
-        let gh_check = Command::new("gh").arg("--version").output();
+        let gh_check = Command::new(gh_bin()).arg("--version").output();
         if gh_check.is_err() || !gh_check.unwrap().status.success() {
             return Err(
                 "GitHub CLI (gh) is not installed. Install it with: brew install gh".to_string(),
@@ -368,7 +411,7 @@ pub(crate) async fn create_pr(
             gh_args.push(&body_str);
         }
 
-        let pr = Command::new("gh")
+        let pr = Command::new(gh_bin())
             .args(gh_args)
             .current_dir(&workspace_root)
             .output()
@@ -1239,8 +1282,15 @@ pub(crate) async fn git_pr_list(workspace_root: String) -> Result<Vec<PullReques
         &[
             "pr",
             "list",
+            // Without `--state` gh only returns OPEN PRs, so merged/closed ones
+            // never reached the "Merged"/"All" tabs. Pull every state; cap the
+            // batch so a busy repo can't stall this off-thread call.
+            "--state",
+            "all",
+            "--limit",
+            "50",
             "--json",
-            "number,title,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,updatedAt",
+            "number,title,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,comments,updatedAt",
         ],
     )?;
     let raw: serde_json::Value = serde_json::from_str(&json)
@@ -1298,6 +1348,20 @@ pub(crate) async fn git_pr_list(workspace_root: String) -> Result<Vec<PullReques
             .get("changedFiles")
             .and_then(|x| x.as_i64())
             .unwrap_or(0) as i32;
+        let comment_arr = obj.get("comments").and_then(|x| x.as_array());
+        let comments = comment_arr.map(|a| a.len()).unwrap_or(0) as i32;
+        // Distinct commenter logins in first-seen order — feeds the avatar stack.
+        let mut comment_authors: Vec<String> = Vec::new();
+        if let Some(arr) = comment_arr {
+            for c in arr {
+                if let Some(login) = c.get("author").and_then(|a| a.get("login")).and_then(|a| a.as_str()) {
+                    let login = login.to_string();
+                    if !login.is_empty() && !comment_authors.contains(&login) {
+                        comment_authors.push(login);
+                    }
+                }
+            }
+        }
         let updated_at_ms = obj
             .get("updatedAt")
             .and_then(|x| x.as_str())
@@ -1321,11 +1385,16 @@ pub(crate) async fn git_pr_list(workspace_root: String) -> Result<Vec<PullReques
             additions,
             deletions,
             changed_files,
+            comments,
+            comment_authors,
             updated_at_ms,
             badge,
             is_current_branch: !current_branch.is_empty() && head_ref == current_branch,
         });
     }
+    // Mixed states come back grouped by state; sort newest-first so the panel
+    // reads chronologically regardless of the open/merged/closed mix.
+    prs.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
     Ok(prs)
     })
     .await
@@ -1344,7 +1413,7 @@ pub(crate) async fn git_pr_view(
             "view",
             &number.to_string(),
             "--json",
-            "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,mergeable,createdAt,updatedAt",
+            "number,title,body,state,isDraft,author,headRefName,baseRefName,url,additions,deletions,changedFiles,comments,commits,mergeable,createdAt,updatedAt",
         ],
     )?;
     let obj: serde_json::Value = serde_json::from_str(&json)
@@ -1353,6 +1422,63 @@ pub(crate) async fn git_pr_view(
         Some(o) => o,
         None => return Err(format!("PR #{number} not found")),
     };
+    let commits: Vec<PrCommit> = obj
+        .get("commits")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|c| {
+                    let oid = c.get("oid").and_then(|o| o.as_str()).unwrap_or("");
+                    PrCommit {
+                        short_hash: oid.chars().take(7).collect(),
+                        headline: c
+                            .get("messageHeadline")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        // `authors` is the co-author list; take the first login.
+                        author: c
+                            .get("authors")
+                            .and_then(|a| a.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|a| a.get("login"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        created_at_ms: c
+                            .get("committedDate")
+                            .and_then(|s| s.as_str())
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|d| d.timestamp_millis())
+                            .unwrap_or(0),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let comment_thread: Vec<PrComment> = obj
+        .get("comments")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|c| PrComment {
+                    author: c
+                        .get("author")
+                        .and_then(|a| a.get("login"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    body: c.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string(),
+                    created_at_ms: c
+                        .get("createdAt")
+                        .and_then(|s| s.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|d| d.timestamp_millis())
+                        .unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let state = obj
         .get("state")
         .and_then(|x| x.as_str())
@@ -1408,6 +1534,9 @@ pub(crate) async fn git_pr_view(
             .get("changedFiles")
             .and_then(|x| x.as_i64())
             .unwrap_or(0) as i32,
+        comments: comment_thread.len() as i32,
+        comment_thread,
+        commits,
         badge,
         mergeable: obj
             .get("mergeable")
