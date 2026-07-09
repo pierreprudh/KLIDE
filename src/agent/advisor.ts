@@ -8,6 +8,9 @@
 // The advisor consultation is a ONE-SHOT chat run (no tools) on the advisor's
 // provider/model, seeded with the executor's self-contained question. It runs
 // as a nested child (parentId = the executor run), so Mission Control nests it.
+// The advisor can be any provider: a hosted model over its wire API, OR a
+// Subscription CLI run headlessly (`claude -p …`) so the consult uses your CLI
+// subscription instead of an API key — chat mode routes both through ai_chat.
 
 /** Default advisor when none is configured in Harness settings. The canonical
  *  advisor strategy: a cheap executor escalates to a hosted top model. Needs an
@@ -43,7 +46,8 @@ export function buildAdvisorSystemPrompt(workspaceRoot: string | null): string {
     "- The single most important reason for it.",
     "- If the executor is heading somewhere wrong or the task looks already done, say so plainly — a stop signal is valid advice.",
     "",
-    "Be concise and concrete. No preamble, no restating the question. You cannot run tools or edit files; reason from what the executor tells you.",
+    "Be concise and concrete. No preamble, no restating the question.",
+    "CRITICAL: do NOT edit files, run commands, or change anything in the workspace — even if you are running as a CLI that technically could. Your entire job is to return advice as text. Reason from what the executor tells you plus a read of the code if you must.",
     workspaceRoot ? `Workspace root: ${workspaceRoot}` : "",
   ]
     .filter(Boolean)

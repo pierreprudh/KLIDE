@@ -279,11 +279,12 @@ function RegionEditor({
 
 // The advisor pairing: which provider + model answers a `consult_advisor` call.
 // A run's own (often cheap or local) model drives the task and escalates one
-// hard decision to this stronger advisor. Only Local + API providers are
-// offered — the consult runs through the one-shot chat path, not a delegate CLI.
-// Switching provider seeds its default model and refetches the real model list
-// (`ai_provider_models`); the model is then chosen from the same premium
-// ModelPicker the AI panel uses, so you pick an actual available model.
+// hard decision to this stronger advisor. Local, API, and Subscription CLI
+// providers are all offered: a hosted model over its wire API, or a Claude Code
+// (/ Codex / OpenCode / omp) *session* run headlessly (`claude -p …`) so the
+// consult uses your CLI subscription — no API key needed. Switching provider
+// seeds its default model and refetches the real model list (`ai_provider_models`);
+// the model is chosen from the same premium ModelPicker the AI panel uses.
 function AdvisorControl({
   provider,
   model,
@@ -293,7 +294,9 @@ function AdvisorControl({
   model: string;
   onChange: (next: { advisorProvider: string; advisorModel: string }) => void;
 }) {
-  const groups = PROVIDER_GROUPS.filter((g) => g.label === "Local" || g.label === "API");
+  const groups = PROVIDER_GROUPS.filter(
+    (g) => g.label === "Local" || g.label === "API" || g.label === "Subscription"
+  );
   // Real model list for the chosen provider (installed Ollama/MLX models, or a
   // hosted catalog), fetched the same way the AI panel does. Refetched whenever
   // the advisor provider changes so the model dropdown always reflects it.
