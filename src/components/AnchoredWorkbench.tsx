@@ -1,18 +1,13 @@
 import { lazy, Suspense, useRef, type ReactNode, type RefObject, type ComponentProps } from "react";
-import type { ProviderId } from "../agent/types";
-import type { Conversation } from "./ai/types";
-import type { HarnessSettings } from "../App";
 import type { Skill } from "../skills";
-import type {
-  Layout as PanelLayout,
-  PanelRect,
-} from "../panelLayout";
+import type { Layout as PanelLayout } from "../panelLayout";
+import type { AiPanelInstance } from "../hooks/usePanelLayout";
+import type { RenderAiPanel } from "./ai/panelHost";
 import { Sidebar } from "./Sidebar";
 import { TabBar } from "./TabBar";
 import { EditorArea } from "./EditorArea";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPanel } from "./TerminalPanel";
-import { AiPanel } from "./AiPanel";
 import { SplitPane } from "./SplitPane";
 import type { ThemeId } from "../theme";
 
@@ -27,12 +22,6 @@ type Tab = {
   diskCode?: string;
 };
 type Panel = "explorer" | "git" | "memory" | "skills" | "ai" | "runs" | "settings" | "profile";
-type AiPanelInstance = {
-  id: string;
-  rect: PanelRect;
-  provider?: ProviderId;
-  model?: string;
-};
 
 type Props = {
   // Layout measurement + persistence plumbing
@@ -77,50 +66,20 @@ type Props = {
   focusPanel: (id: string) => void;
   onMountEditor: (editor: Parameters<NonNullable<ComponentProps<typeof EditorArea>["onEditorMount"]>>[0]) => void;
 
-  // AI panel extras
+  // Sidebar skills slot
   skills: Skill[];
   setSkills: (s: Skill[]) => void;
   reloadFilesystemSkills: () => Promise<void>;
-  apiKeyVersion: number;
-  requireDiffReview: boolean;
-  onRequireDiffReviewChange?: (enabled: boolean) => void;
-  onOpenDiff?: (edit: { path: string; oldContent: string; newContent: string; isCreate: boolean }) => void;
-  stopAfterRejection: boolean;
-  aiModel: string;
-  panelModels: Record<string, string[]>;
-  setPanelModels: (m: Record<string, string[]> | ((cur: Record<string, string[]>) => Record<string, string[]>)) => void;
-  onAiPanelModelChange: (id: string, model: string) => void;
-  onAiPanelProviderChange: (id: string, provider: ProviderId) => void;
-  onDuplicateAiPanel: (snapshot?: { provider: ProviderId; model: string }) => void;
-  onCloseAiPanel: (id: string) => void;
-  onAgentWrote: (path: string, content: string) => void;
-  refreshGitStatus: (root: string | null) => Promise<void>;
+
+  // The AI column renders through the App's AiPanel host — this shell only
+  // chooses the surface knobs (width, closable). See components/ai/panelHost.
+  renderAiPanel: RenderAiPanel;
   onPanelWidthChange: (panel: "explorer" | "ai", w: number) => void;
   onPanelHeightChange: (panel: "terminal", h: number) => void;
-
-  // Mission Control handoff
-  pendingAiPanel: {
-    panelId: string;
-    provider: ProviderId;
-    resumeSessionId: string | null;
-    initialTask: string | null;
-  } | null;
-  onPendingAiPanelConsumed: () => void;
-  // A resumed Klide run targeted at one panel by id — only the matching panel
-  // adopts the conversation, so a resume click never clobbers other panels.
-  resumeTarget: { panelId: string; convo: Conversation } | null;
-  onResumeConsumed: () => void;
 
   // Quick view
   previewPath: string | null;
   onClosePreview: () => void;
-
-  // Header actions (memory + skill) from AI panel
-  onMemoryWritten: (entry: { title: string; relPath: string }) => void;
-  onOpenMemory?: () => void;
-  onSkillGenerated: (skill: { name: string; relPath: string }) => void;
-
-  harnessSettings: HarnessSettings;
 };
 
 // Anchored workbench — the calm, fullscreen surface. A single 1px-bordered
@@ -162,32 +121,11 @@ export function AnchoredWorkbench(props: Props) {
     skills,
     setSkills,
     reloadFilesystemSkills,
-    apiKeyVersion,
-    requireDiffReview,
-    onRequireDiffReviewChange,
-    onOpenDiff,
-    stopAfterRejection,
-    aiModel,
-    panelModels,
-    setPanelModels,
-    onAiPanelModelChange,
-    onAiPanelProviderChange,
-    onDuplicateAiPanel,
-    onCloseAiPanel,
-    onAgentWrote,
-    refreshGitStatus,
+    renderAiPanel,
     onPanelWidthChange,
     onPanelHeightChange,
-    pendingAiPanel,
-    onPendingAiPanelConsumed,
-    resumeTarget,
-    onResumeConsumed,
     previewPath,
     onClosePreview,
-    onMemoryWritten,
-    onOpenMemory,
-    onSkillGenerated,
-    harnessSettings,
   } = props;
 
   const sideVisible = explorerVisible;
@@ -195,15 +133,6 @@ export function AnchoredWorkbench(props: Props) {
   const aiPanel = aiPanels[0];
   const aiPanelWidth = aiPanel?.rect.w ?? 360;
   const terminalHeight = panelLayout.terminal?.h ?? 220;
-  const updatePanelModels = (id: string, models: string[]) => {
-    setPanelModels((prev) => {
-      const current = prev[id] ?? [];
-      if (current.length === models.length && current.every((name, idx) => name === models[idx])) {
-        return prev;
-      }
-      return { ...prev, [id]: models };
-    });
-  };
 
   // The side column shows explorer; ⌘+click in the activity bar can stack
   // skills below it via a SplitPane (matches the existing behaviour).
@@ -298,69 +227,16 @@ export function AnchoredWorkbench(props: Props) {
   // picks the first one; subsequent ones can be addressed in a follow-up.
   //
   // If `aiVisible` is on but `aiPanels` is empty (round-trip anchored ↔ free
-  // can momentarily drop the in-memory list), still render the panel using
-  // sensible defaults. App will re-seed `aiPanels` on the next interaction.
+  // can momentarily drop the in-memory list), the host falls back to the
+  // default "ai-main" slot so the panel still renders; App will re-seed
+  // `aiPanels` on the next interaction.
   const renderAi = () => {
     if (!aiVisible) return null;
-    // Fall back to a default id when the in-memory list is empty (transient
-    // state during the anchored ↔ free round-trip). AiPanel keys off panelId
-    // for model/provider state, so we keep the same default id the rest of
-    // the app uses (App's ensureAiRect and projectAiPanelsToRects all use
-    // "ai-main" for the first slot).
-    const safeId = aiPanel?.id ?? "ai-main";
-    const safeModel = aiPanel?.model ?? aiModel;
-    return (
-      <AiPanel
-        fill
-        visible
-        width={aiPanelWidth}
-        panelId={safeId}
-        initialProvider={
-          pendingAiPanel?.panelId === safeId
-            ? pendingAiPanel.provider
-            : aiPanel?.provider
-        }
-        initialResumeSessionId={
-          pendingAiPanel?.panelId === safeId
-            ? pendingAiPanel.resumeSessionId ?? undefined
-            : undefined
-        }
-        initialTask={
-          pendingAiPanel?.panelId === safeId
-            ? pendingAiPanel.initialTask ?? undefined
-            : undefined
-        }
-        onInitialConsumed={
-          pendingAiPanel?.panelId === safeId
-            ? onPendingAiPanelConsumed
-            : undefined
-        }
-        workspaceRoot={workspaceRoot}
-        onFileWritten={onAgentWrote}
-        onWorkspaceChanged={() =>
-          workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-        }
-        model={safeModel}
-        onModelChange={(model) => onAiPanelModelChange(safeId, model)}
-        onProviderChange={(provider) => onAiPanelProviderChange(safeId, provider)}
-        availableModels={panelModels[safeId] ?? [safeModel]}
-        onAvailableModelsChange={(models) => updatePanelModels(safeId, models)}
-        apiKeyVersion={apiKeyVersion}
-        requireDiffReview={requireDiffReview}
-        onRequireDiffReviewChange={onRequireDiffReviewChange}
-        onOpenDiff={onOpenDiff}
-        stopAfterRejection={stopAfterRejection}
-        skills={skills}
-        harnessSettings={harnessSettings}
-        onDuplicate={onDuplicateAiPanel}
-        onClose={aiPanels.length > 1 ? () => onCloseAiPanel(safeId) : undefined}
-        resumeConversation={resumeTarget?.panelId === safeId ? resumeTarget.convo : null}
-        onResumeConsumed={onResumeConsumed}
-        onMemoryWritten={onMemoryWritten}
-        onOpenMemory={onOpenMemory}
-        onSkillGenerated={onSkillGenerated}
-      />
-    );
+    return renderAiPanel(aiPanel, {
+      width: aiPanelWidth,
+      duplicatable: true,
+      closable: aiPanels.length > 1,
+    });
   };
 
   return (

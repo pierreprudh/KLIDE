@@ -47,7 +47,15 @@ import { defaultLayout as defaultPanelLayout } from "./panelLayout";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import { useEditorTabs } from "./hooks/useEditorTabs";
-import { usePanelLayout } from "./hooks/usePanelLayout";
+import { usePanelLayout, type AiPanelInstance } from "./hooks/usePanelLayout";
+import {
+  DEFAULT_AI_PANEL_ID,
+  initialHandoffFor,
+  panelWorkspace,
+  resumeConversationFor,
+  type AiPanelRenderOptions,
+  type PendingAiPanel,
+} from "./components/ai/panelHost";
 import { readWorkspaceTextFile } from "./workspaceFs";
 import "./styles/tokens.css";
 
@@ -149,15 +157,7 @@ function App() {
   // pinned to a delegate provider, we set this and the matching <AiPanel>
   // picks it up on mount, sets its initial provider + resume/task, then
   // clears the entry. One-at-a-time, key matched by panel id.
-  const [pendingAiPanel, setPendingAiPanel] = useState<{
-    panelId: string;
-    provider: ProviderId;
-    resumeSessionId: string | null;
-    initialTask: string | null;
-    /** Set only for "Reattach" to a live session — binds the new panel to the
-     *  running PTY's conversation id so its terminal reconnects + replays. */
-    conversationId: string | null;
-  } | null>(null);
+  const [pendingAiPanel, setPendingAiPanel] = useState<PendingAiPanel | null>(null);
   void pendingAiPanel;
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -441,6 +441,80 @@ function App() {
     setActiveGridId(null);
   }
 
+  // ── AiPanel host ────────────────────────────────────────────────────
+  // The one place the App↔AiPanel contract is turned into props. Every
+  // surface that shows an AI panel — the anchored column, free-floating
+  // windows, grid cells, Focus — renders through this function, so the
+  // pending-handoff keying, resume targeting, and per-panel model/provider/
+  // review policy can't drift between render sites. Surfaces only choose the
+  // knobs in `AiPanelRenderOptions`; the policy itself lives in
+  // `components/ai/panelHost.ts`.
+  function renderAiPanel(
+    panel: AiPanelInstance | undefined,
+    opts?: AiPanelRenderOptions
+  ): ReactNode {
+    const panelId = panel?.id ?? DEFAULT_AI_PANEL_ID;
+    const model = panel?.model ?? aiModel;
+    const handoff = initialHandoffFor(panelId, panel?.provider, pendingAiPanel);
+    const { root, worktreeName } = panelWorkspace(
+      panel,
+      workspaceRoot,
+      opts?.respectWorktree ?? false
+    );
+    return (
+      <AiPanel
+        key={opts?.key ?? panelId}
+        fill
+        visible
+        width={opts?.width ?? panel?.rect.w ?? 360}
+        panelId={panelId}
+        initialProvider={handoff.initialProvider}
+        initialConversationId={handoff.initialConversationId}
+        initialResumeSessionId={handoff.initialResumeSessionId}
+        initialTask={handoff.initialTask}
+        onInitialConsumed={handoff.matched ? () => setPendingAiPanel(null) : undefined}
+        workspaceRoot={root}
+        worktreeName={worktreeName}
+        onFileWritten={onAgentWrote}
+        onWorkspaceChanged={() => {
+          // A worktree-pinned panel changes its own branch, not the main
+          // checkout — only refresh the sidebar git status when the panel
+          // runs in the global workspace.
+          if (!worktreeName && root) refreshGitStatus(root);
+        }}
+        model={model}
+        onModelChange={(m) => updateAiPanelModel(panelId, m)}
+        onProviderChange={(provider) => setAiPanelProvider(panelId, provider)}
+        availableModels={panelModels[panelId] ?? [model]}
+        onAvailableModelsChange={(models) => updatePanelModels(panelId, models)}
+        apiKeyVersion={apiKeyVersion}
+        requireDiffReview={reviewForPanel(panelId)}
+        onRequireDiffReviewChange={(v) => setPanelReview(panelId, v)}
+        onOpenDiff={setDiffView}
+        stopAfterRejection={stopAfterRejection}
+        skills={skills}
+        harnessSettings={harnessSettings}
+        onDuplicate={opts?.duplicatable ? appendAiPanel : undefined}
+        onForkConversationInWorktree={forkConversationInWorktree}
+        onClose={opts?.closable ? () => closeAiPanel(panelId) : undefined}
+        resumeConversation={resumeConversationFor(panelId, resumeTarget)}
+        onResumeConsumed={() => setResumeTarget(null)}
+        variant={opts?.variant}
+        initialMessage={opts?.initialMessage ?? null}
+        onInitialMessageConsumed={() => setFocusInitialMessage(null)}
+        onMemoryWritten={(entry) => {
+          setMemoryRefreshKey((k) => k + 1);
+          setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
+        }}
+        onOpenMemory={() => setMemoryVisible(true)}
+        onSkillGenerated={(skill) => {
+          void reloadFilesystemSkills();
+          setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
+        }}
+      />
+    );
+  }
+
   // Build the real panel for a grid cell. Reuses the same state/handlers as the
   // fixed frame, but with `fill` so each panel sizes to its cell.
   function renderPanel(
@@ -510,43 +584,11 @@ function App() {
           />
         );
       case "ai":
-        return (
-          <AiPanel
-            key={key}
-            fill
-            visible
-            width={aiPanels[0]?.rect.w ?? 360}
-            panelId={aiPanels[0]?.id}
-            initialProvider={aiPanels[0]?.provider}
-            workspaceRoot={workspaceRoot}
-            onFileWritten={onAgentWrote}
-            onWorkspaceChanged={() =>
-              workspaceRoot ? refreshGitStatus(workspaceRoot) : undefined
-            }
-            model={aiPanels[0]?.model ?? aiModel}
-            onModelChange={(model) => updateAiPanelModel(aiPanels[0]?.id ?? "ai-main", model)}
-            onProviderChange={(provider) => setAiPanelProvider(aiPanels[0]?.id ?? "ai-main", provider)}
-            availableModels={panelModels[aiPanels[0]?.id ?? "ai-main"] ?? [aiPanels[0]?.model ?? aiModel]}
-            onAvailableModelsChange={(models) => updatePanelModels(aiPanels[0]?.id ?? "ai-main", models)}
-            apiKeyVersion={apiKeyVersion}
-            requireDiffReview={reviewForPanel(aiPanels[0]?.id ?? "ai-main")}
-            onRequireDiffReviewChange={(v) => setPanelReview(aiPanels[0]?.id ?? "ai-main", v)}
-            onOpenDiff={setDiffView}
-            stopAfterRejection={stopAfterRejection}
-            skills={skills}
-            harnessSettings={harnessSettings}
-            onForkConversationInWorktree={forkConversationInWorktree}
-            resumeConversation={
-              resumeTarget?.panelId === (aiPanels[0]?.id ?? "ai-main")
-                ? resumeTarget.convo
-                : null
-            }
-            onResumeConsumed={() => setResumeTarget(null)}
-            variant={opts?.aiVariant}
-            initialMessage={opts?.aiVariant === "focus" ? focusInitialMessage : null}
-            onInitialMessageConsumed={() => setFocusInitialMessage(null)}
-          />
-        );
+        return renderAiPanel(aiPanels[0], {
+          key,
+          variant: opts?.aiVariant,
+          initialMessage: opts?.aiVariant === "focus" ? focusInitialMessage : null,
+        });
       default:
         return (
           <div
@@ -1708,20 +1750,7 @@ function App() {
                   saveSkills(next);
                 }}
                 reloadFilesystemSkills={reloadFilesystemSkills}
-                apiKeyVersion={apiKeyVersion}
-                requireDiffReview={reviewForPanel(aiPanels[0]?.id ?? "ai-main")}
-                onRequireDiffReviewChange={(v) => setPanelReview(aiPanels[0]?.id ?? "ai-main", v)}
-                onOpenDiff={setDiffView}
-                stopAfterRejection={stopAfterRejection}
-                aiModel={aiModel}
-                panelModels={panelModels}
-                setPanelModels={setPanelModels}
-                onAiPanelModelChange={updateAiPanelModel}
-                onAiPanelProviderChange={setAiPanelProvider}
-                onDuplicateAiPanel={appendAiPanel}
-                onCloseAiPanel={closeAiPanel}
-                onAgentWrote={onAgentWrote}
-                refreshGitStatus={refreshGitStatus}
+                renderAiPanel={renderAiPanel}
                 onPanelWidthChange={(panel, w) => {
                   if (panel === "explorer" && panelLayout.explorer) {
                     updatePanelRect("explorer", { ...panelLayout.explorer, w });
@@ -1734,22 +1763,8 @@ function App() {
                     updatePanelRect("terminal", { ...panelLayout.terminal, h });
                   }
                 }}
-                pendingAiPanel={pendingAiPanel}
-                onPendingAiPanelConsumed={() => setPendingAiPanel(null)}
-                resumeTarget={resumeTarget}
-                onResumeConsumed={() => setResumeTarget(null)}
                 previewPath={previewPath}
                 onClosePreview={() => setPreviewPath(null)}
-                onMemoryWritten={(entry) => {
-                  setMemoryRefreshKey((k) => k + 1);
-                  setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
-                }}
-                onOpenMemory={() => setMemoryVisible(true)}
-                onSkillGenerated={(skill) => {
-                  void reloadFilesystemSkills();
-                  setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
-                }}
-                harnessSettings={harnessSettings}
               />
             ) : (
               <div
@@ -1972,79 +1987,12 @@ function App() {
                       onResize={(next) => updateAiRect(panel.id, next)}
                       onMove={(next) => updateAiRect(panel.id, next)}
                     >
-                      <AiPanel
-                        fill
-                        visible
-                        width={panel.rect.w}
-                        panelId={panel.id}
-                        initialProvider={
-                          pendingAiPanel?.panelId === panel.id
-                            ? pendingAiPanel.provider
-                            : panel.provider
-                        }
-                        initialConversationId={
-                          pendingAiPanel?.panelId === panel.id
-                            ? pendingAiPanel.conversationId
-                            : undefined
-                        }
-                        initialResumeSessionId={
-                          pendingAiPanel?.panelId === panel.id
-                            ? pendingAiPanel.resumeSessionId
-                            : undefined
-                        }
-                        initialTask={
-                          pendingAiPanel?.panelId === panel.id
-                            ? pendingAiPanel.initialTask
-                            : undefined
-                        }
-                        onInitialConsumed={
-                          pendingAiPanel?.panelId === panel.id
-                            ? () => setPendingAiPanel(null)
-                            : undefined
-                        }
-                        workspaceRoot={panel.cwd ?? workspaceRoot}
-                        worktreeName={panel.cwd ? panel.cwd.split("/").filter(Boolean).pop() : undefined}
-                        onFileWritten={onAgentWrote}
-                        onWorkspaceChanged={() => {
-                          // A worktree-pinned panel changes its own branch, not
-                          // the main checkout, so only refresh the sidebar git
-                          // status when the panel runs in the global workspace.
-                          const root = panel.cwd ?? workspaceRoot;
-                          if (!panel.cwd && root) refreshGitStatus(root);
-                        }}
-                        model={panel.model ?? aiModel}
-                        onModelChange={(model) => updateAiPanelModel(panel.id, model)}
-                        onProviderChange={(provider) => setAiPanelProvider(panel.id, provider)}
-                        availableModels={panelModels[panel.id] ?? [panel.model ?? aiModel]}
-                        onAvailableModelsChange={(models) => updatePanelModels(panel.id, models)}
-                        apiKeyVersion={apiKeyVersion}
-                        requireDiffReview={reviewForPanel(panel.id)}
-                        onRequireDiffReviewChange={(v) => setPanelReview(panel.id, v)}
-                        onOpenDiff={setDiffView}
-                        stopAfterRejection={stopAfterRejection}
-                        skills={skills}
-                        harnessSettings={harnessSettings}
-                        onDuplicate={appendAiPanel}
-                        onForkConversationInWorktree={forkConversationInWorktree}
-                        onClose={
-                          aiPanels.length > 1 ? () => closeAiPanel(panel.id) : undefined
-                        }
-                        resumeConversation={
-                          resumeTarget?.panelId === panel.id ? resumeTarget.convo : null
-                        }
-                        onResumeConsumed={() => setResumeTarget(null)}
-                        onMemoryWritten={(entry) => {
-                          setMemoryRefreshKey((k) => k + 1);
-                          setFileNotice(
-                            `Memory written → ${entry.title} (${entry.relPath})`
-                          );
-                        }}
-                        onOpenMemory={() => setMemoryVisible(true)}
-                        onSkillGenerated={(skill) => {
-                          void reloadFilesystemSkills();
-                          setFileNotice(`Skill generated → ${skill.name} (${skill.relPath})`);
-                        }}
-                      />
+                      {renderAiPanel(panel, {
+                        width: panel.rect.w,
+                        respectWorktree: true,
+                        duplicatable: true,
+                        closable: aiPanels.length > 1,
+                      })}
                     </FloatingPanel>
                   );
                 })}
