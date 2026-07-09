@@ -916,6 +916,13 @@ where
 /// Distinct from `spawn_subagent`: the advisor gives *guidance*, not a nested
 /// agentic run — the executor stays in control and applies the advice itself.
 /// Cancelling during the wait bubbles up as `Cancelled`.
+/// Sentinel the frontend prepends when an advisor consult fails (no key,
+/// provider unreachable, empty reply). The shared question oneshot only carries
+/// a string, so this marker is how a failure crosses back — process_advisor_tool
+/// strips it and returns a NOT-ok tool result. Keep in sync with the same
+/// constant in AiPanel's runAdvisorConsult.
+const ADVISOR_ERROR_PREFIX: &str = "[advisor:error] ";
+
 async fn process_advisor_tool<E>(
     ctx: &ToolCtx<'_>,
     call: &NormalizedToolCall,
@@ -948,7 +955,8 @@ where
             question: question.clone(),
             ts: now_ms(),
         },
-        "(advisor produced no output)",
+        // A closed channel is a failure, not advice — mark it so below.
+        ADVISOR_ERROR_PREFIX,
         ctx.cancel,
         emit,
         |handle, tx| {
@@ -967,6 +975,17 @@ where
         advice: advice.clone(),
         ts: now_ms(),
     })?;
+
+    // A failed consult (no key, provider down, empty reply) is prefixed with
+    // ADVISOR_ERROR_PREFIX by the frontend. Surface it as a NOT-ok tool result
+    // so the executor treats it as a failure, not as guidance it should follow.
+    if let Some(msg) = advice.strip_prefix(ADVISOR_ERROR_PREFIX) {
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: format!("Advisor consult failed: {}", msg.trim()),
+            metadata: Some(serde_json::json!({ "advisor": true })),
+        }));
+    }
 
     Ok(ToolOutcome::Produced(ToolResult {
         ok: true,
@@ -3381,6 +3400,54 @@ mod run_supervisor_tests {
             e,
             AgentEvent::AdvisorResolved { advice, .. } if advice.contains("Use a channel")
         )));
+    }
+
+    /// A failed consult (frontend prefixes the reply with ADVISOR_ERROR_PREFIX)
+    /// must come back as a NOT-ok tool result — otherwise the executor treats an
+    /// error string like "Advisor unavailable: no key" as guidance to follow.
+    #[tokio::test]
+    async fn consult_advisor_marks_a_failed_consult_not_ok() {
+        let sup = FakeSupervisor::with_run("adv-run");
+        let cancel = CancellationToken::new();
+        let request: StartRunRequest = serde_json::from_value(serde_json::json!({
+            "workspaceRoot": null, "mode": "goal", "provider": "mock", "model": "mock",
+            "initialText": "t", "context": null, "systemPrompt": null,
+        }))
+        .unwrap();
+        let tmp = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "adv-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: tmp.as_path(),
+        };
+        let call = NormalizedToolCall {
+            id: "c1".to_string(),
+            name: "consult_advisor".to_string(),
+            input: serde_json::json!({ "question": "A or B?" }),
+        };
+        let mut emit = |_: AgentEvent| -> Result<(), String> { Ok(()) };
+        let reply = format!("{ADVISOR_ERROR_PREFIX}Advisor unavailable (anthropic/claude-opus-4-8): no key");
+
+        let (outcome, _) = tokio::join!(
+            process_advisor_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "adv-run", &reply),
+        );
+
+        match outcome.expect("advisor tool ok") {
+            ToolOutcome::Produced(r) => {
+                assert!(!r.ok, "a failed consult must be a not-ok tool result");
+                assert!(r.content.contains("Advisor consult failed"), "got: {}", r.content);
+                assert!(r.content.contains("no key"), "got: {}", r.content);
+                assert!(
+                    !r.content.contains("Advisor guidance:"),
+                    "an error must not be dressed up as guidance: {}",
+                    r.content
+                );
+            }
+            _ => panic!("expected Produced outcome"),
+        }
     }
 
     #[tokio::test]

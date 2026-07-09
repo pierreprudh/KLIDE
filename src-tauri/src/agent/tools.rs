@@ -3028,6 +3028,19 @@ mod tests {
         ));
     }
 
+    /// Advisor-recursion guard. A consult_advisor call runs its consultation as
+    /// a CHAT-mode child (AiPanel runAdvisorConsult). Chat mode must expose zero
+    /// tools — so the advisor can never itself call consult_advisor and escalate
+    /// forever. If this ever regresses (chat gains tools), that loop reopens.
+    #[test]
+    fn chat_mode_exposes_no_tools_so_an_advisor_cannot_recurse() {
+        assert!(
+            list_tools_for_workspace(&AgentMode::Chat, &[], None).is_empty(),
+            "Chat mode must expose no tools (advisor recursion guard)"
+        );
+        assert!(schemas_for_mode(&AgentMode::Chat, &[], None).is_none());
+    }
+
     #[test]
     fn command_preflight_surfaces_external_absolute_paths() {
         let dir = std::env::temp_dir().join(format!("klide-preflight-{}", std::process::id()));

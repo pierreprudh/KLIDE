@@ -12,6 +12,9 @@
 // Subscription CLI run headlessly (`claude -p …`) so the consult uses your CLI
 // subscription instead of an API key — chat mode routes both through ai_chat.
 
+import type { ProviderId } from "./types";
+import { DEFAULT_MODELS } from "./providers";
+
 /** Default advisor when none is configured in Harness settings. The canonical
  *  advisor strategy: a cheap executor escalates to a hosted top model. Needs an
  *  Anthropic key in Settings. Change via HarnessSettings.advisorProvider/
@@ -19,18 +22,28 @@
 export const DEFAULT_ADVISOR_PROVIDER = "anthropic";
 export const DEFAULT_ADVISOR_MODEL = "claude-opus-4-8";
 
+/** Error marker the AiPanel prepends when a consult fails, so the Rust side can
+ *  return a not-ok tool result instead of dressing an error up as advice. Keep
+ *  in sync with ADVISOR_ERROR_PREFIX in src-tauri/src/agent/mod.rs. */
+export const ADVISOR_ERROR_PREFIX = "[advisor:error] ";
+
 export type AdvisorConfig = { provider: string; model: string };
 
-/** Resolve the advisor pairing from harness settings, falling back to the
- *  default. Kept tiny so both AiPanel and any future settings UI agree. */
+/** Resolve the advisor pairing from harness settings, falling back to defaults.
+ *  The model default is DERIVED FROM THE RESOLVED PROVIDER, never a fixed
+ *  constant — otherwise a stored provider with no model (e.g. ollama) would
+ *  inherit the Anthropic default model and produce a nonsense pairing. */
 export function resolveAdvisor(settings?: {
   advisorProvider?: string;
   advisorModel?: string;
 }): AdvisorConfig {
-  return {
-    provider: settings?.advisorProvider?.trim() || DEFAULT_ADVISOR_PROVIDER,
-    model: settings?.advisorModel?.trim() || DEFAULT_ADVISOR_MODEL,
-  };
+  const provider = settings?.advisorProvider?.trim() || DEFAULT_ADVISOR_PROVIDER;
+  const model =
+    settings?.advisorModel?.trim() ||
+    (provider === DEFAULT_ADVISOR_PROVIDER
+      ? DEFAULT_ADVISOR_MODEL
+      : DEFAULT_MODELS[provider as ProviderId] ?? "");
+  return { provider, model };
 }
 
 /** System prompt for the advisor consultation. The advisor is a senior
