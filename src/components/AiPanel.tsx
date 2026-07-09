@@ -23,7 +23,8 @@ import {
 } from "../contextTray";
 import { startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
-import { resolveAdvisor, buildAdvisorSystemPrompt, ADVISOR_ERROR_PREFIX } from "../agent/advisor";
+import { resolveAdvisor } from "../agent/advisor";
+import { serviceAdvisorConsult } from "../agent/advisorConsult";
 import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
@@ -2188,36 +2189,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     // parent with the advice — that text becomes the tool result. The executor
     // then continues its own loop. This is the advisor strategy: small model
     // drives, big model advises only at the fork it flagged.
-    const runAdvisorConsult = async (event: Extract<AgentEvent, { type: "advisor_requested" }>) => {
-      const advisor = resolveAdvisor(harnessSettings);
-      const systemPrompt = buildAdvisorSystemPrompt(workspaceRoot);
-      let advice = "";
-      try {
-        const session = await startAgentRun({
-          runId: event.requestId,
-          workspaceRoot, mode: "chat", provider: advisor.provider as ProviderId, model: advisor.model,
-          text: event.question, attachments: [],
-          context: { workspaceRoot, attachments: [], lensItems: [], estimatedTokens: 0, omitted: [] },
-          systemPrompt,
-          parentId: event.runId,
-          maxTurns: 1,
-        }, (ev) => {
-          if (ev.type === "assistant_message") {
-            const text = ev.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-            if (text.trim()) advice = text;
-          } else if (ev.type === "run_error") {
-            advice = `${ADVISOR_ERROR_PREFIX}Advisor unavailable (${advisor.provider}/${advisor.model}): ${ev.error.message}`;
-          }
-        });
-        await session.done;
-      } catch (e) {
-        advice = `${ADVISOR_ERROR_PREFIX}Advisor consult failed: ${(e as Error).message}`;
-      }
-      // A blank reply is also a failure — flag it so the executor sees a not-ok
-      // tool result, not an empty "guidance" string it might act on.
-      const answer = advice.trim() || `${ADVISOR_ERROR_PREFIX}advisor produced no output`;
-      await resolveUserQuestion({ runId: event.runId, requestId: event.requestId, answer });
-    };
+    const runAdvisorConsult = (event: Extract<AgentEvent, { type: "advisor_requested" }>) =>
+      // AI-panel runs use the global advisor setting. (Orchestrator-dispatched
+      // runs pass a per-tier advisor to the same helper — see advisorConsult.ts.)
+      serviceAdvisorConsult({ event, advisor: resolveAdvisor(harnessSettings), workspaceRoot });
 
     const handleEvent = (event: AgentEvent) => {
       if (queueGenerationRef.current !== generation) return;

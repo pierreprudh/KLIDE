@@ -1,4 +1,5 @@
 import type { ProviderId } from "./types";
+import type { AdvisorConfig } from "./advisor";
 import type { BudgetDecision, BudgetLedger } from "./budgetLedger";
 import { canSpendBudget } from "./budgetLedger";
 import type { CapacityDecision, CapacityNeed, CapacityState } from "./capacityPlanner";
@@ -18,6 +19,11 @@ export type RoutingPolicy = {
   maxParallelWorkers: number;
   askBeforeEscalation: boolean;
   defaultProviderByTier: Record<ModelTier, ProviderId | null>;
+  /** Per-tier advisor a crew member escalates a `consult_advisor` call to.
+   *  `null` for a tier means "fall back to the global harness advisor". Lets a
+   *  cheap/local tier phone a strong model (Opus) only at hard forks — the
+   *  advisor strategy as an orchestrator lever, not just a per-worker tool. */
+  advisorByTier?: Record<ModelTier, AdvisorConfig | null>;
 };
 
 export type RouteTaskInput = {
@@ -47,6 +53,10 @@ export type WorkerAssignment = {
   estimatedDurationMs: number | null;
   capacityNeed: CapacityNeed;
   validationChecks: ValidationCheck[];
+  /** The advisor this worker escalates to, resolved from the policy's
+   *  `advisorByTier` for its tier. `null` → the dispatcher falls back to the
+   *  global harness advisor when servicing a `consult_advisor` request. */
+  advisor: AdvisorConfig | null;
 };
 
 export type RoutingDecision =
@@ -75,6 +85,15 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
     cheap: "openai",
     strong: "anthropic",
     specialist: "codex",
+  },
+  // All null by default: every tier falls back to the global harness advisor
+  // (Opus by default), so a cheap/local executor already escalates to a strong
+  // model out of the box. Set a tier's advisor in the Console to override.
+  advisorByTier: {
+    local: null,
+    cheap: null,
+    strong: null,
+    specialist: null,
   },
 };
 
@@ -138,6 +157,7 @@ export function chooseAssignment(task: RouteTaskInput, policy: RoutingPolicy = D
     provider,
     modelTier,
     model: null,
+    advisor: policy.advisorByTier?.[modelTier] ?? null,
     reason: explainAssignment(task, workerKind, modelTier, policy),
     estimatedCostUsd: task.estimatedCostUsd ?? estimateCostForTier(modelTier, task),
     estimatedDurationMs: task.estimatedDurationMs ?? estimateDurationForTask(task),

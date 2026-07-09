@@ -28,6 +28,9 @@ import { dispatchAssignment, type DispatchableTask } from "../agent/dispatcher";
 import { chainStep } from "../agent/missionChain";
 import type { AgentEvent, DiffProposal, PermissionRequest, ProviderId } from "../agent/types";
 import { resolveDiff, resolvePermission } from "../agent/client";
+import { resolveAdvisor } from "../agent/advisor";
+import { serviceAdvisorConsult } from "../agent/advisorConsult";
+import { getSetting, SETTINGS } from "../settingsStore";
 import { DiffModal } from "./DiffModal";
 import { planGoal, resolvePlannerModel, stubPlan, type PlannedTask } from "../agent/planner";
 import { PROVIDER_GROUPS, providerName, isDelegateProvider, DEFAULT_MODELS } from "../agent/providers";
@@ -170,6 +173,14 @@ function useRealDispatch(workspaceRoot: string | null, story: string) {
           // pauses still arrive so command-running tasks never hang silently).
           if (ev.type === "diff_proposed") setPending((q) => [...q, { kind: "diff", proposal: ev.proposal }]);
           else if (ev.type === "permission_requested") setPending((q) => [...q, { kind: "permission", request: ev.request }]);
+          // The crew member escalated a hard decision. Service it with this
+          // tier's advisor (falling back to the global harness advisor) —
+          // without this, an orchestrator run that calls consult_advisor parks
+          // forever, since only the AI panel used to answer the event.
+          else if (ev.type === "advisor_requested") {
+            const advisor = eff.advisor ?? resolveAdvisor(getSetting(SETTINGS.harnessSettings));
+            void serviceAdvisorConsult({ event: ev, advisor, workspaceRoot });
+          }
         }
       );
       if (plan.kind !== "harness") {
