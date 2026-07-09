@@ -999,6 +999,19 @@ where
 /// gate. Approvals/rejections are remembered per-run (and project-scoped ones
 /// persist to the on-disk allowlist) so an identical command doesn't re-prompt.
 /// Cancelling during the approval wait bubbles up as `Cancelled`.
+/// The four options every command/network gate offers, declared once so the
+/// optionId / behavior / scope wire contract can't drift between capabilities.
+/// Only the run/project labels differ ("Approve for this run" vs "Approve
+/// target for this run").
+fn standard_gate_options(run_label: &str, project_label: &str) -> serde_json::Value {
+    serde_json::json!([
+        { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
+        { "optionId": "allow_run", "label": run_label, "behavior": "allow", "scope": "run" },
+        { "optionId": "allow_project", "label": project_label, "behavior": "allow", "scope": "project" },
+        { "optionId": "deny", "label": "Reject", "behavior": "deny" }
+    ])
+}
+
 async fn process_command_tool<E>(
     ctx: &ToolCtx<'_>,
     call: &NormalizedToolCall,
@@ -1134,12 +1147,7 @@ where
         },
         "summary": permission_summary,
         "reason": permission_reason,
-        "options": [
-            { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
-            { "optionId": "allow_run", "label": "Approve for this run", "behavior": "allow", "scope": "run" },
-            { "optionId": "allow_project", "label": "Approve for this project", "behavior": "allow", "scope": "project" },
-            { "optionId": "deny", "label": "Reject", "behavior": "deny" }
-        ]
+        "options": standard_gate_options("Approve for this run", "Approve for this project")
     });
 
     let decision = match permission::run_gate(ctx, call, perm, emit).await? {
@@ -1288,12 +1296,7 @@ where
         "input": invocation.input,
         "summary": invocation.summary,
         "reason": invocation.reason,
-        "options": [
-            { "optionId": "allow_once", "label": "Approve", "behavior": "allow", "scope": "once" },
-            { "optionId": "allow_run", "label": "Approve target for this run", "behavior": "allow", "scope": "run" },
-            { "optionId": "allow_project", "label": "Approve target for this project", "behavior": "allow", "scope": "project" },
-            { "optionId": "deny", "label": "Reject", "behavior": "deny" }
-        ]
+        "options": standard_gate_options("Approve target for this run", "Approve target for this project")
     });
 
     let decision = match permission::run_gate(ctx, call, perm, emit).await? {
@@ -3183,20 +3186,24 @@ mod provider_caller_tests {
     }
 }
 
+/// Shared test doubles for driving the harness headlessly: the fake supervisor
+/// (the seam's second adapter), a scripted provider caller (the "model" for
+/// loop-level tests), and the "frontend" halves of the pause ceremonies
+/// (`answer_permission` / `answer_question`).
 #[cfg(test)]
-mod run_supervisor_tests {
+mod test_support {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
 
     /// A supervisor backed by a plain map — no Tauri app. This is the second
     /// adapter that makes the seam real: the loop's run-scoped helpers can be
     /// exercised headlessly against it.
-    struct FakeSupervisor {
-        runs: Mutex<HashMap<String, AgentRunHandle>>,
+    pub(super) struct FakeSupervisor {
+        pub(super) runs: Mutex<HashMap<String, AgentRunHandle>>,
     }
 
     impl FakeSupervisor {
-        fn with_run(id: &str) -> Self {
+        pub(super) fn with_run(id: &str) -> Self {
             let mut runs = HashMap::new();
             runs.insert(id.to_string(), make_handle());
             Self {
@@ -3228,7 +3235,7 @@ mod run_supervisor_tests {
         fn broadcast(&self, _run_id: &str, _seq: u64, _event: &AgentEvent) {}
     }
 
-    fn make_handle() -> AgentRunHandle {
+    pub(super) fn make_handle() -> AgentRunHandle {
         AgentRunHandle {
             status: AgentRunStatus::Running,
             cancel: CancellationToken::new(),
@@ -3243,23 +3250,9 @@ mod run_supervisor_tests {
         }
     }
 
-    #[test]
-    fn set_status_and_with_run_handle_round_trip_off_tauri() {
-        let sup = FakeSupervisor::with_run("run-1");
-        set_run_status(&sup, "run-1", AgentRunStatus::WaitingForDiff);
-        let status = with_run_handle(&sup, "run-1", |h| h.status);
-        assert_eq!(status, Some(AgentRunStatus::WaitingForDiff));
-    }
-
-    #[test]
-    fn with_run_handle_returns_none_for_a_missing_run() {
-        let sup = FakeSupervisor::with_run("run-1");
-        assert!(with_run_handle(&sup, "ghost", |_| ()).is_none());
-    }
-
     /// Poll the run's stashed permission sender and answer it — stands in for
     /// the agent_resolve_permission command in a headless drive of the pause.
-    async fn answer_permission(sup: &FakeSupervisor, id: &str, reply: &str) {
+    pub(super) async fn answer_permission(sup: &FakeSupervisor, id: &str, reply: &str) {
         loop {
             let mut answered = false;
             sup.with_handle(id, &mut |h| {
@@ -3273,6 +3266,138 @@ mod run_supervisor_tests {
             }
             tokio::task::yield_now().await;
         }
+    }
+
+    /// Poll the run's stashed question sender and answer it — stands in for the
+    /// agent_resolve_question command (which the frontend calls after the
+    /// advisor consult / subagent finishes) in a headless drive of the pause.
+    pub(super) async fn answer_question(sup: &FakeSupervisor, id: &str, reply: &str) {
+        loop {
+            let mut answered = false;
+            sup.with_handle(id, &mut |h| {
+                if let Some(tx) = h.pending_question.lock().unwrap().take() {
+                    let _ = tx.send(reply.to_string());
+                    answered = true;
+                }
+            });
+            if answered {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A provider caller that replays a scripted sequence of responses — the
+    /// "model" for loop-level tests. Records each request's message roles so a
+    /// test can assert tool results were replayed to the model. Errors when the
+    /// script runs dry so a runaway loop fails fast instead of hanging.
+    #[derive(Clone, Default)]
+    pub(super) struct ScriptedProviderCaller {
+        pub(super) script: Arc<Mutex<VecDeque<Result<AiChatResponse, String>>>>,
+        pub(super) seen_roles: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    impl ScriptedProviderCaller {
+        pub(super) fn new(turns: Vec<Result<AiChatResponse, String>>) -> Self {
+            Self {
+                script: Arc::new(Mutex::new(turns.into())),
+                seen_roles: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl AgentProviderCaller for ScriptedProviderCaller {
+        fn call<'a>(
+            &'a self,
+            request: ProviderTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+            let script = self.script.clone();
+            let seen = self.seen_roles.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push(
+                    request
+                        .messages
+                        .iter()
+                        .map(|m| {
+                            m.get("role")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("?")
+                                .to_string()
+                        })
+                        .collect(),
+                );
+                script.lock().unwrap().pop_front().unwrap_or_else(|| {
+                    Err("provider script exhausted — the loop ran more turns than scripted"
+                        .to_string())
+                })
+            })
+        }
+    }
+
+    /// One scripted assistant turn in provider wire shape. Empty `tool_calls`
+    /// makes it the final answer.
+    pub(super) fn scripted_turn(
+        content: &str,
+        tool_calls: Vec<serde_json::Value>,
+    ) -> Result<AiChatResponse, String> {
+        Ok(AiChatResponse {
+            content: content.to_string(),
+            thinking: None,
+            tool_calls,
+            usage: None,
+            stop_reason: None,
+        })
+    }
+
+    /// A structured tool call as providers emit it (`function.name` +
+    /// `function.arguments`).
+    pub(super) fn scripted_tool_call(
+        id: &str,
+        name: &str,
+        input: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "function": { "name": name, "arguments": input },
+        })
+    }
+
+    /// A StartRunRequest for headless tests: goal mode, auto-accept diffs, an
+    /// explicit num_ctx so the loop never looks up provider model metadata.
+    pub(super) fn test_request(root: &str, command_allowlist: &[&str]) -> StartRunRequest {
+        serde_json::from_value(serde_json::json!({
+            "workspaceRoot": root,
+            "mode": "goal",
+            "provider": "mock",
+            "model": "mock-model",
+            "initialText": "Complete the fixture task.",
+            "context": null,
+            "systemPrompt": null,
+            "numCtx": 32768,
+            "requireDiffReview": false,
+            "commandAllowlist": command_allowlist,
+        }))
+        .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod run_supervisor_tests {
+    use super::test_support::*;
+    use super::*;
+
+    #[test]
+    fn set_status_and_with_run_handle_round_trip_off_tauri() {
+        let sup = FakeSupervisor::with_run("run-1");
+        set_run_status(&sup, "run-1", AgentRunStatus::WaitingForDiff);
+        let status = with_run_handle(&sup, "run-1", |h| h.status);
+        assert_eq!(status, Some(AgentRunStatus::WaitingForDiff));
+    }
+
+    #[test]
+    fn with_run_handle_returns_none_for_a_missing_run() {
+        let sup = FakeSupervisor::with_run("run-1");
+        assert!(with_run_handle(&sup, "ghost", |_| ()).is_none());
     }
 
     fn request_event() -> AgentEvent {
@@ -3309,25 +3434,6 @@ mod run_supervisor_tests {
             with_run_handle(&sup, "run-1", |h| h.status),
             Some(AgentRunStatus::Running)
         );
-    }
-
-    /// Poll the run's stashed question sender and answer it — stands in for the
-    /// agent_resolve_question command (which the frontend calls after the
-    /// advisor consult / subagent finishes) in a headless drive of the pause.
-    async fn answer_question(sup: &FakeSupervisor, id: &str, reply: &str) {
-        loop {
-            let mut answered = false;
-            sup.with_handle(id, &mut |h| {
-                if let Some(tx) = h.pending_question.lock().unwrap().take() {
-                    let _ = tx.send(reply.to_string());
-                    answered = true;
-                }
-            });
-            if answered {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
     }
 
     /// The advisor strategy end-to-end through the real tool code: the executor
@@ -3470,6 +3576,420 @@ mod run_supervisor_tests {
         )
         .await;
         assert!(matches!(outcome, Ok(PauseOutcome::Cancelled)));
+    }
+}
+
+#[cfg(test)]
+mod run_loop_tests {
+    //! Loop-level tests: the real `run_agent_loop` driven headlessly through
+    //! its three seams — `FakeSupervisor`, `ScriptedProviderCaller`, and a temp
+    //! `runs_dir`. This is the coverage the scripted eval loop used to fake by
+    //! re-implementing the turn sequence; now the one Harness loop is the test
+    //! surface, including event emission, transcript writes, and `settle_run`.
+    use super::test_support::*;
+    use super::*;
+
+    /// A fresh sandbox: `(runs_dir, workspace_root)`.
+    fn sandbox(name: &str) -> (PathBuf, String) {
+        let base = std::env::temp_dir().join(format!(
+            "klide-run-loop-{name}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let runs = base.join("runs");
+        let workspace = base.join("workspace");
+        std::fs::create_dir_all(&runs).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        (runs, workspace.to_string_lossy().to_string())
+    }
+
+    async fn drive_loop(
+        sup: Arc<FakeSupervisor>,
+        runs_dir: &Path,
+        id: &str,
+        request: StartRunRequest,
+        caller: ScriptedProviderCaller,
+    ) {
+        run_agent_loop(
+            sup,
+            runs_dir.to_path_buf(),
+            id.to_string(),
+            request,
+            Channel::new(|_| Ok(())),
+            CancellationToken::new(),
+            caller,
+        )
+        .await
+        .expect("run loop settles without an infrastructure error");
+    }
+
+    /// Ports the scripted-model eval: read → edit → verify → final answer, now
+    /// through the real loop. Asserts the edit landed, the run settled Done,
+    /// the transcript carries the full event sequence, and every tool result
+    /// was replayed to the model as a `role: "tool"` message.
+    #[tokio::test]
+    async fn loop_executes_scripted_tools_and_settles_done() {
+        let (runs_dir, root) = sandbox("read-edit-verify");
+        std::fs::write(format!("{root}/greeting.txt"), "hello world\n").unwrap();
+
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn(
+                "I'll inspect the file first.",
+                vec![scripted_tool_call(
+                    "call_read",
+                    "read_file",
+                    serde_json::json!({ "path": "greeting.txt" }),
+                )],
+            ),
+            scripted_turn(
+                "Now I'll make the requested edit.",
+                vec![scripted_tool_call(
+                    "call_write",
+                    "write_file",
+                    serde_json::json!({
+                        "path": "greeting.txt",
+                        "old_str": "hello world",
+                        "new_str": "hello klide",
+                    }),
+                )],
+            ),
+            scripted_turn(
+                "I'll verify the result.",
+                vec![scripted_tool_call(
+                    "call_verify",
+                    "run_command",
+                    serde_json::json!({ "command": "cat greeting.txt" }),
+                )],
+            ),
+            scripted_turn("Done: greeting.txt now says hello klide.", vec![]),
+        ]);
+
+        let sup = Arc::new(FakeSupervisor::with_run("loop-run"));
+        // The verify command is on the project allowlist so this scenario stays
+        // linear; the ask-then-remember path is covered in permission_gate_tests.
+        let request = test_request(&root, &["cat greeting.txt"]);
+        drive_loop(sup.clone(), &runs_dir, "loop-run", request, caller.clone()).await;
+
+        // The edit landed on disk and the run settled Done.
+        assert_eq!(
+            std::fs::read_to_string(format!("{root}/greeting.txt")).unwrap(),
+            "hello klide\n"
+        );
+        assert_eq!(
+            with_run_handle(sup.as_ref(), "loop-run", |h| h.status),
+            Some(AgentRunStatus::Done)
+        );
+
+        // The transcript carries the whole sequence.
+        let events = read_events(&runs_dir, "loop-run").unwrap();
+        assert!(matches!(events.first(), Some(AgentEvent::RunStarted { .. })));
+        let finished: Vec<&ToolResult> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolCallFinished { result, .. } => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finished.len(), 3);
+        assert!(finished[0].content.contains("hello world"), "read shows original");
+        assert!(finished[1].ok, "edit applied: {}", finished[1].content);
+        assert!(
+            finished[2].ok && finished[2].content.contains("hello klide"),
+            "command sees the edit: {}",
+            finished[2].content
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::AssistantMessage { content, .. }
+                    if content.iter().any(|b| matches!(
+                        b,
+                        AgentContentBlock::Text { text } if text.contains("Done: greeting.txt")
+                    ))
+            )),
+            "final answer is on the transcript"
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::RunResult { result, .. } if result["status"] == "done"
+        )));
+
+        // Every provider turn saw the conversation so far; by the final turn
+        // all three tool results had been replayed as role:"tool" messages.
+        let roles = caller.seen_roles.lock().unwrap();
+        assert_eq!(roles.len(), 4, "one provider call per scripted turn");
+        assert_eq!(
+            roles[3].iter().filter(|r| r.as_str() == "tool").count(),
+            3,
+            "tool results are replayed to the model"
+        );
+    }
+
+    /// A provider failure settles the run as a retryable error instead of
+    /// crashing the loop or leaving the run stuck in Running.
+    #[tokio::test]
+    async fn provider_failure_emits_run_error_and_settles_error() {
+        let (runs_dir, root) = sandbox("provider-error");
+        let caller =
+            ScriptedProviderCaller::new(vec![Err("connection refused (mock)".to_string())]);
+        let sup = Arc::new(FakeSupervisor::with_run("err-run"));
+        drive_loop(sup.clone(), &runs_dir, "err-run", test_request(&root, &[]), caller).await;
+
+        assert_eq!(
+            with_run_handle(sup.as_ref(), "err-run", |h| h.status),
+            Some(AgentRunStatus::Error)
+        );
+        let events = read_events(&runs_dir, "err-run").unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::RunError { error, .. }
+                if error.code == "provider_unavailable" && error.retryable
+        )));
+    }
+
+    /// Hitting the turn cap emits a readable final message plus a retryable
+    /// max_turns error — never a silent stop on a tool result.
+    #[tokio::test]
+    async fn turn_cap_emits_a_readable_final_message_and_max_turns_error() {
+        let (runs_dir, root) = sandbox("turn-cap");
+        std::fs::write(format!("{root}/greeting.txt"), "hello world\n").unwrap();
+        // The model keeps asking for tools; the cap (1) cuts it off.
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn(
+            "Reading first.",
+            vec![scripted_tool_call(
+                "call_read",
+                "read_file",
+                serde_json::json!({ "path": "greeting.txt" }),
+            )],
+        )]);
+        let mut request = test_request(&root, &[]);
+        request.max_turns = Some(1);
+        let sup = Arc::new(FakeSupervisor::with_run("cap-run"));
+        drive_loop(sup.clone(), &runs_dir, "cap-run", request, caller).await;
+
+        assert_eq!(
+            with_run_handle(sup.as_ref(), "cap-run", |h| h.status),
+            Some(AgentRunStatus::Error)
+        );
+        let events = read_events(&runs_dir, "cap-run").unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::AssistantMessage { content, .. }
+                    if content.iter().any(|b| matches!(
+                        b,
+                        AgentContentBlock::Text { text } if text.contains("tool-turn limit")
+                    ))
+            )),
+            "the user sees a readable closing message"
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::RunError { error, .. } if error.code == "max_turns" && error.retryable
+        )));
+    }
+}
+
+#[cfg(test)]
+mod permission_gate_tests {
+    //! The Permission engine's load-bearing behaviour, driven end-to-end
+    //! through the real command gate: classify → ask only when new → remember
+    //! at the chosen scope → auto-execute or auto-reject the identical
+    //! re-proposal. `answer_permission` stands in for the frontend; the
+    //! timeout-guarded second calls prove no prompt was shown.
+    use super::test_support::*;
+    use super::*;
+    use std::time::Duration;
+
+    fn temp_workspace(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-perm-gate-{name}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().to_string()
+    }
+
+    fn command_call(id: &str, command: &str) -> NormalizedToolCall {
+        NormalizedToolCall {
+            id: id.to_string(),
+            name: "run_command".to_string(),
+            input: serde_json::json!({ "command": command }),
+        }
+    }
+
+    type EventLog = Arc<Mutex<Vec<AgentEvent>>>;
+
+    fn event_log() -> (EventLog, impl FnMut(AgentEvent) -> Result<(), String>) {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let emit = move |e: AgentEvent| -> Result<(), String> {
+            sink.lock().unwrap().push(e);
+            Ok(())
+        };
+        (events, emit)
+    }
+
+    fn prompts_shown(events: &EventLog) -> usize {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::PermissionRequested { .. }))
+            .count()
+    }
+
+    fn produced(outcome: Result<ToolOutcome, String>) -> ToolResult {
+        match outcome.expect("gate returns ok") {
+            ToolOutcome::Produced(result) => result,
+            ToolOutcome::Cancelled => panic!("gate unexpectedly reported cancellation"),
+        }
+    }
+
+    /// Run the command gate expecting NO prompt: if it pauses, nobody answers,
+    /// so the timeout converts a would-be hang into a clear failure.
+    async fn run_gate_without_prompt(
+        ctx: &ToolCtx<'_>,
+        call: &NormalizedToolCall,
+        emit: &mut impl FnMut(AgentEvent) -> Result<(), String>,
+    ) -> ToolResult {
+        produced(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                process_command_tool(ctx, call, emit),
+            )
+            .await
+            .expect("no prompt expected — precheck should have decided"),
+        )
+    }
+
+    #[tokio::test]
+    async fn approve_for_run_executes_and_the_identical_command_skips_the_prompt() {
+        let root = temp_workspace("approve-run");
+        let sup = FakeSupervisor::with_run("perm-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "perm-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let first_call = command_call("c1", "echo approved-hi");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &first_call, &mut emit),
+            answer_permission(&sup, "perm-run", r#"{"behavior":"allow","scope":"run"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "approved command ran: {}", result.content);
+        assert!(result.content.contains("approved-hi"));
+
+        // The prompt offered the four standard options.
+        {
+            let evs = events.lock().unwrap();
+            let request_json = evs
+                .iter()
+                .find_map(|e| match e {
+                    AgentEvent::PermissionRequested { request, .. } => Some(request.clone()),
+                    _ => None,
+                })
+                .expect("PermissionRequested emitted");
+            let ids: Vec<&str> = request_json["options"]
+                .as_array()
+                .expect("options array")
+                .iter()
+                .filter_map(|o| o["optionId"].as_str())
+                .collect();
+            assert_eq!(ids, ["allow_once", "allow_run", "allow_project", "deny"]);
+        }
+
+        // Approved for the run: the identical command auto-executes, no prompt.
+        let second =
+            run_gate_without_prompt(&ctx, &command_call("c2", "echo approved-hi"), &mut emit)
+                .await;
+        assert!(second.ok, "re-run auto-executes: {}", second.content);
+        assert_eq!(prompts_shown(&events), 1, "asked exactly once");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn rejected_command_is_remembered_and_the_reproposal_auto_rejects() {
+        let root = temp_workspace("reject-run");
+        let sup = FakeSupervisor::with_run("perm-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "perm-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let first_call = command_call("c1", "echo nope");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &first_call, &mut emit),
+            answer_permission(&sup, "perm-run", r#"{"behavior":"deny"}"#),
+        );
+        let result = produced(outcome);
+        assert!(!result.ok, "rejected command must not run");
+        assert!(result.content.contains("command not run"), "got: {}", result.content);
+
+        // Re-proposing the identical command auto-rejects without a prompt.
+        let second = run_gate_without_prompt(&ctx, &command_call("c2", "echo nope"), &mut emit).await;
+        assert!(!second.ok);
+        assert!(
+            second.content.contains("already proposed this exact command"),
+            "got: {}",
+            second.content
+        );
+        assert_eq!(prompts_shown(&events), 1, "asked exactly once");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn project_scope_approval_persists_to_the_on_disk_allowlist() {
+        let root = temp_workspace("project-scope");
+        let sup = FakeSupervisor::with_run("perm-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "perm-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let first_call = command_call("c1", "echo persist-me");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &first_call, &mut emit),
+            answer_permission(&sup, "perm-run", r#"{"behavior":"allow","scope":"project"}"#),
+        );
+        assert!(produced(outcome).ok);
+
+        // The approval reached the project allowlist on disk…
+        let stored = command_allowlist::list(&root).unwrap();
+        assert!(
+            stored.contains(&"echo persist-me".to_string()),
+            "project approval persisted: {stored:?}"
+        );
+        // …and the run-scoped memory covers the rest of this run too.
+        let second =
+            run_gate_without_prompt(&ctx, &command_call("c2", "echo persist-me"), &mut emit).await;
+        assert!(second.ok);
+        assert_eq!(prompts_shown(&events), 1, "asked exactly once");
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 
