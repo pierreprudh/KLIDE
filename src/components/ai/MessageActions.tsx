@@ -106,6 +106,13 @@ const WorktreeBranchIcon = () => (
   </svg>
 );
 
+const RevertIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M9 14L4 9l5-5" />
+    <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
+  </svg>
+);
+
 const TrashIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M3 6h18" />
@@ -190,41 +197,28 @@ export function MessageActions({
             marginLeft: "auto",
             display: "inline-flex",
             alignItems: "center",
-            gap: 6,
+            gap: 4,
             fontFamily: "var(--font-mono)",
             fontSize: 10.5,
             color: "var(--fg-dim)",
             whiteSpace: "nowrap",
           }}
         >
-          <span>
+          <span style={{ opacity: revert.busy ? 0.6 : 1 }}>
             {revert.files} file{revert.files === 1 ? "" : "s"} changed
           </span>
-          <span aria-hidden>·</span>
-          <button
-            type="button"
+          <Chip
+            title={
+              revert.busy
+                ? "Reverting…"
+                : "Undo every file change this run made"
+            }
             onClick={revert.onRevert}
             disabled={revert.busy}
-            title="Undo every file change this run made"
-            style={{
-              padding: 0,
-              border: "none",
-              background: "transparent",
-              font: "inherit",
-              color: "var(--danger)",
-              cursor: revert.busy ? "default" : "pointer",
-              opacity: revert.busy ? 0.6 : 1,
-              textDecoration: "none",
-            }}
-            onMouseEnter={(e) => {
-              if (!revert.busy) e.currentTarget.style.textDecoration = "underline";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.textDecoration = "none";
-            }}
+            tone="danger"
           >
-            {revert.busy ? "Reverting…" : "Revert"}
-          </button>
+            <RevertIcon />
+          </Chip>
         </span>
       )}
     </div>
