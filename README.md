@@ -101,6 +101,12 @@ The first Rust build takes 3–5 minutes; subsequent builds are seconds. Leave `
 2. Hit `⌘P` to jump to a file, `⌘/` for the shortcut cheatsheet.
 3. Open the AI panel, pick a provider (Ollama works with no setup if it's running), and go — `Tab` cycles Chat / Plan / Goal.
 
+**Klide's own fine-tuned model** — a LoRA fine-tune trained on agent traces to run this harness's tool/edit contract, published on Ollama: [`pierreprudh/klide-8b`](https://ollama.com/pierreprudh/klide-8b). Pull it, then pick it in the Ollama model switcher (it's offered there by default):
+
+```bash
+ollama pull pierreprudh/klide-8b
+```
+
 ## Architecture
 
 Two halves, two languages. The frontend (`src/`) is React + TypeScript and owns the views; the backend (`src-tauri/`) is Rust and owns everything durable — the agent loop, tools, PTYs, git, keychain, and filesystem access (workspace-rooted, checked on every call).

@@ -11,7 +11,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { MLX_MODEL_PRESETS, providerName } from "../../agent/providers";
+import { MLX_MODEL_PRESETS, OLLAMA_MODEL_PRESETS, providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { ProviderLogo } from "./icons";
 import { modelBrand } from "../../modelBrand";
@@ -63,6 +63,13 @@ export function modelOptionsFor(
   if (model && !options.includes(model)) options.unshift(model);
   if (provider === "mlx") {
     for (const preset of MLX_MODEL_PRESETS) {
+      if (!options.includes(preset)) options.push(preset);
+    }
+  }
+  // Klide's own fine-tune is offered on Ollama even before it's pulled, so it's
+  // discoverable in the picker (shown as not-installed until `ollama pull`).
+  if (provider === "ollama") {
+    for (const preset of OLLAMA_MODEL_PRESETS) {
       if (!options.includes(preset)) options.push(preset);
     }
   }

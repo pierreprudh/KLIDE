@@ -51,6 +51,12 @@ export const MLX_MODEL_PRESETS = [
   "mlx-community/gemma-4-12B-it-qat-4bit",
 ] as const;
 
+/** Curated Ollama models offered in the picker even before they're pulled.
+ *  `pierreprudh/klide-8b` is Klide's own LoRA fine-tune (trained on agent
+ *  traces to run this harness's tool/edit contract). Pull it with
+ *  `ollama pull pierreprudh/klide-8b` — https://ollama.com/pierreprudh/klide-8b */
+export const OLLAMA_MODEL_PRESETS = ["pierreprudh/klide-8b"] as const;
+
 /** Sentinel model for delegate CLIs meaning "no model picked" — the Rust
  *  side (delegate::CLI_DEFAULT_MODEL) omits the model flag when it sees this,
  *  so the CLI opens on whatever default its own settings choose. Forcing a
