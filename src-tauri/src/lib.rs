@@ -18,8 +18,9 @@ mod workspace;
 use crate::providers::ProviderKeyStatus;
 use memory::{memory_list, memory_read, memory_write};
 use pty::{
-    delegate_pty_live_sessions, delegate_pty_resize, delegate_pty_snapshot, delegate_pty_spawn,
-    delegate_pty_stop, delegate_pty_write, pty_spawn, pty_write, DelegatePtyState, PtyState,
+    delegate_pty_live_sessions, delegate_pty_recent_sessions, delegate_pty_resize,
+    delegate_pty_snapshot, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
+    pty_write, DelegatePtyState, PtyState,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -910,6 +911,7 @@ pub fn run() {
             delegate_pty_stop,
             delegate_pty_snapshot,
             delegate_pty_live_sessions,
+            delegate_pty_recent_sessions,
             list_dir,
             read_text_file,
             path_exists,

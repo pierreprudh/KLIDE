@@ -959,10 +959,15 @@ function App() {
   // there's no `--resume` and no fresh CLI spawn: binding the new panel to the
   // session's conversation id makes its terminal land on the same PTY, and the
   // scrollback buffer (Slice 1) replays everything it produced while detached.
+  // "Reopen" on a persisted (ended) session takes the same path with a
+  // `resumeSessionId`: the disk-backed scrollback repaints the pre-restart
+  // history and the fresh spawn `--resume`s the CLI session when its id is
+  // known.
   function reattachLiveSession(opts: {
     provider: ProviderId;
     conversationId: string;
     workspaceRoot: string | null;
+    resumeSessionId?: string | null;
   }) {
     setView("workbench");
     if (!aiVisible) togglePanel("ai");
@@ -981,7 +986,7 @@ function App() {
     setPendingAiPanel({
       panelId: id,
       provider: opts.provider,
-      resumeSessionId: null,
+      resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: null,
       conversationId: opts.conversationId,
     });

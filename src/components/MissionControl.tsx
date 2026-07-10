@@ -3631,6 +3631,27 @@ type LiveDelegateSession = {
   bufferedBytes: number;
 };
 
+// One persisted-but-ended delegate session, mirror of Rust's
+// `RecentDelegateSession`. Its PTY died (CLI finished, or the app restarted)
+// but its scrollback survives on disk — reopening repaints the terminal
+// history, and resumes the CLI session when `resumeSessionId` is known.
+type RecentDelegateSession = {
+  sessionId: string;
+  convoId: string;
+  provider: string;
+  cwd: string | null;
+  task: string | null;
+  model: string | null;
+  resumeSessionId: string | null;
+  startedMs: number;
+  endedMs: number | null;
+};
+
+/** Only surface recently-ended sessions (the interrupted-by-restart case);
+ *  older history stays reachable through the run board, not the strip. */
+const RECENT_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RECENT_SESSION_MAX_ROWS = 4;
+
 // Live-strip status rendering: hook states get precise language + a status
 // tone; timer states keep the old Active/Idle. No chips, no dots — the word
 // and its color carry the state.
@@ -3657,18 +3678,21 @@ const LIVE_STATUS_COLOR: Record<LiveDelegateSession["status"], string> = {
 // it never adds chrome to a quiet board.
 function LiveSessionsStrip({
   sessions,
+  recent,
   workspaceRoot,
   onReattach,
 }: {
   sessions: LiveDelegateSession[];
+  recent: RecentDelegateSession[];
   workspaceRoot: string | null;
   onReattach?: (opts: {
     provider: ProviderId;
     conversationId: string;
     workspaceRoot: string | null;
+    resumeSessionId?: string | null;
   }) => void;
 }) {
-  if (sessions.length === 0) return null;
+  if (sessions.length === 0 && recent.length === 0) return null;
 
   // Show ~5 flat rows, scroll past that. ~30px per row.
   const maxVisible = 5;
@@ -3676,6 +3700,7 @@ function LiveSessionsStrip({
 
   return (
     <div className="klide-enter-rise" style={{ padding: "14px 8px 12px 16px", borderBottom: "1px solid var(--border)" }}>
+      {sessions.length > 0 && (
       <div
         style={{
           display: "flex",
@@ -3695,6 +3720,7 @@ function LiveSessionsStrip({
           {sessions.length}
         </span>
       </div>
+      )}
       <div
         className={scrolls ? "live-scroll" : undefined}
         style={{
@@ -3800,6 +3826,100 @@ function LiveSessionsStrip({
           );
         })}
       </div>
+      {recent.length > 0 && (
+        <>
+          <div
+            style={{
+              marginTop: sessions.length > 0 ? 10 : 0,
+              marginBottom: 6,
+              paddingRight: 8,
+              fontSize: 10.5,
+              fontWeight: 600,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "var(--fg-dim)",
+            }}
+          >
+            Recent
+          </div>
+          {recent.map((s) => {
+            const providerId = s.provider as ProviderId;
+            const title = s.task?.trim() || `${providerName(providerId)} session`;
+            const canReopen = isDelegateProvider(providerId) && !!onReattach;
+            const reopen = () =>
+              canReopen &&
+              onReattach!({
+                provider: providerId,
+                conversationId: s.convoId,
+                workspaceRoot: s.cwd ?? workspaceRoot,
+                resumeSessionId: s.resumeSessionId,
+              });
+            return (
+              <button
+                key={s.sessionId}
+                type="button"
+                onClick={reopen}
+                disabled={!canReopen}
+                className={`live-row${canReopen ? " has-act" : ""}`}
+                title={
+                  canReopen
+                    ? `Reopen · ${title}${s.resumeSessionId ? " · resumes the CLI session" : " · history only"}`
+                    : title
+                }
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  width: "100%",
+                  textAlign: "left",
+                  height: 30,
+                  padding: "0 8px",
+                  margin: "0 -8px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "none",
+                  background: "transparent",
+                  cursor: canReopen ? "pointer" : "default",
+                  font: "inherit",
+                  transition: "background var(--motion-fast) var(--ease-out)",
+                }}
+                onMouseEnter={(e) => {
+                  if (canReopen) e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <span style={{ flexShrink: 0, display: "grid", placeItems: "center", opacity: 0.55 }}>
+                  <ProviderLogo id={providerId} size={13} />
+                </span>
+                <span
+                  style={{
+                    flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--fg)",
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  }}
+                >
+                  {title}
+                </span>
+                <span
+                  style={{
+                    flexShrink: 0,
+                    minWidth: 96,
+                    display: "inline-flex",
+                    justifyContent: "flex-end",
+                    fontSize: 11,
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  <span className="live-rest" style={{ color: "var(--fg-dim)" }}>
+                    ended {relativeTime(s.endedMs ?? s.startedMs)}
+                  </span>
+                  {canReopen && <span className="live-act">Reopen</span>}
+                </span>
+              </button>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 }
@@ -3838,6 +3958,9 @@ export function MissionControl({
     provider: ProviderId;
     conversationId: string;
     workspaceRoot: string | null;
+    /** Set when reopening a persisted (ended) session whose CLI session id is
+     *  known — the fresh spawn `--resume`s it under the same terminal history. */
+    resumeSessionId?: string | null;
   }) => void;
   /** "Review Diff" — for Klide runs, scroll the detail pane's
    *  CheckpointPanel into view. For CLI runs, switch to the git-review
@@ -3886,6 +4009,9 @@ export function MissionControl({
   // sections below, so it doesn't appear twice). Polled here, not in the strip,
   // so both consumers share one source.
   const [liveSessions, setLiveSessions] = useState<LiveDelegateSession[]>([]);
+  // Persisted sessions whose PTY is gone (CLI finished / app restarted) but
+  // whose scrollback survives on disk — drives the strip's "Recent" rows.
+  const [recentSessions, setRecentSessions] = useState<RecentDelegateSession[]>([]);
   useEffect(() => {
     void refreshCustomCli().catch(() => {});
   }, []);
@@ -3897,6 +4023,12 @@ export function MissionControl({
         if (!cancelled) setLiveSessions(live);
       } catch {
         if (!cancelled) setLiveSessions([]); // outside Tauri / command missing
+      }
+      try {
+        const recent = await invoke<RecentDelegateSession[]>("delegate_pty_recent_sessions");
+        if (!cancelled) setRecentSessions(recent);
+      } catch {
+        if (!cancelled) setRecentSessions([]);
       }
     };
     void poll();
@@ -3910,6 +4042,15 @@ export function MissionControl({
     () => new Set(liveSessions.map((s) => s.convoId)),
     [liveSessions]
   );
+  // Keep the Recent rows quiet: only sessions ended in the last day, a few at
+  // most, and never one whose conversation is live again.
+  const recentStripSessions = useMemo(() => {
+    const cutoff = Date.now() - RECENT_SESSION_WINDOW_MS;
+    return recentSessions
+      .filter((s) => (s.endedMs ?? s.startedMs) >= cutoff)
+      .filter((s) => !liveConvoIds.has(s.convoId))
+      .slice(0, RECENT_SESSION_MAX_ROWS);
+  }, [recentSessions, liveConvoIds]);
   const [ledgerMetadata, setLedgerMetadata] = useState<RunLedgerMetadataStore>(() => readRunLedgerMetadata());
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [expandedSubagentParents, setExpandedSubagentParents] = useState<Set<string>>(new Set());
@@ -4416,6 +4557,7 @@ export function MissionControl({
 
         <LiveSessionsStrip
           sessions={liveSessions}
+          recent={recentStripSessions}
           workspaceRoot={workspaceRoot}
           onReattach={onReattachLiveSession}
         />
