@@ -33,7 +33,7 @@ export function DelegateConsole({
           <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>Delegate Console</span>
           <span>{provider}</span>
         </span>
-        <span style={{ color: active ? "var(--accent)" : "var(--fg-subtle)" }}>{active ? "Running" : "Finished"}</span>
+        <span style={{ color: active ? "var(--accent)" : "var(--fg-subtle)" }}>{active ? "Working" : "Done"}</span>
       </div>
       <pre style={{
         margin: 0, minHeight: 96, maxHeight: 260, overflow: "auto", padding: "10px 11px",

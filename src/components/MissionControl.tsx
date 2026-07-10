@@ -3652,15 +3652,16 @@ type RecentDelegateSession = {
 const RECENT_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENT_SESSION_MAX_ROWS = 4;
 
-// Live-strip status rendering: hook states get precise language + a status
-// tone; timer states keep the old Active/Idle. No chips, no dots — the word
-// and its color carry the state.
+// Live-strip status rendering: the one status vocabulary (see runs.ts
+// STATUS_LABEL) — Working / Waiting / Blocked (+ Idle for the timer
+// heuristic). No chips, no dots — the word and its color carry the state;
+// precise phrasing lives in the row tooltip.
 const LIVE_STATUS_TEXT: Record<LiveDelegateSession["status"], string> = {
-  running: "Active",
-  working: "Active",
+  running: "Working",
+  working: "Working",
   idle: "Idle",
-  blocked: "Needs input",
-  waiting: "Turn done",
+  blocked: "Blocked",
+  waiting: "Waiting",
 };
 const LIVE_STATUS_COLOR: Record<LiveDelegateSession["status"], string> = {
   running: "var(--accent)",
@@ -3733,9 +3734,9 @@ function LiveSessionsStrip({
           const title = s.task?.trim() || `${providerName(providerId)} session`;
           const canReattach = isDelegateProvider(providerId) && !!onReattach;
           const idle = s.status === "idle";
-          const statusLabel = LIVE_STATUS_TEXT[s.status] ?? "Active";
+          const statusLabel = LIVE_STATUS_TEXT[s.status] ?? "Working";
           const statusColor = LIVE_STATUS_COLOR[s.status] ?? "var(--accent)";
-          // "Needs input" is the one state worth a resting wash — the agent is
+          // Blocked is the one state worth a resting wash — the agent is
           // parked on the user. Everything else stays flat until hover.
           const restBg =
             s.status === "blocked"

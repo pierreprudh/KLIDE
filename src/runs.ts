@@ -41,9 +41,9 @@ export type RunBoardReason = {
 /** Human label for an attention kind, surfaced on the queue pill. */
 export const ATTENTION_LABEL: Record<RunAttention["kind"], string> = {
   failed: "Failed",
-  awaiting_input: "Needs you",
+  awaiting_input: "Blocked",
   idle: "Idle",
-  awaiting_review: "Awaiting review",
+  awaiting_review: "Waiting",
 };
 
 /** Tone (CSS color token) for an attention kind. Failed/awaiting-input pull
@@ -195,9 +195,17 @@ export const STATUS_ORDER: RunStatus[] = [
   "error",
 ];
 
+// ── The one status vocabulary ────────────────────────────────────────────
+// Every run surface (board sections, row labels, Live strip, detail pane)
+// renders the same four quiet words for the four core states the hook layer
+// emits: **Working / Waiting / Blocked / Done** — type-only, the colored word
+// carries the state (docs/competitors-design-language.md, gap #1). Waiting =
+// output sitting on you (turn done, review ready); Blocked = the agent can't
+// proceed without you. Genuinely distinct states (Queued / Stopped / Failed /
+// Idle) keep their own single quiet word — they're not synonyms.
 export const STATUS_LABEL: Record<RunStatus, string> = {
-  running: "Active",
-  waiting: "Needs you",
+  running: "Working",
+  waiting: "Blocked",
   queued: "Queued",
   done: "Done",
   cancelled: "Stopped",
@@ -216,12 +224,12 @@ export const LIFECYCLE_ORDER: RunLifecycleStatus[] = [
 
 export const LIFECYCLE_LABEL: Record<RunLifecycleStatus, string> = {
   queued: "Queued",
-  running: "Running",
-  waiting: "Needs you",
-  needs_review: "Needs review",
+  running: "Working",
+  waiting: "Blocked",
+  needs_review: "Waiting",
   done: "Done",
   failed: "Failed",
-  cancelled: "Cancelled",
+  cancelled: "Stopped",
 };
 
 export const BOARD_SECTION_ORDER: RunBoardSection[] = [
@@ -232,16 +240,16 @@ export const BOARD_SECTION_ORDER: RunBoardSection[] = [
 ];
 
 export const BOARD_SECTION_LABEL: Record<RunBoardSection, string> = {
-  running: "Running",
-  blocked: "Needs you",
-  ready_for_review: "Ready for Review",
+  running: "Working",
+  blocked: "Blocked",
+  ready_for_review: "Waiting",
   done: "Done",
 };
 
 export const BOARD_SECTION_HINT: Record<RunBoardSection, string> = {
   running: "Active or queued work",
   blocked: "Awaiting your answer, failed, or gone idle — needs a nudge",
-  ready_for_review: "Delegated subtask output to inspect",
+  ready_for_review: "Finished output waiting on your review",
   done: "Finished conversations you ran",
 };
 
@@ -330,7 +338,7 @@ export function runBoardReason(
         };
       case "awaiting_input":
         return {
-          label: "Needs you",
+          label: "Blocked",
           detail: `${SOURCE_LABEL[run.source]} is waiting for input or approval.`,
           tone: "warn",
         };
@@ -344,7 +352,7 @@ export function runBoardReason(
       }
       case "awaiting_review":
         return {
-          label: "Review",
+          label: "Waiting",
           detail: run.parentId || run.kind === "task"
             ? `${SOURCE_LABEL[run.source]} finished delegated work. Review the output before calling it done.`
             : "Finished work is ready to inspect.",
@@ -356,7 +364,7 @@ export function runBoardReason(
   switch (runLifecycleStatus(run)) {
     case "running":
       return {
-        label: "Active",
+        label: "Working",
         detail: `${SOURCE_LABEL[run.source]} is actively working.`,
         tone: "active",
       };
@@ -380,7 +388,7 @@ export function runBoardReason(
       };
     case "waiting":
       return {
-        label: "Needs you",
+        label: "Blocked",
         detail: `${SOURCE_LABEL[run.source]} is waiting for input or approval.`,
         tone: "warn",
       };
@@ -392,7 +400,7 @@ export function runBoardReason(
       };
     case "needs_review":
       return {
-        label: "Review",
+        label: "Waiting",
         detail: run.parentId || run.kind === "task"
           ? `${SOURCE_LABEL[run.source]} finished delegated work. Review the output before calling it done.`
           : "Finished work is ready to inspect.",

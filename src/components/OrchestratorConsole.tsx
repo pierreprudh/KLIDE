@@ -335,7 +335,7 @@ function StatusBadge({ status }: { status: CardStatus }) {
         lineHeight: 1,
       }}
     >
-      {status === "error" ? "error" : status === "running" ? "live" : "idle"}
+      {status === "error" ? "error" : status === "running" ? "working" : "idle"}
     </span>
   );
 }
