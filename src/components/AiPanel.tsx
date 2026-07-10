@@ -2709,6 +2709,17 @@ This user request requires workspace inspection. Before answering, you MUST call
     await resolveDiff({ runId: pendingDiff.runId, proposalId: pendingDiff.id, decision: { behavior: "reject" } });
   }
 
+  // "Request changes" — reject with the user's review note attached, so the
+  // model revises the edit toward the feedback instead of abandoning course.
+  async function handleDiffRequestChanges(note: string) {
+    if (!pendingDiff) return;
+    await resolveDiff({
+      runId: pendingDiff.runId,
+      proposalId: pendingDiff.id,
+      decision: { behavior: "reject", note },
+    });
+  }
+
   // Q&A submit: send the typed answer to the harness and let the
   // user_question_resolved event clear the card. The Rust side replaces
   // the literal "(skipped)" with a friendlier marker before returning it
@@ -3232,6 +3243,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               }}
               onApply={handleDiffApply}
               onReject={handleDiffReject}
+              onRequestChanges={handleDiffRequestChanges}
               onOpenChanges={onOpenDiff ? () => onOpenDiff({
                 path: pendingDiff.path,
                 oldContent: pendingDiff.oldContent,

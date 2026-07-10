@@ -15,6 +15,10 @@ type Props = {
   edit: PendingEdit;
   onApply: () => void;
   onReject: () => void;
+  /** "Request changes": reject with review feedback attached — the harness
+   *  hands the note to the model so it revises the edit instead of dropping
+   *  it. Shown as a quiet input under the expanded diff. */
+  onRequestChanges?: (note: string) => void;
   /** Open the full side-by-side diff in the Monaco editor. When provided, the
    *  ⤢ action opens there (syntax-highlighted); the inline hunk peek stays
    *  available by clicking the filename. Without it, ⤢ toggles the inline diff. */
@@ -127,12 +131,20 @@ function BareAction({
  *  ✗ cancel / ✓ validate / ⤢ open-changes on the right (the Image-#4 sketch).
  *  Folded by default; "open changes" expands the description + line-numbered
  *  diff in place. Lives inline under the message that proposed the edit. */
-export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Props) {
+export function InlineDiffReview({ edit, onApply, onReject, onRequestChanges, onOpenChanges }: Props) {
   const { rows, added, removed } = useMemo(
     () => buildRows(edit.oldContent, edit.newContent),
     [edit.oldContent, edit.newContent]
   );
   const [expanded, setExpanded] = useState(false);
+  const [note, setNote] = useState("");
+
+  const requestChanges = () => {
+    const trimmed = note.trim();
+    if (!trimmed || !onRequestChanges) return;
+    onRequestChanges(trimmed);
+    setNote("");
+  };
 
   const gutter = useMemo(() => {
     const max = rows.reduce((m, r) => (r.kind === "gap" ? m : Math.max(m, r.no)), 0);
@@ -309,6 +321,62 @@ export function InlineDiffReview({ edit, onApply, onReject, onOpenChanges }: Pro
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Request changes — reject with feedback. One quiet input; ⏎ sends. */}
+      {expanded && onRequestChanges && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                requestChanges();
+              }
+            }}
+            placeholder="Feedback for the agent — ⏎ rejects and asks for a revision"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 11.5,
+              padding: "5px 8px",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--bg)",
+              color: "var(--fg-strong)",
+              outline: "none",
+            }}
+            onFocus={(e) => (e.currentTarget.style.borderColor = "var(--border-strong)")}
+            onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+          />
+          <button
+            type="button"
+            onClick={requestChanges}
+            disabled={!note.trim()}
+            title="Reject this edit and send the feedback to the agent"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: "0 10px",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              background: "transparent",
+              fontSize: 11.5,
+              color: note.trim() ? "var(--fg-strong)" : "var(--fg-dim)",
+              cursor: note.trim() ? "pointer" : "default",
+              transition: "background var(--motion-fast) var(--ease-out)",
+            }}
+            onMouseEnter={(e) => {
+              if (note.trim()) e.currentTarget.style.background = "var(--bg-hover)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            Request changes
+          </button>
         </div>
       )}
     </div>

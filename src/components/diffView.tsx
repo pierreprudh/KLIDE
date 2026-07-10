@@ -6,8 +6,19 @@
 // word-level highlighting inside changed line pairs, collapsible per-file
 // sections, and hunk gaps as quiet "···" bands instead of raw @@ noise.
 // Row tinting keeps the 12% success/danger vocabulary.
+//
+// Line comments (Diff Comment → Agent): when a host passes `onLineComment`,
+// clicking a line's number gutter selects it (⇧-click extends within the
+// file) and an inline composer appears under the selection — the note plus
+// its line anchor goes back to the host, which routes it to the running
+// agent. Selection is marked with a 2px left spine (selection, not state).
 
 import { memo, useState, type ReactNode } from "react";
+import {
+  commentFromBlocks,
+  fileOfBlock,
+  type DiffLineComment,
+} from "../diffComments";
 
 export type DiffBlock =
   | { kind: "file"; path: string }
@@ -147,8 +158,18 @@ export function FileStatusIcon({ status }: { status: string }) {
 }
 
 /** One diff code row: [old№ | new№ | sign | code], tinted by tone, with
- *  the word-level changed span on a stronger tint. */
-const DiffCodeRow = memo(function DiffCodeRow({ block }: { block: DiffCodeBlock }) {
+ *  the word-level changed span on a stronger tint. When the host supports
+ *  line comments the gutter becomes the click target and a selected row
+ *  carries a 2px accent spine. */
+const DiffCodeRow = memo(function DiffCodeRow({
+  block,
+  selected = false,
+  onGutterClick,
+}: {
+  block: DiffCodeBlock;
+  selected?: boolean;
+  onGutterClick?: (e: React.MouseEvent) => void;
+}) {
   const bg =
     block.tone === "add" ? "color-mix(in srgb, var(--success) 12%, transparent)"
     : block.tone === "del" ? "color-mix(in srgb, var(--danger) 12%, transparent)"
@@ -162,12 +183,38 @@ const DiffCodeRow = memo(function DiffCodeRow({ block }: { block: DiffCodeBlock 
     : "color-mix(in srgb, var(--danger) 30%, transparent)";
   const code = block.code || " ";
   const hi = block.hi;
+  const gutterStyle: React.CSSProperties = {
+    textAlign: "right",
+    paddingRight: 8,
+    userSelect: "none",
+    fontSize: 10,
+    color: "var(--fg-dim)",
+    lineHeight: "18px",
+    cursor: onGutterClick ? "pointer" : undefined,
+  };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "36px 36px 18px 1fr", minHeight: 18, background: bg, color: fg }}>
-      <span style={{ textAlign: "right", paddingRight: 8, userSelect: "none", fontSize: 10, color: "var(--fg-dim)", lineHeight: "18px" }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "36px 36px 18px 1fr",
+        minHeight: 18,
+        background: bg,
+        color: fg,
+        boxShadow: selected ? "inset 2px 0 0 var(--accent)" : undefined,
+      }}
+    >
+      <span
+        style={gutterStyle}
+        onClick={onGutterClick}
+        title={onGutterClick ? "Comment on this line (⇧-click extends the selection)" : undefined}
+      >
         {block.oldNo ?? ""}
       </span>
-      <span style={{ textAlign: "right", paddingRight: 8, userSelect: "none", fontSize: 10, color: "var(--fg-dim)", lineHeight: "18px" }}>
+      <span
+        style={gutterStyle}
+        onClick={onGutterClick}
+        title={onGutterClick ? "Comment on this line (⇧-click extends the selection)" : undefined}
+      >
         {block.newNo ?? ""}
       </span>
       <span style={{ userSelect: "none", textAlign: "center" }}>
@@ -196,14 +243,23 @@ type DiffViewProps = {
   limit: number;
   /** Optional per-file status + counts for the file header rows. */
   fileCounts?: Map<string, FileCount>;
+  /** Enables line comments: gutter click selects, an inline composer sends
+   *  the note + its line anchor back to the host for routing to the agent. */
+  onLineComment?: (comment: DiffLineComment) => void;
+  /** The send button's label — hosts name the actual target
+   *  ("Send to claude-code" / "Copy for the agent"). */
+  commentActionLabel?: string;
 };
 
 /** The renderer over parseDiffBlocks output: collapsible file headers, quiet
  *  hunk bands, tinted code rows, and a "show full diff" tail past `limit`.
  *  Collapse/expand state lives here — remount with a `key` to reset it. */
-export function DiffView({ blocks, limit, fileCounts }: DiffViewProps) {
+export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActionLabel }: DiffViewProps) {
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
+  // Line-comment selection: block indices, anchor→head (⇧-click moves head).
+  const [sel, setSel] = useState<{ anchor: number; head: number } | null>(null);
+  const [note, setNote] = useState("");
   const toggleFileCollapsed = (path: string) => {
     setCollapsedFiles((prev) => {
       const next = new Set(prev);
@@ -214,6 +270,38 @@ export function DiffView({ blocks, limit, fileCounts }: DiffViewProps) {
   };
   const visible = showFullDiff ? blocks : blocks.slice(0, limit);
   const hidden = blocks.length - visible.length;
+
+  const clearSelection = () => {
+    setSel(null);
+    setNote("");
+  };
+
+  const gutterClick = (index: number) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    // ⇧-click extends within the same file; anything else starts fresh.
+    if (
+      e.shiftKey &&
+      sel &&
+      fileOfBlock(blocks, sel.anchor) === fileOfBlock(blocks, index)
+    ) {
+      setSel({ anchor: sel.anchor, head: index });
+    } else if (sel && sel.anchor === index && sel.head === index) {
+      clearSelection(); // clicking the lone selected line deselects
+    } else {
+      setSel({ anchor: index, head: index });
+    }
+  };
+
+  const sendComment = () => {
+    if (!sel || !onLineComment) return;
+    const comment = commentFromBlocks(blocks, sel.anchor, sel.head, note);
+    if (!comment || !comment.text) return;
+    onLineComment(comment);
+    clearSelection();
+  };
+
+  const selFrom = sel ? Math.min(sel.anchor, sel.head) : -1;
+  const selTo = sel ? Math.max(sel.anchor, sel.head) : -1;
 
   const out: ReactNode[] = [];
   let fileCollapsed = false;
@@ -257,7 +345,113 @@ export function DiffView({ blocks, limit, fileCounts }: DiffViewProps) {
       );
       return;
     }
-    out.push(<DiffCodeRow key={i} block={block} />);
+    const selected = sel !== null && i >= selFrom && i <= selTo;
+    out.push(
+      <DiffCodeRow
+        key={i}
+        block={block}
+        selected={selected}
+        onGutterClick={onLineComment ? gutterClick(i) : undefined}
+      />
+    );
+    // The composer sits directly under the selection's last row.
+    if (sel !== null && i === selTo && onLineComment) {
+      const target = commentFromBlocks(blocks, sel.anchor, sel.head, note);
+      out.push(
+        <div
+          key="comment-composer"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            padding: "8px 16px 10px 90px",
+            borderTop: "1px solid var(--border)",
+            borderBottom: "1px solid var(--border)",
+            background: "color-mix(in srgb, var(--accent) 4%, transparent)",
+            fontFamily: "var(--font-ui)",
+          }}
+        >
+          <textarea
+            autoFocus
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                sendComment();
+              } else if (e.key === "Escape") {
+                clearSelection();
+              }
+            }}
+            placeholder={
+              target
+                ? `Comment on ${target.path.split("/").pop()} · ${
+                    target.startLine === target.endLine
+                      ? `line ${target.startLine}`
+                      : `lines ${target.startLine}-${target.endLine}`
+                  } — ⏎ sends, ⇧⏎ newline`
+                : "Comment…"
+            }
+            style={{
+              width: "100%",
+              resize: "vertical",
+              fontSize: 12,
+              lineHeight: 1.5,
+              padding: "6px 9px",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--bg)",
+              color: "var(--fg-strong)",
+              outline: "none",
+              fontFamily: "var(--font-ui)",
+            }}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={clearSelection}
+              style={{
+                height: 24,
+                padding: "0 9px",
+                border: "none",
+                background: "transparent",
+                fontSize: 11.5,
+                color: "var(--fg-subtle)",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={sendComment}
+              disabled={!note.trim()}
+              style={{
+                height: 24,
+                padding: "0 10px",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                background: "transparent",
+                fontSize: 11.5,
+                color: note.trim() ? "var(--fg-strong)" : "var(--fg-dim)",
+                cursor: note.trim() ? "pointer" : "default",
+                transition: "background var(--motion-fast) var(--ease-out)",
+              }}
+              onMouseEnter={(e) => {
+                if (note.trim()) e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {commentActionLabel ?? "Send to agent"}
+            </button>
+          </div>
+        </div>
+      );
+    }
   });
 
   return (

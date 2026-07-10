@@ -1332,6 +1332,34 @@ where
 /// optional test-after-edit command. A byte-identical re-proposal of an
 /// already-rejected change is auto-declined. Cancelling during review bubbles
 /// up as `Cancelled`.
+/// Parse a resolved diff decision. The channel carries either a bare behavior
+/// string ("apply" / "reject" — also the pause's cancellation default) or the
+/// frontend's full decision JSON `{"behavior": "...", "note": "..."}` where
+/// `note` is the user's review feedback. Tolerates both; unknown shapes read
+/// as a plain rejection.
+fn parse_diff_decision(raw: &str) -> (String, Option<String>) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(obj) = value.as_object() {
+            let behavior = obj
+                .get("behavior")
+                .and_then(|b| b.as_str())
+                .unwrap_or("reject")
+                .to_string();
+            let note = obj
+                .get("note")
+                .and_then(|n| n.as_str())
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
+            return (behavior, note);
+        }
+        if let Some(s) = value.as_str() {
+            return (s.to_string(), None);
+        }
+    }
+    (raw.to_string(), None)
+}
+
 async fn process_write_tool<E>(
     ctx: &ToolCtx<'_>,
     call: &NormalizedToolCall,
@@ -1406,7 +1434,11 @@ Do not propose it again — take a different approach or ask the user what they'
         }
     };
 
-    let decision_obj = serde_json::json!({ "behavior": decision });
+    let (behavior, note) = parse_diff_decision(&decision);
+    let mut decision_obj = serde_json::json!({ "behavior": behavior });
+    if let Some(n) = &note {
+        decision_obj["note"] = serde_json::json!(n);
+    }
     emit(AgentEvent::DiffResolved {
         run_id: ctx.id.to_string(),
         proposal_id: proposal.id.clone(),
@@ -1414,7 +1446,7 @@ Do not propose it again — take a different approach or ask the user what they'
         ts: now_ms(),
     })?;
 
-    if decision == "apply" {
+    if behavior == "apply" {
         match apply_write(root, &proposal) {
             Ok(result) => {
                 let mut tool_result = result;
@@ -1462,22 +1494,31 @@ Do not propose it again — take a different approach or ask the user what they'
         }
     } else {
         // Remember this rejection so a byte-identical re-proposal is
-        // auto-declined above instead of prompting again.
+        // auto-declined above instead of prompting again. (A revised edit
+        // addressing the feedback hashes differently, so it prompts normally.)
         with_run_handle(ctx.sup, ctx.id, |h| {
             h.rejected_edits.lock().unwrap().insert(edit_key.clone());
         });
+        let verb = if proposal.is_create { "created" } else { "changed" };
+        let content = match note {
+            // Review feedback turns the rejection into steering: tell the
+            // model to revise toward the note instead of abandoning course.
+            Some(note) => format!(
+                "The user reviewed this change to {} and rejected it with feedback:\n\
+{note}\n\n\
+The file was not {verb}. Revise the change to address the feedback (or ask \
+the user if it's unclear) — do not re-propose the same edit unchanged.",
+                proposal.path
+            ),
+            None => format!(
+                "Rejected by user: {} was not {verb}. Do not propose this exact change again — \
+take a different approach or ask the user what they'd prefer.",
+                proposal.path
+            ),
+        };
         Ok(ToolOutcome::Produced(ToolResult {
             ok: false,
-            content: format!(
-                "Rejected by user: {} was not {}. Do not propose this exact change again — \
-take a different approach or ask the user what they'd prefer.",
-                proposal.path,
-                if proposal.is_create {
-                    "created"
-                } else {
-                    "changed"
-                }
-            ),
+            content,
             metadata: None,
         }))
     }
@@ -2064,12 +2105,11 @@ pub async fn agent_resolve_diff(
         Some(handle) => {
             let sender = handle.pending_diff.lock().unwrap().take();
             if let Some(tx) = sender {
-                let behavior = decision
-                    .decision
-                    .get("behavior")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("reject");
-                let _ = tx.send(behavior.to_string());
+                // Forward the full decision JSON; the write tool parses the
+                // behavior back out plus the optional review `note` — the
+                // user's line of feedback that turns a bare rejection into a
+                // steerable "request changes".
+                let _ = tx.send(decision.decision.to_string());
                 Ok(())
             } else {
                 Err("No pending diff review for this run.".to_string())
@@ -3268,6 +3308,24 @@ mod test_support {
         }
     }
 
+    /// Poll the run's stashed diff sender and answer it — stands in for the
+    /// agent_resolve_diff command in a headless drive of the diff-review pause.
+    pub(super) async fn answer_diff(sup: &FakeSupervisor, id: &str, reply: &str) {
+        loop {
+            let mut answered = false;
+            sup.with_handle(id, &mut |h| {
+                if let Some(tx) = h.pending_diff.lock().unwrap().take() {
+                    let _ = tx.send(reply.to_string());
+                    answered = true;
+                }
+            });
+            if answered {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
     /// Poll the run's stashed question sender and answer it — stands in for the
     /// agent_resolve_question command (which the frontend calls after the
     /// advisor consult / subagent finishes) in a headless drive of the pause.
@@ -3990,6 +4048,198 @@ mod permission_gate_tests {
         assert!(second.ok);
         assert_eq!(prompts_shown(&events), 1, "asked exactly once");
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod diff_gate_tests {
+    //! The diff-review gate end-to-end through the real `process_write_tool`:
+    //! a rejection carrying a review note steers the model (Diff Comment →
+    //! Agent, harness route); a bare rejection keeps the legacy wording; an
+    //! apply decision in either wire shape still applies.
+    use super::test_support::*;
+    use super::*;
+
+    fn temp_workspace(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-diff-gate-{name}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().to_string()
+    }
+
+    fn create_call(id: &str, path: &str, contents: &str) -> NormalizedToolCall {
+        NormalizedToolCall {
+            id: id.to_string(),
+            name: "create_file".to_string(),
+            input: serde_json::json!({ "path": path, "contents": contents }),
+        }
+    }
+
+    /// A request with diff review ON (the default), unlike test_request's
+    /// auto-accept.
+    fn reviewed_request(root: &str) -> StartRunRequest {
+        let mut request = test_request(root, &[]);
+        request.require_diff_review = None;
+        request
+    }
+
+    #[test]
+    fn parse_diff_decision_tolerates_every_wire_shape() {
+        assert_eq!(parse_diff_decision("apply"), ("apply".to_string(), None));
+        assert_eq!(parse_diff_decision("reject"), ("reject".to_string(), None));
+        assert_eq!(
+            parse_diff_decision(r#"{"behavior":"apply"}"#),
+            ("apply".to_string(), None)
+        );
+        assert_eq!(
+            parse_diff_decision(r#"{"behavior":"reject","note":"use snake_case"}"#),
+            ("reject".to_string(), Some("use snake_case".to_string()))
+        );
+        // Blank notes are dropped; garbage falls back to a plain rejection.
+        assert_eq!(
+            parse_diff_decision(r#"{"behavior":"reject","note":"  "}"#),
+            ("reject".to_string(), None)
+        );
+        assert_eq!(parse_diff_decision("{broken"), ("{broken".to_string(), None));
+    }
+
+    #[tokio::test]
+    async fn reject_with_a_note_returns_the_feedback_as_steering() {
+        let root = temp_workspace("note");
+        let sup = FakeSupervisor::with_run("diff-run");
+        let cancel = CancellationToken::new();
+        let request = reviewed_request(&root);
+        let runs_dir = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "diff-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let events = std::sync::Arc::new(Mutex::new(Vec::<AgentEvent>::new()));
+        let sink = events.clone();
+        let mut emit = move |e: AgentEvent| -> Result<(), String> {
+            sink.lock().unwrap().push(e);
+            Ok(())
+        };
+
+        let call = create_call("c1", "notes.md", "- shipit\n");
+        let (outcome, _) = tokio::join!(
+            process_write_tool(&ctx, &call, &mut emit),
+            answer_diff(
+                &sup,
+                "diff-run",
+                r#"{"behavior":"reject","note":"Use a heading and full sentences."}"#
+            ),
+        );
+
+        let result = match outcome.expect("gate ok") {
+            ToolOutcome::Produced(r) => r,
+            ToolOutcome::Cancelled => panic!("unexpected cancellation"),
+        };
+        assert!(!result.ok, "rejected edit must not report ok");
+        assert!(
+            result.content.contains("Use a heading and full sentences."),
+            "the model sees the feedback: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("Revise the change"),
+            "steering language, not abandon-course language: {}",
+            result.content
+        );
+        assert!(
+            !std::path::Path::new(&root).join("notes.md").exists(),
+            "rejected create must not land on disk"
+        );
+        // The transcript's DiffResolved carries the note for replay surfaces.
+        let evs = events.lock().unwrap();
+        assert!(evs.iter().any(|e| matches!(
+            e,
+            AgentEvent::DiffResolved { decision, .. }
+                if decision["behavior"] == "reject"
+                    && decision["note"] == "Use a heading and full sentences."
+        )));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn bare_reject_keeps_the_legacy_wording() {
+        let root = temp_workspace("bare");
+        let sup = FakeSupervisor::with_run("diff-run");
+        let cancel = CancellationToken::new();
+        let request = reviewed_request(&root);
+        let runs_dir = std::env::temp_dir();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "diff-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let mut emit = |_: AgentEvent| -> Result<(), String> { Ok(()) };
+
+        let call = create_call("c1", "notes.md", "x\n");
+        let (outcome, _) = tokio::join!(
+            process_write_tool(&ctx, &call, &mut emit),
+            // The cancellation-default wire shape: a bare behavior string.
+            answer_diff(&sup, "diff-run", "reject"),
+        );
+        let result = match outcome.expect("gate ok") {
+            ToolOutcome::Produced(r) => r,
+            ToolOutcome::Cancelled => panic!("unexpected cancellation"),
+        };
+        assert!(!result.ok);
+        assert!(
+            result.content.contains("Rejected by user"),
+            "got: {}",
+            result.content
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn apply_decision_json_applies_the_edit() {
+        let root = temp_workspace("apply");
+        let sup = FakeSupervisor::with_run("diff-run");
+        let cancel = CancellationToken::new();
+        let request = reviewed_request(&root);
+        let runs_dir = std::env::temp_dir().join(format!(
+            "klide-diff-gate-runs-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "diff-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let mut emit = |_: AgentEvent| -> Result<(), String> { Ok(()) };
+
+        let call = create_call("c1", "notes.md", "approved\n");
+        let (outcome, _) = tokio::join!(
+            process_write_tool(&ctx, &call, &mut emit),
+            answer_diff(&sup, "diff-run", r#"{"behavior":"apply"}"#),
+        );
+        let result = match outcome.expect("gate ok") {
+            ToolOutcome::Produced(r) => r,
+            ToolOutcome::Cancelled => panic!("unexpected cancellation"),
+        };
+        assert!(result.ok, "applied: {}", result.content);
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(&root).join("notes.md")).unwrap(),
+            "approved\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
     }
 }
 

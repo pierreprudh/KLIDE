@@ -20,6 +20,12 @@ import {
   type CommitDetails,
 } from "./GitHistoryGraph";
 import { parseDiffBlocks, DiffView } from "./diffView";
+import {
+  formatDiffComment,
+  sendTextToDelegatePty,
+  type DiffLineComment,
+} from "../diffComments";
+import { notify } from "../toast";
 import { renderMarkdown } from "./markdown";
 
 type GitCommit = {
@@ -227,9 +233,45 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
     };
   }, [openPath, openStaged, workspaceRoot]);
 
-  const blocks = useMemo(
-    () => (diff && diff.diff.trim() ? parseDiffBlocks(diff.diff.replace(/\n$/, "").split("\n")) : []),
-    [diff]
+  const blocks = useMemo(() => {
+    if (!diff || !diff.diff.trim()) return [];
+    const parsed = parseDiffBlocks(diff.diff.replace(/\n$/, "").split("\n"));
+    // A single-file diff may arrive without its `diff --git` header — line
+    // comments anchor to the nearest file block, so guarantee one.
+    if (parsed.length > 0 && parsed[0].kind !== "file") {
+      parsed.unshift({ kind: "file", path: diff.path });
+    }
+    return parsed;
+  }, [diff]);
+
+  // Diff Comment → Agent: route a line comment to the live delegate session
+  // working this checkout; without one, the contract goes to the clipboard so
+  // it can be pasted into any agent (or the AI panel).
+  const sendLineComment = useCallback(
+    async (comment: DiffLineComment) => {
+      const text = formatDiffComment(comment);
+      try {
+        const live = await invoke<
+          { sessionId: string; provider: string; cwd: string | null }[]
+        >("delegate_pty_live_sessions");
+        const exact = live.find((s) => s.cwd === workspaceRoot);
+        const target = exact ?? live.find((s) => !s.cwd) ?? null;
+        if (target) {
+          await sendTextToDelegatePty(target.sessionId, text);
+          notify(`Review comment sent to ${target.provider}.`);
+          return;
+        }
+      } catch {
+        // Outside Tauri or command unavailable — fall through to clipboard.
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        notify("No live agent here — review comment copied to the clipboard.");
+      } catch {
+        notify("Couldn't deliver the review comment.", { tone: "error" });
+      }
+    },
+    [workspaceRoot]
   );
 
   if (!open) {
@@ -269,7 +311,13 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
   }
   return (
     <div style={{ flex: 1, overflow: "auto", background: "var(--bg)", padding: "8px 0" }}>
-      <DiffView key={lastLoadedRef.current} blocks={blocks} limit={DIFF_RENDER_LIMIT} />
+      <DiffView
+        key={lastLoadedRef.current}
+        blocks={blocks}
+        limit={DIFF_RENDER_LIMIT}
+        onLineComment={(c) => void sendLineComment(c)}
+        commentActionLabel="Send to agent"
+      />
     </div>
   );
 });

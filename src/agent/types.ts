@@ -122,7 +122,10 @@ export type DiffProposal = {
 
 export type DiffDecision =
   | { behavior: "apply" }
-  | { behavior: "reject"; message?: string };
+  /** `note` is the user's review feedback ("request changes") — the harness
+   *  folds it into the rejection tool result so the model revises toward it
+   *  instead of abandoning course. */
+  | { behavior: "reject"; note?: string; message?: string };
 
 export type AgentRunResult = {
   status: "done" | "cancelled" | "max_turns";
