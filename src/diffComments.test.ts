@@ -71,6 +71,29 @@ describe("commentFromBlocks", () => {
   });
 });
 
+describe("new-file diffs (synthesized by Rust git_diff for untracked files)", () => {
+  it("parses with 1-based line numbers so comments anchor correctly", async () => {
+    const { parseDiffBlocks } = await import("./components/diffView");
+    const synthesized = [
+      "diff --git a/HAIKU.md b/HAIKU.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/HAIKU.md",
+      "@@ -0,0 +1,3 @@",
+      "+# Worktrees",
+      "+",
+      "+branches drift apart",
+    ];
+    const parsed = parseDiffBlocks(synthesized);
+    const c = commentFromBlocks(parsed, 0, parsed.length - 1, "title it better");
+    expect(c).not.toBeNull();
+    expect(c!.path).toBe("HAIKU.md");
+    expect(c!.side).toBe("new");
+    expect(c!.startLine).toBe(1);
+    expect(c!.endLine).toBe(3);
+  });
+});
+
 describe("formatDiffComment", () => {
   it("renders the contract with side-aware wording", () => {
     const text = formatDiffComment(commentFromBlocks(blocks, 3, 4, "keep old name")!);

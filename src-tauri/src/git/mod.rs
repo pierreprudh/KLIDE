@@ -225,6 +225,26 @@ pub(crate) async fn git_commit(workspace_root: String, message: String) -> Resul
 }
 
 
+/// A git-shaped diff for an UNTRACKED file (plain `git diff` shows nothing for
+/// those). The `@@ -0,0 +1,N @@` hunk header is load-bearing: the frontend's
+/// diff parser derives line numbers from it, and line comments anchor to those
+/// numbers — without it every row parses as line 0.
+fn synthesize_new_file_diff(path: &str, content: &str) -> String {
+    let mut out = format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+    );
+    let line_count = content.lines().count();
+    if line_count > 0 {
+        out.push_str(&format!("@@ -0,0 +1,{line_count} @@\n"));
+        for line in content.lines() {
+            out.push('+');
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 #[tauri::command]
 pub(crate) async fn git_diff(
     workspace_root: String,
@@ -247,18 +267,7 @@ pub(crate) async fn git_diff(
                 let full_path = std::path::Path::new(&workspace_root).join(&path);
                 let content = std::fs::read_to_string(&full_path)
                     .map_err(|e| format!("Unable to read untracked file: {e}"))?;
-                let mut out = format!(
-                "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
-            );
-                for line in content.lines() {
-                    out.push('+');
-                    out.push_str(line);
-                    out.push('\n');
-                }
-                if content.ends_with('\n') {
-                    // content.lines() omits the final empty segment; no extra line is needed.
-                }
-                out
+                synthesize_new_file_diff(&path, &content)
             } else {
                 diff
             }
@@ -1495,6 +1504,52 @@ detached
         run_git(&repo_s, &["add", "."]).unwrap();
         run_git(&repo_s, &["commit", "-m", "init"]).unwrap();
         (base, repo_s)
+    }
+
+    #[test]
+    fn synthesized_new_file_diff_carries_a_hunk_header() {
+        let diff = synthesize_new_file_diff("HAIKU.md", "old pane\nnew branch grows\n");
+        assert!(diff.contains("new file mode 100644"));
+        assert!(
+            diff.contains("@@ -0,0 +1,2 @@"),
+            "hunk header drives frontend line numbers: {diff}"
+        );
+        assert!(diff.contains("+old pane\n+new branch grows\n"));
+        // An empty new file has nothing to number — no hunk header, no rows.
+        let empty = synthesize_new_file_diff("empty.txt", "");
+        assert!(!empty.contains("@@"));
+    }
+
+    /// The case Pierre hit reviewing a freshly created file: plain `git diff`
+    /// shows nothing for an untracked file, so git_diff must synthesize a
+    /// parseable new-file diff (with line numbers) instead of returning empty.
+    #[tokio::test]
+    async fn git_diff_synthesizes_a_diff_for_untracked_files() {
+        let (base, repo) = temp_repo("untracked-diff");
+        std::fs::write(
+            std::path::Path::new(&repo).join("HAIKU.md"),
+            "# Worktrees\n\nbranches drift apart\n",
+        )
+        .unwrap();
+
+        let diff = git_diff(repo.clone(), "HAIKU.md".to_string(), false)
+            .await
+            .expect("untracked diff");
+        assert_eq!(diff.additions, 3);
+        assert!(diff.diff.contains("@@ -0,0 +1,3 @@"), "got: {}", diff.diff);
+        assert!(diff.diff.contains("+# Worktrees"));
+
+        // Staged view of the same untracked file stays empty (nothing staged),
+        // and a TRACKED clean file yields an empty working diff.
+        let staged = git_diff(repo.clone(), "HAIKU.md".to_string(), true)
+            .await
+            .expect("staged diff");
+        assert!(staged.diff.trim().is_empty());
+        let clean = git_diff(repo.clone(), "a.txt".to_string(), false)
+            .await
+            .expect("clean diff");
+        assert!(clean.diff.trim().is_empty());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[tokio::test]
