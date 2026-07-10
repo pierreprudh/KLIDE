@@ -126,6 +126,10 @@ type Props = {
   onBranchInWorktree?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Run outcome, shown right-aligned in the same row on the final answer:
+   *  "N files changed · Revert". Lives here instead of as its own strip so
+   *  the conversation ends with one quiet meta row, not three. */
+  revert?: { files: number; busy: boolean; onRevert: () => void };
 };
 
 export function MessageActions({
@@ -138,6 +142,7 @@ export function MessageActions({
   onBranchInWorktree,
   onEdit,
   onDelete,
+  revert,
 }: Props) {
   return (
     <div
@@ -178,6 +183,49 @@ export function MessageActions({
         >
           <TrashIcon />
         </Chip>
+      )}
+      {revert && revert.files > 0 && (
+        <span
+          style={{
+            marginLeft: "auto",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontFamily: "var(--font-mono)",
+            fontSize: 10.5,
+            color: "var(--fg-dim)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span>
+            {revert.files} file{revert.files === 1 ? "" : "s"} changed
+          </span>
+          <span aria-hidden>·</span>
+          <button
+            type="button"
+            onClick={revert.onRevert}
+            disabled={revert.busy}
+            title="Undo every file change this run made"
+            style={{
+              padding: 0,
+              border: "none",
+              background: "transparent",
+              font: "inherit",
+              color: "var(--danger)",
+              cursor: revert.busy ? "default" : "pointer",
+              opacity: revert.busy ? 0.6 : 1,
+              textDecoration: "none",
+            }}
+            onMouseEnter={(e) => {
+              if (!revert.busy) e.currentTarget.style.textDecoration = "underline";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.textDecoration = "none";
+            }}
+          >
+            {revert.busy ? "Reverting…" : "Revert"}
+          </button>
+        </span>
       )}
     </div>
   );

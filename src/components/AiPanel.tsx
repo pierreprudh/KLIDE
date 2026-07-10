@@ -3163,6 +3163,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                       onRetry={() => retryFromMessage(i)}
                       onBranch={() => branchFromMessage(i)}
                       onBranchInWorktree={onForkConversationInWorktree ? () => branchMessageInWorktree(i) : undefined}
+                      revert={
+                        isLast && !streaming && revertableFiles > 0
+                          ? { files: revertableFiles, busy: reverting, onRevert: () => void revertThisRun() }
+                          : undefined
+                      }
                     />
                     {autoMemoryNotice && onOpenMemory && isLast && (
                       <button
@@ -3469,23 +3474,8 @@ This user request requires workspace inspection. Before answering, you MUST call
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{modeFlash.text}</span>
           </div>
         )}
-        {!streaming && revertableFiles > 0 && (
-          // A quiet meta line, not a chip: the action is a colored word with a
-          // dot separator (Klide's status-bar idiom) — no border, no pill.
-          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 4px 6px", fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              This run changed {revertableFiles} file{revertableFiles === 1 ? "" : "s"}
-            </span>
-            <span aria-hidden style={{ color: "var(--fg-dim)" }}>·</span>
-            <button type="button" onClick={() => void revertThisRun()} disabled={reverting}
-              title="Undo every file change this run made"
-              style={{ padding: 0, border: "none", background: "transparent", font: "inherit", color: "var(--danger)", cursor: reverting ? "default" : "pointer", opacity: reverting ? 0.6 : 1, textDecoration: "none" }}
-              onMouseEnter={(e) => { if (!reverting) e.currentTarget.style.textDecoration = "underline"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}>
-              {reverting ? "Reverting…" : "Revert"}
-            </button>
-          </div>
-        )}
+        {/* The run's changed-files outcome lives in the final answer's
+            MessageActions row (revert slot) — no standalone strip here. */}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && slashMatches.length > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
