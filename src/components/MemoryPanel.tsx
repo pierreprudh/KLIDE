@@ -18,6 +18,11 @@ import {
   removeMemoryDraft,
   type MemoryDraft,
 } from "../memoryDrafts";
+import {
+  matchesMemoryQuery,
+  memoryMatchNote,
+  parseMemoryQuery,
+} from "../memorySearch";
 
 type Props = {
   workspaceRoot: string | null;
@@ -311,17 +316,20 @@ export function MemoryPanel({
     };
   }, [workspaceRoot, selectedId, entries]);
 
+  // Memory v4 search: bare terms match anywhere; `file:` / `run:` /
+  // `decision:` scope to that facet (see memorySearch.ts).
+  const parsedQuery = useMemo(() => parseMemoryQuery(query), [query]);
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter(
-      (e) =>
-        e.title.toLowerCase().includes(q) ||
-        e.goal.toLowerCase().includes(q) ||
-        e.notes.toLowerCase().includes(q) ||
-        e.decisions.some((d) => d.toLowerCase().includes(q))
-    );
-  }, [entries, query]);
+    if (!query.trim()) return entries;
+    return entries.filter((e) => matchesMemoryQuery(e, parsedQuery));
+  }, [entries, query, parsedQuery]);
+
+  /** Facet click-through from the detail pane ("browse by"): filter the list
+   *  by this run / file and make the query visible + editable. */
+  function searchFacet(facetQuery: string) {
+    setQuery(facetQuery);
+    setSearchOpen(true);
+  }
 
   const selected = entries.find((e) => e.id === selectedId) ?? null;
 
@@ -422,7 +430,7 @@ export function MemoryPanel({
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Filter…"
+                placeholder="Search — file:pty.rs · run:ses_… · decision:…"
                 style={{
                   width: "100%",
                   fontSize: 12,
@@ -581,6 +589,9 @@ export function MemoryPanel({
             )}
             {filtered.map((e) => {
               const active = e.id === selectedId;
+              // Why this row matched, when the evidence isn't already visible
+              // (a hit in files touched / decisions / run id).
+              const matchNote = query.trim() ? memoryMatchNote(e, parsedQuery) : null;
               return (
                 <div
                   key={e.id}
@@ -631,6 +642,22 @@ export function MemoryPanel({
                       }}
                     >
                       {e.goal || e.notes}
+                    </div>
+                  )}
+                  {matchNote && (
+                    <div
+                      style={{
+                        marginTop: 5,
+                        fontSize: 10.5,
+                        fontFamily: "var(--font-mono)",
+                        color: "var(--accent)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={matchNote}
+                    >
+                      {matchNote}
                     </div>
                   )}
                   <div
@@ -722,6 +749,7 @@ export function MemoryPanel({
               rawLoading={rawLoading}
               onOpenInEditor={() => void openInEditor(selected)}
               onOpenTouchedFile={onOpenTouchedFile}
+              onSearchRun={(runId) => searchFacet(`run:${runId}`)}
             />
           )}
         </div>
@@ -740,6 +768,7 @@ function MemoryDetail({
   rawLoading,
   onOpenInEditor,
   onOpenTouchedFile,
+  onSearchRun,
 }: {
   entry: MemoryEntry;
   rawView: boolean;
@@ -748,6 +777,8 @@ function MemoryDetail({
   rawLoading: boolean;
   onOpenInEditor: () => void;
   onOpenTouchedFile?: (path: string) => void;
+  /** Filter the list to every note written from this run ("browse by run"). */
+  onSearchRun?: (runId: string) => void;
 }) {
   return (
     <div style={{ padding: "22px 26px", maxWidth: 760 }}>
@@ -820,6 +851,37 @@ function MemoryDetail({
           <>
             <span style={{ color: "var(--fg-dim)" }}>·</span>
             <span style={{ fontFamily: "var(--font-mono)" }}>{entry.model}</span>
+          </>
+        )}
+        {entry.runId && (
+          <>
+            <span style={{ color: "var(--fg-dim)" }}>·</span>
+            <button
+              onClick={onSearchRun ? () => onSearchRun(entry.runId!) : undefined}
+              title="Show every note written from this run"
+              style={{
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                font: "inherit",
+                fontFamily: "var(--font-mono)",
+                color: "var(--fg-subtle)",
+                cursor: onSearchRun ? "pointer" : "default",
+                textDecoration: "none",
+              }}
+              onMouseEnter={(e) => {
+                if (onSearchRun) {
+                  e.currentTarget.style.color = "var(--fg-strong)";
+                  e.currentTarget.style.textDecoration = "underline";
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--fg-subtle)";
+                e.currentTarget.style.textDecoration = "none";
+              }}
+            >
+              run {entry.runId.length > 18 ? `${entry.runId.slice(0, 18)}…` : entry.runId}
+            </button>
           </>
         )}
       </div>
