@@ -3470,18 +3470,18 @@ This user request requires workspace inspection. Before answering, you MUST call
           </div>
         )}
         {!streaming && revertableFiles > 0 && (
+          // A quiet meta line, not a chip: the action is a colored word with a
+          // dot separator (Klide's status-bar idiom) — no border, no pill.
           <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 4px 6px", fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--fg-subtle)" }}>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               This run changed {revertableFiles} file{revertableFiles === 1 ? "" : "s"}
             </span>
+            <span aria-hidden style={{ color: "var(--fg-dim)" }}>·</span>
             <button type="button" onClick={() => void revertThisRun()} disabled={reverting}
               title="Undo every file change this run made"
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--danger)", background: "transparent", color: "var(--danger)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: reverting ? "default" : "pointer", opacity: reverting ? 0.6 : 1, transition: "background var(--motion-fast) var(--ease-out)" }}
-              onMouseEnter={(e) => { if (!reverting) e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-3" />
-              </svg>
+              style={{ padding: 0, border: "none", background: "transparent", font: "inherit", color: "var(--danger)", cursor: reverting ? "default" : "pointer", opacity: reverting ? 0.6 : 1, textDecoration: "none" }}
+              onMouseEnter={(e) => { if (!reverting) e.currentTarget.style.textDecoration = "underline"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}>
               {reverting ? "Reverting…" : "Revert"}
             </button>
           </div>

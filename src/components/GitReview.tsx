@@ -195,20 +195,21 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
   const [diff, setDiff] = useState<{ path: string; diff: string; additions: number; deletions: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const lastLoadedRef = useRef<string>("");
   const openPath = open?.path ?? null;
   const openStaged = open?.staged ?? false;
+  const diffKey = `${openPath ?? ""}::${openStaged ? "staged" : "work"}`;
 
+  // Every effect run fetches; the per-run `cancelled` flag drops a stale
+  // result instead of applying it. Deliberately NO ref-based "already loaded"
+  // dedupe here: under StrictMode's double-invoked dev effects, run A gets
+  // cancelled after claiming the key and run B early-returns on it — leaving
+  // "Loading diff…" on screen forever (the HAIKU.md bug).
   useEffect(() => {
     if (!workspaceRoot || !openPath) {
       setDiff(null);
       setError(null);
-      lastLoadedRef.current = "";
       return;
     }
-    const key = `${openPath}::${openStaged ? "staged" : "work"}`;
-    if (key === lastLoadedRef.current) return;
-    lastLoadedRef.current = key;
     setLoading(true);
     setError(null);
     let cancelled = false;
@@ -223,7 +224,6 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
         if (cancelled) return;
         setDiff(null);
         setError(e instanceof Error ? e.message : String(e));
-        lastLoadedRef.current = "";
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -312,7 +312,7 @@ const DiffViewer = memo(function DiffViewer({ workspaceRoot, open }: DiffViewerP
   return (
     <div style={{ flex: 1, overflow: "auto", background: "var(--bg)", padding: "8px 0" }}>
       <DiffView
-        key={lastLoadedRef.current}
+        key={diffKey}
         blocks={blocks}
         limit={DIFF_RENDER_LIMIT}
         onLineComment={(c) => void sendLineComment(c)}
