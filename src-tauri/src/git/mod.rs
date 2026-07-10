@@ -1023,46 +1023,28 @@ pub(crate) struct WorktreeInfo {
     /// so a fresh worktree can actually build. Empty when nothing was copied.
     #[serde(default)]
     pub bootstrapped: Vec<String>,
+    /// Dependency dirs symlinked from the main checkout (recipe `linkDirs`).
+    #[serde(default)]
+    pub linked: Vec<String>,
+    /// Deterministic dev-server port (recipe `portBase`), when configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// True when a recipe `setupScript` was started in the background — its
+    /// outcome arrives later on the `worktree-setup:done` event.
+    #[serde(default)]
+    pub script_started: bool,
 }
 
-/// Copy small untracked config files (e.g. `.env`) from the main checkout into
-/// a fresh worktree. A worktree has every TRACKED file but none of the
-/// gitignored secrets/config a build needs — the #1 reason a fresh worktree
-/// won't run. Top-level files only (no `/` or `..`, so this can't be coaxed
-/// into writing outside the worktree); skips any already present in the
-/// worktree or missing from the source. Returns the names actually copied.
-fn bootstrap_worktree_files(
-    source_root: &str,
-    worktree: &std::path::Path,
-    files: &[String],
-) -> Vec<String> {
-    let mut copied = Vec::new();
-    for name in files {
-        let name = name.trim();
-        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-            continue;
-        }
-        let src = std::path::Path::new(source_root).join(name);
-        let dst = worktree.join(name);
-        if src.is_file() && !dst.exists() && std::fs::copy(&src, &dst).is_ok() {
-            copied.push(name.to_string());
-        }
-    }
-    copied
-}
-
-/// Default config files Klide copies into a new worktree when the caller
-/// doesn't specify a list. The common local-secret/config names.
-fn default_worktree_copy_files() -> Vec<String> {
-    [
-        ".env",
-        ".env.local",
-        ".env.development",
-        ".env.development.local",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+/// Payload of the `worktree-setup:done` event — the background setup script's
+/// outcome, reported once it finishes (or is killed at the recipe timeout).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeSetupDone {
+    path: String,
+    branch: String,
+    ok: bool,
+    /// Combined output tail — enough to see why a setup failed.
+    output: String,
 }
 
 /// Turn a branch name into one safe directory segment for the worktree dir.
@@ -1088,15 +1070,82 @@ fn worktree_dir_name(branch: &str) -> String {
     }
 }
 
+/// How the background setup script reports its outcome. Production emits the
+/// `worktree-setup:done` event; tests pass a sink — the seam that keeps the
+/// worktree core drivable without a Tauri app.
+type SetupNotify = std::sync::Arc<dyn Fn(WorktreeSetupDone) + Send + Sync>;
+
+/// Apply the workspace's worktree-setup recipe to a (new or reused) checkout:
+/// copy env files, link dependency dirs, derive the port, and start the setup
+/// script on a background thread that reports through `notify`.
+/// `copy_files` overrides the recipe's list when the caller passes one.
+fn apply_worktree_setup(
+    notify: SetupNotify,
+    toplevel: &str,
+    dir: &std::path::Path,
+    branch: &str,
+    copy_files: Option<Vec<String>>,
+) -> (Vec<String>, Vec<String>, Option<u16>, bool) {
+    use crate::worktree_setup;
+    let setup = worktree_setup::load(toplevel);
+    let copy = copy_files.unwrap_or_else(|| setup.copy_files.clone());
+    let bootstrapped = worktree_setup::copy_files_into(toplevel, dir, &copy);
+    let linked = worktree_setup::link_dirs_into(toplevel, dir, &setup.link_dirs);
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let port = setup.port_base.map(|base| worktree_setup::port_for(base, &name));
+
+    let script_started = match setup.setup_script.clone().filter(|s| !s.trim().is_empty()) {
+        Some(script) => {
+            // Background: an `npm install` must not block opening the panel.
+            // The outcome lands on the notify seam; the frontend toasts it.
+            let envs = worktree_setup::script_env(toplevel, dir, branch, port);
+            let dir = dir.to_path_buf();
+            let branch = branch.to_string();
+            let timeout = setup.script_timeout_secs;
+            std::thread::spawn(move || {
+                let outcome = worktree_setup::run_script(&script, &dir, &envs, timeout);
+                notify(WorktreeSetupDone {
+                    path: dir.to_string_lossy().to_string(),
+                    branch,
+                    ok: outcome.ok,
+                    output: outcome.output,
+                });
+            });
+            true
+        }
+        None => false,
+    };
+    (bootstrapped, linked, port, script_started)
+}
+
 /// Create a worktree on `branch` and return its checkout path. If the branch
 /// already exists it is checked out; otherwise it's created off the current
 /// HEAD. Idempotent on the directory: an existing checkout at the target path
 /// is returned as-is rather than re-added.
 #[tauri::command]
 pub(crate) async fn git_worktree_add(
+    app: tauri::AppHandle,
     workspace_root: String,
     branch: String,
     copy_files: Option<Vec<String>>,
+) -> Result<WorktreeInfo, String> {
+    use tauri::Emitter;
+    let notify: SetupNotify = std::sync::Arc::new(move |done: WorktreeSetupDone| {
+        let _ = app.emit("worktree-setup:done", done);
+    });
+    worktree_add_core(workspace_root, branch, copy_files, notify).await
+}
+
+/// The command's body behind the notify seam, so tests can drive it against a
+/// real temp repo without a Tauri app.
+async fn worktree_add_core(
+    workspace_root: String,
+    branch: String,
+    copy_files: Option<Vec<String>>,
+    notify: SetupNotify,
 ) -> Result<WorktreeInfo, String> {
     blocking(move || {
         let branch = branch.trim();
@@ -1109,7 +1158,6 @@ pub(crate) async fn git_worktree_add(
         if toplevel.is_empty() {
             return Err("Not inside a git repository".to_string());
         }
-        let copy_files = copy_files.unwrap_or_else(default_worktree_copy_files);
 
         // A worktree dir deleted by hand (rm -rf, Finder) leaves a stale
         // registration that keeps its branch claimed — re-creating a worktree on
@@ -1132,15 +1180,16 @@ pub(crate) async fn git_worktree_add(
             let actual = git_output(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
                 .map(|s| s.trim().to_string())
                 .unwrap_or_else(|_| branch.to_string());
-            let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
+            let actual = if actual == "HEAD" { String::new() } else { actual };
+            let (bootstrapped, linked, port, script_started) =
+                apply_worktree_setup(notify, &toplevel, &dir, &actual, copy_files);
             return Ok(WorktreeInfo {
                 path,
-                branch: if actual == "HEAD" {
-                    String::new()
-                } else {
-                    actual
-                },
+                branch: actual,
                 bootstrapped,
+                linked,
+                port,
+                script_started,
             });
         }
         if let Some(parent) = dir.parent() {
@@ -1193,11 +1242,15 @@ pub(crate) async fn git_worktree_add(
             }
         }
 
-        let bootstrapped = bootstrap_worktree_files(&toplevel, &dir, &copy_files);
+        let (bootstrapped, linked, port, script_started) =
+            apply_worktree_setup(notify, &toplevel, &dir, branch, copy_files);
         Ok(WorktreeInfo {
             path,
             branch: branch.to_string(),
             bootstrapped,
+            linked,
+            port,
+            script_started,
         })
     })
     .await
@@ -1295,6 +1348,9 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
                 path: p,
                 branch: std::mem::take(branch),
                 bootstrapped: Vec::new(),
+                linked: Vec::new(),
+                port: None,
+                script_started: false,
             });
         }
     };
@@ -1391,42 +1447,8 @@ mod tests {
         assert!(commits[1].refs.is_empty());
     }
 
-    #[test]
-    fn bootstrap_copies_only_missing_top_level_files() {
-        let base = std::env::temp_dir().join(format!("klide-wt-bootstrap-{}", std::process::id()));
-        let src = base.join("main");
-        let wt = base.join("wt");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(src.join(".env"), "SECRET=1").unwrap();
-        std::fs::write(src.join(".env.local"), "L=2").unwrap();
-        // Already present in the worktree → must not be overwritten.
-        std::fs::write(wt.join(".env.local"), "KEEP").unwrap();
-
-        let copied = bootstrap_worktree_files(
-            src.to_str().unwrap(),
-            &wt,
-            &[
-                ".env".into(),
-                ".env.local".into(),   // exists in wt → skipped
-                ".env.missing".into(), // not in src → skipped
-                "../escape".into(),    // traversal → rejected
-                "nested/x".into(),     // not top-level → rejected
-            ],
-        );
-
-        assert_eq!(copied, vec![".env".to_string()]);
-        assert_eq!(
-            std::fs::read_to_string(wt.join(".env")).unwrap(),
-            "SECRET=1"
-        );
-        assert_eq!(
-            std::fs::read_to_string(wt.join(".env.local")).unwrap(),
-            "KEEP"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
+    // (The copy/link/port/script setup helpers live — with their tests — in
+    // crate::worktree_setup; this file only orchestrates them.)
 
     #[test]
     fn parse_worktree_list_reads_path_and_branch() {
@@ -1454,6 +1476,11 @@ detached
 
     /// A throwaway git repo with one commit on `main`, for exercising the
     /// worktree commands against real git.
+    /// Tests don't have a Tauri app to emit `worktree-setup:done` — drop it.
+    fn noop_notify() -> SetupNotify {
+        std::sync::Arc::new(|_| {})
+    }
+
     fn temp_repo(name: &str) -> (std::path::PathBuf, String) {
         let base =
             std::env::temp_dir().join(format!("klide-git-test-{name}-{}", std::process::id()));
@@ -1474,7 +1501,7 @@ detached
     async fn worktree_add_applies_the_fleet_recipe() {
         let (base, repo) = temp_repo("wt-recipe");
 
-        let wt = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![]))
+        let wt = worktree_add_core(repo.clone(),"klide/test-run".into(), Some(vec![]), noop_notify())
             .await
             .unwrap();
         assert_eq!(wt.branch, "klide/test-run");
@@ -1495,7 +1522,7 @@ detached
         );
 
         // Re-adding is idempotent: same path back, no error.
-        let again = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![]))
+        let again = worktree_add_core(repo.clone(),"klide/test-run".into(), Some(vec![]), noop_notify())
             .await
             .unwrap();
         assert_eq!(again.path, wt.path);
@@ -1503,7 +1530,7 @@ detached
         // A worktree dir deleted by hand leaves a stale registration that
         // claims the branch; the prune-before-add must revive it cleanly.
         std::fs::remove_dir_all(&wt.path).unwrap();
-        let revived = git_worktree_add(repo.clone(), "klide/test-run".into(), Some(vec![]))
+        let revived = worktree_add_core(repo.clone(),"klide/test-run".into(), Some(vec![]), noop_notify())
             .await
             .unwrap();
         assert_eq!(revived.path, wt.path);
@@ -1517,7 +1544,7 @@ detached
     #[tokio::test]
     async fn branch_diff_defaults_to_the_recorded_fork_base() {
         let (base, repo) = temp_repo("wt-diff-base");
-        let wt = git_worktree_add(repo.clone(), "klide/diffed".into(), Some(vec![]))
+        let wt = worktree_add_core(repo.clone(),"klide/diffed".into(), Some(vec![]), noop_notify())
             .await
             .unwrap();
         // Move main forward AFTER the fork, then commit a change in the
@@ -1549,7 +1576,7 @@ detached
         let (base, repo) = temp_repo("wt-guard");
         // The user explicitly opted out — the recipe must not clobber that.
         run_git(&repo, &["config", "push.autoSetupRemote", "false"]).unwrap();
-        git_worktree_add(repo.clone(), "klide/guarded".into(), Some(vec![]))
+        worktree_add_core(repo.clone(),"klide/guarded".into(), Some(vec![]), noop_notify())
             .await
             .unwrap();
         assert_eq!(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Z } from "../zLayers";
+import type { WorktreeInfo } from "../worktrees";
 
 // Worktrees — the fleet's review/merge surface. Lists the repo's git
 // worktrees and lets you open one in a pinned AI panel, merge its branch back
@@ -9,7 +10,7 @@ import { Z } from "../zLayers";
 // the thin operator UI over those. Same centered-overlay treatment as
 // MemoryModal.
 
-type Worktree = { path: string; branch: string; bootstrapped: string[] };
+type Worktree = WorktreeInfo;
 
 type Props = {
   open: boolean;

@@ -57,6 +57,12 @@ import {
   type PendingAiPanel,
 } from "./components/ai/panelHost";
 import { readWorkspaceTextFile } from "./workspaceFs";
+import {
+  worktreeSetupSummary,
+  worktreeName,
+  type WorktreeInfo,
+  type WorktreeSetupDone,
+} from "./worktrees";
 import "./styles/tokens.css";
 
 const MissionControl = lazy(() => import("./components/MissionControl").then((m) => ({ default: m.MissionControl })));
@@ -857,16 +863,15 @@ function App() {
         return;
       }
       const branch = `klide/fork-${Date.now().toString(36)}`;
-      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+      const wt = await invoke<WorktreeInfo>(
         "git_worktree_add",
         { workspaceRoot: baseRoot, branch, copyFiles: null }
       );
       openForkedConversation(run, forkConversationFromRun(run, messages, wt.path, {
         branch: wt.branch,
-        worktree: wt.path.split("/").filter(Boolean).pop() ?? wt.branch,
+        worktree: worktreeName(wt),
       }));
-      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
-      setFileNotice(`Forked "${run.title}" into worktree ${wt.branch}${copied}.`);
+      setFileNotice(`Forked "${run.title}" into worktree ${wt.branch}${worktreeSetupSummary(wt)}.`);
     } catch (e) {
       setFileNotice(`Worktree fork failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -880,7 +885,7 @@ function App() {
     }
     try {
       const branch = `klide/turn-${Date.now().toString(36)}`;
-      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+      const wt = await invoke<WorktreeInfo>(
         "git_worktree_add",
         { workspaceRoot: root, branch, copyFiles: null }
       );
@@ -888,7 +893,7 @@ function App() {
         ...convo,
         cwd: wt.path,
         branch: wt.branch,
-        worktree: wt.path.split("/").filter(Boolean).pop() ?? wt.branch,
+        worktree: worktreeName(wt),
         updatedAt: Date.now(),
       };
       setView("workbench");
@@ -899,8 +904,7 @@ function App() {
         cwd: wt.path,
       });
       setResumeTarget({ panelId, convo: forked });
-      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
-      setFileNotice(`Branched turn into worktree ${wt.branch}${copied}.`);
+      setFileNotice(`Branched turn into worktree ${wt.branch}${worktreeSetupSummary(wt)}.`);
     } catch (e) {
       setFileNotice(`Turn worktree branch failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -1012,15 +1016,14 @@ function App() {
     }
     const name = branch?.trim() || `klide/wt-${Date.now().toString(36)}`;
     try {
-      const wt = await invoke<{ path: string; branch: string; bootstrapped: string[] }>(
+      const wt = await invoke<WorktreeInfo>(
         "git_worktree_add",
         { workspaceRoot, branch: name, copyFiles: null }
       );
       setView("workbench");
       if (!aiVisible) togglePanel("ai");
       appendAiPanel({ cwd: wt.path });
-      const copied = wt.bootstrapped.length > 0 ? ` · copied ${wt.bootstrapped.join(", ")}` : "";
-      setFileNotice(`Worktree ready on ${wt.branch} — this panel runs there${copied}.`);
+      setFileNotice(`Worktree ready on ${wt.branch} — this panel runs there${worktreeSetupSummary(wt)}.`);
     } catch (err) {
       setFileNotice(`Worktree failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1240,6 +1243,25 @@ function App() {
     }).then((u) => { unlisten = u; });
     return () => { unlisten?.(); };
   }, [workspaceRoot]);
+
+  // Worktree setup scripts (recipe: .klide/worktree.json) run on a Rust
+  // background thread so creating a worktree never blocks on an install —
+  // surface their outcome the moment they finish, whichever view is open.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    void listen<WorktreeSetupDone>("worktree-setup:done", (e) => {
+      const name = worktreeName(e.payload);
+      if (e.payload.ok) {
+        notify(`Worktree setup finished · ${name}`);
+      } else {
+        const lines = e.payload.output.trim().split("\n");
+        const tail = lines[lines.length - 1] ?? "";
+        notify(`Worktree setup failed · ${name}${tail ? ` — ${tail}` : ""}`, { tone: "error" });
+      }
+    }).then((u) => { unlisten = u; });
+    return () => { unlisten?.(); };
+  }, []);
 
   // The editor's no-file launcher rows fire the same handlers as their
   // keyboard chords below — click and shortcut stay one code path.

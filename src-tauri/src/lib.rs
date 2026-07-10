@@ -14,6 +14,7 @@ mod pty;
 mod search;
 mod skills;
 mod workspace;
+mod worktree_setup;
 
 use crate::providers::ProviderKeyStatus;
 use memory::{memory_list, memory_read, memory_write};
