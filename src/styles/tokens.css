@@ -356,7 +356,7 @@ input:focus-visible {
   outline-offset: 1px;
 }
 
-textarea:focus-visible:not(.inputarea):not(.xterm-helper-textarea) {
+textarea:focus-visible:not(.inputarea):not(.xterm-helper-textarea):not(.klide-diff-comment-input) {
   outline: 2px solid var(--accent-soft) !important;
   outline-offset: 1px;
 }
@@ -465,6 +465,112 @@ select.klide-field {
     calc(100% - 10px) 50%;
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
+}
+
+/* Diff line-comment composer. Kept in the token layer because DiffView is
+   shared by Git Review and commit/detail surfaces, and this little note editor
+   should feel like one Klide control everywhere it appears. */
+.klide-diff-comment-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-strong) 48%, transparent);
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.klide-diff-comment-row:focus-within {
+  border-bottom-color: var(--border-strong);
+  box-shadow: none;
+}
+
+.klide-diff-comment-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  max-height: 96px;
+  resize: none;
+  overflow-y: auto;
+  padding: 7px 2px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-strong);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.45;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.klide-diff-comment-input::placeholder {
+  color: var(--fg-dim);
+}
+
+.klide-diff-comment-input:focus {
+  background: transparent;
+  box-shadow: none;
+}
+
+textarea.klide-diff-comment-input:focus,
+textarea.klide-diff-comment-input:focus-visible {
+  outline: none !important;
+}
+
+.klide-diff-comment-icon,
+.klide-diff-comment-send {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.klide-diff-comment-icon {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  display: inline-grid;
+  place-items: center;
+}
+
+.klide-diff-comment-icon:hover {
+  background: transparent;
+  color: var(--fg-strong);
+}
+
+.klide-diff-comment-send {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-subtle);
+}
+
+.klide-diff-comment-send:hover:not(:disabled) {
+  background: transparent;
+  color: var(--fg-strong);
+}
+
+.klide-diff-comment-send:disabled {
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+@media (max-width: 720px) {
+  .klide-diff-comment-row {
+    grid-template-columns: minmax(0, 1fr) 28px 28px;
+  }
 }
 
 .klide-surface {

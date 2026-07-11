@@ -276,6 +276,11 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
     setNote("");
   };
 
+  const resizeCommentInput = (textarea: HTMLTextAreaElement) => {
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 96)}px`;
+  };
+
   const gutterClick = (index: number) => (e: React.MouseEvent) => {
     e.preventDefault();
     // ⇧-click extends within the same file; anything else starts fresh.
@@ -356,97 +361,60 @@ export function DiffView({ blocks, limit, fileCounts, onLineComment, commentActi
     );
     // The composer sits directly under the selection's last row.
     if (sel !== null && i === selTo && onLineComment) {
-      const target = commentFromBlocks(blocks, sel.anchor, sel.head, note);
       out.push(
         <div
           key="comment-composer"
           style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            padding: "8px 16px 10px 90px",
-            borderTop: "1px solid var(--border)",
-            borderBottom: "1px solid var(--border)",
-            background: "color-mix(in srgb, var(--accent) 4%, transparent)",
+            display: "grid",
+            gridTemplateColumns: "72px minmax(220px, 620px) 1fr",
+            padding: "2px 16px 4px 0",
             fontFamily: "var(--font-ui)",
           }}
         >
-          <textarea
-            autoFocus
-            rows={2}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendComment();
-              } else if (e.key === "Escape") {
-                clearSelection();
-              }
-            }}
-            placeholder={
-              target
-                ? `Comment on ${target.path.split("/").pop()} · ${
-                    target.startLine === target.endLine
-                      ? `line ${target.startLine}`
-                      : `lines ${target.startLine}-${target.endLine}`
-                  } — ⏎ sends, ⇧⏎ newline`
-                : "Comment…"
-            }
-            style={{
-              width: "100%",
-              resize: "vertical",
-              fontSize: 12,
-              lineHeight: 1.5,
-              padding: "6px 9px",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              background: "var(--bg)",
-              color: "var(--fg-strong)",
-              outline: "none",
-              fontFamily: "var(--font-ui)",
-            }}
-          />
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ flex: 1 }} />
+          <span aria-hidden="true" />
+          <div className="klide-diff-comment-row klide-fade-swap">
+            <textarea
+              className="klide-diff-comment-input"
+              autoFocus
+              rows={1}
+              value={note}
+              onChange={(e) => {
+                setNote(e.target.value);
+                resizeCommentInput(e.currentTarget);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendComment();
+                } else if (e.key === "Escape") {
+                  clearSelection();
+                }
+              }}
+              placeholder="Leave feedback"
+            />
             <button
               type="button"
               onClick={clearSelection}
-              style={{
-                height: 24,
-                padding: "0 9px",
-                border: "none",
-                background: "transparent",
-                fontSize: 11.5,
-                color: "var(--fg-subtle)",
-                cursor: "pointer",
-              }}
+              className="klide-diff-comment-icon"
+              aria-label="Cancel comment"
+              title="Cancel"
             >
-              Cancel
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
             </button>
             <button
               type="button"
               onClick={sendComment}
               disabled={!note.trim()}
-              style={{
-                height: 24,
-                padding: "0 10px",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                background: "transparent",
-                fontSize: 11.5,
-                color: note.trim() ? "var(--fg-strong)" : "var(--fg-dim)",
-                cursor: note.trim() ? "pointer" : "default",
-                transition: "background var(--motion-fast) var(--ease-out)",
-              }}
-              onMouseEnter={(e) => {
-                if (note.trim()) e.currentTarget.style.background = "var(--bg-hover)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-              }}
+              className="klide-diff-comment-send"
+              aria-label={commentActionLabel ?? "Send to agent"}
+              title={commentActionLabel ?? "Send to agent"}
             >
-              {commentActionLabel ?? "Send to agent"}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="m5 12 14-7-7 14-2-5-5-2Z" />
+                <path d="m12 14 7-9" />
+              </svg>
             </button>
           </div>
         </div>
