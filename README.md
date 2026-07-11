@@ -101,7 +101,7 @@ The first Rust build takes 3–5 minutes; subsequent builds are seconds. Leave `
 2. Hit `⌘P` to jump to a file, `⌘/` for the shortcut cheatsheet.
 3. Open the AI panel, pick a provider (Ollama works with no setup if it's running), and go — `Tab` cycles Chat / Plan / Goal.
 
-**Klide's own fine-tuned model** — a LoRA fine-tune trained on agent traces to run this harness's tool/edit contract, published on Ollama: [`pierreprudh/klide-8b`](https://ollama.com/pierreprudh/klide-8b). Pull it, then pick it in the Ollama model switcher (it's offered there by default):
+**Klide's own model** — [`pierreprudh/klide-8b`](https://ollama.com/pierreprudh/klide-8b) is a LoRA fine-tune of LFM2.5-8B-A1B, trained to drive this harness's tool/edit contract. Pull it and it appears in the Ollama model switcher:
 
 ```bash
 ollama pull pierreprudh/klide-8b
@@ -140,7 +140,7 @@ Shipped milestones live in the [changelog](./CHANGELOG.md). Ahead:
 npm run tauri dev      # full dev loop (Vite + Rust hot reload)
 npx tsc --noEmit       # frontend type-check — must pass clean
 cargo check            # in src-tauri/ — must pass clean
-cargo test             # harness eval suite
+cargo test             # in src-tauri/ — harness eval suite
 ```
 
 Issues and PRs are welcome. Keep changes small and verified — both checks above must pass before committing.
