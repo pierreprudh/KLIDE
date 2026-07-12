@@ -2,89 +2,88 @@
 
 # Klide
 
-### The local-first agent IDE that keeps you in control.
+### Every agent visible. Every change reviewable.
 
-Run local models, steer Codex / Claude Code / OpenCode, review every change, and keep your coding agents visible.
+A local-first coding workspace for running local models and subscription coding agents side by side.
 
 <br/>
 
-[![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)](https://v2.tauri.app)
-[![Rust](https://img.shields.io/badge/Rust-backend-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Ollama](https://img.shields.io/badge/Ollama-local_first-000000?style=flat-square&logo=ollama&logoColor=white)](https://ollama.com)
-![Status](https://img.shields.io/badge/status-v0.5-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
+[![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
 <br/>
 
-[**Get started**](#getting-started) &nbsp;&bull;&nbsp; [Features](#features) &nbsp;&bull;&nbsp; [Development](#development) &nbsp;&bull;&nbsp; [Roadmap](#roadmap)
+[**Get started**](#get-started) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Architecture](#trust-and-architecture) &nbsp;·&nbsp; [Contributing](#contributing)
 
 <br/>
 
-<img src=".github/assets/welcome.png" alt="Klide welcome screen — a live ASCII globe rotating against a starfield" width="860" />
+<img src=".github/assets/workbench.png" alt="Klide running Ollama, OpenRouter, MLX, and OpenCode in one workspace" width="1200" />
 
 </div>
 
----
+## One workspace for every coding agent
 
-**Klide is a small, fast, AI-native coding workbench for developers who want agent speed without black-box autonomy.** It keeps the VS Code structure you already know — activity bar, explorer, tabs, editor, terminal, status bar — but the center of gravity is the agent loop: modes, context, diffs, skills, workspace state, and run evidence stay close to the work.
+Klide runs Ollama, MLX, Claude Code, Codex, OpenCode, and Oh My Pi (OMP) without hiding their native capabilities. You can inspect tool calls, follow terminal output, compare model cost and latency, and review changes from one workspace.
 
-Local models run out of the box through Ollama / MLX. Online providers and subscription CLIs are opt-in. Codex, Claude Code, and OpenCode run as real embedded terminals, while Klide's own Rust harness can read code, draft plans, propose diff-reviewed edits, and run approval-gated commands.
+Klide keeps three questions in view:
 
-| What you get | Why it matters |
-|---|---|
-| **Mission Control for agents** | See what is running, what needs you, and what changed across Klide runs and delegate CLIs. |
-| **Local-first model support** | Start with Ollama / MLX, then add hosted providers only when you want them. |
-| **Real delegate terminals** | Use Codex, Claude Code, and OpenCode without flattening their CLIs into a fake chat UI. |
-| **Review before trust** | File edits, commands, memory drafts, and validation evidence stay visible before they become durable. |
-| **Tauri-light desktop shell** | A native webview app with a ~10 MB binary instead of Electron-scale overhead. |
-
-> **VS Code's structure · a calm, minimal aesthetic · agent harness transparency** — built for people who want to steer coding agents, not babysit hidden automation.
+- **What is running?** Mission Control tracks Klide runs and delegate command-line interface (CLI) sessions
+- **What needs attention?** Waiting, blocked, failed, and reviewable work rises to the top
+- **What changed?** Each run keeps its files, branch, transcript, validation state, cost, and memory evidence
 
 ## Why Klide
 
-Most editors fall into two camps: heavy (VS Code, JetBrains — powerful, but busy chrome and AI bolted on) or niche (Zed, Lapce, Helix — beautiful, but you give up your muscle memory). Klide aims for a third spot: a calm operator surface for code work where the agent can act, the risky parts are gated, and the UI stays quiet until you need deeper control. Inspired by [Sinew](https://sinew-ide.com/), with a nod to [Ara](https://ara.so/), [Cursor](https://cursor.com), and [Cline](https://cline.bot).
+Coding agents work well in terminals, but their sessions, diffs, and evidence spread across separate tools. Klide keeps the real terminal experience and adds a shared operations layer around it.
+
+| | |
+|---|---|
+| **Run real agents** | Use Claude Code, Codex, OpenCode, OMP, or a custom CLI inside persistent pseudoterminal (PTY) sessions |
+| **Keep work visible** | See working, waiting, blocked, and completed runs across the workspace |
+| **Review before trust** | Approve commands, inspect proposed edits, comment on diffs, and check validation evidence |
+| **Choose where inference runs** | Start with Ollama or MLX, then opt into hosted providers or subscription CLIs |
+| **Resume with context** | Reopen transcripts, hand work to another agent, and save reviewed project memory |
+
+## How work moves through Klide
+
+1. Start a Klide run or open a delegate CLI
+2. Follow its status, tool calls, terminal output, and changed files
+3. Review edits and commands before they cross the workspace trust boundary
+4. Validate the result, send feedback, resume later, or hand the work to another agent
+
+Klide has three capability modes:
+
+| Mode | Agent access |
+|---|---|
+| `Chat` | Answers without workspace tools |
+| `Plan` | Reads the workspace and proposes an approach |
+| `Goal` | Uses tools with diff review and permission-gated commands |
 
 ## Features
 
-**Editor & shell**
+| Area | Included |
+|---|---|
+| **Agent operations** | Mission Control, shared run lifecycle, attention queue, transcripts, session resume, cross-agent handoff, sub-agent visibility |
+| **Review and evidence** | Diff comments sent to agents, command approval, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
+| **Parallel work** | Git worktrees, worktree setup recipes, branch comparison, and merge controls |
+| **Editor and shell** | Monaco editor, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
+| **Models** | Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, OpenRouter, and OpenAI-compatible endpoints |
+| **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, skills, dynamic tools, and reviewed project memory |
+| **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, and network permissions |
 
-- Familiar layout: activity bar, file explorer, multi-file tabs, Monaco editor, real PTY terminal, status bar
-- Command palette (`⌘P` files, `⌘⇧P` commands), find-in-files, Git review workbench, keyboard-shortcut cheatsheet (`⌘/`)
-- Light + dark themes shared across app, editor, and terminal — including per-theme terminal ANSI palettes
+## Get started
 
-**AI panel**
+Klide currently targets macOS. Apple Silicon is the primary development platform.
 
-- Streaming chat across local (Ollama, MLX) and hosted providers (Anthropic, OpenAI-compatible, Mistral, xAI, OpenRouter) plus self-hosted endpoints — all behind one switcher, all streamed through Rust so API keys never enter the webview
-- Real delegate terminals: Claude Code, Codex, OpenCode, Oh My Pi, and user-defined CLI agents run inside embedded PTYs — the actual CLI UI, not a chat imitation
-- Chat / Plan / Goal modes: Chat has no tools, Plan is read-only, Goal proposes diff-reviewed edits and runs approval-gated commands
-- `@`-mentions to attach workspace files, slash commands, exact per-message token counts, project rules from `AGENTS.md` / `CLAUDE.md`, installable skills
-- API keys in the OS keychain; self-hosted endpoint tokens via `${VAR}` references to your `.env`
+### Prerequisites
 
-**Agent harness (Rust)**
+- [Node.js](https://nodejs.org) 20 or later
+- [Rust](https://rustup.rs) stable
+- Optional: [Ollama](https://ollama.com) or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) for local inference
 
-- One agent loop for every mode; tools are defined once in Rust and the frontend fetches schemas over IPC — see [`KLIDE_HARNESS_SCHEMA.md`](./KLIDE_HARNESS_SCHEMA.md)
-- `run_command` with per-command approval, timeouts, and a project-persistent allowlist, so the agent can run tests and verify its own work
-- Edit contract tuned for small local models: numbered reads, tolerant search/replace, post-edit syntax checks
-- Golden-scenario eval suite runs as `cargo test`, so harness changes can't silently regress reads, edits, or command handling
+### Build from source
 
-**Agent operations**
-
-- Mission Control: a run board across Klide and delegate CLIs — what's running, what needs you, what changed — with evidence per run (branch, files touched, tokens/cost, sub-agents), transcript preview, resume, cross-CLI handoff, and workspace-scoped history
-- Live session reattach: delegate PTYs survive panel switches; hook-based status reports working / waiting / blocked without scraping terminal output
-- Git Review: branch diff, PR workbench, commit graph, and a structured commit-detail pane with avatars and full-width diffs
-- Project Memory: durable handoff notes in `.klide/memory/` — completed runs draft a note you accept, edit, or skip (git-ignored by default; teams can opt in to sharing)
-
-## Getting started
-
-**Prerequisites**
-
-- macOS (Apple Silicon is the primary target; other platforms are untested)
-- [Node.js](https://nodejs.org) 20+ and [Rust](https://rustup.rs) (stable)
-- Optional, for local models: [Ollama](https://ollama.com) and/or [`mlx-lm`](https://github.com/ml-explore/mlx-lm)
-
-**Build & run**
+Clone the repository and start the Tauri development build:
 
 ```bash
 git clone https://github.com/pierreprudh/KLIDE.git
@@ -93,62 +92,73 @@ npm install
 npm run tauri dev
 ```
 
-The first Rust build takes 3–5 minutes; subsequent builds are seconds. Leave `tauri dev` running — frontend changes hot-reload.
+The first Rust build takes about three to five minutes. Later builds reuse the compiled dependencies.
 
-**First steps**
+Once Klide opens:
 
-1. Open a folder from the welcome screen.
-2. Hit `⌘P` to jump to a file, `⌘/` for the shortcut cheatsheet.
-3. Open the AI panel, pick a provider (Ollama works with no setup if it's running), and go — `Tab` cycles Chat / Plan / Goal.
+1. Open a workspace folder
+2. Open the AI panel and select a provider
+3. Press `Tab` to switch between `Chat`, `Plan`, and `Goal`
+4. Open Mission Control to follow active and completed work
 
-**Klide's own model** — [`pierreprudh/klide-8b`](https://ollama.com/pierreprudh/klide-8b) is a LoRA fine-tune of LFM2.5-8B-A1B, trained to drive this harness's tool/edit contract. Pull it and it appears in the Ollama model switcher:
+`⌘P` jumps to a file, `⌘⇧P` opens the command palette, and `⌘/` shows the full shortcut cheatsheet.
+
+## Use the Klide model
+
+[`pierreprudh/klide-8b`](https://ollama.com/pierreprudh/klide-8b) is a Low-Rank Adaptation (LoRA) fine-tune of LFM2.5-8B-A1B. It is trained for Klide's tool and edit contract.
 
 ```bash
 ollama pull pierreprudh/klide-8b
 ```
 
-## Architecture
+The model appears in Klide's Ollama picker after the download finishes.
 
-Two halves, two languages. The frontend (`src/`) is React + TypeScript and owns the views; the backend (`src-tauri/`) is Rust and owns everything durable — the agent loop, tools, PTYs, git, keychain, and filesystem access (workspace-rooted, checked on every call).
+## Trust and architecture
 
-```
-Klide/
-├── src/             React + TypeScript frontend (the UI)
-├── src-tauri/       Rust backend (agent harness, PTYs, git, keychain, fs)
-└── CLAUDE.md        Architecture map + working conventions
-```
+Klide separates the interface from the durable execution layer:
 
-| Layer | Tech |
+| Layer | Responsibility |
 |---|---|
-| App shell | **Tauri 2** (Rust) — ~10 MB binary, native webview |
-| Editor | **Monaco** — the editor from VS Code |
-| Terminal | **xterm.js** + **portable-pty** — real PTYs on the Rust side |
-| Local AI | **Ollama** / **MLX** — both run the full tool harness |
+| **React and TypeScript** | Editor, panels, review surfaces, layouts, and run projections |
+| **Tauri and Rust** | Agent harness, provider streaming, tools, permissions, PTYs, Git, keychain, and filesystem access |
+| **JSON Lines (JSONL) transcripts** | Append-only run events used by Mission Control, validation, memory, and replay |
 
-## Roadmap
+The Rust harness checks capabilities when it advertises tools and again before execution. Writes pause for diff review. Commands and network access pause for permission.
 
-Shipped milestones live in the [changelog](./CHANGELOG.md). Ahead:
+Read the [Harness contract](./HARNESS_CONTRACT.md) for the trust model and [Harness schema](./KLIDE_HARNESS_SCHEMA.md) for the tool interface.
 
-- Worktree-per-run isolation polished into the default parallel-agent flow
-- Deeper review queue — diff comments sent back to the running agent
-- Natural-language scheduling and proactive suggestions, still parked until the evidence loop has more daily mileage
-- Packaged releases (signed macOS builds), then cross-platform validation
+## Project status
+
+Klide is at version 0.5 and remains under active development. Source builds are available now; signed application bundles are not yet published.
+
+Current priorities:
+
+- Make worktree-per-run isolation the default parallel-agent flow
+- Deepen the review queue and agent feedback loop
+- Publish signed macOS builds, then validate Windows and Linux
+
+See the [changelog](./CHANGELOG.md) for shipped milestones.
 
 ## Development
 
+Run the relevant checks before submitting a change:
+
 ```bash
-npm run tauri dev      # full dev loop (Vite + Rust hot reload)
-npx tsc --noEmit       # frontend type-check — must pass clean
-cargo check            # in src-tauri/ — must pass clean
-cargo test             # in src-tauri/ — harness eval suite
+npm test
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Issues and PRs are welcome. Keep changes small and verified — both checks above must pass before committing.
+The frontend lives in `src/`. The Rust backend lives in `src-tauri/`.
+
+## Contributing
+
+Issues and pull requests are welcome. Keep changes focused, preserve the workspace trust boundary, and include validation for changed behavior.
 
 ## Acknowledgments
 
-Built on [Tauri](https://v2.tauri.app), [Monaco](https://github.com/microsoft/monaco-editor), and [xterm.js](https://xtermjs.org). Design and product inspiration: Sinew, Ara, Cursor, Cline, Linear.
+Klide is built with [Tauri](https://v2.tauri.app), [Monaco](https://microsoft.github.io/monaco-editor/), and [xterm.js](https://xtermjs.org). Its product influences include Sinew, Ara, Cursor, Cline, Linear, and the open coding-agent ecosystem.
 
 ## License
 
-[MIT](./LICENSE)
+Klide is available under the [MIT License](./LICENSE).
