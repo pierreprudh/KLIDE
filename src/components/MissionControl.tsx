@@ -2697,6 +2697,7 @@ function RunDetail({
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(run.title);
   const [exportState, setExportState] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [evidenceState, setEvidenceState] = useState<"idle" | "exporting" | "saved" | "error">("idle");
   const [compareState, setCompareState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [branchDiff, setBranchDiff] = useState<GitBranchDiffSummary | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
@@ -2707,6 +2708,7 @@ function RunDetail({
     setCompareState("idle");
     setBranchDiff(null);
     setCompareError(null);
+    setEvidenceState("idle");
   }, [run.id, run.source, run.title]);
 
   function commitRename() {
@@ -2731,6 +2733,28 @@ function RunDetail({
     } catch {
       setExportState("error");
       window.setTimeout(() => setExportState((state) => (state === "error" ? "idle" : state)), 1800);
+    }
+  }
+
+  async function exportEvidence() {
+    setEvidenceState("exporting");
+    try {
+      const res = await invoke<{ markdown: string; relPath: string | null; absPath: string | null }>(
+        "agent_export_evidence",
+        { runId: run.id, workspaceRoot: run.cwd ?? workspaceRoot ?? null },
+      );
+      setEvidenceState("saved");
+      notify(res.relPath ? `Evidence packet saved to ${res.relPath}` : "Evidence packet generated", {
+        action: {
+          label: "Copy Markdown",
+          run: () => void navigator.clipboard.writeText(res.markdown),
+        },
+      });
+      window.setTimeout(() => setEvidenceState((state) => (state === "saved" ? "idle" : state)), 1400);
+    } catch (err) {
+      setEvidenceState("error");
+      notify(`Evidence export failed: ${err instanceof Error ? err.message : String(err)}`);
+      window.setTimeout(() => setEvidenceState((state) => (state === "error" ? "idle" : state)), 1800);
     }
   }
 
@@ -3065,6 +3089,23 @@ function RunDetail({
               icon={exportState === "copied" ? CheckGlyph : ExportGlyph}
               disabled={exportState === "copying"}
               onClick={() => void exportTranscript()}
+            />
+          )}
+          {run.capabilities.canExportEvidence && (
+            <IconActionButton
+              tone={evidenceState === "saved" ? "success" : "default"}
+              label={
+                evidenceState === "exporting"
+                  ? "Exporting…"
+                  : evidenceState === "saved"
+                  ? "Evidence saved"
+                  : evidenceState === "error"
+                  ? "Evidence export failed — try again"
+                  : "Export evidence packet"
+              }
+              icon={evidenceState === "saved" ? CheckGlyph : EvidenceGlyph}
+              disabled={evidenceState === "exporting"}
+              onClick={() => void exportEvidence()}
             />
           )}
           {onRename && run.capabilities.canRename && (
@@ -3442,6 +3483,8 @@ const DiffGlyph = <Glyph><path d="M12 4v8" /><path d="M8 8h8" /><path d="M6 20h1
 const MemoryGlyph = <Glyph><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" /></Glyph>;
 const CopyGlyph = <Glyph><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Glyph>;
 const FolderGlyph = <Glyph><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" /></Glyph>;
+// A document bearing a check — the run's proof, not just its words.
+const EvidenceGlyph = <Glyph><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="m9 15 2 2 4-4" /></Glyph>;
 
 function RefreshIcon() {
   return (

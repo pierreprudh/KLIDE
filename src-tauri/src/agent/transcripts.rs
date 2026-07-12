@@ -383,6 +383,15 @@ pub(crate) fn last_assistant_summary(events: &[AgentEvent]) -> Option<String> {
     last
 }
 
+/// Read one run's summary file. Errors when the run has no summary on disk
+/// (never persisted, or a delegate CLI run that lives outside `runs/`).
+pub fn read_summary(runs_dir: &Path, run_id: &str) -> Result<AgentRunSummary, String> {
+    let path = summary_path(runs_dir, run_id);
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("Unable to read run summary: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("Unable to parse run summary: {e}"))
+}
+
 pub fn read_events(runs_dir: &Path, run_id: &str) -> Result<Vec<AgentEvent>, String> {
     let path = transcript_path(runs_dir, run_id);
     let content =

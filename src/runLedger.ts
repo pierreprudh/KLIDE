@@ -23,6 +23,9 @@ export type RunCapabilities = {
   canFork: boolean;
   canArchive: boolean;
   canExportTranscript: boolean;
+  /** Export a Markdown evidence packet — Klide-native runs only, since the
+   *  packet is rendered from the on-disk AgentEvent transcript. */
+  canExportEvidence: boolean;
 };
 
 const NO_CAPABILITIES: RunCapabilities = {
@@ -35,6 +38,7 @@ const NO_CAPABILITIES: RunCapabilities = {
   canFork: false,
   canArchive: false,
   canExportTranscript: false,
+  canExportEvidence: false,
 };
 
 export type RunLedgerMetadata = {
@@ -112,6 +116,7 @@ function capabilitiesFor(run: Run, origin: RunLedgerOrigin, lifecycle = runLifec
     canFork: hasContent,
     canArchive: !active,
     canExportTranscript: hasContent,
+    canExportEvidence: run.source === "klide" && hasContent,
   };
 }
 

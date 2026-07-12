@@ -972,6 +972,7 @@ pub fn run() {
             agent::agent_run_status,
             agent::agent_list_runs,
             agent::agent_read_run,
+            agent::agent_export_evidence,
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,
             agent::agent_revert_run_checkpoints,

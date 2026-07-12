@@ -1,6 +1,7 @@
 mod command_allowlist;
 #[cfg(test)]
 mod eval;
+pub mod evidence;
 mod network_allowlist;
 mod permission;
 mod run_core;
@@ -2289,6 +2290,49 @@ pub async fn agent_read_run(
 ) -> Result<Vec<AgentEvent>, String> {
     let runs_dir = app_runs_dir(&app)?;
     read_events(&runs_dir, &run_id)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceExport {
+    pub markdown: String,
+    /// Workspace-relative path of the written packet, when a workspace was
+    /// given. `None` for markdown-only exports.
+    pub rel_path: Option<String>,
+    pub abs_path: Option<String>,
+}
+
+/// Fold a run's summary + transcript into a Markdown evidence packet and,
+/// when a workspace is given, write it to `<workspace>/.klide/evidence/`.
+/// Klide-native runs only — delegate CLI transcripts live outside `runs/`.
+#[tauri::command]
+pub async fn agent_export_evidence(
+    app: tauri::AppHandle,
+    run_id: String,
+    workspace_root: Option<String>,
+) -> Result<EvidenceExport, String> {
+    let runs_dir = app_runs_dir(&app)?;
+    let summary = transcripts::read_summary(&runs_dir, &run_id)?;
+    let events = read_events(&runs_dir, &run_id)?;
+    let markdown = evidence::render_evidence_markdown(&summary, &events);
+    let mut rel_path = None;
+    let mut abs_path = None;
+    if let Some(root) = workspace_root.as_deref().filter(|r| !r.trim().is_empty()) {
+        let dir = Path::new(root).join(".klide").join("evidence");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Unable to create .klide/evidence directory: {e}"))?;
+        let name = format!("{}.md", sanitize_file_id(&run_id));
+        let file = dir.join(&name);
+        std::fs::write(&file, &markdown)
+            .map_err(|e| format!("Unable to write evidence file: {e}"))?;
+        rel_path = Some(format!(".klide/evidence/{name}"));
+        abs_path = Some(file.to_string_lossy().to_string());
+    }
+    Ok(EvidenceExport {
+        markdown,
+        rel_path,
+        abs_path,
+    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
