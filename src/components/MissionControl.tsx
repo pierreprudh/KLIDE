@@ -1584,22 +1584,11 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
           onToggleTools={() => setShowTools((v) => !v)}
           onToggleNotes={() => setShowProcessNotes((v) => !v)}
         />
-        <button
+        <IconActionButton
+          icon={CopyGlyph}
+          label="Copy conversation as Markdown"
           onClick={copyAsMarkdown}
-          title="Copy conversation as Markdown"
-          style={{
-            background: "none",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            color: "var(--fg-subtle)",
-            fontSize: 10,
-            padding: "3px 8px",
-            cursor: "pointer",
-            letterSpacing: "0.04em",
-          }}
-        >
-          Copy as MD
-        </button>
+        />
       </div>
       <div
         style={{
@@ -1704,55 +1693,115 @@ function ConversationReviewBar({
       }}
     >
       <span style={{ color: "var(--fg-subtle)" }}>Review</span>
-      <span>{turns} turns</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {TurnsGlyph}
+        {turns} turns
+      </span>
       {tools > 0 && (
-        <ReviewToggle
-          active={showTools}
-          label={`${tools} tools`}
-          title={showTools ? "Hide tool activity" : "Show tool activity"}
-          onClick={onToggleTools}
-        />
+        <>
+          <ReviewDot />
+          <ReviewToggle
+            icon={ToolRunGlyph}
+            active={showTools}
+            label={`${tools} tools`}
+            title={showTools ? "Hide tool activity" : "Show tool activity"}
+            onClick={onToggleTools}
+          />
+        </>
       )}
       {notes > 0 && (
-        <ReviewToggle
-          active={showNotes}
-          label={`${notes} notes`}
-          title={showNotes ? "Hide working notes" : "Show working notes"}
-          onClick={onToggleNotes}
-        />
+        <>
+          <ReviewDot />
+          <ReviewToggle
+            icon={NotesGlyph}
+            active={showNotes}
+            label={`${notes} notes`}
+            title={showNotes ? "Hide working notes" : "Show working notes"}
+            onClick={onToggleNotes}
+          />
+        </>
       )}
     </div>
   );
 }
 
+// Micro glyphs for the review bar — 11px so they sit flush with the 10px mono
+// counts they annotate.
+const TurnsGlyph = (
+  <Glyph size={11}>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
+  </Glyph>
+);
+const ToolRunGlyph = (
+  <Glyph size={11}>
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+  </Glyph>
+);
+const NotesGlyph = (
+  <Glyph size={11}>
+    <path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11l5-5V5a2 2 0 0 0-2-2Z" />
+    <path d="M15 21v-4a2 2 0 0 1 2-2h4" />
+  </Glyph>
+);
+
+function ReviewDot() {
+  return (
+    <span aria-hidden style={{ color: "var(--fg-dim)", opacity: 0.6 }}>
+      ·
+    </span>
+  );
+}
+
 function ReviewToggle({
   active,
+  icon,
   label,
   title,
   onClick,
 }: {
   active: boolean;
+  icon?: React.ReactNode;
   label: string;
   title: string;
   onClick: () => void;
 }) {
+  // Hidden sections read as struck-through counts — type does the state work,
+  // no chip container needed. The strike stays on the words; the glyph only
+  // dims, so it keeps reading as an icon.
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
       style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
         fontSize: 10,
         fontFamily: "var(--font-mono)",
-        padding: "2px 7px",
-        borderRadius: "var(--radius-sm)",
-        border: "1px solid var(--border)",
-        background: active ? "var(--bg-selected)" : "transparent",
+        padding: 0,
+        border: "none",
+        background: "transparent",
         color: active ? "var(--fg-strong)" : "var(--fg-dim)",
         cursor: "pointer",
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.color = active ? "var(--fg-strong)" : "var(--fg-subtle)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = active ? "var(--fg-strong)" : "var(--fg-dim)";
       }}
     >
-      {label}
+      {icon}
+      <span
+        style={{
+          textDecoration: active ? "none" : "line-through",
+          textDecorationColor: "color-mix(in srgb, var(--fg-dim) 70%, transparent)",
+        }}
+      >
+        {label}
+      </span>
     </button>
   );
 }

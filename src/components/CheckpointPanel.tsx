@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { listCheckpoints, revertCheckpoint, revertRunCheckpoints } from "../agent/client";
 import type { CheckpointEntry } from "../agent/types";
 import { DiffModal, type PendingEdit } from "./DiffModal";
@@ -37,6 +37,123 @@ type Props = {
   runId: string;
 };
 
+// Line glyphs on the 24-grid — the same icon idiom as the AI panel's action
+// chips (undo arrow from the revert chip, plus-over-minus for diff).
+function Glyph({ children, size = 13 }: { children: ReactNode; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+// Eye — "view the diff" said plainly; the old plus-over-minus read cryptic.
+const EyeGlyph = (
+  <Glyph>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+    <circle cx="12" cy="12" r="3" />
+  </Glyph>
+);
+
+// Row change marks — pencil for an edited file, plus for a created one.
+const EditMarkGlyph = (
+  <Glyph size={12}>
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  </Glyph>
+);
+
+const AddMarkGlyph = (
+  <Glyph size={12}>
+    <path d="M12 5v14" />
+    <path d="M5 12h14" />
+  </Glyph>
+);
+
+const RevertGlyph = (
+  <Glyph>
+    <path d="M9 14L4 9l5-5" />
+    <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
+  </Glyph>
+);
+
+const revertGlyphSmall = (
+  <Glyph size={11}>
+    <path d="M9 14L4 9l5-5" />
+    <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
+  </Glyph>
+);
+
+/* Borderless action — the checkpoint list reads as a quiet macOS-style list,
+   so controls are glyphs (or glyph+word) that gain color on hover instead of
+   boxed buttons. Destructive actions stay neutral at rest and only turn red
+   when pointed at. Icon-only actions keep their label as tooltip + aria. */
+function QuietAction({
+  icon,
+  label,
+  showLabel = true,
+  busyLabel = "…",
+  danger,
+  busy,
+  disabled,
+  onClick,
+  size = 11,
+}: {
+  icon?: ReactNode;
+  label: string;
+  showLabel?: boolean;
+  busyLabel?: string;
+  danger?: boolean;
+  busy?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  size?: number;
+}) {
+  const inactive = !!disabled || !!busy;
+  const restColor = busy && danger ? "var(--danger)" : "var(--fg-subtle)";
+  return (
+    <button
+      onClick={onClick}
+      disabled={inactive}
+      title={label}
+      aria-label={label}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        fontSize: size,
+        fontWeight: 500,
+        padding: showLabel ? "2px 5px" : 4,
+        border: "none",
+        background: "transparent",
+        color: restColor,
+        cursor: inactive ? "default" : "pointer",
+        opacity: (disabled && !busy) || (busy && !showLabel) ? 0.5 : 1,
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => {
+        if (!inactive) e.currentTarget.style.color = danger ? "var(--danger)" : "var(--fg)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = restColor;
+      }}
+    >
+      {icon}
+      {showLabel && (busy ? busyLabel : label)}
+    </button>
+  );
+}
+
 export function CheckpointPanel({ runId }: Props) {
   const [entries, setEntries] = useState<CheckpointEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +162,7 @@ export function CheckpointPanel({ runId }: Props) {
   const [reverting, setReverting] = useState<string | null>(null);
   const [revertingAll, setRevertingAll] = useState(false);
   const [revertingTurn, setRevertingTurn] = useState<number | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,6 +182,9 @@ export function CheckpointPanel({ runId }: Props) {
   }, [load]);
 
   async function handleRevert(entry: CheckpointEntry) {
+    // The blocking confirm can swallow mouseleave — drop hover state first so
+    // row actions can't stay stuck visible after the dialog closes.
+    setHoverId(null);
     // Match the bulk/turn paths: confirm before an overwrite that can't be
     // undone. Single-file revert was the one destructive path without a guard.
     if (!window.confirm(`Revert ${entry.path} to its checkpoint? This overwrites the current file and can't be undone.`)) return;
@@ -81,6 +202,7 @@ export function CheckpointPanel({ runId }: Props) {
   }
 
   async function handleRevertAll() {
+    setHoverId(null);
     if (!window.confirm(`Revert all ${entries.length} remaining file change${entries.length === 1 ? "" : "s"} for this run?`)) return;
     setRevertingAll(true);
     setError(null);
@@ -98,6 +220,7 @@ export function CheckpointPanel({ runId }: Props) {
   }
 
   async function handleRevertTurn(turn: number, group: CheckpointEntry[]) {
+    setHoverId(null);
     if (!window.confirm(`Revert ${group.length} file change${group.length === 1 ? "" : "s"} from turn ${turn}?`)) return;
     setRevertingTurn(turn);
     setError(null);
@@ -126,35 +249,8 @@ export function CheckpointPanel({ runId }: Props) {
   if (entries.length === 0) return <div style={muted}>No file changes to revert.</div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button
-          onClick={() => void handleRevertAll()}
-          disabled={revertingAll || !!reverting}
-          style={{
-            fontSize: 11,
-            padding: "3px 8px",
-            borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--danger)",
-            color: "var(--danger)",
-            background: revertingAll
-              ? "color-mix(in srgb, var(--danger) 12%, transparent)"
-              : "transparent",
-            cursor: revertingAll || !!reverting ? "default" : "pointer",
-            opacity: revertingAll || !!reverting ? 0.6 : 1,
-          }}
-          onMouseEnter={(e) => {
-            if (!revertingAll && !reverting)
-              e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)";
-          }}
-          onMouseLeave={(e) => {
-            if (!revertingAll && !reverting) e.currentTarget.style.background = "transparent";
-          }}
-        >
-          {revertingAll ? "Reverting…" : "Revert all"}
-        </button>
-      </div>
-      {groups.map(({ turn, entries: group }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {groups.map(({ turn, entries: group }, groupIdx) => (
         <div key={turn}>
           <div
             style={{
@@ -162,134 +258,135 @@ export function CheckpointPanel({ runId }: Props) {
               alignItems: "center",
               justifyContent: "space-between",
               gap: 8,
-              marginBottom: 6,
+              marginBottom: 2,
             }}
           >
             <div
               style={{
-              fontSize: 10,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              color: "var(--fg-subtle)",
-              fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: "var(--fg-subtle)",
+                fontFamily: "var(--font-mono)",
               }}
             >
               Turn {turn} · {group.length} file{group.length === 1 ? "" : "s"}
             </div>
-            <button
-              onClick={() => void handleRevertTurn(turn, group)}
-              disabled={revertingAll || revertingTurn === turn || !!reverting}
-              style={{
-                fontSize: 10,
-                padding: "2px 6px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border)",
-                color: "var(--fg-subtle)",
-                background: revertingTurn === turn ? "var(--bg-hover)" : "transparent",
-                cursor: revertingAll || revertingTurn === turn || !!reverting ? "default" : "pointer",
-                opacity: revertingAll || revertingTurn === turn || !!reverting ? 0.6 : 1,
-              }}
-              onMouseEnter={(e) => {
-                if (!revertingAll && revertingTurn !== turn && !reverting)
-                  e.currentTarget.style.background = "var(--bg-hover)";
-              }}
-              onMouseLeave={(e) => {
-                if (!revertingAll && revertingTurn !== turn && !reverting)
-                  e.currentTarget.style.background = "transparent";
-              }}
-            >
-              {revertingTurn === turn ? "…" : "Revert turn"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <QuietAction
+                icon={revertGlyphSmall}
+                label="Revert turn"
+                danger
+                size={10}
+                busy={revertingTurn === turn}
+                disabled={revertingAll || !!reverting || (revertingTurn !== null && revertingTurn !== turn)}
+                onClick={() => void handleRevertTurn(turn, group)}
+              />
+              {/* Run-level revert rides the first group header instead of
+                  claiming its own row — one line of chrome, not two. */}
+              {groupIdx === 0 && groups.reduce((n, g) => n + g.entries.length, 0) > group.length && (
+                <QuietAction
+                  icon={revertGlyphSmall}
+                  label="Revert all"
+                  busyLabel="Reverting…"
+                  danger
+                  size={10}
+                  busy={revertingAll}
+                  disabled={!!reverting || revertingTurn !== null}
+                  onClick={() => void handleRevertAll()}
+                />
+              )}
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {group.map((entry) => (
-              <div
-                key={entry.toolCallId}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "5px 8px",
-                  borderRadius: "var(--radius-sm)",
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border)",
-                  fontSize: 12,
-                }}
-              >
-                <span
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {group.map((entry, idx) => {
+              const rowBusy = reverting === entry.toolCallId;
+              const showActions = hoverId === entry.toolCallId || rowBusy;
+              return (
+                <div
+                  key={entry.toolCallId}
+                  onMouseEnter={() => setHoverId(entry.toolCallId)}
+                  onMouseLeave={() => setHoverId((prev) => (prev === entry.toolCallId ? null : prev))}
                   style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    fontFamily: "var(--font-mono)",
-                    color: entry.isCreate ? "var(--diff-add)" : "var(--accent)",
-                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "5px 2px",
+                    minHeight: 30,
+                    borderTop:
+                      idx === 0
+                        ? "1px solid transparent"
+                        : "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                    fontSize: 12,
                   }}
                 >
-                  {entry.isCreate ? "add" : "edit"}
-                </span>
-                <span
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontFamily: "var(--font-mono)",
-                    color: "var(--fg)",
-                  }}
-                  title={entry.path}
-                >
-                  {entry.path}
-                </span>
-                <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap", flexShrink: 0 }}>
-                  {relativeTime(entry.ts)}
-                </span>
-                <button
-                  onClick={() => setPreview(entry)}
-                  style={{
-                    fontSize: 10,
-                    padding: "2px 6px",
-                    borderRadius: "var(--radius-sm)",
-                    border: "1px solid var(--border)",
-                    color: "var(--fg-subtle)",
-                    background: "transparent",
-                    cursor: "pointer",
-                    flexShrink: 0,
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  Diff
-                </button>
-                <button
-                  onClick={() => void handleRevert(entry)}
-                  disabled={reverting === entry.toolCallId}
-                  style={{
-                    fontSize: 10,
-                    padding: "2px 6px",
-                    borderRadius: "var(--radius-sm)",
-                    border: "1px solid var(--danger)",
-                    color: "var(--danger)",
-                    background: reverting === entry.toolCallId
-                      ? "color-mix(in srgb, var(--danger) 12%, transparent)"
-                      : "transparent",
-                    cursor: reverting === entry.toolCallId ? "default" : "pointer",
-                    opacity: reverting === entry.toolCallId ? 0.6 : 1,
-                    flexShrink: 0,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (reverting !== entry.toolCallId)
-                      e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (reverting !== entry.toolCallId)
-                      e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  {reverting === entry.toolCallId ? "…" : "Revert"}
-                </button>
-              </div>
-            ))}
+                  <span
+                    title={entry.isCreate ? "Added" : "Modified"}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: entry.isCreate ? "var(--success)" : "var(--accent)",
+                      flexShrink: 0,
+                      width: 14,
+                    }}
+                  >
+                    {entry.isCreate ? AddMarkGlyph : EditMarkGlyph}
+                  </span>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--fg)",
+                    }}
+                    title={entry.path}
+                  >
+                    {entry.path}
+                  </span>
+                  {/* Right slot: timestamp at rest, actions while hovered.
+                      Conditional render (not opacity stacking) so nothing can
+                      bleed through; minWidth keeps the swap shift-free. */}
+                  <span
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      alignItems: "center",
+                      gap: 2,
+                      minWidth: 64,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {showActions ? (
+                      <>
+                        <QuietAction
+                          icon={EyeGlyph}
+                          label="View diff"
+                          showLabel={false}
+                          onClick={() => setPreview(entry)}
+                        />
+                        <QuietAction
+                          icon={RevertGlyph}
+                          label="Revert file"
+                          showLabel={false}
+                          danger
+                          busy={rowBusy}
+                          disabled={revertingAll || revertingTurn !== null}
+                          onClick={() => void handleRevert(entry)}
+                        />
+                      </>
+                    ) : (
+                      <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>
+                        {relativeTime(entry.ts)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}
