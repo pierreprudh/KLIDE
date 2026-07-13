@@ -268,6 +268,13 @@ export function projectMatchesFilter(
     return true;
   }
   if (projectName(run.cwd) === filter) return true;
+  // A run in a linked worktree belongs to its parent project: worktrees are
+  // created as siblings under `<repo>-worktrees/<name>` (git worktree_add).
+  // Without this, races/forks running in worktrees vanish from the default
+  // current-project board.
+  const segments = runCwd?.split("/") ?? [];
+  const parentDir = segments.length >= 2 ? segments[segments.length - 2] : null;
+  if (parentDir === `${filter}-worktrees`) return true;
   return run.project === filter;
 }
 

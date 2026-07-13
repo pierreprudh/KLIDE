@@ -49,6 +49,12 @@ type Props = {
   availableModels: string[];
   disabled?: boolean;
   onChange: (model: string) => void;
+  /** Which way the menu opens. "up" (default) suits the AI panel composer at
+   *  the bottom of its panel; "down" suits triggers near the top of a view
+   *  (e.g. Mission Control's race composer). */
+  direction?: "up" | "down";
+  /** Fill the row instead of the composer's compact 112px slot. */
+  fluid?: boolean;
 };
 
 /** Merged list: available models first, the current model pinned at the top
@@ -116,7 +122,15 @@ function providerCaption(id: ProviderId): string {
   }
 }
 
-export function ModelPicker({ provider, model, availableModels, disabled, onChange }: Props) {
+export function ModelPicker({
+  provider,
+  model,
+  availableModels,
+  disabled,
+  onChange,
+  direction = "up",
+  fluid = false,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [focusIdx, setFocusIdx] = useState(0);
@@ -132,7 +146,7 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
    *  is portalled to <body> so it can escape the AI panel's
    *  `overflow: hidden` + `transform: translateZ(0)` (which together trap
    *  any `position: absolute` / `position: fixed` child of the panel). */
-  const [menuPos, setMenuPos] = useState<{ bottom: number; left: number; width: number } | null>(null);
+  const [menuPos, setMenuPos] = useState<{ bottom?: number; top?: number; left: number; width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -197,11 +211,11 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
     const gap = 8;
     const idealLeft = rect.right - width; // right-align to the trigger
     const left = Math.max(8, Math.min(idealLeft, window.innerWidth - width - 8));
-    setMenuPos({
-      bottom: Math.round(window.innerHeight - rect.top + gap),
-      left: Math.round(left),
-      width,
-    });
+    setMenuPos(
+      direction === "down"
+        ? { top: Math.round(rect.bottom + gap), left: Math.round(left), width }
+        : { bottom: Math.round(window.innerHeight - rect.top + gap), left: Math.round(left), width },
+    );
     setOpen(true);
   }
 
@@ -309,7 +323,13 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
   }, [focusIdx, open]);
 
   return (
-    <div style={{ position: "relative", flex: "0 1 112px", minWidth: 64, maxWidth: 138 }}>
+    <div
+      style={
+        fluid
+          ? { position: "relative", flex: 1, minWidth: 0 }
+          : { position: "relative", flex: "0 1 112px", minWidth: 64, maxWidth: 138 }
+      }
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -326,7 +346,7 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
           position: "relative",
           display: "flex",
           alignItems: "center",
-          justifyContent: "flex-end",
+          justifyContent: fluid ? "flex-start" : "flex-end",
           gap: 5,
           width: "100%",
           height: 24,
@@ -360,7 +380,7 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            textAlign: "right",
+            textAlign: fluid ? "left" : "right",
           }}
         >
           {model ? (
@@ -385,6 +405,7 @@ export function ModelPicker({ provider, model, availableModels, disabled, onChan
             // children inside the panel.
             position: "fixed",
             bottom: menuPos.bottom,
+            top: menuPos.top,
             left: menuPos.left,
             width: menuPos.width,
             maxHeight: 360,

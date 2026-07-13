@@ -19,6 +19,26 @@ describe("projectMatchesFilter", () => {
 
     expect(projectMatchesFilter(run, "KIDE", "/Users/pierre/Documents/Private/KIDE")).toBe(true);
   });
+
+  it("matches runs executing in a linked worktree of the filtered project", () => {
+    // Races and worktree forks run in `<repo>-worktrees/<name>` — they must
+    // stay visible under the default current-project filter.
+    const run = {
+      project: null,
+      cwd: "/Users/pierre/Documents/Private/KIDE-worktrees/race-m3abc-1",
+    };
+
+    expect(projectMatchesFilter(run, "KIDE", "/Users/pierre/Documents/Private/KIDE")).toBe(true);
+  });
+
+  it("does not leak another project's worktree runs into the filter", () => {
+    const run = {
+      project: null,
+      cwd: "/Users/pierre/Documents/Other-worktrees/race-m3abc-1",
+    };
+
+    expect(projectMatchesFilter(run, "KIDE", "/Users/pierre/Documents/Private/KIDE")).toBe(false);
+  });
 });
 
 describe("presentProjects", () => {

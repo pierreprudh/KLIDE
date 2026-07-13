@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Tooltip } from "./Tooltip";
@@ -82,7 +82,10 @@ import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
-import { isDelegateProvider, providerName } from "../agent/providers";
+import { ALL_PROVIDERS, DEFAULT_MODELS, isDelegateProvider, providerName } from "../agent/providers";
+import { ModelPicker } from "./ai/ModelPicker";
+import { dispatchRace, PartialRaceError, type RaceAgentPick } from "../agent/race";
+import { listRaces, raceForRun, subscribeRaces, type RaceGroup, type RaceMember } from "../races";
 import { refreshCustomCli } from "../customCli";
 import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
@@ -1213,6 +1216,206 @@ function MetaRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Race mark — a pane split into two columns: two agents side by side on the
+ *  same task. Inline SVG so it renders crisply and matches the stroke-icon
+ *  family used across Mission Control. */
+function RaceMark({ size = 11 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M12 4v16" />
+    </svg>
+  );
+}
+
+/** A run's race membership, precomputed for the board rows. */
+type RaceRowInfo = {
+  groupId: string;
+  memberIndex: number;
+  /** "A", "B", … — the member's stable letter within its race. */
+  label: string;
+  size: number;
+  prompt: string;
+};
+
+/** Keep race siblings adjacent within a section: the first-seen member of a
+ *  group pulls the rest up next to it (in member order), so a race reads as
+ *  one comparison block instead of scattered rows. Non-members keep their
+ *  recency order. */
+function clusterRaceRows(
+  rows: RunLedgerEntry[],
+  info: Map<string, RaceRowInfo>,
+): RunLedgerEntry[] {
+  const out: RunLedgerEntry[] = [];
+  const emitted = new Set<string>();
+  for (const row of rows) {
+    if (emitted.has(row.id)) continue;
+    const ri = info.get(row.id);
+    if (!ri) {
+      out.push(row);
+      continue;
+    }
+    const siblings = rows
+      .filter((r) => info.get(r.id)?.groupId === ri.groupId)
+      .sort((a, b) => (info.get(a.id)?.memberIndex ?? 0) - (info.get(b.id)?.memberIndex ?? 0));
+    for (const s of siblings) {
+      out.push(s);
+      emitted.add(s.id);
+    }
+  }
+  return out;
+}
+
+/** Side-by-side stats for a race's members: metric labels down the left, one
+ *  column per agent. The numbers come from each run's ledger entry (validation
+ *  snapshot, tokens, cost); a member with no entry yet shows "—" everywhere.
+ *  Clicking a column header opens that run. */
+function RaceCompareTable({
+  raceEntries,
+  currentRunId,
+  onSelectRun,
+}: {
+  raceEntries: { member: RaceMember; entry: RunLedgerEntry | null }[];
+  currentRunId: string;
+  onSelectRun?: (run: RunLedgerEntry) => void;
+}) {
+  const stats: {
+    label: string;
+    value: (e: RunLedgerEntry | null) => string | null;
+    tone?: (e: RunLedgerEntry | null) => string | undefined;
+  }[] = [
+    {
+      label: "Status",
+      value: (e) => (e ? LIFECYCLE_LABEL[e.lifecycle] : "starting…"),
+    },
+    {
+      label: "Validation",
+      value: (e) => formatValidationStatus(e?.validation),
+      tone: (e) =>
+        e?.validation?.status === "failed"
+          ? "var(--danger)"
+          : e?.validation?.status === "passed"
+          ? "var(--success)"
+          : undefined,
+    },
+    {
+      label: "Files",
+      value: (e) => (e?.validation ? String(e.validation.filesChanged) : formatFilesTouched(e?.filesTouched)),
+    },
+    {
+      label: "Commands",
+      value: (e) =>
+        e?.validation && e.validation.commandsRun > 0
+          ? `${e.validation.commandsRun}${e.validation.commandsFailed ? ` · ${e.validation.commandsFailed} failed` : ""}`
+          : e?.validation
+          ? "0"
+          : null,
+      tone: (e) => (e?.validation?.commandsFailed ? "var(--danger)" : undefined),
+    },
+    { label: "Tokens", value: (e) => (e ? runTokenSummary(e) : null) },
+    { label: "Cost", value: (e) => (e ? formatCost(e.costUsd) : null) },
+    {
+      label: "Time",
+      value: (e) =>
+        e && e.updatedMs > e.createdMs ? formatRaceDuration(e.updatedMs - e.createdMs) : null,
+    },
+    { label: "Worktree", value: () => null },
+  ];
+
+  const cellBase: React.CSSProperties = {
+    padding: "3px 8px",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `84px repeat(${raceEntries.length}, minmax(0, 1fr))`,
+        alignItems: "center",
+      }}
+    >
+      {/* Header row: one column per agent; the run being viewed reads bolder. */}
+      <span />
+      {raceEntries.map(({ member, entry }) => {
+        const current = member.runId === currentRunId;
+        return (
+          <button
+            key={member.runId}
+            type="button"
+            onClick={() => {
+              if (!current && entry && onSelectRun) onSelectRun(entry);
+            }}
+            disabled={current || !entry || !onSelectRun}
+            title={
+              current
+                ? `${member.model} — this run`
+                : entry
+                ? `Open ${member.model}`
+                : `${member.model} — not on the board yet`
+            }
+            style={{
+              ...cellBase,
+              paddingBottom: 6,
+              border: "none",
+              background: "transparent",
+              textAlign: "left",
+              cursor: current || !entry ? "default" : "pointer",
+              color: "var(--fg-strong)",
+              fontWeight: current ? 600 : 400,
+            }}
+          >
+            {providerName(member.provider as ProviderId)} · {member.model}
+          </button>
+        );
+      })}
+      {stats.map((stat) => (
+        <Fragment key={stat.label}>
+          <span style={{ ...cellBase, fontFamily: "var(--font-ui, inherit)", color: "var(--fg-subtle)" }}>
+            {stat.label}
+          </span>
+          {raceEntries.map(({ member, entry }) => (
+            <span
+              key={member.runId}
+              title={stat.label === "Validation" ? formatValidationTitle(entry?.validation) : undefined}
+              style={{
+                ...cellBase,
+                color: stat.tone?.(entry) ?? "var(--fg-strong)",
+              }}
+            >
+              {stat.label === "Worktree" ? member.worktree : stat.value(entry) ?? "—"}
+            </span>
+          ))}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/** Compact wall-clock span for the race compare rows: "42s", "3m 10s", "1h 4m". */
+function formatRaceDuration(ms: number): string {
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (secs >= 3600) return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  if (secs >= 60) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${secs}s`;
+}
+
 function EvidenceMeta({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
     <div
@@ -2220,6 +2423,263 @@ function TaskComposer({
   );
 }
 
+// One agent pick of a race: harness provider + model. Delegate CLIs are
+// excluded — a race run is a headless harness run in a worktree.
+function RaceAgentRow({
+  label,
+  pick,
+  onChange,
+}: {
+  label: string;
+  pick: RaceAgentPick;
+  onChange: (next: RaceAgentPick) => void;
+}) {
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const providers = ALL_PROVIDERS.filter((p) => !isDelegateProvider(p.id));
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setModels([]);
+    invoke<string[]>("ai_provider_models", { provider: pick.provider })
+      .then((list) => {
+        if (cancelled) return;
+        setModels(list);
+        if (list.length > 0 && !list.includes(pick.model)) {
+          onChange({ ...pick, model: list[0] });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Refetch only on provider change; `pick.model`/`onChange` churn per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pick.provider]);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      <span
+        style={{
+          width: 14,
+          flexShrink: 0,
+          fontSize: 11,
+          color: "var(--fg-subtle)",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        {label}
+      </span>
+      {/* Provider: logo + quiet native select (the list is short); model:
+          the classic ModelPicker, opening downward since this row sits at
+          the top of the board. */}
+      <span
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flex: "0 0 148px",
+          minWidth: 0,
+          height: 26,
+          padding: "0 4px 0 7px",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          background: "var(--bg)",
+        }}
+      >
+        <span style={{ display: "grid", placeItems: "center", flexShrink: 0 }}>
+          <ProviderLogo id={pick.provider} size={13} />
+        </span>
+        <select
+          value={pick.provider}
+          onChange={(e) => onChange({ provider: e.target.value as ProviderId, model: "" })}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: "100%",
+            fontSize: 12,
+            fontFamily: "inherit",
+            color: "var(--fg-strong)",
+            background: "transparent",
+            border: "none",
+            outline: "none",
+            cursor: "pointer",
+          }}
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </span>
+      {loading ? (
+        <span style={{ flex: 1, fontSize: 11.5, color: "var(--fg-dim)" }}>Loading models…</span>
+      ) : (
+        <ModelPicker
+          provider={pick.provider}
+          model={pick.model}
+          availableModels={models}
+          onChange={(m) => onChange({ ...pick, model: m })}
+          direction="down"
+          fluid
+        />
+      )}
+    </div>
+  );
+}
+
+// The race affordance — a quiet ghost row under the task composer. Expanded,
+// it takes one prompt and two agent picks, then dispatches both as headless
+// harness runs in isolated worktrees (dispatchRace). The runs land on the
+// board like any other; the detail pane's race section compares them.
+function RaceComposer({
+  workspaceRoot,
+  onStarted,
+}: {
+  workspaceRoot: string | null;
+  onStarted: (firstRunId: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [picks, setPicks] = useState<RaceAgentPick[]>([
+    { provider: "ollama", model: DEFAULT_MODELS.ollama ?? "" },
+    { provider: "anthropic", model: DEFAULT_MODELS.anthropic ?? "" },
+  ]);
+
+  async function start() {
+    const text = prompt.trim();
+    if (!text || starting) return;
+    if (!workspaceRoot) {
+      notify("Open a workspace folder before starting a race.", { tone: "warn" });
+      return;
+    }
+    if (picks.some((p) => !p.model)) {
+      notify("Pick a model for both agents first.", { tone: "warn" });
+      return;
+    }
+    setStarting(true);
+    try {
+      const group = await dispatchRace({ prompt: text, workspaceRoot, agents: picks });
+      notify(`Race started — ${group.members.length} agents, each in its own worktree.`);
+      setPrompt("");
+      setEditing(false);
+      if (group.members[0]) onStarted(group.members[0].runId);
+    } catch (err) {
+      if (err instanceof PartialRaceError) {
+        notify(`Race started, but not fully: ${err.failures.join(" · ")}`, { tone: "warn" });
+        setPrompt("");
+        setEditing(false);
+        if (err.group.members[0]) onStarted(err.group.members[0].runId);
+      } else {
+        notify(`Race failed: ${err instanceof Error ? err.message : String(err)}`, {
+          tone: "error",
+        });
+      }
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          width: "calc(100% - 16px)",
+          margin: "0 8px 10px",
+          padding: "8px 9px",
+          fontSize: 12.5,
+          fontFamily: "inherit",
+          textAlign: "left",
+          color: "var(--fg-subtle)",
+          background: "transparent",
+          border: "1px dashed var(--border)",
+          borderRadius: "var(--radius-md)",
+          cursor: "pointer",
+          transition:
+            "border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = "var(--border-strong)";
+          e.currentTarget.style.color = "var(--fg-strong)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = "var(--border)";
+          e.currentTarget.style.color = "var(--fg-subtle)";
+        }}
+      >
+        <RaceMark size={12} />
+        Race two agents on one task
+      </button>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        margin: "0 8px 10px",
+        padding: "9px",
+        border: "1px solid var(--border-strong)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-elevated)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <input
+        autoFocus
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void start();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+        placeholder="One task for both agents…"
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          fontSize: 12.5,
+          lineHeight: 1.5,
+          fontFamily: "inherit",
+          color: "var(--fg-strong)",
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          padding: "7px 9px",
+          outline: "none",
+        }}
+      />
+      <RaceAgentRow label="A" pick={picks[0]} onChange={(next) => setPicks([next, picks[1]])} />
+      <RaceAgentRow label="B" pick={picks[1]} onChange={(next) => setPicks([picks[0], next])} />
+      <div
+        style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}
+        title="Each agent works in its own worktree; edits auto-apply with checkpoints."
+      >
+        <ActionButton label="Cancel" onClick={() => setEditing(false)} />
+        <ActionButton label={starting ? "Starting…" : "Start race"} onClick={() => void start()} />
+      </div>
+    </div>
+  );
+}
+
 // Live console of a dispatched task. The PTY was spawned at dispatch time —
 // here we replay the buffered scrollback, then stream. Typing goes straight to
 // the CLI, so "take over" is just clicking in and typing. Mirrors the main
@@ -2700,6 +3160,8 @@ function RunDetail({
   forkParent,
   forkChildren = [],
   onSelectLineageRun,
+  race = null,
+  raceEntries = [],
   onOpenInAiPanel,
   onResumeKlide,
   onReviewDiff,
@@ -2719,6 +3181,10 @@ function RunDetail({
   forkParent?: RunLedgerEntry | null;
   forkChildren?: RunLedgerEntry[];
   onSelectLineageRun?: (run: RunLedgerEntry) => void;
+  /** The race this run belongs to (same task, N agents in worktrees), with
+   *  each member's ledger entry when it has landed on the board. */
+  race?: RaceGroup | null;
+  raceEntries?: { member: RaceMember; entry: RunLedgerEntry | null }[];
   /** Compact task state used when handing a Klide run off to an external CLI. */
   handoffPrompt: string | null;
   /** Land the user in a new AI panel pinned to the chosen delegate provider. */
@@ -2988,6 +3454,38 @@ function RunDetail({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {race && raceEntries.length > 0 && (
+        <div
+          style={{
+            margin: "0 0 12px",
+            padding: "8px 10px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            background: "var(--bg-elevated)",
+            fontSize: 12,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              color: "var(--fg-subtle)",
+              marginBottom: 7,
+            }}
+            title={`Same task, ${raceEntries.length} agents: “${race.prompt}”`}
+          >
+            <RaceMark size={11} />
+            Race
+          </div>
+          <RaceCompareTable
+            raceEntries={raceEntries}
+            currentRunId={run.id}
+            onSelectRun={onSelectLineageRun}
+          />
         </div>
       )}
 
@@ -4309,6 +4807,28 @@ export function MissionControl({
     );
   }, [linkedRuns, liveConvoIds, sourceFilter, projectFilter, workspaceRoot, sessionQuery]);
 
+  // Race membership for the board: runId → its group + "A"/"B" label. Drives
+  // the row mark + spine and keeps siblings adjacent, so a race reads as one
+  // comparison rather than two unrelated runs.
+  const [raceTick, setRaceTick] = useState(0);
+  useEffect(() => subscribeRaces(() => setRaceTick((t) => t + 1)), []);
+  const raceInfoByRunId = useMemo(() => {
+    const map = new Map<string, RaceRowInfo>();
+    for (const g of listRaces()) {
+      g.members.forEach((m, i) => {
+        map.set(m.runId, {
+          groupId: g.id,
+          memberIndex: i,
+          label: String.fromCharCode(65 + i),
+          size: g.members.length,
+          prompt: g.prompt,
+        });
+      });
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raceTick]);
+
   const grouped = useMemo(() => {
     const by: Record<RunBoardSection, RunLedgerEntry[]> = {
       running: [],
@@ -4325,9 +4845,12 @@ export function MissionControl({
       by[section].sort(
         (a, b) => b.updatedMs - a.updatedMs || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
       );
+      if (raceInfoByRunId.size > 0) {
+        by[section] = clusterRaceRows(by[section], raceInfoByRunId);
+      }
     }
     return by;
-  }, [filtered]);
+  }, [filtered, raceInfoByRunId]);
 
   // Keep a valid selection as the filter/data changes — unless pinned.
   useEffect(() => {
@@ -4377,6 +4900,24 @@ export function MissionControl({
   const selectedForkChildren = selectedRunForLineage
     ? forkChildrenByParent.get(selectedRunForLineage.id) ?? []
     : [];
+
+  // Race grouping for the detail pane: when the selected run was dispatched
+  // as part of a race, surface its siblings so their evidence can be compared.
+  const selectedRace = useMemo(
+    () => (selectedRunForLineage ? raceForRun(selectedRunForLineage.id) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedRunForLineage?.id, raceTick],
+  );
+  const selectedRaceEntries = useMemo(
+    () =>
+      selectedRace
+        ? selectedRace.members.map((member) => ({
+            member,
+            entry: allRuns.find((r) => r.id === member.runId) ?? null,
+          }))
+        : [],
+    [selectedRace, allRuns],
+  );
 
   // When a Klide run (kind=run) is selected, fetch its transcript once and
   // build the prompt we'll hand off to a fresh delegate session if the user
@@ -4660,6 +5201,13 @@ export function MissionControl({
             workspaceRoot={workspaceRoot}
             onAdded={(id) => setSelectedId(id)}
           />
+          <RaceComposer
+            workspaceRoot={workspaceRoot}
+            onStarted={(id) => {
+              setSelectedId(id);
+              void load();
+            }}
+          />
           {!loading && filtered.length === 0 && (
             sessionQuery.trim() !== "" || sourceFilter !== "all" ? (
               <div className="klide-enter-rise" style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
@@ -4781,17 +5329,47 @@ export function MissionControl({
                     const expanded = children.length > 0 && expandedSubagentParents.has(run.id);
                     const parentSelected = run.id === selectedId;
                     const parentDismissible = section === "blocked" || runAttentionReason(run) !== null;
+                    // Race siblings are adjacent (clusterRaceRows) — fuse their
+                    // cards into one quiet container: a caption above the first,
+                    // no gap between members, radii only on the group's ends.
+                    const race = raceInfoByRunId.get(run.id) ?? null;
+                    const prevRaceGroup =
+                      i > 0 ? raceInfoByRunId.get(visible[i - 1].id)?.groupId : undefined;
+                    const nextRaceGroup =
+                      i < visible.length - 1
+                        ? raceInfoByRunId.get(visible[i + 1].id)?.groupId
+                        : undefined;
+                    const raceFirst = !!race && race.groupId !== prevRaceGroup;
+                    const raceLast = !!race && race.groupId !== nextRaceGroup;
                     return (
                       <div
                         key={run.id}
                         className="mc-row"
                         style={{
                           position: "relative",
-                          margin: "0 8px 10px",
+                          margin: race && !raceLast ? "0 8px 0" : "0 8px 10px",
                           // Capped stagger — long lists (Done) still settle fast.
                           animationDelay: `${Math.min(i, 6) * 35}ms`,
                         }}
                       >
+                        {race && raceFirst && (
+                          <Tooltip label={`Same task, ${race.size} agents: “${race.prompt}”`}>
+                            <div
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 5,
+                                padding: "0 3px 4px",
+                                fontSize: 10,
+                                fontFamily: "var(--font-mono)",
+                                color: "var(--fg-dim)",
+                              }}
+                            >
+                              <RaceMark size={10} />
+                              race
+                            </div>
+                          </Tooltip>
+                        )}
                         {/* Main conversation card — top of the stack. */}
                         <div
                           className="mc-card"
@@ -4799,7 +5377,17 @@ export function MissionControl({
                             position: "relative",
                             zIndex: children.length + 1,
                             border: "1px solid var(--border)",
-                            borderRadius: "var(--radius-md)",
+                            borderTop:
+                              race && !raceFirst ? "none" : "1px solid var(--border)",
+                            borderRadius: race
+                              ? raceFirst && raceLast
+                                ? "var(--radius-md)"
+                                : raceFirst
+                                ? "var(--radius-md) var(--radius-md) 0 0"
+                                : raceLast
+                                ? "0 0 var(--radius-md) var(--radius-md)"
+                                : "0"
+                              : "var(--radius-md)",
                             background: "var(--bg-elevated)",
                             overflow: "hidden",
                           }}
@@ -5103,6 +5691,8 @@ export function MissionControl({
             forkParent={selectedForkParent}
             forkChildren={selectedForkChildren}
             onSelectLineageRun={selectLineageRun}
+            race={selectedRace}
+            raceEntries={selectedRaceEntries}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
@@ -5123,6 +5713,8 @@ export function MissionControl({
             forkParent={selectedForkParent}
             forkChildren={selectedForkChildren}
             onSelectLineageRun={selectLineageRun}
+            race={selectedRace}
+            raceEntries={selectedRaceEntries}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
             onReviewDiff={onReviewDiff}
