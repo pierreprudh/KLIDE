@@ -65,7 +65,7 @@ Klide has three capability modes:
 |---|---|
 | **Agent operations** | Mission Control, shared run lifecycle, attention queue, transcripts, session resume, cross-agent handoff, sub-agent visibility |
 | **Review and evidence** | Diff comments sent to agents, command approval, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
-| **Parallel work** | Git worktrees, worktree setup recipes, branch comparison, and merge controls |
+| **Parallel work** | Git worktrees, worktree setup recipes, agent races on the same task, evidence comparison, and merge controls |
 | **Editor and shell** | Monaco editor, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
 | **Models** | Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, OpenRouter, and OpenAI-compatible endpoints |
 | **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, skills, dynamic tools, and reviewed project memory |
@@ -133,8 +133,9 @@ Klide is at version 0.5 and remains under active development. Source builds are 
 
 Current priorities:
 
+- Harden race/restart/merge behavior through daily dogfooding
 - Make worktree-per-run isolation the default parallel-agent flow
-- Deepen the review queue and agent feedback loop
+- Complete provider-aware lifecycle signals for historical delegate runs
 - Publish signed macOS builds, then validate Windows and Linux
 
 See the [changelog](./CHANGELOG.md) for shipped milestones.

@@ -1327,19 +1327,61 @@ pub(crate) async fn git_worktree_merge(
 
 /// Remove a worktree checkout. Fails (surfacing git's message) if it has
 /// uncommitted changes, unless `force`.
+///
+/// `clean_files` lists worktree-relative recipe artifacts (the bootstrapped
+/// config copies from `git_worktree_add`) to delete first — without this, a
+/// non-ignored `.env` copy makes git refuse a non-force removal, so a checkout
+/// whose run never started could never be discarded without `--force`.
+/// `delete_branch` drops the named branch after the checkout is gone (its
+/// `branch.<name>.*` config section goes with it) — for callers discarding a
+/// branch they created for this worktree.
 #[tauri::command]
 pub(crate) async fn git_worktree_remove(
     workspace_root: String,
     path: String,
     force: Option<bool>,
+    clean_files: Option<Vec<String>>,
+    delete_branch: Option<String>,
 ) -> Result<(), String> {
     blocking(move || {
+        for rel in clean_files.unwrap_or_default() {
+            let rel_path = std::path::Path::new(&rel);
+            // Worktree-relative only: an absolute or `..`-escaping entry could
+            // reach outside the checkout being discarded.
+            if rel_path.is_absolute()
+                || rel_path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(format!("Invalid cleanup path: {rel}"));
+            }
+            let target = std::path::Path::new(&path).join(rel_path);
+            match std::fs::symlink_metadata(&target) {
+                Ok(meta) if meta.is_dir() => {
+                    return Err(format!("Refusing to delete directory during cleanup: {rel}"));
+                }
+                Ok(_) => {
+                    std::fs::remove_file(&target).map_err(|e| format!("delete {rel}: {e}"))?
+                }
+                Err(_) => {} // already gone
+            }
+        }
         let mut args = vec!["worktree", "remove"];
         if force.unwrap_or(false) {
             args.push("--force");
         }
         args.push(&path);
-        run_git(&workspace_root, &args)
+        run_git(&workspace_root, &args)?;
+        if let Some(branch) = delete_branch
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty())
+        {
+            // -D, not -d: the branch may be unmerged (it usually just mirrors
+            // its base when the run never started, but -d would refuse any
+            // stray commit). The checkout is already gone either way.
+            run_git(&workspace_root, &["branch", "-D", &branch])?;
+        }
+        Ok(())
     })
     .await
 }
@@ -1593,6 +1635,63 @@ detached
 
         // `<repo>-worktrees` is a sibling of the repo inside `base`, so this
         // sweeps the worktree checkouts too.
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The race failure path: a fresh worktree holding only recipe artifacts
+    /// (a non-ignored `.env` copy) must be removable without --force once the
+    /// artifacts are cleaned, and the branch created for it must go too —
+    /// while real (non-listed) content still blocks a non-force removal.
+    #[tokio::test]
+    async fn worktree_remove_cleans_recipe_artifacts_and_the_created_branch() {
+        let (base, repo) = temp_repo("wt-discard");
+        let wt = worktree_add_core(repo.clone(), "klide/race-x-1".into(), Some(vec![]), noop_notify())
+            .await
+            .unwrap();
+        // Untracked, not ignored — exactly the copy that makes bare
+        // `git worktree remove` refuse.
+        std::fs::write(std::path::Path::new(&wt.path).join(".env"), "K=1").unwrap();
+
+        // An escaping cleanup path is rejected before anything is touched.
+        let escape = git_worktree_remove(
+            repo.clone(),
+            wt.path.clone(),
+            Some(false),
+            Some(vec!["../outside".into()]),
+            None,
+        )
+        .await;
+        assert!(escape.unwrap_err().contains("Invalid cleanup path"));
+
+        git_worktree_remove(
+            repo.clone(),
+            wt.path.clone(),
+            Some(false),
+            Some(vec![".env".into()]),
+            Some("klide/race-x-1".into()),
+        )
+        .await
+        .expect("clean removal");
+        assert!(!std::path::Path::new(&wt.path).exists());
+        assert!(
+            run_git(&repo, &["show-ref", "--verify", "--quiet", "refs/heads/klide/race-x-1"])
+                .is_err(),
+            "created branch is deleted with the discarded worktree"
+        );
+        assert!(
+            git_output(&repo, &["config", "--get", "branch.klide/race-x-1.base"]).is_err(),
+            "branch config section goes with the branch"
+        );
+
+        // Content NOT in clean_files still blocks a non-force removal.
+        let wt2 = worktree_add_core(repo.clone(), "klide/race-x-2".into(), Some(vec![]), noop_notify())
+            .await
+            .unwrap();
+        std::fs::write(std::path::Path::new(&wt2.path).join("work.txt"), "w").unwrap();
+        let refused = git_worktree_remove(repo.clone(), wt2.path.clone(), Some(false), None, None).await;
+        assert!(refused.is_err(), "dirty checkout survives non-force cleanup");
+        assert!(std::path::Path::new(&wt2.path).join("work.txt").exists());
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -5,6 +5,7 @@
 
 import type { Conversation, Msg } from "./components/ai/types";
 import { deriveTitle, loadConversations, persistConversation } from "./components/ai/utils";
+import { readValidatedArray } from "./persistedStore";
 import type { RunMessage, RunStatus } from "./runs";
 
 export type KlideConvo = {
@@ -76,29 +77,23 @@ function conversationToConvo(c: Conversation): KlideConvo | null {
 }
 
 function readStoredConvos(): KlideConvo[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((c): c is KlideConvo =>
-        c &&
-        typeof c.id === "string" &&
-        typeof c.title === "string" &&
-        Array.isArray(c.messages) &&
-        typeof c.updatedMs === "number"
-      )
-      .map((c) => ({
-        ...c,
-        status: safeStatus(c.status),
-        provider: typeof c.provider === "string" ? c.provider as Conversation["provider"] : null,
-        branch: typeof c.branch === "string" ? c.branch : null,
-        worktree: typeof c.worktree === "string" ? c.worktree : null,
-        forkedFrom: safeForkedFrom(c.forkedFrom),
-      }));
-  } catch {
-    return [];
-  }
+  return readValidatedArray(
+    STORAGE_KEY,
+    (c): c is KlideConvo =>
+      !!c &&
+      typeof c === "object" &&
+      typeof (c as Partial<KlideConvo>).id === "string" &&
+      typeof (c as Partial<KlideConvo>).title === "string" &&
+      Array.isArray((c as Partial<KlideConvo>).messages) &&
+      typeof (c as Partial<KlideConvo>).updatedMs === "number",
+  ).map((c) => ({
+    ...c,
+    status: safeStatus(c.status),
+    provider: typeof c.provider === "string" ? c.provider as Conversation["provider"] : null,
+    branch: typeof c.branch === "string" ? c.branch : null,
+    worktree: typeof c.worktree === "string" ? c.worktree : null,
+    forkedFrom: safeForkedFrom(c.forkedFrom),
+  }));
 }
 
 function initialConvos(): KlideConvo[] {

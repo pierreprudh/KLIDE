@@ -2,6 +2,22 @@
 
 Notable changes per milestone. Dates are completion dates.
 
+## Unreleased — v0.5 release-candidate hardening
+
+- Race the same task across two Harness runs in isolated worktrees, keep sibling
+  runs together in Mission Control, and compare status, validation, files,
+  commands, tokens, cost, time, and worktree evidence side by side.
+- Remove a newly created race worktree — including its recipe-copied config
+  files and the branch created for it — when its Harness run fails to start,
+  while preserving any checkout that holds other work.
+- Validate persisted race groups before projecting them into Mission Control,
+  with direct regression coverage for persistence, bounded history, partial
+  dispatch, and orphan cleanup.
+- Run frontend tests/build and Rust tests automatically on pushes to `main` and
+  on pull requests.
+- Verify that the release profile produces a 26 MB Apple Silicon `Klide.app`;
+  distribution signing and notarization remain the publishing gate.
+
 ## v0.5 — Git Review + Delegate Live Ops
 
 - Git Review grew into a full workbench: branch diff against the recorded fork base, PR list/create/open/checkout/merge actions, a commit history graph, and a structured commit-detail pane with avatars and full-width diffs.

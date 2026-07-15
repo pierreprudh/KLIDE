@@ -13,6 +13,7 @@
 //   in Mission Control's attention queue, where resuming opens a panel.
 
 import { invoke } from "@tauri-apps/api/core";
+import { errMessage } from "../errors";
 import { addRace, type RaceGroup, type RaceMember } from "../races";
 import { worktreeName, type WorktreeInfo } from "../worktrees";
 import { startAgentRun } from "./client";
@@ -36,15 +37,16 @@ export async function dispatchRace(opts: {
   // concurrent adds from the same checkout can race each other.
   for (const [i, agent] of opts.agents.entries()) {
     const branch = `klide/race-${stamp}-${i + 1}`;
+    let worktree: WorktreeInfo | null = null;
     try {
-      const wt = await invoke<WorktreeInfo>("git_worktree_add", {
+      worktree = await invoke<WorktreeInfo>("git_worktree_add", {
         workspaceRoot: opts.workspaceRoot,
         branch,
         copyFiles: null,
       });
       const session = await startAgentRun(
         {
-          workspaceRoot: wt.path,
+          workspaceRoot: worktree.path,
           mode: "goal",
           provider: agent.provider,
           model: agent.model,
@@ -60,14 +62,34 @@ export async function dispatchRace(opts: {
         runId: session.runId,
         provider: agent.provider,
         model: agent.model,
-        worktreePath: wt.path,
-        branch: wt.branch,
-        worktree: worktreeName(wt),
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+        worktree: worktreeName(worktree),
       });
     } catch (err) {
-      failures.push(
-        `${agent.provider}/${agent.model}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      let detail = errMessage(err);
+      // `git_worktree_add` succeeded but the Harness did not accept the run.
+      // Best-effort removal avoids an invisible orphan checkout. The recipe's
+      // config copies (`bootstrapped`) are deleted first — they're the only
+      // expected content in a checkout whose run never started, and a
+      // non-ignored copy would otherwise make git refuse the removal. The
+      // branch created for this dispatch goes too. Keep force false: any
+      // OTHER content means someone wrote real work here — preserve it and
+      // report the cleanup failure instead of deleting work.
+      if (worktree) {
+        try {
+          await invoke("git_worktree_remove", {
+            workspaceRoot: opts.workspaceRoot,
+            path: worktree.path,
+            force: false,
+            cleanFiles: worktree.bootstrapped,
+            deleteBranch: worktree.branch,
+          });
+        } catch (cleanupErr) {
+          detail += `; worktree cleanup failed: ${errMessage(cleanupErr)}`;
+        }
+      }
+      failures.push(`${agent.provider}/${agent.model}: ${detail}`);
     }
   }
 

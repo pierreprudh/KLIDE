@@ -44,9 +44,8 @@ If a UI element doesn't serve clarity, it doesn't ship.
 ```
 Klide/
 ├── README.md                  Project pitch + status
-├── GETTING_STARTED.md         Step-by-step build guide
 ├── CLAUDE.md                  This file
-├── TODO.md                    Stabilization checklist + next moves
+├── TODO.md                    Current milestone + shipped history
 ├── Ideas.md                   Future ideas + inspiration
 ├── src/                       React + TypeScript frontend
 │   ├── main.tsx                 React boot
@@ -59,7 +58,7 @@ Klide/
 │   │   └── usePanelLayout.ts   Workbench size + panel rects + AI-panel list (hydrate/persist/clamp)
 │   ├── components/
 │   │   ├── ActivityBar.tsx      Left rail — top zone (6 tools, FLIP) + bottom zone (Settings + Profile, dock dot)
-│   │   ├── AiPanel.tsx          AI chat panel (post-split, ~1300 lines)
+│   │   ├── AiPanel.tsx          AI chat panel host + run interaction surface
 │   │   ├── CheckpointPanel.tsx  Per-run file checkpoint rollback UI
 │   │   ├── CommandPalette.tsx   Cmd+P / Cmd+Shift+P modal
 │   │   ├── ContextMenu.tsx      Right-click context menu
@@ -73,7 +72,8 @@ Klide/
 │   │   ├── LayoutCanvas.tsx     Visual layout editor
 │   │   ├── MemoryModal.tsx      Centered Memory handoff-notes modal
 │   │   ├── MemoryPanel.tsx      List+detail body inside MemoryModal
-│   │   ├── MissionControl.tsx   Agent run board + delegate handoff
+│   │   ├── MissionControl.tsx   Run board, attention/review, races + delegate handoff
+│   │   ├── OrchestratorConsole.tsx Mission planner + chained execution board
 │   │   ├── ProfileModal.tsx     Local IDE profile (avatar + identity + workspace)
 │   │   ├── SearchPanel.tsx      Find-in-files results
 │   │   ├── SettingsPanel.tsx    Full settings (keychain, harness, stats)
@@ -100,10 +100,14 @@ Klide/
 │   │   ├── types.ts             Agent protocol types (events, diffs, permissions)
 │   │   ├── providers.ts         Provider definitions (12 providers)
 │   │   ├── client.ts            Frontend agent harness client
+│   │   ├── race.ts              Same-task multi-run dispatch into isolated worktrees
+│   │   ├── missionChain.ts      Dependency-aware mission dispatch
+│   │   ├── routingPolicy.ts     Deterministic tier/model routing
 │   │   └── tools.ts             Frontend tool list fetcher (fetches from Rust)
 │   ├── gridLayouts.ts           Freeform grid layouts
 │   ├── layouts.ts               Fixed-frame layout presets
 │   ├── memory.ts                Project Memory data layer
+│   ├── races.ts                 Persisted race-group membership + pub/sub
 │   ├── panelLayout.ts           Floating panel rect store
 │   ├── skills.ts                Skills store (loader + auto-grant)
 │   ├── tasks.ts                 Delegated tasks
@@ -116,7 +120,7 @@ Klide/
     │   ├── lib.rs                Command registration + thin Tauri glue, AI chat dispatch, keychain keys, fs ops, find-in-files, profile info, shared helpers
     │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
     │   ├── models.rs             Model discovery — list models, context windows, tool support
-    │   ├── git.rs                Git + gh commands (status/diff/log/stash/PR)
+    │   ├── git/                  Git + gh commands (status/diff/log/worktree/PR)
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
     │   ├── pty.rs                PTY plumbing (native shell + delegate spawn)
@@ -147,7 +151,7 @@ AiPanel (view) → startAgentRun() → Rust run_agent_loop()
 - Chat / Plan / Goal modes all go through the harness
 - Write tools pause for diff review via `tokio::sync::oneshot` channels
 - Diff approval triggers `agent_resolve_diff` → harness continues
-- `MAX_TURNS` 16, cancellation via `CancellationToken`, auto-compaction on a recency + token-budget trigger
+- Default tool-turn cap 50 (configurable), cancellation via `CancellationToken`, auto-compaction on a recency + token-budget trigger
 
 ### Mission Control → AI panel handoff
 
@@ -164,8 +168,9 @@ so a panel switch no longer returns a blank terminal. Mission Control shows a
 **Live now** strip (`delegate_pty_live_sessions`) with a **Reattach** action that
 opens an AI panel bound to the session's conversation id (`initialConversationId`)
 so its terminal reconnects + replays — distinct from "Resume", which `--resume`s
-an on-disk run. In-process only (does not survive app restart yet). Full design +
-roadmap: `docs/delegate-session-replay.md`.
+an on-disk run. The live PTY remains process-owned, while its bounded scrollback
+and spawn metadata are mirrored to disk so Recent sessions can repaint history
+after an app restart. Full design + roadmap: `docs/delegate-session-replay.md`.
 
 ### Project Memory (handoff notes)
 
@@ -175,9 +180,14 @@ Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (
 - **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; `MemoryModal` is the centered overlay (same pattern as `SkillsModal`).
 - **Trigger** — the AI panel header has a "Summarize" bookmark button (`src/components/ai/summarize.ts`) that calls the model once with a structured prompt, parses the response, and writes via `memory_write`. The first user message becomes the title; file paths are extracted from the conversation; the model produces Notes + Decisions + Goal.
 
-### v0.2 stabilization focus
+### v0.5 release-candidate focus
 
-Current branch: `main`. v0.2 is functionally complete — provider smoke matrix verified, skill install/uninstall UI shipped, premium polish on the always-visible chrome shipped. Recent direction: deepen the agentic control panel (Mission Control + multi-CLI delegates), and make local models (Ollama + MLX) first-class — MLX now warms up at server start and runs the full tool harness, not chat-only.
+v0.5 is functionally complete and under active hardening. Mission Control is the
+operations surface for Klide Harness runs and Delegate runs; review evidence,
+worktree fleets, mission chaining, subagents, advisor escalation, and two-agent
+races are shipped. The current focus is race/restart/merge dogfooding, default
+worktree-per-run isolation, provider-aware historical lifecycle signals, CI,
+and the first signed/notarized macOS bundle.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.
@@ -222,7 +232,7 @@ ToolEntry { kind, schema, run_read, run_write_preview }
 | Rust → Frontend (request-scoped) | `Channel<T>` | AI token streaming, agent events |
 | Rust → Frontend (global) | `emit()` / `listen()` | PTY data, delegate PTY data |
 
-## Features shipped (v0.2)
+## Features shipped (through v0.5)
 
 - [x] Activity bar — top zone (6 tools) with FLIP-animated indicator + bottom zone (Settings + Profile) with a dock-style dot and a hairline divider.
 - [x] File explorer with tree view, git decorations, context menu, inline rename

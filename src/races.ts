@@ -8,6 +8,8 @@
 // run ids belong together and what prompt spawned them. localStorage +
 // module-level pub/sub, same pattern as memoryDrafts.ts.
 
+import { readValidatedArray } from "./persistedStore";
+
 export type RaceMember = {
   /** Harness run id == transcript id == Mission Control row id. */
   runId: string;
@@ -36,33 +38,50 @@ const MAX_GROUPS = 40;
 type Listener = (groups: RaceGroup[]) => void;
 const listeners = new Set<Listener>();
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRaceMember(value: unknown): value is RaceMember {
+  if (!value || typeof value !== "object") return false;
+  const member = value as Partial<RaceMember>;
+  return (
+    isNonEmptyString(member.runId) &&
+    isNonEmptyString(member.provider) &&
+    isNonEmptyString(member.model) &&
+    isNonEmptyString(member.worktreePath) &&
+    isNonEmptyString(member.branch) &&
+    isNonEmptyString(member.worktree)
+  );
+}
+
+function isRaceGroup(value: unknown): value is RaceGroup {
+  if (!value || typeof value !== "object") return false;
+  const group = value as Partial<RaceGroup>;
+  return (
+    isNonEmptyString(group.id) &&
+    isNonEmptyString(group.prompt) &&
+    isNonEmptyString(group.workspaceRoot) &&
+    typeof group.createdMs === "number" &&
+    Number.isFinite(group.createdMs) &&
+    Array.isArray(group.members) &&
+    group.members.length > 0 &&
+    group.members.every(isRaceMember)
+  );
+}
+
 function readAll(): RaceGroup[] {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (g): g is RaceGroup =>
-        !!g &&
-        typeof g === "object" &&
-        typeof g.id === "string" &&
-        typeof g.prompt === "string" &&
-        typeof g.workspaceRoot === "string" &&
-        Array.isArray(g.members),
-    );
-  } catch {
-    return [];
-  }
+  return readValidatedArray(STORE_KEY, isRaceGroup);
 }
 
 function writeAll(groups: RaceGroup[]): void {
+  const bounded = groups.slice(-MAX_GROUPS);
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(groups.slice(-MAX_GROUPS)));
+    localStorage.setItem(STORE_KEY, JSON.stringify(bounded));
   } catch {
-    /* storage full or unavailable */
+    /* storage full or unavailable — listeners still see the in-memory state */
   }
-  const snapshot = readAll();
-  for (const l of listeners) l(snapshot);
+  for (const l of listeners) l(bounded);
 }
 
 export function listRaces(workspaceRoot?: string | null): RaceGroup[] {

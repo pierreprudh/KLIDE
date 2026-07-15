@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { readValidatedArray } from "./persistedStore";
 import type { RunStatus } from "./runs";
 import type { DelegateId } from "./delegates";
 
@@ -56,30 +57,25 @@ function safeSource(source: unknown): TaskSource | null {
 }
 
 function readTasks(): TaskSession[] {
-  try {
-    const raw = localStorage.getItem(TASKS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((task): task is Partial<TaskSession> =>
-        task &&
-        typeof task.id === "string" &&
-        typeof task.title === "string"
-      )
-      .map((task) => ({
-        id: task.id!,
-        title: task.title!,
-        source: safeSource(task.source),
-        model: typeof task.model === "string" ? task.model : null,
-        status: safeStatus(task.status),
-        cwd: typeof task.cwd === "string" ? task.cwd : null,
-        startedMs: typeof task.startedMs === "number" ? task.startedMs : Date.now(),
-      }))
-      .sort((a, b) => b.startedMs - a.startedMs)
-      .slice(0, MAX_TASKS);
-  } catch {
-    return [];
-  }
+  return readValidatedArray(
+    TASKS_KEY,
+    (task): task is Partial<TaskSession> & { id: string; title: string } =>
+      !!task &&
+      typeof task === "object" &&
+      typeof (task as Partial<TaskSession>).id === "string" &&
+      typeof (task as Partial<TaskSession>).title === "string",
+  )
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      source: safeSource(task.source),
+      model: typeof task.model === "string" ? task.model : null,
+      status: safeStatus(task.status),
+      cwd: typeof task.cwd === "string" ? task.cwd : null,
+      startedMs: typeof task.startedMs === "number" ? task.startedMs : Date.now(),
+    }))
+    .sort((a, b) => b.startedMs - a.startedMs)
+    .slice(0, MAX_TASKS);
 }
 
 function persistTasks() {

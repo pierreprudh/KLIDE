@@ -6,6 +6,24 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
+## v0.5 Release Candidate — started 2026-07-15
+
+- [x] Add direct race-flow regression coverage: persistence, malformed state,
+  bounded history, isolated dispatch, partial failure, and orphan cleanup.
+- [x] Remove a race worktree when its Harness run fails to start without forcing
+  deletion of a dirty checkout.
+- [x] Add CI gates for frontend tests/build and Rust tests.
+- [x] Build the release-profile Apple Silicon `.app` bundle locally.
+- [x] Reconcile the README, changelog, and agent context with the actual v0.5
+  product state.
+- [ ] Dogfood the full Tauri race path: dispatch, permission pause, restart,
+  evidence comparison, winner merge, and explicit worktree cleanup.
+- [ ] Publish the first signed/notarized macOS bundle.
+- [ ] Validate Windows and Linux after replacing the Apple-only keyring feature
+  selection with target-specific backends.
+- [ ] Make worktree-per-run isolation the default parallel-agent flow.
+- [ ] Complete provider-aware waiting/exit markers for historical delegate runs.
+
 ## Stabilize v0.2
 
 - [x] Reconcile README with real delegate PTYs, Mission Control handoff, Project Memory, and Context Lens status.
