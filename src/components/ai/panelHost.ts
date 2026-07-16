@@ -17,7 +17,8 @@ export const DEFAULT_AI_PANEL_ID = "ai-main";
 
 /** A queued Mission Control → AI panel handoff: open panel `panelId` pinned to
  *  `provider`, optionally resuming an on-disk session or reattaching to a live
- *  conversation. One at a time; consumed by the matching panel on mount. */
+ *  conversation. The host queues one per spawned panel (a race "watch live"
+ *  spawns several in one tick); each is consumed by its panel on mount. */
 export type PendingAiPanel = {
   panelId: string;
   provider: ProviderId;

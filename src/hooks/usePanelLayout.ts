@@ -421,15 +421,17 @@ export function usePanelLayout(opts: {
   // Append a fresh AI panel, offset from the last so the user can see both,
   // clamped inside the workbench. Returns the new panel's id. Used by both
   // "duplicate panel" and the Mission Control "open in {CLI}" handoff.
-  function appendAiPanel(seed?: { provider?: ProviderId; model?: string; cwd?: string }): string {
+  function appendAiPanel(seed?: { provider?: ProviderId; model?: string; cwd?: string; rect?: PanelRect }): string {
     const id = newAiPanelId();
     setAiPanels((prevPanels) => {
       const last = prevPanels[prevPanels.length - 1]?.rect;
       const baseW = last?.w ?? Math.min(360, Math.max(1, workbenchSize.w));
       const baseH = last?.h ?? workbenchSize.h;
       const offset = 20;
+      // An explicit seed rect wins over the cascade — used by the race
+      // "watch live" handoff to split two panels across the workbench.
       const rect = clampRect(
-        {
+        seed?.rect ?? {
           x: (last?.x ?? workbenchSize.w - baseW) - offset,
           y: (last?.y ?? 0) + offset,
           w: baseW,

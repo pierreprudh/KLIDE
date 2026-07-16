@@ -2542,17 +2542,31 @@ function RaceAgentRow({
 function RaceComposer({
   workspaceRoot,
   onStarted,
+  onWatch,
 }: {
   workspaceRoot: string | null;
   onStarted: (firstRunId: string) => void;
+  /** "Watch live" — open every racer in its own AI panel (free-mode split /
+   *  Focus tabs) right after dispatch, instead of headless-only. */
+  onWatch?: (group: RaceGroup) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [starting, setStarting] = useState(false);
+  const [watchLive, setWatchLive] = useState(
+    () => localStorage.getItem("klide.race.watchLive") === "true"
+  );
   const [picks, setPicks] = useState<RaceAgentPick[]>([
     { provider: "ollama", model: DEFAULT_MODELS.ollama ?? "" },
     { provider: "anthropic", model: DEFAULT_MODELS.anthropic ?? "" },
   ]);
+
+  function toggleWatchLive() {
+    setWatchLive((v) => {
+      localStorage.setItem("klide.race.watchLive", String(!v));
+      return !v;
+    });
+  }
 
   async function start() {
     const text = prompt.trim();
@@ -2572,12 +2586,14 @@ function RaceComposer({
       setPrompt("");
       setEditing(false);
       if (group.members[0]) onStarted(group.members[0].runId);
+      if (watchLive && group.members.length > 0) onWatch?.(group);
     } catch (err) {
       if (err instanceof PartialRaceError) {
         notify(`Race started, but not fully: ${err.failures.join(" · ")}`, { tone: "warn" });
         setPrompt("");
         setEditing(false);
         if (err.group.members[0]) onStarted(err.group.members[0].runId);
+        if (watchLive && err.group.members.length > 0) onWatch?.(err.group);
       } else {
         notify(`Race failed: ${err instanceof Error ? err.message : String(err)}`, {
           tone: "error",
@@ -2670,9 +2686,31 @@ function RaceComposer({
       <RaceAgentRow label="A" pick={picks[0]} onChange={(next) => setPicks([next, picks[1]])} />
       <RaceAgentRow label="B" pick={picks[1]} onChange={(next) => setPicks([picks[0], next])} />
       <div
-        style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}
+        style={{ display: "flex", alignItems: "center", gap: 8 }}
         title="Each agent works in its own worktree; edits auto-apply with checkpoints."
       >
+        <label
+          title="Open both agents on screen when the race starts — side-by-side panels, or tabs in Focus"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11.5,
+            color: watchLive ? "var(--fg-strong)" : "var(--fg-subtle)",
+            cursor: "pointer",
+            userSelect: "none",
+            marginRight: "auto",
+            transition: "color var(--motion-fast) var(--ease-out)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={watchLive}
+            onChange={toggleWatchLive}
+            style={{ margin: 0, width: 13, height: 13, accentColor: "var(--accent)" }}
+          />
+          Watch live
+        </label>
         <ActionButton label="Cancel" onClick={() => setEditing(false)} />
         <ActionButton label={starting ? "Starting…" : "Start race"} onClick={() => void start()} />
       </div>
@@ -4600,6 +4638,7 @@ export function MissionControl({
   onResumeKlideRun,
   onOpenInAiPanel,
   onReattachLiveSession,
+  onWatchRace,
   onReviewDiff,
   onSaveMemory,
   onForkRun,
@@ -4632,6 +4671,9 @@ export function MissionControl({
      *  known — the fresh spawn `--resume`s it under the same terminal history. */
     resumeSessionId?: string | null;
   }) => void;
+  /** Race "watch live" — open every racer in its own AI panel right after
+   *  dispatch (side-by-side floating panels, or tabs in Focus mode). */
+  onWatchRace?: (group: RaceGroup) => void;
   /** "Review Diff" — for Klide runs, scroll the detail pane's
    *  CheckpointPanel into view. For CLI runs, switch to the git-review
    *  view. Fires from the row's right rail. */
@@ -5286,6 +5328,7 @@ export function MissionControl({
               setSelectedId(id);
               void load();
             }}
+            onWatch={onWatchRace}
           />
           {!loading && filtered.length === 0 && (
             sessionQuery.trim() !== "" || sourceFilter !== "all" ? (

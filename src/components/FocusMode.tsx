@@ -37,6 +37,16 @@ type Props = {
   onSubmit: (text: string) => void;
   onOpenMissionControl: () => void;
   renderChat: () => ReactNode;
+  /** Race watch — one tab per racing agent over the chat canvas. Empty or
+   *  absent means the normal single-conversation chat. The parent keeps every
+   *  tab's panel mounted; this component only draws the strip. */
+  raceTabs?: { panelId: string; label: string }[];
+  activeRaceTab?: string | null;
+  onSelectRaceTab?: (panelId: string) => void;
+  /** "Ask both" — send one follow-up into every racer's conversation. */
+  onRaceFollowUp?: (text: string) => void;
+  /** Leave the race view — close the racers' panels and go back home. */
+  onCloseRaceTabs?: () => void;
   /** Composer run settings — the same per-panel / per-model state the AI
    *  panel and Settings read (provider → model → effort → context). */
   provider: ProviderId;
@@ -282,6 +292,11 @@ export function FocusMode({
   onSubmit,
   onOpenMissionControl,
   renderChat,
+  raceTabs,
+  activeRaceTab,
+  onSelectRaceTab,
+  onRaceFollowUp,
+  onCloseRaceTabs,
   provider,
   onProviderChange,
   model,
@@ -293,6 +308,8 @@ export function FocusMode({
 }: Props) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // "Ask both" strip composer — local draft, cleared on send.
+  const [raceAsk, setRaceAsk] = useState("");
   const [username, setUsername] = useState<string>("");
   const [hostname, setHostname] = useState<string>("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -545,6 +562,112 @@ export function FocusMode({
               overflow: "hidden",
             }}
           >
+            {raceTabs && raceTabs.length > 0 && (
+              /* Race watch — one quiet text tab per racing agent. Active tab
+                 is weight + a 1.5px accent underline (no chips, no boxes);
+                 the panels themselves stay mounted in the parent, this strip
+                 only picks which one is visible. */
+              <div
+                role="tablist"
+                aria-label="Racing agents"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 18,
+                  padding: "0 22px",
+                  height: 38,
+                  flexShrink: 0,
+                  borderBottom: "1px solid var(--border)",
+                }}
+              >
+                {raceTabs.map((t) => {
+                  const active = t.panelId === (activeRaceTab ?? raceTabs[0].panelId);
+                  return (
+                    <button
+                      key={t.panelId}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => onSelectRaceTab?.(t.panelId)}
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        font: "inherit",
+                        fontSize: 12.5,
+                        fontWeight: active ? 550 : 400,
+                        color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
+                        padding: 0,
+                        height: "100%",
+                        cursor: "pointer",
+                        boxShadow: active ? "inset 0 -1.5px 0 var(--accent)" : "none",
+                        transition:
+                          "color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!active) e.currentTarget.style.color = "var(--fg-strong)";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!active) e.currentTarget.style.color = "var(--fg-subtle)";
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+                {onRaceFollowUp && (
+                  <input
+                    value={raceAsk}
+                    onChange={(e) => setRaceAsk(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      const t = raceAsk.trim();
+                      if (!t) return;
+                      onRaceFollowUp(t);
+                      setRaceAsk("");
+                    }}
+                    placeholder={raceTabs.length > 1 ? "Ask both…" : "Ask the racer…"}
+                    title="One follow-up, sent into every racer's conversation"
+                    style={{
+                      marginLeft: "auto",
+                      width: 220,
+                      fontSize: 12,
+                      fontFamily: "inherit",
+                      color: "var(--fg-strong)",
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: "4px 8px",
+                      outline: "none",
+                      transition: "border-color var(--motion-fast) var(--ease-out)",
+                    }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = "var(--border-strong)"; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => onCloseRaceTabs?.()}
+                  title="Close the race view — both runs keep going and stay on Mission Control"
+                  style={{
+                    marginLeft: onRaceFollowUp ? undefined : "auto",
+                    border: "none",
+                    background: "transparent",
+                    font: "inherit",
+                    fontSize: 11.5,
+                    color: "var(--fg-dim)",
+                    padding: 0,
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    transition: "color var(--motion-fast) var(--ease-out)",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-dim)"; }}
+                >
+                  End watch
+                </button>
+              </div>
+            )}
             {renderChat()}
           </div>
         ) : (

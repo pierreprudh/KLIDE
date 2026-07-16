@@ -20,6 +20,10 @@ export const Z = {
   /** Floating panels. A focused panel = `panel + <focus order>`; the band
    *  climbs as panels are focused, so keep every tier below well clear. */
   panel: 1_000,
+  /** The race "ask both" bar — persistent workbench chrome that must stay
+   *  above the floating-panel band (which climbs with focus events) but
+   *  below every popover/menu. */
+  raceBar: 90_000,
   /** Composer menus, model picker, command palette — must float above any
    *  panel, including the one they belong to. */
   popover: 100_000,

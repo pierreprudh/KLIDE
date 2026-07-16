@@ -240,6 +240,13 @@ type Props = {
    *  messages (the hero composer always means "new chat"). */
   initialMessage?: string | null;
   onInitialMessageConsumed?: () => void;
+  /** A message to send into the CURRENT conversation as a follow-up turn —
+   *  the race "ask both" composer fans one text out to every racer's panel
+   *  with this. Unlike `initialMessage` it never starts a new chat, and the
+   *  turn queues behind an externally-started run that's still streaming.
+   *  `nonce` distinguishes repeat sends of the same text. */
+  followUpMessage?: { text: string; nonce: number } | null;
+  onFollowUpConsumed?: () => void;
   /** "focus" restyles the same surface for the fullscreen Focus screen: the
    *  transcript and composer sit in a centered ~760px reading column with
    *  roomier padding. Logic is identical — this is a design variant only. */
@@ -464,6 +471,8 @@ export function AiPanel({
   onInitialConsumed,
   initialMessage,
   onInitialMessageConsumed,
+  followUpMessage,
+  onFollowUpConsumed,
   variant = "panel",
   onMemoryWritten,
   onOpenMemory,
@@ -1545,7 +1554,13 @@ This user request requires workspace inspection. Before answering, you MUST call
         // status, so the tail is the authoritative "is this turn done" signal.
         const adopt = async (guardBaseLen?: number): Promise<{ len: number; terminal: boolean }> => {
           const events = await invoke<AgentEvent[]>("agent_read_run", { runId: reattachId });
-          const replayed = eventsToMsgs(events);
+          // Turns queued locally (waiting for this external run to settle)
+          // aren't in the transcript yet — carry them across the replay or a
+          // long-running race run would silently swallow an "ask both" send.
+          const queuedLocal = msgsRef.current.filter(
+            (m) => m.role === "user" && m.queueState === "queued",
+          );
+          const replayed = [...eventsToMsgs(events), ...queuedLocal];
           const safe =
             currentIdRef.current === reattachId &&
             (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen) &&
@@ -1701,6 +1716,21 @@ This user request requires workspace inspection. Before answering, you MUST call
     void send({ text });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingHeroSend]);
+
+  // Race "ask both" handoff: a follow-up for the CURRENT conversation. Goes
+  // through the normal composer path (send → enqueue → drain), so if the
+  // racer's externally-started run is still streaming the turn waits its
+  // turn in the queue instead of racing it.
+  const consumedFollowUpRef = useRef<number>(0);
+  useEffect(() => {
+    if (!followUpMessage || consumedFollowUpRef.current === followUpMessage.nonce) return;
+    consumedFollowUpRef.current = followUpMessage.nonce;
+    const text = followUpMessage.text.trim();
+    onFollowUpConsumed?.();
+    if (!text) return;
+    void send({ text });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followUpMessage]);
 
   // The Focus variant's reading column: instead of restructuring the
   // transcript/composer DOM, the horizontal padding grows to center a
@@ -2487,6 +2517,15 @@ This user request requires workspace inspection. Before answering, you MUST call
     const generation = queueGenerationRef.current;
     try {
       while (queueRef.current.length > 0 && queueGenerationRef.current === generation) {
+        // An externally-started run (race watch, resumed live run) is still
+        // streaming into this conversation via the reattach follower.
+        // Starting a queued turn now would run two harness loops over one
+        // transcript — wait for it to settle, then re-check the queue.
+        const follow = reattachRef.current;
+        if (follow) {
+          await follow.done;
+          continue;
+        }
         const [turn, ...rest] = queueRef.current;
         queueRef.current = rest;
         setQueuedTurns(rest);

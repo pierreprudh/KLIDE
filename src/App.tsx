@@ -57,6 +57,9 @@ import {
   type PendingAiPanel,
 } from "./components/ai/panelHost";
 import { readWorkspaceTextFile } from "./workspaceFs";
+import { modelLabel } from "./components/ai/ModelPicker";
+import { RaceFollowUpBar } from "./components/ai/RaceFollowUpBar";
+import type { RaceGroup } from "./races";
 import {
   worktreeSetupSummary,
   worktreeName,
@@ -160,11 +163,19 @@ function App() {
   // re-resuming the same run focuses its panel instead of opening a duplicate.
   const resumePanelsRef = useRef<Map<string, string>>(new Map());
   // AI panel spawn queue: when Mission Control asks to open a fresh panel
-  // pinned to a delegate provider, we set this and the matching <AiPanel>
-  // picks it up on mount, sets its initial provider + resume/task, then
-  // clears the entry. One-at-a-time, key matched by panel id.
-  const [pendingAiPanel, setPendingAiPanel] = useState<PendingAiPanel | null>(null);
-  void pendingAiPanel;
+  // pinned to a provider, we push an entry and the matching <AiPanel> picks
+  // it up on mount, sets its initial provider + resume/task, then clears its
+  // entry. A list (not a single slot) because a race "watch live" handoff
+  // opens one panel per racer in the same tick — key matched by panel id.
+  const [pendingAiPanels, setPendingAiPanels] = useState<PendingAiPanel[]>([]);
+  // Active race watch — one entry per racer panel. Drives the Focus tab
+  // strip, the free-mode "ask both" bar, and the follow-up fan-out. Empty
+  // means no race is being watched.
+  const [raceWatchTabs, setRaceWatchTabs] = useState<{ panelId: string; label: string }[]>([]);
+  const [focusActiveTabId, setFocusActiveTabId] = useState<string | null>(null);
+  // Pending "ask both" follow-ups, keyed by panelId — each racer's AiPanel
+  // consumes its entry and sends it into its own conversation.
+  const [raceFollowUps, setRaceFollowUps] = useState<Record<string, { text: string; nonce: number }>>({});
   const [apiKeyVersion, setApiKeyVersion] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
@@ -461,7 +472,11 @@ function App() {
   ): ReactNode {
     const panelId = panel?.id ?? DEFAULT_AI_PANEL_ID;
     const model = panel?.model ?? aiModel;
-    const handoff = initialHandoffFor(panelId, panel?.provider, pendingAiPanel);
+    const handoff = initialHandoffFor(
+      panelId,
+      panel?.provider,
+      pendingAiPanels.find((p) => p.panelId === panelId) ?? null
+    );
     const { root, worktreeName } = panelWorkspace(
       panel,
       workspaceRoot,
@@ -478,7 +493,11 @@ function App() {
         initialConversationId={handoff.initialConversationId}
         initialResumeSessionId={handoff.initialResumeSessionId}
         initialTask={handoff.initialTask}
-        onInitialConsumed={handoff.matched ? () => setPendingAiPanel(null) : undefined}
+        onInitialConsumed={
+          handoff.matched
+            ? () => setPendingAiPanels((ps) => ps.filter((p) => p.panelId !== panelId))
+            : undefined
+        }
         workspaceRoot={root}
         worktreeName={worktreeName}
         onFileWritten={onAgentWrote}
@@ -502,12 +521,34 @@ function App() {
         harnessSettings={harnessSettings}
         onDuplicate={opts?.duplicatable ? appendAiPanel : undefined}
         onForkConversationInWorktree={forkConversationInWorktree}
-        onClose={opts?.closable ? () => closeAiPanel(panelId) : undefined}
+        onClose={
+          opts?.closable
+            ? () => {
+                closeAiPanel(panelId);
+                // A closed racer drops out of the watch (its run keeps going
+                // headless); the "ask both" bar follows the surviving list.
+                setRaceWatchTabs((ts) => ts.filter((t) => t.panelId !== panelId));
+                setRaceFollowUps((m) => {
+                  if (!(panelId in m)) return m;
+                  const { [panelId]: _dropped, ...rest } = m;
+                  return rest;
+                });
+              }
+            : undefined
+        }
         resumeConversation={resumeConversationFor(panelId, resumeTarget)}
         onResumeConsumed={() => setResumeTarget(null)}
         variant={opts?.variant}
         initialMessage={opts?.initialMessage ?? null}
         onInitialMessageConsumed={() => setFocusInitialMessage(null)}
+        followUpMessage={raceFollowUps[panelId] ?? null}
+        onFollowUpConsumed={() =>
+          setRaceFollowUps((m) => {
+            if (!(panelId in m)) return m;
+            const { [panelId]: _consumed, ...rest } = m;
+            return rest;
+          })
+        }
         onMemoryWritten={(entry) => {
           setMemoryRefreshKey((k) => k + 1);
           setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);
@@ -949,13 +990,13 @@ function App() {
     setView("workbench");
     if (!aiVisible) togglePanel("ai");
     const id = appendAiPanel({ provider: opts.provider, cwd: opts.cwd });
-    setPendingAiPanel({
+    setPendingAiPanels([{
       panelId: id,
       provider: opts.provider,
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: opts.initialTask ?? null,
       conversationId: null,
-    });
+    }]);
   }
 
   // "Reattach" from Mission Control's live-sessions strip — reconnect to a
@@ -987,13 +1028,92 @@ function App() {
       return;
     }
     const id = appendAiPanel({ provider: opts.provider, cwd: opts.workspaceRoot ?? undefined });
-    setPendingAiPanel({
+    setPendingAiPanels([{
       panelId: id,
       provider: opts.provider,
       resumeSessionId: opts.resumeSessionId ?? null,
       initialTask: null,
       conversationId: opts.conversationId,
+    }]);
+  }
+
+  // "Watch live" from the race composer — open every racer in its own AI
+  // panel so both runs stream on screen instead of headless-only. Free /
+  // anchored layouts get two floating panels split across the workbench;
+  // Focus gets a tab per racer over the chat canvas. Each panel mounts
+  // pinned to its worktree and bound to its run id (`conversationId`), so
+  // AiPanel's existing mount-reattach path adopts the transcript snapshot
+  // and follows the run live off the `agent-run:{id}` broadcast.
+  function watchRace(group: RaceGroup) {
+    const members = group.members.slice(0, 4);
+    if (members.length === 0) return;
+    setView("workbench");
+    const margin = 12;
+    const gap = 12;
+    const splitW = Math.max(320, Math.floor((workbenchSize.w - margin * 2 - gap) / 2));
+    const splitH = Math.max(320, workbenchSize.h - margin * 2);
+    const pending: PendingAiPanel[] = [];
+    const tabs: { panelId: string; label: string }[] = [];
+    members.forEach((m, i) => {
+      // Two racers split the workbench half/half; a partial race (one
+      // survivor) or >2 members fall back to the cascade placement.
+      const rect =
+        !focusMode && members.length === 2
+          ? { x: margin + i * (splitW + gap), y: margin, w: splitW, h: splitH }
+          : undefined;
+      const panelId = appendAiPanel({
+        provider: m.provider as ProviderId,
+        model: m.model,
+        cwd: m.worktreePath,
+        rect,
+      });
+      resumePanelsRef.current.set(m.runId, panelId);
+      pending.push({
+        panelId,
+        provider: m.provider as ProviderId,
+        resumeSessionId: null,
+        initialTask: null,
+        conversationId: m.runId,
+      });
+      tabs.push({
+        panelId,
+        label: `${String.fromCharCode(65 + i)} · ${modelLabel(m.model)}`,
+      });
     });
+    setPendingAiPanels(pending);
+    setRaceWatchTabs(tabs);
+    if (focusMode) {
+      setFocusActiveTabId(tabs[0].panelId);
+      setFocusChatActive(true);
+    } else {
+      // Two side-by-side panels need the free (floating) layout — the
+      // anchored column has one AI slot.
+      setAnchoredLayout(false);
+      if (!aiVisible) togglePanel("ai");
+    }
+  }
+
+  // One follow-up, every racer: queue the same text for each watched panel.
+  // Each AiPanel sends it into its own conversation — and if that racer's
+  // run is still streaming, the turn waits in its queue instead of racing it.
+  function sendRaceFollowUp(text: string) {
+    const t = text.trim();
+    if (!t || raceWatchTabs.length === 0) return;
+    const nonce = Date.now();
+    setRaceFollowUps(
+      Object.fromEntries(raceWatchTabs.map((tab) => [tab.panelId, { text: t, nonce }]))
+    );
+  }
+
+  // Leave the Focus race-tab view: close the racers' panels (the runs keep
+  // going headless in Rust and stay visible on the Mission Control board)
+  // and return the canvas to the normal single-conversation chat.
+  function endFocusRaceWatch() {
+    if (raceWatchTabs.length === 0) return;
+    for (const t of raceWatchTabs) closeAiPanel(t.panelId);
+    setRaceWatchTabs([]);
+    setFocusActiveTabId(null);
+    setRaceFollowUps({});
   }
 
   // Open an existing worktree (from the Worktrees modal) in a fresh AI panel
@@ -1625,6 +1745,7 @@ function App() {
                   onResumeKlideRun={resumeKlideRun}
                   onOpenInAiPanel={openRunInAiPanel}
                   onReattachLiveSession={reattachLiveSession}
+                  onWatchRace={watchRace}
                   onReviewDiff={reviewDiffFromRun}
                   onSaveMemory={saveMemoryFromRun}
                   onForkRun={forkRun}
@@ -1672,14 +1793,19 @@ function App() {
                   projects={recentFolders}
                   chatActive={focusChatActive}
                   onSwitchProject={(root) => {
+                    endFocusRaceWatch();
                     setFocusChatActive(false);
                     changeRoot(root);
                   }}
-                  onNewChat={() => setFocusChatActive(false)}
+                  onNewChat={() => {
+                    endFocusRaceWatch();
+                    setFocusChatActive(false);
+                  }}
                   onOpenConversation={(convo) => {
                     // A conversation from another project's history brings its
                     // project along — resuming it against the wrong workspace
                     // would point every tool at the wrong tree.
+                    endFocusRaceWatch();
                     if (convo.cwd && convo.cwd !== workspaceRoot) changeRoot(convo.cwd);
                     setResumeTarget({ panelId: aiPanels[0]?.id ?? "ai-main", convo });
                     setFocusChatActive(true);
@@ -1689,7 +1815,39 @@ function App() {
                     setFocusChatActive(true);
                   }}
                   onOpenMissionControl={() => setView("runs")}
-                  renderChat={() => renderPanel("ai", "focus-ai", { aiVariant: "focus" })}
+                  raceTabs={raceWatchTabs}
+                  activeRaceTab={focusActiveTabId}
+                  onSelectRaceTab={setFocusActiveTabId}
+                  onRaceFollowUp={sendRaceFollowUp}
+                  onCloseRaceTabs={() => {
+                    endFocusRaceWatch();
+                    setFocusChatActive(false);
+                  }}
+                  renderChat={() => {
+                    if (raceWatchTabs.length === 0)
+                      return renderPanel("ai", "focus-ai", { aiVariant: "focus" });
+                    // Race watch: every racer's panel stays MOUNTED (run
+                    // subscriptions are mount-tied), the inactive tab is only
+                    // display:none.
+                    const activeId = focusActiveTabId ?? raceWatchTabs[0].panelId;
+                    return raceWatchTabs.map((t) => (
+                      <div
+                        key={t.panelId}
+                        style={{
+                          display: t.panelId === activeId ? "flex" : "none",
+                          flex: 1,
+                          minHeight: 0,
+                          flexDirection: "column",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {renderAiPanel(
+                          aiPanels.find((p) => p.id === t.panelId),
+                          { key: `focus-${t.panelId}`, variant: "focus", respectWorktree: true }
+                        )}
+                      </div>
+                    ));
+                  }}
                   provider={
                     aiPanels[0]?.provider ??
                     ((localStorage.getItem("klide.provider") as ProviderId) || "ollama")
@@ -2023,6 +2181,17 @@ function App() {
                     </FloatingPanel>
                   );
                 })}
+                {aiVisible && raceWatchTabs.length > 0 && (
+                  <RaceFollowUpBar
+                    count={raceWatchTabs.length}
+                    onSend={sendRaceFollowUp}
+                    onDismiss={() => {
+                      // Hide the bar only — panels and runs are untouched.
+                      setRaceWatchTabs([]);
+                      setRaceFollowUps({});
+                    }}
+                  />
+                )}
               </div>
             )}
               </div>
