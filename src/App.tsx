@@ -542,6 +542,11 @@ function App() {
             return rest;
           })
         }
+        onSendToRace={
+          raceWatchTabs.length > 1 && raceWatchTabs.some((t) => t.panelId === panelId)
+            ? sendRaceFollowUp
+            : undefined
+        }
         onMemoryWritten={(entry) => {
           setMemoryRefreshKey((k) => k + 1);
           setFileNotice(`Memory written → ${entry.title} (${entry.relPath})`);

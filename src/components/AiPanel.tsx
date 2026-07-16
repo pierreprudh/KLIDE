@@ -247,6 +247,11 @@ type Props = {
    *  `nonce` distinguishes repeat sends of the same text. */
   followUpMessage?: { text: string; nonce: number } | null;
   onFollowUpConsumed?: () => void;
+  /** Set only while this panel belongs to a watched race with 2+ racers:
+   *  hovering the send button reveals a "Send to both" action that fans the
+   *  composed text out to every racer (the host routes it back through
+   *  `followUpMessage`, including to this panel). */
+  onSendToRace?: (text: string) => void;
   /** "focus" restyles the same surface for the fullscreen Focus screen: the
    *  transcript and composer sit in a centered ~760px reading column with
    *  roomier padding. Logic is identical — this is a design variant only. */
@@ -473,6 +478,7 @@ export function AiPanel({
   onInitialMessageConsumed,
   followUpMessage,
   onFollowUpConsumed,
+  onSendToRace,
   variant = "panel",
   onMemoryWritten,
   onOpenMemory,
@@ -2852,6 +2858,8 @@ This user request requires workspace inspection. Before answering, you MUST call
   // ── RENDER ──
 
   const canSend = !!input.trim() && !serverStarting;
+  // Hover-revealed "Send to both" over the send button (race panels only).
+  const [raceSendHover, setRaceSendHover] = useState(false);
 
   return (
     <>
@@ -3843,12 +3851,43 @@ This user request requires workspace inspection. Before answering, you MUST call
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
               </button>
             ) : (
-              <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
-                style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "var(--control-primary-fg)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
-                onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
-                onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
-              </button>
+              /* Race panels grow a hover flyout over the send button: "Send
+                 to both" fans the composed text out to every racer via the
+                 host. The wrapper span carries the hover so the pointer can
+                 travel from button to flyout without a dead zone. */
+              <span
+                style={{ position: "relative", flexShrink: 0 }}
+                onMouseEnter={() => { if (onSendToRace) setRaceSendHover(true); }}
+                onMouseLeave={() => setRaceSendHover(false)}
+              >
+                {onSendToRace && raceSendHover && canSend && (
+                  <span style={{ position: "absolute", bottom: 30, right: 0, paddingBottom: 6, zIndex: 30 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const t = input.trim();
+                        if (!t) return;
+                        onSendToRace(t);
+                        setInput("");
+                        setRaceSendHover(false);
+                      }}
+                      title="Send this message to every racer in this race"
+                      className="klide-enter-rise"
+                      style={{ whiteSpace: "nowrap", fontSize: 11.5, fontFamily: "inherit", color: "var(--fg-strong)", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", padding: "4px 9px", cursor: "pointer", transition: "background var(--motion-fast) var(--ease-out)" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; }}
+                    >
+                      Send to both
+                    </button>
+                  </span>
+                )}
+                <button onClick={() => send()} disabled={!canSend} aria-label="Send message" title={serverStarting ? `Starting ${providerName(provider)}...` : "Send (Enter)"}
+                  style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", color: canSend ? "var(--control-primary-fg)" : "var(--fg-dim)", background: canSend ? "var(--accent)" : "var(--bg-elevated)", border: canSend ? "none" : "1px solid var(--border)", cursor: canSend ? "pointer" : "default", transition: "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), filter var(--motion-fast) var(--ease-out)" }}
+                  onMouseEnter={(e) => { if (canSend) e.currentTarget.style.filter = "brightness(1.08)"; }}
+                  onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5" /><path d="M6 11l6-6 6 6" /></svg>
+                </button>
+              </span>
             )}
             </div>
           </div>
