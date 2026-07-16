@@ -2,6 +2,7 @@ mod command_allowlist;
 #[cfg(test)]
 mod eval;
 pub mod evidence;
+pub mod failure_budget;
 mod network_allowlist;
 mod permission;
 mod run_core;
@@ -88,12 +89,16 @@ pub struct AgentRunHandle {
 
 pub struct AgentSupervisorState {
     pub runs: Mutex<HashMap<String, AgentRunHandle>>,
+    /// Crash-loop quarantine: refuses re-dispatch of a conversation whose
+    /// recent runs all errored (see failure_budget.rs for the block rule).
+    pub failure_budget: failure_budget::FailureBudget,
 }
 
 impl Default for AgentSupervisorState {
     fn default() -> Self {
         Self {
             runs: Mutex::new(HashMap::new()),
+            failure_budget: failure_budget::FailureBudget::default(),
         }
     }
 }
@@ -164,6 +169,10 @@ trait RunSupervisor: Send + Sync {
     /// through the `emit` closure (structural events, persisted with a `seq`)
     /// are broadcast — token deltas stream separately and are not replayed.
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent);
+    /// Feed the failure budget: a run settled in error (`failed`) or done.
+    /// Default no-op keeps FakeSupervisor tests headless; the budget itself
+    /// is unit-tested in failure_budget.rs.
+    fn note_terminal(&self, _run_id: &str, _provider: &str, _model: &str, _failed: bool) {}
 }
 
 /// Payload for the `agent-run:{id}` reattach stream. `seq` is the event's
@@ -222,6 +231,15 @@ impl RunSupervisor for TauriSupervisor {
             },
         );
     }
+
+    fn note_terminal(&self, run_id: &str, provider: &str, model: &str, failed: bool) {
+        let budget = &self.app.state::<AgentSupervisorState>().failure_budget;
+        if failed {
+            budget.record_failure(run_id, provider, model, now_ms());
+        } else {
+            budget.record_success(run_id);
+        }
+    }
 }
 
 fn set_run_status(sup: &dyn RunSupervisor, run_id: &str, status: AgentRunStatus) {
@@ -242,6 +260,13 @@ fn settle_run(
     status: AgentRunStatus,
 ) -> Result<(), String> {
     set_run_status(sup, id, status);
+    // Only real outcomes move the failure budget: error counts against it,
+    // done clears it, cancellation is the user's call and says nothing.
+    match status {
+        AgentRunStatus::Error => sup.note_terminal(id, &summary.provider, &summary.model, true),
+        AgentRunStatus::Done => sup.note_terminal(id, &summary.provider, &summary.model, false),
+        _ => {}
+    }
     write_summary(
         runs_dir,
         &AgentRunSummary {
@@ -1550,6 +1575,17 @@ pub async fn agent_start_run(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(run_id);
     let cancel = CancellationToken::new();
+
+    // Crash-loop quarantine: a conversation whose recent runs all errored on
+    // this provider/model is refused re-dispatch while the cooldown holds, so
+    // a broken setup can't be hammered in a tight loop (human or orchestrated).
+    if let Some(reason) =
+        state
+            .failure_budget
+            .check(&id, &request.provider, &request.model, now_ms())
+    {
+        return Err(reason);
+    }
 
     // One live run per conversation id. The handle stays in the map with a
     // terminal status after a run finishes, so reusing the id for a NEW run is
