@@ -66,23 +66,20 @@ export function ConversationHistory({ conversations, currentId, historyOpen, set
                 style={{
                   display: "flex", alignItems: "center", gap: 8, padding: "7px 8px",
                   borderRadius: "var(--radius-sm)", cursor: "pointer",
-                  background: current ? "var(--bg-selected)" : "transparent",
-                  // The ongoing conversation reads as "you are here": an accent
-                  // spine (inset shadow — no layout shift) + heavier title.
-                  boxShadow: current ? "inset 2px 0 0 var(--accent)" : "none",
+                  background: "transparent",
                 }}
-                onMouseEnter={(e) => { if (!current) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = current ? "var(--bg-selected)" : "transparent"; }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: current ? 650 : 500, color: "var(--fg-strong)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--fg-strong)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {c.title}
                   </div>
                   <div
                     title={c.model ? `${c.model}` : undefined}
                     style={{ fontSize: 11, color: "var(--fg-subtle)", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                   >
-                    {current ? "Current · " : ""}{relativeTime(c.updatedAt)}{c.model ? ` · ${c.model}` : ""}
+                    {relativeTime(c.updatedAt)}{c.model ? ` · ${c.model}` : ""}
                   </div>
                 </div>
                 <button

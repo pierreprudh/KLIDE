@@ -15,12 +15,22 @@ import {
 // auto-dismiss so a result can be read (or its action taken) without racing a
 // timer.
 
+// No spines, no badges — tone shows only through the message text itself,
+// and only when it matters (warn/error). Info and success stay neutral.
 const TONE_COLOR: Record<ToastTone, string> = {
-  info: "var(--fg-subtle)",
-  success: "var(--success)",
+  info: "var(--fg-strong)",
+  success: "var(--fg-strong)",
   warn: "var(--warning)",
   error: "var(--danger)",
 };
+
+// "Title — detail" messages render as two lines: the title carries the tone,
+// the detail sits quieter underneath. Messages without a dash stay one line.
+function splitMessage(message: string): { title: string; detail: string | null } {
+  const idx = message.indexOf(" — ");
+  if (idx === -1) return { title: message, detail: null };
+  return { title: message.slice(0, idx), detail: message.slice(idx + 3) };
+}
 
 function ToastRow({ toast }: { toast: Toast }) {
   const { id, message, tone, action, duration } = toast;
@@ -46,6 +56,7 @@ function ToastRow({ toast }: { toast: Toast }) {
   }, []);
 
   const toneColor = TONE_COLOR[tone];
+  const { title, detail } = splitMessage(message);
 
   return (
     <div
@@ -61,32 +72,48 @@ function ToastRow({ toast }: { toast: Toast }) {
         gap: 10,
         maxWidth: 380,
         minWidth: 220,
-        padding: "9px 11px 9px 13px",
+        padding: "10px 12px 10px 14px",
         borderRadius: "var(--radius-md)",
         border: "1px solid var(--panel-border)",
-        borderLeft: `2px solid ${toneColor}`,
-        boxShadow: "var(--panel-shadow)",
+        boxShadow: "inset 0 1px 0 var(--panel-highlight), var(--panel-shadow)",
         fontSize: 12.5,
-        fontWeight: 500,
-        lineHeight: 1.4,
-        color: "var(--fg-strong)",
+        lineHeight: 1.45,
+        color: toneColor,
       }}
     >
-      <span
-        style={{
-          flex: 1,
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          display: "-webkit-box",
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: "vertical",
-          whiteSpace: "normal",
-          wordBreak: "break-word",
-        }}
-      >
-        {message}
-      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            whiteSpace: "normal",
+            wordBreak: "break-word",
+          }}
+        >
+          {title}
+        </div>
+        {detail && (
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 11.5,
+              color: "var(--fg-subtle)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              whiteSpace: "normal",
+              wordBreak: "break-word",
+            }}
+          >
+            {detail}
+          </div>
+        )}
+      </div>
       {action && (
         <button
           onClick={() => {
@@ -95,13 +122,18 @@ function ToastRow({ toast }: { toast: Toast }) {
           }}
           style={{
             flexShrink: 0,
-            padding: "3px 9px",
+            padding: "3px 7px",
             borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--border-strong)",
-            background: "var(--bg-elevated)",
+            border: "none",
+            background: "transparent",
             color: "var(--accent)",
             fontSize: 12,
-            fontWeight: 600,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--bg-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
           }}
         >
           {action.label}
@@ -141,10 +173,54 @@ function ToastRow({ toast }: { toast: Toast }) {
   );
 }
 
-export default function ToastHost() {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+// A toast that left the bus (auto-dismiss, ✕, or pushed out by the stack cap)
+// stays rendered with `leaving: true` until its exit animation finishes — so
+// the oldest toast fades and collapses instead of popping out of the stack.
+type Row = { toast: Toast; leaving: boolean };
 
-  useEffect(() => subscribeToasts(setToasts), []);
+// Keep in sync with the .toast-leave exit in tokens.css: slide-out (360ms) and
+// delayed collapse (220ms + 360ms) both finish before this. Rows are removed
+// by timer, not by animationend, so a missed event can never leave a ghost
+// toast behind.
+const EXIT_MS = 620;
+
+export default function ToastHost() {
+  const [rows, setRows] = useState<Row[]>([]);
+  const exiting = useRef(new Set<number>());
+
+  useEffect(
+    () =>
+      subscribeToasts((next) => {
+        setRows((prev) => {
+          const live = new Map(next.map((t) => [t.id, t]));
+          const merged: Row[] = [];
+          for (const r of prev) {
+            const t = live.get(r.toast.id);
+            if (t) {
+              merged.push({ toast: t, leaving: false });
+              live.delete(r.toast.id);
+            } else {
+              merged.push(r.leaving ? r : { ...r, leaving: true });
+            }
+          }
+          for (const t of live.values()) merged.push({ toast: t, leaving: false });
+          return merged;
+        });
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    for (const r of rows) {
+      if (!r.leaving || exiting.current.has(r.toast.id)) continue;
+      const id = r.toast.id;
+      exiting.current.add(id);
+      window.setTimeout(() => {
+        exiting.current.delete(id);
+        setRows((prev) => prev.filter((p) => p.toast.id !== id));
+      }, EXIT_MS);
+    }
+  }, [rows]);
 
   // The delegate status watcher lives with the surface that renders its
   // output: ToastHost is mounted exactly once at the App root, so this is
@@ -155,7 +231,7 @@ export default function ToastHost() {
     return watchDelegateStatus();
   }, []);
 
-  if (toasts.length === 0) return null;
+  if (rows.length === 0) return null;
 
   return createPortal(
     <div
@@ -171,8 +247,17 @@ export default function ToastHost() {
         pointerEvents: "none",
       }}
     >
-      {toasts.map((t) => (
-        <ToastRow key={t.id} toast={t} />
+      {rows.map((r) => (
+        <div
+          key={r.toast.id}
+          className={r.leaving ? "toast-shell toast-leave" : "toast-shell"}
+        >
+          {/* Clip only vertically while leaving: the collapse needs the row's
+              height contained, but the card itself slides out horizontally. */}
+          <div style={{ minHeight: 0, overflowX: "visible", overflowY: r.leaving ? "clip" : "visible" }}>
+            <ToastRow toast={r.toast} />
+          </div>
+        </div>
       ))}
     </div>,
     document.body,
