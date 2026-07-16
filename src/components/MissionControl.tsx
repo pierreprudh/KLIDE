@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Tooltip } from "./Tooltip";
@@ -80,6 +80,8 @@ import {
 import { compactConversationMessages, runMessagesToMarkdown } from "../transcripts";
 import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
+import { listCheckpoints } from "../agent/client";
+import type { ArtifactRequest, ArtifactTab } from "./ArtifactInspector";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { ALL_PROVIDERS, DEFAULT_MODELS, isDelegateProvider, providerName } from "../agent/providers";
@@ -91,6 +93,10 @@ import { modelBrand } from "../modelBrand";
 import { renderMarkdown } from "./markdown";
 import { buildRunHandoff } from "../agentHandoff";
 import { notify } from "../toast";
+
+const ArtifactInspector = lazy(() =>
+  import("./ArtifactInspector").then((module) => ({ default: module.ArtifactInspector }))
+);
 
 type GitBranchDiffSummary = {
   baseBranch: string;
@@ -106,6 +112,22 @@ type GitBranchDiffSummary = {
     deletions: number;
   }>;
 };
+
+function patchForFile(diff: string, path: string): string {
+  const lines = diff.replace(/\n$/, "").split("\n");
+  const start = lines.findIndex(
+    (line) => line.startsWith("diff --git ") && line.endsWith(` b/${path}`)
+  );
+  if (start < 0) return diff;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (lines[i].startsWith("diff --git ")) {
+      end = i;
+      break;
+    }
+  }
+  return `${lines.slice(start, end).join("\n")}\n`;
+}
 
 // Mission Control — Klide's agentic control panel. A board of agent runs pulled
 // from every tool you use (its own AI panel + external Claude Code / Codex
@@ -3202,7 +3224,8 @@ function RunDetail({
   raceEntries = [],
   onOpenInAiPanel,
   onResumeKlide,
-  onReviewDiff,
+  onReviewRun,
+  onOpenArtifact,
   onSaveMemory,
   summarizingFromRunId,
 }: {
@@ -3233,10 +3256,10 @@ function RunDetail({
     initialTask?: string;
   }) => void;
   onResumeKlide?: (runId: string) => void;
-  /** Review this run's file changes (CheckpointPanel for Klide, Git Review
-   *  for CLI). These live here in the detail pane rather than on the row so
-   *  the run list stays quiet. */
-  onReviewDiff?: (run: { id: string; source: string; cwd: string | null }) => void;
+  /** Open this Run's changes in Mission Control's docked Artifact Inspector. */
+  onReviewRun?: (run: RunLedgerEntry) => void;
+  /** Open one file or diff without leaving the selected Run. */
+  onOpenArtifact?: (request: ArtifactRequest) => void;
   onSaveMemory?: (run: { id: string; source: string; provider?: string | null; model: string | null; cwd: string | null }) => void;
   summarizingFromRunId?: string | null;
 }) {
@@ -3605,11 +3628,11 @@ function RunDetail({
                 }
               />
             ))}
-          {onReviewDiff && run.capabilities.canReviewDiff && (
+          {onReviewRun && run.capabilities.canReviewDiff && (
             <IconActionButton
-              label={run.source === "klide" ? "Review diff" : "Open Git Review"}
+              label="Review changes"
               icon={DiffGlyph}
-              onClick={() => onReviewDiff({ id: run.id, source: run.source, cwd: run.cwd })}
+              onClick={() => onReviewRun(run)}
             />
           )}
           {onFork && run.capabilities.canFork && (
@@ -3754,8 +3777,24 @@ function RunDetail({
                   </div>
                 ) : (
                   branchDiff.files.map((file) => (
-                    <div
+                    <button
                       key={`${file.status}-${file.path}`}
+                      type="button"
+                      onClick={
+                        onOpenArtifact && (run.cwd || workspaceRoot)
+                          ? () =>
+                              onOpenArtifact({
+                                kind: "patch",
+                                runId: run.id,
+                                workspaceRoot: run.cwd ?? workspaceRoot!,
+                                path: file.path,
+                                diff: patchForFile(branchDiff.diff, file.path),
+                                additions: file.additions,
+                                deletions: file.deletions,
+                                status: file.status,
+                              })
+                          : undefined
+                      }
                       style={{
                         display: "grid",
                         gridTemplateColumns: "48px minmax(0, 1fr) 64px",
@@ -3764,6 +3803,14 @@ function RunDetail({
                         padding: "5px 10px",
                         fontSize: 12,
                         borderTop: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                        borderRight: "none",
+                        borderBottom: "none",
+                        borderLeft: "none",
+                        width: "100%",
+                        background: "transparent",
+                        textAlign: "left",
+                        font: "inherit",
+                        cursor: onOpenArtifact ? "pointer" : "default",
                       }}
                     >
                       <span style={{ color: "var(--fg-subtle)", fontFamily: "var(--font-mono)" }}>{file.status}</span>
@@ -3784,7 +3831,7 @@ function RunDetail({
                         <span style={{ color: "var(--success)" }}>+{file.additions}</span>{" "}
                         <span style={{ color: "var(--danger)" }}>-{file.deletions}</span>
                       </span>
-                    </div>
+                    </button>
                   ))
                 )}
               </div>
@@ -3916,7 +3963,34 @@ function RunDetail({
         <>
           <DetailLabel id={`klide-checkpoints-${run.id}`}>Checkpoints</DetailLabel>
           <div style={{ marginBottom: 22 }}>
-            <CheckpointPanel runId={run.id} />
+            <CheckpointPanel
+              runId={run.id}
+              onOpenFile={
+                onOpenArtifact
+                  ? (entry) =>
+                      onOpenArtifact({
+                        kind: "file",
+                        runId: run.id,
+                        workspaceRoot: entry.workspaceRoot,
+                        path: entry.path,
+                      })
+                  : undefined
+              }
+              onOpenDiff={
+                onOpenArtifact
+                  ? (entry) =>
+                      onOpenArtifact({
+                        kind: "diff",
+                        runId: run.id,
+                        workspaceRoot: entry.workspaceRoot,
+                        path: entry.path,
+                        original: entry.oldContent,
+                        modified: entry.newContent,
+                        isCreate: entry.isCreate,
+                      })
+                  : undefined
+              }
+            />
           </div>
         </>
       )}
@@ -4639,13 +4713,10 @@ export function MissionControl({
   onOpenInAiPanel,
   onReattachLiveSession,
   onWatchRace,
-  onReviewDiff,
   onSaveMemory,
   onForkRun,
   onForkRunInWorktree,
   onMergeWorktreeRun,
-  pendingCheckpointRunId,
-  onPendingCheckpointConsumed,
   summarizingFromRunId,
 }: {
   workspaceRoot: string | null;
@@ -4674,10 +4745,6 @@ export function MissionControl({
   /** Race "watch live" — open every racer in its own AI panel right after
    *  dispatch (side-by-side floating panels, or tabs in Focus mode). */
   onWatchRace?: (group: RaceGroup) => void;
-  /** "Review Diff" — for Klide runs, scroll the detail pane's
-   *  CheckpointPanel into view. For CLI runs, switch to the git-review
-   *  view. Fires from the row's right rail. */
-  onReviewDiff?: (run: { id: string; source: string; cwd: string | null }) => void;
   /** "Save Memory" — fetch the run's transcript, ask the model for a
    *  structured note, and open the memory modal. Klide-only in this
    *  slice; CLI rows get a "not supported" toast. */
@@ -4685,11 +4752,6 @@ export function MissionControl({
   onForkRun?: (run: Run, messages?: RunMessage[]) => void;
   onForkRunInWorktree?: (run: Run, messages?: RunMessage[]) => void;
   onMergeWorktreeRun?: (run: Run) => void;
-  /** When set, the detail pane focuses the CheckpointPanel for this runId
-   *  (Klide runs) — used to make `onReviewDiff` from a Klide row feel
-   *  instant. The MissionControl consumes it on mount. */
-  pendingCheckpointRunId?: string | null;
-  onPendingCheckpointConsumed?: () => void;
   /** runId currently being summarised by `onSaveMemory`. Used to show a
    *  subtle spinner on the row so the user knows the model call is in
    *  flight. */
@@ -4704,6 +4766,12 @@ export function MissionControl({
   const [nextOffset, setNextOffset] = useState(0);
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [artifactTabs, setArtifactTabs] = useState<ArtifactTab[]>([]);
+  const [activeArtifactKey, setActiveArtifactKey] = useState<number | null>(null);
+  const [artifactOpen, setArtifactOpen] = useState(false);
+  const [artifactDirty, setArtifactDirty] = useState(false);
+  const artifactKeyRef = useRef(0);
+  const artifactCloseTimer = useRef<number | null>(null);
   const [sourceFilter, setSourceFilter] = useState<RunSourceFilter>("all");
   // Default the project filter to the project Klide is currently rooted in, so a
   // user juggling several projects only sees the active one's runs on open. They
@@ -4724,6 +4792,12 @@ export function MissionControl({
   // Persisted sessions whose PTY is gone (CLI finished / app restarted) but
   // whose scrollback survives on disk — drives the strip's "Recent" rows.
   const [recentSessions, setRecentSessions] = useState<RecentDelegateSession[]>([]);
+  useEffect(
+    () => () => {
+      if (artifactCloseTimer.current !== null) window.clearTimeout(artifactCloseTimer.current);
+    },
+    []
+  );
   useEffect(() => {
     void refreshCustomCli().catch(() => {});
   }, []);
@@ -5070,26 +5144,128 @@ export function MissionControl({
     };
   }, [selected?.id, selected?.source, selected?.kind]);
 
-  // "Review Diff" from the row: scroll the Klide CheckpointPanel into
-  // view. The App's `reviewDiffFromRun` sets `pendingCheckpointRunId` and
-  // also selects the run via the row's onSelect. We wait for the
-  // CheckpointPanel to be in the DOM (the run is now selected) and then
-  // scroll. The `scrollIntoView({ block: "start" })` is a no-op on
-  // non-Klide runs (their detail pane has no checkpoint anchor).
-  useEffect(() => {
-    if (!pendingCheckpointRunId) return;
-    if (!selected || selected.id !== pendingCheckpointRunId) return;
-    // Defer to the next frame so the CheckpointPanel has time to mount
-    // and the layout to settle.
-    const raf = requestAnimationFrame(() => {
-      const el = document.getElementById(`klide-checkpoints-${pendingCheckpointRunId}`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      onPendingCheckpointConsumed?.();
+  function artifactIdentity(request: ArtifactRequest): string {
+    if (request.kind === "file" || request.kind === "diff" || request.kind === "patch") {
+      return `${request.workspaceRoot}:${request.path}`;
+    }
+    return `${request.kind}:${request.runId}`;
+  }
+
+  function expandArtifactRequest(request: ArtifactRequest): ArtifactRequest[] {
+    if (request.kind !== "checkpoint-set") return [request];
+    return request.entries.map((entry) => ({
+      kind: "diff",
+      runId: request.runId,
+      workspaceRoot: entry.workspaceRoot,
+      path: entry.path,
+      original: entry.oldContent,
+      modified: entry.newContent,
+      isCreate: entry.isCreate,
+    }));
+  }
+
+  function openArtifact(request: ArtifactRequest) {
+    if (artifactCloseTimer.current !== null) {
+      window.clearTimeout(artifactCloseTimer.current);
+      artifactCloseTimer.current = null;
+    }
+
+    const requests = expandArtifactRequest(request);
+    if (requests.length === 0) return;
+
+    const next = [...artifactTabs];
+    let targetKey: number | null = null;
+    for (const nextRequest of requests) {
+      const identity = artifactIdentity(nextRequest);
+      const existingIndex = next.findIndex(
+        (tab) => artifactIdentity(tab.request) === identity
+      );
+      if (existingIndex >= 0) {
+        const existing = next[existingIndex];
+        if (
+          existing.request.kind === "file" &&
+          (nextRequest.kind === "diff" || nextRequest.kind === "patch")
+        ) {
+          next[existingIndex] = { ...existing, request: nextRequest };
+        }
+        targetKey ??= existing.key;
+        continue;
+      }
+
+      artifactKeyRef.current += 1;
+      const tab = { key: artifactKeyRef.current, request: nextRequest } satisfies ArtifactTab;
+      next.push(tab);
+      targetKey ??= tab.key;
+    }
+    setArtifactTabs(next);
+    setActiveArtifactKey(targetKey);
+    requestAnimationFrame(() => setArtifactOpen(true));
+  }
+
+  function dismissArtifactWorkspace() {
+    setArtifactDirty(false);
+    setArtifactOpen(false);
+    if (artifactCloseTimer.current !== null) window.clearTimeout(artifactCloseTimer.current);
+    artifactCloseTimer.current = window.setTimeout(() => {
+      setArtifactTabs([]);
+      setActiveArtifactKey(null);
+      artifactCloseTimer.current = null;
+    }, 300);
+  }
+
+  function closeArtifact(): boolean {
+    if (artifactDirty && !window.confirm("Close the Artifact Inspector without saving your changes?")) {
+      return false;
+    }
+    dismissArtifactWorkspace();
+    return true;
+  }
+
+  function closeArtifactTab(key: number) {
+    const index = artifactTabs.findIndex((tab) => tab.key === key);
+    if (index < 0) return;
+    const next = artifactTabs.filter((tab) => tab.key !== key);
+    if (next.length === 0) {
+      dismissArtifactWorkspace();
+      return;
+    }
+    setArtifactTabs(next);
+    if (activeArtifactKey === key) {
+      setActiveArtifactKey(next[Math.min(index, next.length - 1)].key);
+    }
+  }
+
+  async function reviewRun(run: RunLedgerEntry) {
+    if (run.source === "klide") {
+      try {
+        const entries = await listCheckpoints(run.id);
+        if (entries.length === 0) {
+          notify("This Run has no reviewable file checkpoints yet.");
+          return;
+        }
+        openArtifact({ kind: "checkpoint-set", runId: run.id, title: run.title, entries });
+      } catch (err) {
+        notify(`Unable to open changes: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
+      }
+      return;
+    }
+
+    const root = run.cwd ?? workspaceRoot;
+    if (!root) {
+      notify("This Run has no workspace checkout to review.", { tone: "error" });
+      return;
+    }
+    openArtifact({
+      kind: "run-review",
+      runId: run.id,
+      title: run.title,
+      workspaceRoot: root,
+      branch: run.branch,
     });
-    return () => cancelAnimationFrame(raf);
-  }, [pendingCheckpointRunId, selected, onPendingCheckpointConsumed]);
+  }
 
   function selectRun(run: Run) {
+    if (run.id !== selectedId && artifactTabs.length > 0 && !closeArtifact()) return;
     setSelectedId(run.id);
     if (run.source === "claude-code" || run.source === "codex" || run.source === "opencode") {
       setPinnedId(run.id);
@@ -5099,6 +5275,7 @@ export function MissionControl({
   }
 
   function selectLineageRun(run: RunLedgerEntry) {
+    if (run.id !== selectedId && artifactTabs.length > 0 && !closeArtifact()) return;
     setSourceFilter("all");
     setSessionQuery("");
     setSelectedId(run.id);
@@ -5171,7 +5348,11 @@ export function MissionControl({
 
 
   return (
-    <div style={{ flex: 1, display: "flex", minWidth: 0, background: "var(--bg)" }}>
+    <div
+      className="mission-control-workbench"
+      data-inspector-open={artifactOpen ? "true" : undefined}
+      style={{ flex: 1, display: "flex", minWidth: 0, background: "var(--bg)" }}
+    >
       {/* Board motion — same de-blur/spring-settle family as the rest of the app
           (klide-orch-in). Rows fade + rise on first mount with a capped stagger;
           a section's explanation reveals on hover instead of a native tooltip;
@@ -5219,8 +5400,9 @@ export function MissionControl({
       `}</style>
       {/* Left: the board */}
       <div
+        className="mission-control-board"
         style={{
-          width: 340,
+          width: artifactOpen ? 320 : 340,
           flexShrink: 0,
           borderRight: "1px solid var(--border)",
           display: "flex",
@@ -5789,7 +5971,7 @@ export function MissionControl({
       </div>
 
       {/* Right: detail */}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="mission-control-detail" style={{ flex: 1, minWidth: 0 }}>
         {selectedTask ? (
           <TaskDetail task={selectedTask} theme={theme} />
         ) : selectedConvo && selectedConvoRun ? (
@@ -5817,7 +5999,8 @@ export function MissionControl({
             raceEntries={selectedRaceEntries}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
-            onReviewDiff={onReviewDiff}
+            onReviewRun={(run) => void reviewRun(run)}
+            onOpenArtifact={openArtifact}
             onSaveMemory={onSaveMemory}
             summarizingFromRunId={summarizingFromRunId}
           />
@@ -5839,7 +6022,8 @@ export function MissionControl({
             raceEntries={selectedRaceEntries}
             onOpenInAiPanel={onOpenInAiPanel}
             onResumeKlide={onResumeKlideRun}
-            onReviewDiff={onReviewDiff}
+            onReviewRun={(run) => void reviewRun(run)}
+            onOpenArtifact={openArtifact}
             onSaveMemory={onSaveMemory}
             summarizingFromRunId={summarizingFromRunId}
           />
@@ -5857,6 +6041,29 @@ export function MissionControl({
           >
             {loading ? "Loading runs..." : "Select a run to inspect its transcript and metadata."}
           </div>
+        )}
+      </div>
+
+      <div
+        className="artifact-inspector-shell"
+        data-open={artifactOpen ? "true" : "false"}
+        aria-hidden={!artifactOpen}
+        style={{ pointerEvents: artifactOpen ? "auto" : "none" }}
+      >
+        {artifactTabs.length > 0 && activeArtifactKey !== null && (
+          <Suspense
+            fallback={<div className="artifact-inspector-state">Opening artifact…</div>}
+          >
+            <ArtifactInspector
+              tabs={artifactTabs}
+              activeTabKey={activeArtifactKey}
+              theme={theme}
+              onSelectTab={setActiveArtifactKey}
+              onCloseTab={closeArtifactTab}
+              onClose={closeArtifact}
+              onDirtyChange={setArtifactDirty}
+            />
+          </Suspense>
         )}
       </div>
     </div>

@@ -3176,3 +3176,386 @@ textarea.klide-diff-comment-input:focus-visible {
     animation: none;
   }
 }
+
+/* ====================================================== Artifact inspector */
+/* Mission Control, Run detail, and the Artifact Inspector are one workbench.
+   The board compresses a little while the trailing code surface docks flush;
+   one hairline carries the hierarchy instead of a floating-card shadow. */
+
+.mission-control-workbench {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.mission-control-board {
+  background: color-mix(in srgb, var(--bg-elevated) 28%, var(--bg));
+  transition: width 320ms var(--ease-soft);
+}
+
+.mission-control-detail {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  transition: background 220ms var(--ease-out);
+}
+
+.mission-control-workbench[data-inspector-open="true"] .mission-control-detail {
+  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated));
+}
+
+.artifact-inspector-shell {
+  width: 0;
+  min-width: 0;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    width 320ms var(--ease-soft),
+    opacity 160ms var(--ease-out);
+  will-change: width, opacity;
+}
+
+.artifact-inspector-shell[data-open="true"] {
+  width: clamp(400px, 40vw, 680px);
+  opacity: 1;
+}
+
+.artifact-inspector {
+  width: clamp(400px, 40vw, 680px);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid color-mix(in srgb, var(--border-strong) 58%, var(--border));
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow:
+    inset 1px 0 0 var(--panel-highlight),
+    -12px 0 30px color-mix(in srgb, var(--fg-strong) 3.5%, transparent);
+  transform: translateX(16px);
+  transition: transform 320ms var(--ease-soft);
+}
+
+.artifact-inspector-shell[data-open="true"] .artifact-inspector {
+  transform: translateX(0);
+}
+
+.artifact-inspector-header {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg));
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.artifact-inspector-tabs {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-self: stretch;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.artifact-inspector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.artifact-inspector-tab {
+  position: relative;
+  width: clamp(104px, 12vw, 176px);
+  min-width: 104px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  background: transparent;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.artifact-inspector-tab:hover {
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.artifact-inspector-tab[data-active="true"] {
+  background: var(--bg-elevated);
+  box-shadow: inset 0 -1px 0 var(--fg-dim);
+}
+
+.artifact-inspector-tab-select {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 0 10px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+}
+
+.artifact-inspector-tab[data-active="true"] .artifact-inspector-tab-select {
+  color: var(--fg-strong);
+}
+
+.artifact-inspector-tab-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--fg-dim);
+}
+
+.artifact-inspector-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: -0.01em;
+}
+
+.artifact-inspector-tab-dirty {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--warning);
+}
+
+.artifact-inspector-tab-close {
+  width: 25px;
+  flex: 0 0 25px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out);
+}
+
+.artifact-inspector-tab:hover .artifact-inspector-tab-close,
+.artifact-inspector-tab[data-active="true"] .artifact-inspector-tab-close,
+.artifact-inspector-tab-close:focus-visible {
+  opacity: 0.7;
+}
+
+.artifact-inspector-tab-close:hover {
+  color: var(--fg-strong);
+  opacity: 1;
+}
+
+.artifact-inspector-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  align-self: stretch;
+  padding: 0 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg));
+  box-shadow: -1px 0 0 color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+.artifact-inspector-button {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-subtle);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.artifact-inspector-button:hover {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+
+.artifact-inspector-button[data-active="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 88%, transparent);
+  color: var(--fg-strong);
+}
+
+.artifact-inspector-button[data-tone="primary"] {
+  padding-inline: 9px;
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  box-shadow:
+    inset 0 1px 0 var(--inset-highlight),
+    inset 0 0 0 1px var(--inset-ring),
+    0 1px 2px var(--inset-drop);
+}
+
+.artifact-inspector-button[data-tone="primary"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--control-primary-bg) 90%, var(--accent));
+  color: var(--control-primary-fg);
+  transform: translateY(-1px);
+}
+
+.artifact-inspector-button:focus-visible,
+.artifact-inspector-tab-select:focus-visible,
+.artifact-inspector-tab-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.artifact-inspector-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.artifact-inspector-action-divider {
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: var(--border);
+}
+
+.artifact-inspector-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  animation: artifact-inspector-content-in 220ms var(--ease-out) both;
+}
+
+@keyframes artifact-inspector-content-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.artifact-inspector-state {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  color: var(--fg-subtle);
+  font-size: 12px;
+  text-align: center;
+}
+
+.artifact-inspector-state[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.artifact-inspector-review {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-inspector-review-summary {
+  min-height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-subtle);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, var(--bg));
+  font-size: 10.5px;
+}
+
+.artifact-inspector-review-branch {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--fg);
+  font-family: var(--font-mono);
+}
+
+.artifact-inspector-review-branch span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-inspector-review-files {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 74%, transparent);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.artifact-inspector-review-count {
+  min-width: 28px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-inspector-review-count[data-tone="add"] {
+  color: var(--diff-add);
+}
+
+.artifact-inspector-review-count[data-tone="remove"] {
+  color: var(--diff-remove);
+}
+
+.artifact-inspector-patch {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-elevated);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mission-control-board,
+  .artifact-inspector-shell {
+    transition: none;
+  }
+
+  .artifact-inspector,
+  .artifact-inspector-body {
+    transition: none;
+    transform: none;
+    animation: none;
+  }
+}

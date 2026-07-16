@@ -35,6 +35,10 @@ function groupByTurn(entries: CheckpointEntry[]): GroupedCheckpoints {
 
 type Props = {
   runId: string;
+  /** Mission Control supplies these to keep file inspection in its docked
+   *  Artifact Inspector. Other hosts keep the existing modal fallback. */
+  onOpenFile?: (entry: CheckpointEntry) => void;
+  onOpenDiff?: (entry: CheckpointEntry) => void;
 };
 
 // Line glyphs on the 24-grid — the same icon idiom as the AI panel's action
@@ -154,7 +158,7 @@ function QuietAction({
   );
 }
 
-export function CheckpointPanel({ runId }: Props) {
+export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   const [entries, setEntries] = useState<CheckpointEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -333,20 +337,29 @@ export function CheckpointPanel({ runId }: Props) {
                   >
                     {entry.isCreate ? AddMarkGlyph : EditMarkGlyph}
                   </span>
-                  <span
+                  <button
+                    type="button"
+                    onClick={onOpenFile ? () => onOpenFile(entry) : undefined}
+                    disabled={!onOpenFile}
                     style={{
                       flex: 1,
                       minWidth: 0,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
+                      padding: 0,
+                      border: "none",
+                      background: "transparent",
+                      textAlign: "left",
                       fontFamily: "var(--font-mono)",
+                      fontSize: 12,
                       color: "var(--fg)",
+                      cursor: onOpenFile ? "pointer" : "default",
                     }}
-                    title={entry.path}
+                    title={onOpenFile ? `Open ${entry.path} in the Artifact Inspector` : entry.path}
                   >
                     {entry.path}
-                  </span>
+                  </button>
                   {/* Right slot: timestamp at rest, actions while hovered.
                       Conditional render (not opacity stacking) so nothing can
                       bleed through; minWidth keeps the swap shift-free. */}
@@ -366,7 +379,10 @@ export function CheckpointPanel({ runId }: Props) {
                           icon={EyeGlyph}
                           label="View diff"
                           showLabel={false}
-                          onClick={() => setPreview(entry)}
+                          onClick={() => {
+                            if (onOpenDiff) onOpenDiff(entry);
+                            else setPreview(entry);
+                          }}
                         />
                         <QuietAction
                           icon={RevertGlyph}

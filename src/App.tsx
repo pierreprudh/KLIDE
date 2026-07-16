@@ -107,7 +107,6 @@ function detectLanguage(path: string): string {
 function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [view, setView] = useState<"workbench" | "runs" | "orchestrator" | "settings" | "git-review">("workbench");
-  const [gitReviewRoot, setGitReviewRoot] = useState<string | null>(null);
   const [explorerVisible, setExplorerVisible] = useState(
     () => localStorage.getItem("klide-explorer-visible") !== "false"
   );
@@ -133,11 +132,6 @@ function App() {
   // Bumped when the AI panel writes a new memory entry, so the modal
   // refreshes when the user opens it.
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0);
-  // When MissionControl asks us to "Review Diff" on a Klide run, this
-  // holds the runId so the MissionControl detail pane can scroll its
-  // CheckpointPanel into view (and the CheckpointPanel isn't always in
-  // the DOM if a CLI run is selected).
-  const [pendingCheckpointRunId, setPendingCheckpointRunId] = useState<string | null>(null);
   // runId currently being summarised by `saveMemoryFromRun` — surfaced as
   // a subtle spinner on the row so the user knows the model call is in
   // flight.
@@ -319,7 +313,7 @@ function App() {
     activeGridId != null
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
       : null;
-  const effectiveGitReviewRoot = gitReviewRoot ?? workspaceRoot;
+  const effectiveGitReviewRoot = workspaceRoot;
   const activityState: Record<ActivityPanel, boolean> = {
     home: view === "workbench",
     explorer: view === "workbench" && (explorerVisible || sidebarSlot2 === "explorer"),
@@ -414,7 +408,6 @@ function App() {
     }
     // Git is a dedicated full-window view, not a sidebar panel.
     if (panel === "git") {
-      setGitReviewRoot(null);
       setView((v) => (v === "git-review" ? "workbench" : "git-review"));
       return;
     }
@@ -1149,28 +1142,6 @@ function App() {
     }
   }
 
-  // "Review Diff" from Mission Control — for Klide runs the CheckpointPanel
-  // is already mounted in the detail pane (it lists every file the agent
-  // changed with revert affordances), so the row action is just: make sure
-  // the run is selected. For external CLI runs we switch to the GitReview
-  // view pinned to the run's cwd, so worktree-backed runs show the right
-  // branch, status, and diff rather than the main checkout.
-  function reviewDiffFromRun(run: { id: string; source: string; cwd: string | null }) {
-    if (run.source === "klide") {
-      // MissionControl is rendered as a single view, so the run is "selected"
-      // by being the current `view === "runs"` selection. We just need to
-      // ask MissionControl to focus the CheckpointPanel — done via a small
-      // bus (see pendingCheckpointRunId below).
-      setPendingCheckpointRunId(run.id);
-    } else {
-      if (!run.cwd) {
-        setFileNotice("Run has no workspace root, so there is no checkout to review.");
-        return;
-      }
-      setGitReviewRoot(run.cwd);
-      setView("git-review");
-    }
-  }
   // "Save Memory" from Mission Control — fetch the run's transcript, ask
   // the model for a structured note, and write it to .klide/memory/. Then
   // open the MemoryModal so the user can see the entry. Klide-only for
@@ -1746,13 +1717,10 @@ function App() {
                   onOpenInAiPanel={openRunInAiPanel}
                   onReattachLiveSession={reattachLiveSession}
                   onWatchRace={watchRace}
-                  onReviewDiff={reviewDiffFromRun}
                   onSaveMemory={saveMemoryFromRun}
                   onForkRun={forkRun}
                   onForkRunInWorktree={forkRunInWorktree}
                   onMergeWorktreeRun={mergeWorktreeRun}
-                  pendingCheckpointRunId={pendingCheckpointRunId}
-                  onPendingCheckpointConsumed={() => setPendingCheckpointRunId(null)}
                   summarizingFromRunId={summarizingFromRun}
                 />
               </Suspense>
