@@ -45,5 +45,8 @@ src-tauri/gen/
 # memory can explicitly unignore this path in their own git policy.
 .klide/memory/
 
+# --- Prompt A/B harness output ---
+scripts/prompt-ab/results.json
+
 # --- OS noise ---
 Thumbs.db
