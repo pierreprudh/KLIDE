@@ -753,6 +753,12 @@ fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String> {
     delegate::OpenCode.read_run(&home, &session_id)
 }
 
+/// True when the process was launched by the bundle verification script
+/// (scripts/verify-bundle.sh) rather than by a user.
+fn smoke_test_mode() -> bool {
+    std::env::var("KLIDE_SMOKE").as_deref() == Ok("1")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -767,6 +773,20 @@ pub fn run() {
         .manage(local_servers::LocalServerState::default())
         .manage(models::ReflectionProbeCache::default())
         .plugin(tauri_plugin_dialog::init())
+        // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
+        // the frontend finishing its first page load proves the packaged
+        // binary, its dylibs, the webview entitlements, and the embedded
+        // assets all work — the failure classes a signed-but-broken bundle
+        // exhibits. Print the marker the script greps for and leave.
+        .on_page_load(|_webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished && smoke_test_mode() {
+                println!("KLIDE_SMOKE_OK");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                // Hard exit on purpose: a smoke boot must terminate
+                // deterministically, never hang in teardown.
+                std::process::exit(0);
+            }
+        })
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
             use tauri::Manager;
@@ -774,8 +794,11 @@ pub fn run() {
             let handle = app.handle();
 
             // Persistent delegate sessions: reconnect to (or start) the ptyd
-            // daemon when the toggle was left on last session.
-            pty::init_daemon_bridge(handle.clone());
+            // daemon when the toggle was left on last session. Skipped during
+            // the smoke boot so a release check never touches live sessions.
+            if !smoke_test_mode() {
+                pty::init_daemon_bridge(handle.clone());
+            }
 
             // Open at a comfortable fraction of the display the window lands on,
             // centered — like a native macOS app, rather than a fixed pixel size
@@ -799,7 +822,11 @@ pub fn run() {
                     let _ = window.set_size(tauri::LogicalSize::new(w, h));
                 }
                 let _ = window.center();
-                let _ = window.show();
+                // Smoke boot stays invisible: the webview loads (and fires
+                // on_page_load) without the window ever being shown.
+                if !smoke_test_mode() {
+                    let _ = window.show();
+                }
             }
 
             let open_folder = MenuItemBuilder::with_id("open-folder", "Open Folder…")
