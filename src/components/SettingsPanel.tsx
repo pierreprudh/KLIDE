@@ -49,6 +49,7 @@ import {
   Toggle,
 } from "./settings/controls";
 import { API_KEY_PROVIDERS, ApiKeyRow, ApiKeySummary, ProviderBalanceBlock } from "./settings/apiKeys";
+import { notify } from "../toast";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
 import { LocalServerRow } from "./settings/localServers";
 import { AccountControl } from "./settings/accounts";
@@ -1621,6 +1622,11 @@ export function SettingsPanel({
                   </div>
                 </Panel>
               </SettingBlock>
+              <SettingBlock title="Delegate sessions">
+                <Panel>
+                  <DelegateDaemonRow />
+                </Panel>
+              </SettingBlock>
               <SettingBlock title="Connections">
                 <Panel>
                   <Row
@@ -1931,6 +1937,72 @@ export function SettingsPanel({
         </div>
       </div>
     </main>
+  );
+}
+
+// ── Delegate session daemon ──────────────────────────────────────────
+// Toggle for the detached `klide ptyd` host (docs/delegate-session-replay.md
+// Slice 3): with it on, delegate CLIs run outside the app process and survive
+// an app restart — quit Klide mid-run, reopen, and the session is still in
+// the Live strip. Self-contained: reads/writes the Rust-side config directly
+// rather than threading through harness settings, because the flag must be
+// known before the frontend loads.
+
+type DaemonStatus = {
+  enabled: boolean;
+  reachable: boolean;
+  version: string | null;
+  liveSessions: number;
+};
+
+function DelegateDaemonRow() {
+  const [status, setStatus] = useState<DaemonStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    invoke<DaemonStatus>("delegate_daemon_status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  };
+  useEffect(refresh, []);
+
+  const detail = !status
+    ? ""
+    : !status.enabled
+      ? ""
+      : !status.reachable
+        ? "Daemon not running — it starts with the next delegate session."
+        : status.liveSessions > 0
+          ? `Daemon running · ${status.liveSessions} live session${status.liveSessions === 1 ? "" : "s"}`
+          : "Daemon running";
+
+  return (
+    <Row
+      title="Persistent delegate sessions"
+      description={
+        "Run delegate CLIs (Claude Code, Codex, OpenCode, Oh My Pi) in a detached background host so they keep working when Klide quits. Experimental." +
+        (detail ? ` ${detail}` : "")
+      }
+      control={
+        <Toggle
+          checked={status?.enabled ?? false}
+          onChange={(next: boolean) => {
+            if (busy) return;
+            setBusy(true);
+            invoke("delegate_daemon_set_enabled", { enabled: next })
+              .then(() => {
+                notify(next ? "Persistent sessions on — new delegate runs survive app restarts." : "Persistent sessions off for new delegate runs.");
+              })
+              .catch((e) => notify(`Persistent sessions: ${e}`, { tone: "error", duration: 0 }))
+              .finally(() => {
+                setBusy(false);
+                refresh();
+              });
+          }}
+          label="Persistent delegate sessions"
+        />
+      }
+    />
   );
 }
 

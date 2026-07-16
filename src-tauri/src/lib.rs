@@ -11,6 +11,9 @@ mod models;
 mod pricing;
 mod providers;
 mod pty;
+mod pty_client;
+pub mod pty_daemon;
+mod pty_host;
 mod search;
 mod skills;
 mod workspace;
@@ -19,9 +22,9 @@ mod worktree_setup;
 use crate::providers::ProviderKeyStatus;
 use memory::{memory_list, memory_read, memory_write};
 use pty::{
-    delegate_pty_live_sessions, delegate_pty_recent_sessions, delegate_pty_resize,
-    delegate_pty_snapshot, delegate_pty_spawn, delegate_pty_stop, delegate_pty_write, pty_spawn,
-    pty_write, DelegatePtyState, PtyState,
+    delegate_daemon_set_enabled, delegate_daemon_status, delegate_pty_live_sessions,
+    delegate_pty_recent_sessions, delegate_pty_resize, delegate_pty_snapshot, delegate_pty_spawn,
+    delegate_pty_stop, delegate_pty_write, pty_spawn, pty_write, DelegatePtyState, PtyState,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -757,9 +760,8 @@ pub fn run() {
             writer: Mutex::new(None),
             cwd: Mutex::new(None),
         })
-        .manage(DelegatePtyState {
-            sessions: Mutex::new(std::collections::HashMap::new()),
-        })
+        .manage(DelegatePtyState::default())
+        .manage(pty::DaemonBridge::default())
         .manage(delegate::status::DelegateStatusState::default())
         .manage(agent::AgentSupervisorState::default())
         .manage(local_servers::LocalServerState::default())
@@ -770,6 +772,10 @@ pub fn run() {
             use tauri::Manager;
 
             let handle = app.handle();
+
+            // Persistent delegate sessions: reconnect to (or start) the ptyd
+            // daemon when the toggle was left on last session.
+            pty::init_daemon_bridge(handle.clone());
 
             // Open at a comfortable fraction of the display the window lands on,
             // centered — like a native macOS app, rather than a fixed pixel size
@@ -910,6 +916,8 @@ pub fn run() {
             delegate_pty_write,
             delegate_pty_resize,
             delegate_pty_stop,
+            delegate_daemon_status,
+            delegate_daemon_set_enabled,
             delegate_pty_snapshot,
             delegate_pty_live_sessions,
             delegate_pty_recent_sessions,
