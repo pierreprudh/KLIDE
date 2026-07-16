@@ -343,8 +343,21 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
             Request::Subscribe => {
                 let id = state.next_client.fetch_add(1, Ordering::Relaxed);
                 if let Ok(event_half) = writer.try_clone() {
-                    state.subscribers.lock().unwrap().insert(id, event_half);
-                    let _ = respond(&mut writer, &Response::Subscribed);
+                    // Ack THEN register, both under the broadcast lock: a
+                    // session streaming at full tilt broadcasts every ~15ms,
+                    // and a chunk slipping out between registration and the
+                    // ack reaches the client as its "ack" — it treats the
+                    // subscribe as failed, retries, and loses this race
+                    // forever while anything is streaming. Holding the lock
+                    // serializes us against broadcast(), so the ack is
+                    // always the first line and no event can precede it.
+                    {
+                        let mut subs = state.subscribers.lock().unwrap();
+                        if respond(&mut writer, &Response::Subscribed).is_err() {
+                            return;
+                        }
+                        subs.insert(id, event_half);
+                    }
                     // Keep reading only to notice the disconnect: an event
                     // stream client sends nothing more.
                     let mut drain = BufReader::new(writer);
@@ -490,6 +503,7 @@ mod tests {
 
     struct TestServer {
         dir: PathBuf,
+        state: Arc<DaemonState>,
     }
 
     impl TestServer {
@@ -502,8 +516,9 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             let listener = bind_socket(&dir).expect("bind");
             let state = test_state(dir.clone());
-            std::thread::spawn(move || serve(listener, state));
-            Self { dir }
+            let serve_state = state.clone();
+            std::thread::spawn(move || serve(listener, serve_state));
+            Self { dir, state }
         }
 
         fn connect(&self) -> (BufReader<UnixStream>, UnixStream) {
@@ -590,6 +605,58 @@ mod tests {
             serde_json::from_str::<Response>(&line).unwrap(),
             Response::Pong { .. }
         ));
+    }
+
+    /// The freeze bug: with a session streaming (broadcasts every ~15ms), a
+    /// chunk used to slip out between subscriber registration and the ack —
+    /// the client read a Chunk as its "ack", declared the subscribe failed,
+    /// and lost that race on every retry. The ack must ALWAYS be the first
+    /// line, no matter how hot the broadcast loop is.
+    #[test]
+    fn subscribe_ack_precedes_events_even_mid_stream() {
+        use std::sync::atomic::AtomicBool;
+        let server = TestServer::start("ackrace");
+        let state = server.state.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_hammer = stop.clone();
+        let hammer = std::thread::spawn(move || {
+            let mut seq = 0u64;
+            while !stop_hammer.load(Ordering::Relaxed) {
+                seq += 1;
+                state.broadcast(&Event::Chunk {
+                    session_id: "hot:codex".into(),
+                    data: "x".repeat(64),
+                    seq,
+                });
+            }
+        });
+        for attempt in 0..20 {
+            let (mut reader, mut writer) = server.connect();
+            writeln!(
+                writer,
+                "{}",
+                serde_json::to_string(&Request::Subscribe).unwrap()
+            )
+            .unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(
+                matches!(
+                    serde_json::from_str::<Response>(&line),
+                    Ok(Response::Subscribed)
+                ),
+                "attempt {attempt}: first line must be the ack, got: {line}"
+            );
+            // And the stream is genuinely live: the next line is an event.
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(
+                serde_json::from_str::<Event>(&line).is_ok(),
+                "attempt {attempt}: expected an event after the ack, got: {line}"
+            );
+        }
+        stop.store(true, Ordering::Relaxed);
+        hammer.join().unwrap();
     }
 
     #[test]
