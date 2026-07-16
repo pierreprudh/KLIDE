@@ -419,6 +419,14 @@ function storedModelForProvider(id: ProviderId): string {
     const looksLikeMlx = stored.includes("/") || stored.startsWith(".");
     if (!looksLikeMlx || stored.includes(":")) return defaultModelFor(id);
   }
+  if ((id === "claude-code" || id === "codex") && stored) {
+    // These CLIs take bare model names ("opus", "gpt-5.3-codex") — a stored
+    // value with a repo prefix or tag (`pierreprudh/lfm2.5-8b-a1b:latest`) is
+    // another provider's model that leaked in via a stale-persist bug; never
+    // hand it to the CLI. (OpenCode/omp legitimately use provider/model ids,
+    // so they are exempt.)
+    if (stored.includes("/") || stored.includes(":")) return defaultModelFor(id);
+  }
   return stored || defaultModelFor(id);
 }
 
@@ -712,6 +720,17 @@ export function AiPanel({
 
   const providerDelegatesWork = isDelegateProvider(provider);
   const isLocalProvider = provider === "ollama" || provider === "mlx";
+  // A delegate conversation's identity IS its PTY session id
+  // (`{convoId}:{provider}`), so persist the panel↔convo pairing the moment
+  // the provider/convo binds — not on turn start like hosted chats, because a
+  // delegate session is driven through the PTY, never through the harness
+  // turn path that writes this record. Without it, an app relaunch rotates
+  // the panel to a fresh convo id and spawns a brand-new CLI instead of
+  // reattaching to the same session — which, with the ptyd daemon on, is
+  // still alive and waiting.
+  useEffect(() => {
+    if (panelId && providerDelegatesWork) savePanelSession(panelId, currentId, true);
+  }, [panelId, providerDelegatesWork, currentId]);
   // Portalled to <body> like the composer popovers: the menu is taller than
   // the panel's clip region (`.floating-panel` is overflow: hidden), so an
   // in-tree absolute menu gets cut off and its own scrollbar never engages.
@@ -1947,7 +1966,20 @@ This user request requires workspace inspection. Before answering, you MUST call
     return () => document.removeEventListener("mousedown", onDown);
   }, [historyOpen]);
 
-  useEffect(() => { localStorage.setItem(`klide.model.${provider}`, model); }, [model, provider]);
+  // Persist the per-provider model memory — but never on mount: at mount the
+  // provider was restored from this panel's own storage while `model` is
+  // App's last value for the panel, and after a relaunch those can belong to
+  // DIFFERENT providers (an Ollama tag under `klide.model.claude-code` is how
+  // a delegate once spawned with `--model pierreprudh/lfm2.5…`). Only picks
+  // made after mount — always provider-consistent — are worth remembering.
+  const modelPersistArmed = useRef(false);
+  useEffect(() => {
+    if (!modelPersistArmed.current) {
+      modelPersistArmed.current = true;
+      return;
+    }
+    localStorage.setItem(`klide.model.${provider}`, model);
+  }, [model, provider]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2978,7 +3010,14 @@ This user request requires workspace inspection. Before answering, you MUST call
             workspaceRoot={workspaceRoot}
             parentRunId={activeHarnessRunRef.current ?? currentId}
             resumeSessionId={initialResumeSessionId ?? null}
-            model={model}
+            // The spawn model comes from the per-provider store, NOT the
+            // `model` prop: on relaunch the prop is App's last value for the
+            // panel and can belong to another provider entirely (`claude
+            // --model pierreprudh/lfm2.5…` shipped that way once), and the
+            // surface spawns on mount — before the models-load effect can
+            // heal the prop. The store is written on every in-session pick,
+            // so it is exactly "the model last used with THIS provider".
+            model={storedModelForProvider(provider)}
             task={initialTask ?? null}
           />
         ) : (

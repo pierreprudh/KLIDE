@@ -4283,11 +4283,121 @@ function LiveSessionsStrip({
     resumeSessionId?: string | null;
   }) => void;
 }) {
+  // Idle sessions collapse into one quiet line: with the ptyd daemon,
+  // sessions outlive the app, so a busy day leaves a tail of parked CLIs —
+  // rows that say nothing new individually. Anything the user should act on
+  // (working / blocked / waiting) keeps its own row; the idle tail is a
+  // count you can expand, with a stop-all for cleaning up in one move.
+  const [idleOpen, setIdleOpen] = useState(false);
   if (sessions.length === 0 && recent.length === 0) return null;
-
-  // Show ~5 flat rows, scroll past that. ~30px per row.
+  const activeSessions = sessions.filter((s) => s.status !== "idle");
+  const idleSessions = sessions.filter((s) => s.status === "idle");
+  // Show ~5 flat rows, scroll past that. ~30px per row. The idle group
+  // counts as one row collapsed, or toggle + rows expanded.
+  const rowCount =
+    activeSessions.length +
+    (idleSessions.length === 1 ? 1 : 0) +
+    (idleSessions.length >= 2 ? 1 + (idleOpen ? idleSessions.length : 0) : 0);
   const maxVisible = 5;
-  const scrolls = sessions.length > maxVisible;
+  const scrolls = rowCount > maxVisible;
+
+  const renderSessionRow = (s: LiveDelegateSession) => {
+    const providerId = s.provider as ProviderId;
+    const title = s.task?.trim() || `${providerName(providerId)} session`;
+    const canReattach = isDelegateProvider(providerId) && !!onReattach;
+    const idle = s.status === "idle";
+    const statusLabel = LIVE_STATUS_TEXT[s.status] ?? "Working";
+    const statusColor = LIVE_STATUS_COLOR[s.status] ?? "var(--accent)";
+    // Blocked is the one state worth a resting wash — the agent is
+    // parked on the user. Everything else stays flat until hover.
+    const restBg =
+      s.status === "blocked"
+        ? "color-mix(in srgb, var(--warning) 6%, transparent)"
+        : "transparent";
+    const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : statusLabel;
+    const reattach = () =>
+      canReattach &&
+      onReattach!({
+        provider: providerId,
+        conversationId: s.convoId,
+        workspaceRoot: s.cwd ?? workspaceRoot,
+      });
+    return (
+      <button
+        key={s.sessionId}
+        type="button"
+        onClick={reattach}
+        disabled={!canReattach}
+        className={`klide-enter-rise live-row${canReattach ? " has-act" : ""}`}
+        title={canReattach ? `Reattach · ${title} · ${statusText}` : `${title} · ${statusText}`}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          width: "100%",
+          textAlign: "left",
+          height: 30,
+          padding: "0 8px",
+          margin: "0 -8px",
+          borderRadius: "var(--radius-sm)",
+          border: "none",
+          background: restBg,
+          cursor: canReattach ? "pointer" : "default",
+          font: "inherit",
+          transition: "background var(--motion-fast) var(--ease-out)",
+        }}
+        onMouseEnter={(e) => {
+          if (canReattach) e.currentTarget.style.background = "var(--bg-hover)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = restBg;
+        }}
+      >
+        <span style={{ flexShrink: 0, display: "grid", placeItems: "center", opacity: 0.9 }}>
+          <ProviderLogo id={s.provider as ProviderId} size={13} />
+        </span>
+        <span
+          style={{
+            flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--fg-strong)",
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          }}
+        >
+          {title}
+        </span>
+        <span
+          style={{
+            flexShrink: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            maxWidth: 88,
+            fontSize: 11,
+            color: statusColor,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {statusLabel}
+        </span>
+        <span
+          style={{
+            flexShrink: 0,
+            minWidth: 64,
+            display: "inline-flex",
+            justifyContent: "flex-end",
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          <span className="live-rest" style={{ color: "var(--fg-dim)" }}>
+            {relativeTime(s.startedMs)}
+          </span>
+          {canReattach && <span className="live-act">Reattach</span>}
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div className="klide-enter-rise" style={{ padding: "14px 8px 12px 16px", borderBottom: "1px solid var(--border)" }}>
@@ -4319,103 +4429,72 @@ function LiveSessionsStrip({
           paddingRight: scrolls ? 4 : 8,
         }}
       >
-        {sessions.map((s) => {
-          const providerId = s.provider as ProviderId;
-          const title = s.task?.trim() || `${providerName(providerId)} session`;
-          const canReattach = isDelegateProvider(providerId) && !!onReattach;
-          const idle = s.status === "idle";
-          const statusLabel = LIVE_STATUS_TEXT[s.status] ?? "Working";
-          const statusColor = LIVE_STATUS_COLOR[s.status] ?? "var(--accent)";
-          // Blocked is the one state worth a resting wash — the agent is
-          // parked on the user. Everything else stays flat until hover.
-          const restBg =
-            s.status === "blocked"
-              ? "color-mix(in srgb, var(--warning) 6%, transparent)"
-              : "transparent";
-          const statusText = idle ? `Idle ${relativeTime(s.updatedMs)}` : statusLabel;
-          const reattach = () =>
-            canReattach &&
-            onReattach!({
-              provider: providerId,
-              conversationId: s.convoId,
-              workspaceRoot: s.cwd ?? workspaceRoot,
-            });
-          return (
-            <button
-              key={s.sessionId}
-              type="button"
-              onClick={reattach}
-              disabled={!canReattach}
-              className={`klide-enter-rise live-row${canReattach ? " has-act" : ""}`}
-              title={canReattach ? `Reattach · ${title} · ${statusText}` : `${title} · ${statusText}`}
+        {activeSessions.map(renderSessionRow)}
+        {idleSessions.length === 1 && idleSessions.map(renderSessionRow)}
+        {idleSessions.length >= 2 && (
+          <button
+            type="button"
+            className="live-row has-act"
+            onClick={() => setIdleOpen((v) => !v)}
+            title={idleOpen ? "Hide idle sessions" : "Show idle sessions"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              width: "100%",
+              textAlign: "left",
+              height: 30,
+              padding: "0 8px",
+              margin: "0 -8px",
+              borderRadius: "var(--radius-sm)",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              font: "inherit",
+              transition: "background var(--motion-fast) var(--ease-out)",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          >
+            {/* Same leading slot as the provider logo above, so the “+”
+                lines up with the icon column. Rotates to “×” when open —
+                the glyph carries the state, no Show/Hide text needed. */}
+            <span
+              aria-hidden
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 9,
-                width: "100%",
-                textAlign: "left",
-                height: 30,
-                padding: "0 8px",
-                margin: "0 -8px",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                background: restBg,
-                cursor: canReattach ? "pointer" : "default",
-                font: "inherit",
-                transition: "background var(--motion-fast) var(--ease-out)",
-              }}
-              onMouseEnter={(e) => {
-                if (canReattach) e.currentTarget.style.background = "var(--bg-hover)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = restBg;
+                flexShrink: 0,
+                width: 13,
+                display: "grid",
+                placeItems: "center",
+                fontSize: 13,
+                lineHeight: 1,
+                color: "var(--fg-dim)",
+                transform: idleOpen ? "rotate(45deg)" : "none",
+                transition: "transform var(--motion-fast) var(--ease-out)",
               }}
             >
-              <span style={{ flexShrink: 0, display: "grid", placeItems: "center", opacity: 0.9 }}>
-                <ProviderLogo id={s.provider as ProviderId} size={13} />
-              </span>
+              +
+            </span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--fg-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {idleSessions.length} idle session{idleSessions.length === 1 ? "" : "s"}
+            </span>
+            <span style={{ flexShrink: 0, display: "inline-flex", fontSize: 11, fontFamily: "var(--font-mono)" }}>
               <span
-                style={{
-                  flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--fg-strong)",
-                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                className="live-act"
+                title="Stop every idle session — history stays in Recent, resumable"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  for (const s of idleSessions) {
+                    void invoke("delegate_pty_stop", { sessionId: s.sessionId });
+                  }
                 }}
               >
-                {title}
+                Stop all
               </span>
-              <span
-                style={{
-                  flexShrink: 0,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  maxWidth: 88,
-                  fontSize: 11,
-                  color: statusColor,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {statusLabel}
-              </span>
-              <span
-                style={{
-                  flexShrink: 0,
-                  minWidth: 64,
-                  display: "inline-flex",
-                  justifyContent: "flex-end",
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                <span className="live-rest" style={{ color: "var(--fg-dim)" }}>
-                  {relativeTime(s.startedMs)}
-                </span>
-                {canReattach && <span className="live-act">Reattach</span>}
-              </span>
-            </button>
-          );
-        })}
+            </span>
+          </button>
+        )}
+        {idleOpen && idleSessions.length >= 2 && idleSessions.map(renderSessionRow)}
       </div>
       {recent.length > 0 && (
         <>
