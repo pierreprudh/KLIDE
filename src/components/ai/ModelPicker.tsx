@@ -74,9 +74,15 @@ export function modelOptionsFor(
   }
   // Klide's own fine-tune is offered on Ollama even before it's pulled, so it's
   // discoverable in the picker (shown as not-installed until `ollama pull`).
+  // Ollama reports installed models with an explicit tag ("name:latest") while
+  // the preset is bare, so compare tag-insensitively — otherwise a pulled
+  // preset shows twice, once installed and once as a phantom "Stored" row.
   if (provider === "ollama") {
+    const bareTag = (m: string) =>
+      m.endsWith(":latest") ? m.slice(0, -":latest".length) : m;
+    const present = new Set(options.map(bareTag));
     for (const preset of OLLAMA_MODEL_PRESETS) {
-      if (!options.includes(preset)) options.push(preset);
+      if (!present.has(bareTag(preset))) options.push(preset);
     }
   }
   return options;
