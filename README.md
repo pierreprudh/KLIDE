@@ -75,6 +75,12 @@ Klide has three capability modes:
 
 Klide currently targets macOS. Apple Silicon is the primary development platform.
 
+### Download the unsigned Apple Silicon build
+
+Download the latest `.app.zip` from [GitHub Releases](https://github.com/pierreprudh/KLIDE/releases/latest), unzip it, and move `Klide.app` to Applications.
+
+This build is ad-hoc signed and is not Apple-notarized. On first launch, macOS may block it because the developer cannot be verified. Control-click `Klide.app`, choose **Open**, then confirm **Open**. Only install builds published from this repository.
+
 ### Prerequisites
 
 - [Node.js](https://nodejs.org) 20 or later
@@ -129,7 +135,7 @@ Read the [Harness contract](./HARNESS_CONTRACT.md) for the trust model and [Harn
 
 ## Project status
 
-Klide is at version 0.5 and remains under active development. Source builds are available now; signed application bundles are not yet published.
+Klide is at version 0.5 and remains under active development. Unsigned Apple Silicon bundles and source builds are available now; Apple-notarized bundles are not yet published.
 
 Current priorities:
 
