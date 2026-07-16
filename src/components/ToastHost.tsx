@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Z } from "../zLayers";
 import { watchDelegateStatus } from "../delegateStatusNotify";
@@ -178,11 +178,11 @@ function ToastRow({ toast }: { toast: Toast }) {
 // the oldest toast fades and collapses instead of popping out of the stack.
 type Row = { toast: Toast; leaving: boolean };
 
-// Keep in sync with the .toast-leave exit in tokens.css: slide-out (360ms) and
-// delayed collapse (220ms + 360ms) both finish before this. Rows are removed
-// by timer, not by animationend, so a missed event can never leave a ghost
-// toast behind.
-const EXIT_MS = 620;
+// Keep in sync with the .toast-leave slide-out in tokens.css (360ms) — the row
+// is removed right after the card is off-screen, and the FLIP pass glides the
+// survivors into the freed space. Timer-driven, so a missed animation event
+// can never leave a ghost toast behind.
+const EXIT_MS = 380;
 
 export default function ToastHost() {
   const [rows, setRows] = useState<Row[]>([]);
@@ -222,6 +222,29 @@ export default function ToastHost() {
     }
   }, [rows]);
 
+  // FLIP the survivors: when the stack reflows (a new toast pushes in, a
+  // removed row gives its space back), each remaining card glides from its
+  // previous position instead of jumping. Same idea as useFlipIndicator.
+  const shells = useRef(new Map<number, HTMLDivElement>());
+  const tops = useRef(new Map<number, number>());
+
+  useLayoutEffect(() => {
+    for (const [id, el] of shells.current) {
+      const prevTop = tops.current.get(id);
+      const top = el.getBoundingClientRect().top;
+      if (prevTop !== undefined && Math.abs(prevTop - top) > 0.5) {
+        el.animate(
+          [{ transform: `translateY(${prevTop - top}px)` }, { transform: "translateY(0)" }],
+          { duration: 420, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+        );
+      }
+      tops.current.set(id, top);
+    }
+    for (const id of tops.current.keys()) {
+      if (!shells.current.has(id)) tops.current.delete(id);
+    }
+  }, [rows]);
+
   // The delegate status watcher lives with the surface that renders its
   // output: ToastHost is mounted exactly once at the App root, so this is
   // the one place the app-wide "agent needs you / turn done" subscription
@@ -250,13 +273,13 @@ export default function ToastHost() {
       {rows.map((r) => (
         <div
           key={r.toast.id}
+          ref={(el) => {
+            if (el) shells.current.set(r.toast.id, el);
+            else shells.current.delete(r.toast.id);
+          }}
           className={r.leaving ? "toast-shell toast-leave" : "toast-shell"}
         >
-          {/* Clip only vertically while leaving: the collapse needs the row's
-              height contained, but the card itself slides out horizontally. */}
-          <div style={{ minHeight: 0, overflowX: "visible", overflowY: r.leaving ? "clip" : "visible" }}>
-            <ToastRow toast={r.toast} />
-          </div>
+          <ToastRow toast={r.toast} />
         </div>
       ))}
     </div>,
