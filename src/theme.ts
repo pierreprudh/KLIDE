@@ -206,11 +206,43 @@ export const MONACO_THEME_IDS: Record<ThemeId, string> = {
   "solarized-dark": "klide-monaco-solarized-dark",
 };
 
+type DiagnosticsDefaultsLike = {
+  setDiagnosticsOptions: (options: {
+    noSemanticValidation?: boolean;
+    noSyntaxValidation?: boolean;
+  }) => void;
+};
+
 type MonacoLike = {
   editor: {
     defineTheme: (themeName: string, themeData: any) => void;
   };
+  languages?: {
+    typescript?: {
+      typescriptDefaults?: DiagnosticsDefaultsLike;
+      javascriptDefaults?: DiagnosticsDefaultsLike;
+    };
+  };
 };
+
+/** Standalone Monaco runs its TS worker with no project context — it can't
+ *  see node_modules or tsconfig.json, so semantic validation flags every
+ *  import with "Cannot find module" (the red underlines). Real resolution
+ *  needs a tsserver, which the webview doesn't run; until Klide has an LSP
+ *  story we keep syntax errors and drop semantic validation. */
+export function configureMonacoDiagnostics(monaco: MonacoLike) {
+  const ts = monaco.languages?.typescript;
+  for (const defaults of [ts?.typescriptDefaults, ts?.javascriptDefaults]) {
+    defaults?.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
+  }
+}
+
+/** The one `beforeMount` every Monaco surface should use: themes + language
+ *  diagnostics config. */
+export function prepareMonaco(monaco: MonacoLike) {
+  defineKlideMonacoThemes(monaco);
+  configureMonacoDiagnostics(monaco);
+}
 
 let monacoThemesDefined = false;
 

@@ -3,7 +3,7 @@ import Editor, { DiffEditor } from "@monaco-editor/react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CheckpointEntry } from "../agent/types";
 import type { ThemeId } from "../theme";
-import { defineKlideMonacoThemes, getMonacoThemeId } from "../theme";
+import { getMonacoThemeId, prepareMonaco } from "../theme";
 import type { GitStatus } from "../gitTypes";
 import { readWorkspaceTextFile, writeWorkspaceTextFile } from "../workspaceFs";
 import { notify } from "../toast";
@@ -580,7 +580,7 @@ export function ArtifactInspector({
             modified={diff.modified}
             language={detectLanguage(diff.path)}
             theme={getMonacoThemeId(theme)}
-            beforeMount={defineKlideMonacoThemes}
+            beforeMount={prepareMonaco}
             options={{
               readOnly: true,
               renderSideBySide: false,
@@ -607,7 +607,7 @@ export function ArtifactInspector({
             onChange={(value) => updateTabState(activeTab.key, { draft: value ?? "" })}
             language={detectLanguage(activePath)}
             theme={getMonacoThemeId(theme)}
-            beforeMount={defineKlideMonacoThemes}
+            beforeMount={prepareMonaco}
             options={{
               minimap: { enabled: false },
               fontSize: 12,

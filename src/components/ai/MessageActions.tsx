@@ -135,8 +135,10 @@ type Props = {
   onDelete?: () => void;
   /** Run outcome, shown right-aligned in the same row on the final answer:
    *  "N files changed · Revert". Lives here instead of as its own strip so
-   *  the conversation ends with one quiet meta row, not three. */
-  revert?: { files: number; busy: boolean; onRevert: () => void };
+   *  the conversation ends with one quiet meta row, not three. When
+   *  `onReview` is wired the count itself is clickable and opens the run's
+   *  diffs in the docked Artifact Inspector. */
+  revert?: { files: number; busy: boolean; onRevert: () => void; onReview?: () => void };
 };
 
 export function MessageActions({
@@ -204,9 +206,36 @@ export function MessageActions({
             whiteSpace: "nowrap",
           }}
         >
-          <span style={{ opacity: revert.busy ? 0.6 : 1 }}>
-            {revert.files} file{revert.files === 1 ? "" : "s"} changed
-          </span>
+          {revert.onReview ? (
+            <button
+              type="button"
+              title="Review this run's changes"
+              onClick={revert.onReview}
+              disabled={revert.busy}
+              style={{
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                font: "inherit",
+                color: "inherit",
+                cursor: revert.busy ? "default" : "pointer",
+                opacity: revert.busy ? 0.6 : 1,
+                textDecorationLine: "underline",
+                textDecorationStyle: "dotted",
+                textDecorationColor: "color-mix(in srgb, currentColor 45%, transparent)",
+                textUnderlineOffset: 3,
+                transition: "color var(--motion-fast) var(--ease-out)",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "inherit")}
+            >
+              {revert.files} file{revert.files === 1 ? "" : "s"} changed
+            </button>
+          ) : (
+            <span style={{ opacity: revert.busy ? 0.6 : 1 }}>
+              {revert.files} file{revert.files === 1 ? "" : "s"} changed
+            </span>
+          )}
           <Chip
             title={
               revert.busy

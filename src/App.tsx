@@ -5,6 +5,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -42,12 +43,15 @@ import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts"
 import { GridWorkbench } from "./components/GridWorkbench";
 import { FloatingPanel } from "./components/FloatingPanel";
 import { AnchoredWorkbench } from "./components/AnchoredWorkbench";
+import { EditorDockSpine } from "./components/EditorDockSpine";
 import { SplitPane } from "./components/SplitPane";
 import { defaultLayout as defaultPanelLayout } from "./panelLayout";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout, type AiPanelInstance } from "./hooks/usePanelLayout";
+import { useArtifactInspector } from "./hooks/useArtifactInspector";
+import { listCheckpoints } from "./agent/client";
 import {
   DEFAULT_AI_PANEL_ID,
   initialHandoffFor,
@@ -73,6 +77,7 @@ const OrchestratorConsole = lazy(() => import("./components/OrchestratorConsole"
 const FocusMode = lazy(() => import("./components/FocusMode").then((m) => ({ default: m.FocusMode })));
 const GitReview = lazy(() => import("./components/GitReview").then((m) => ({ default: m.GitReview })));
 const MemoryModal = lazy(() => import("./components/MemoryModal").then((m) => ({ default: m.MemoryModal })));
+const ArtifactInspector = lazy(() => import("./components/ArtifactInspector").then((m) => ({ default: m.ArtifactInspector })));
 const WorktreesModal = lazy(() => import("./components/WorktreesModal").then((m) => ({ default: m.WorktreesModal })));
 const FileViewerPanel = lazy(() => import("./components/FileViewerPanel").then((m) => ({ default: m.FileViewerPanel })));
 const DiffViewerPanel = lazy(() => import("./components/DiffViewerPanel").then((m) => ({ default: m.DiffViewerPanel })));
@@ -451,6 +456,85 @@ function App() {
     setActiveGridId(null);
   }
 
+  // ── Workbench Artifact Inspector ────────────────────────────────────
+  // The same docked review surface Mission Control has, docked at the right
+  // edge of the main workbench. The AI panel's "N files changed" row opens
+  // the run's checkpoint diffs here instead of leaving them to the
+  // background editor tabs.
+  const {
+    artifactTabs,
+    activeArtifactKey,
+    artifactOpen,
+    setActiveArtifactKey,
+    setArtifactDirty,
+    openArtifact,
+    closeArtifact,
+    closeArtifactTab,
+  } = useArtifactInspector();
+
+  // Docked-editor width (free layout). null → the CSS clamp default; a number
+  // once the user has dragged the left-edge splitter. Width changes are
+  // user-driven only — never animated — so the open/close glide stays pure
+  // transform (see .editor-dock-overlay).
+  const [editorDockWidth, setEditorDockWidth] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem("klide-editor-dock-width"));
+    return Number.isFinite(stored) && stored >= 420 ? stored : null;
+  });
+  useEffect(() => {
+    if (editorDockWidth !== null) {
+      localStorage.setItem("klide-editor-dock-width", String(Math.round(editorDockWidth)));
+    }
+  }, [editorDockWidth]);
+
+  // Folded: the docked editor tucks to a slim spine on the right edge so open
+  // documents stay ready without occupying the canvas. Opening/selecting a
+  // file from outside (Explorer, ⌘P, search) unfolds it — you asked to see
+  // that file.
+  const [editorDockFolded, setEditorDockFolded] = useState(false);
+  useEffect(() => {
+    if (active?.path) setEditorDockFolded(false);
+  }, [active?.path]);
+
+  function beginEditorDockResize(e: ReactMouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const pane = e.currentTarget.parentElement;
+    if (!pane) return;
+    const startX = e.clientX;
+    const startW = pane.getBoundingClientRect().width;
+    const maxW = Math.max(420, workbenchSize.w - 24);
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    function onMove(ev: MouseEvent) {
+      // Left-edge drag: moving left grows the pane.
+      setEditorDockWidth(Math.min(maxW, Math.max(420, startW - (ev.clientX - startX))));
+    }
+    function onUp() {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  async function reviewRunChanges({ runId, title }: { runId: string; title: string }) {
+    try {
+      const entries = await listCheckpoints(runId);
+      if (entries.length === 0) {
+        notify("This run has no reviewable file checkpoints yet.");
+        return;
+      }
+      openArtifact({ kind: "checkpoint-set", runId, title, entries });
+    } catch (err) {
+      notify(`Unable to open changes: ${err instanceof Error ? err.message : String(err)}`, {
+        tone: "error",
+      });
+    }
+  }
+
   // ── AiPanel host ────────────────────────────────────────────────────
   // The one place the App↔AiPanel contract is turned into props. Every
   // surface that shows an AI panel — the anchored column, free-floating
@@ -494,6 +578,7 @@ function App() {
         workspaceRoot={root}
         worktreeName={worktreeName}
         onFileWritten={onAgentWrote}
+        onReviewChanges={(info) => void reviewRunChanges(info)}
         onWorkspaceChanged={() => {
           // A worktree-pinned panel changes its own branch, not the main
           // checkout — only refresh the sidebar git status when the panel
@@ -1936,60 +2021,9 @@ function App() {
                   // No padding: FloatingPanels are absolutely positioned
                   // from the workbench's padding box edge, and their
                   // negative-offset resize handles need a few px of room
-                  // past the panel edge. The editor carries its own
-                  // 6px inset so the visual margin is preserved.
+                  // past the panel edge.
                 }}
               >
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 6,
-                      display: "flex",
-                      flexDirection: "column",
-                      minWidth: 0,
-                      minHeight: 0,
-                      borderRadius: "var(--radius-md)",
-                      border: "1px solid color-mix(in srgb, var(--border) 82%, transparent)",
-                      // Solid (not translucent) and NO backdrop-filter: a
-                      // blurred backdrop here re-composites over a focused panel
-                      // once its z-index is bumped onto its own layer (Z.panel
-                      // ~1011), making the clicked panel vanish in the webview.
-                      // Killing the filter removes that compositing bug.
-                      background: "var(--bg)",
-                      boxShadow: "inset 0 1px 0 var(--panel-highlight)",
-                      overflow: "hidden",
-                      zIndex: 1,
-                    }}
-                  >
-                    <TabBar
-                      tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty, externalChanged: t.externalChanged }))}
-                      activeIdx={activeIdx}
-                      onSelect={setActiveIdx}
-                      onClose={closeTab}
-                      workspaceRoot={workspaceRoot}
-                    />
-                    <SearchPanel
-                      workspaceRoot={workspaceRoot}
-                      visible={searchVisible}
-                      onClose={() => setSearchVisible(false)}
-                      onOpenFile={openFile}
-                    />
-                    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                      <EditorArea
-                        code={active?.code ?? ""}
-                        onChange={updateActiveCode}
-                        language={language ?? "plaintext"}
-                        hasFile={active !== null}
-                        theme={theme}
-                        fontSize={editorFontSize}
-                        lineNumbers={editorLineNumbers}
-                        wordWrap={editorWordWrap}
-                        minimap={editorMinimap}
-                        onEditorMount={(editor) => { editorRef.current = editor; }}
-                        onEmptyAction={handleEditorEmptyAction}
-                      />
-                    </div>
-                  </div>
                 {explorerVisible && (
                   <FloatingPanel
                     panelId="explorer"
@@ -2165,8 +2199,163 @@ function App() {
                     }}
                   />
                 )}
+                {/* Docked editor — in the free layout, files no longer open in
+                    a background layer under the floating panels. The editor is
+                    an elevated card docked to the right edge that glides in
+                    when a file (or find-in-files) opens and away when the last
+                    tab closes. It animates with transform/opacity ONLY — its
+                    width never changes, so nothing reflows during the slide
+                    (Monaco's automaticLayout would otherwise re-measure every
+                    frame) and the motion stays on the compositor. Content
+                    stays mounted while closed so Monaco doesn't remount per
+                    open/close. */}
+                <div
+                  className="editor-dock-overlay"
+                  data-open={tabs.length > 0 || searchVisible ? "true" : "false"}
+                  data-folded={editorDockFolded ? "true" : "false"}
+                  aria-hidden={tabs.length === 0 && !searchVisible}
+                  style={editorDockWidth !== null ? { width: editorDockWidth } : undefined}
+                >
+                  {/* Left-edge splitter — a wide invisible grab zone that
+                      tints the pane's edge on hover, matching the anchored
+                      workbench's hairline splitters. The folded spine takes
+                      this edge over while tucked. */}
+                  {!editorDockFolded && (
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Resize editor"
+                      onMouseDown={beginEditorDockResize}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "linear-gradient(to right, var(--accent-soft), transparent)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: 7,
+                        cursor: "col-resize",
+                        zIndex: 30,
+                        background: "transparent",
+                        transition: "background var(--motion-fast) var(--ease-out)",
+                      }}
+                    />
+                  )}
+                  {editorDockFolded && (
+                    <EditorDockSpine
+                      tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
+                      activeIdx={activeIdx}
+                      onSelectFile={(i) => {
+                        setActiveIdx(i);
+                        setEditorDockFolded(false);
+                      }}
+                      onUnfold={() => setEditorDockFolded(false)}
+                    />
+                  )}
+                  {/* Everything below fades out while folded so the sliver
+                      shows the canvas through the glass surface — not a
+                      40px strip of line numbers and tab fragments. Content
+                      stays mounted; only opacity changes. */}
+                  <div className="editor-dock-content">
+                  <div style={{ display: "flex", alignItems: "stretch", minWidth: 0 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <TabBar
+                        tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty, externalChanged: t.externalChanged }))}
+                        activeIdx={activeIdx}
+                        onSelect={setActiveIdx}
+                        onClose={closeTab}
+                        workspaceRoot={workspaceRoot}
+                      />
+                    </div>
+                    {tabs.length > 0 && !editorDockFolded && (
+                      <button
+                        type="button"
+                        title="Fold editor to the edge"
+                        aria-label="Fold editor to the edge"
+                        onClick={() => setEditorDockFolded(true)}
+                        style={{
+                          width: 30,
+                          flexShrink: 0,
+                          border: "none",
+                          display: "grid",
+                          placeItems: "center",
+                          background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
+                          color: "var(--fg-subtle)",
+                          cursor: "pointer",
+                          transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.color = "var(--fg-strong)";
+                          e.currentTarget.style.background = "var(--bg-hover)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.color = "var(--fg-subtle)";
+                          e.currentTarget.style.background = "color-mix(in srgb, var(--bg-elevated) 72%, transparent)";
+                        }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M6 6l6 6-6 6" />
+                          <path d="M13 6l6 6-6 6" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  <SearchPanel
+                    workspaceRoot={workspaceRoot}
+                    visible={searchVisible}
+                    onClose={() => setSearchVisible(false)}
+                    onOpenFile={openFile}
+                  />
+                  <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                    <EditorArea
+                      code={active?.code ?? ""}
+                      onChange={updateActiveCode}
+                      language={language ?? "plaintext"}
+                      hasFile={active !== null}
+                      theme={theme}
+                      fontSize={editorFontSize}
+                      lineNumbers={editorLineNumbers}
+                      wordWrap={editorWordWrap}
+                      minimap={editorMinimap}
+                      onEditorMount={(editor) => { editorRef.current = editor; }}
+                      onEmptyAction={handleEditorEmptyAction}
+                    />
+                  </div>
+                  </div>
+                </div>
               </div>
             )}
+              </div>
+            )}
+            {/* Docked Artifact Inspector — the same slide-in review surface as
+                Mission Control, at the right edge of the workbench. Opened
+                from the AI panel's "N files changed" row; MC keeps its own
+                instance, so this one only shows on the workbench view. */}
+            {view === "workbench" && (
+              <div
+                className="artifact-inspector-shell"
+                data-open={artifactOpen ? "true" : "false"}
+                aria-hidden={!artifactOpen}
+                style={{ pointerEvents: artifactOpen ? "auto" : "none" }}
+              >
+                {artifactTabs.length > 0 && activeArtifactKey !== null && (
+                  <Suspense fallback={<div className="artifact-inspector-state">Opening artifact…</div>}>
+                    <ArtifactInspector
+                      tabs={artifactTabs}
+                      activeTabKey={activeArtifactKey}
+                      theme={theme}
+                      onSelectTab={setActiveArtifactKey}
+                      onCloseTab={closeArtifactTab}
+                      onClose={closeArtifact}
+                      onDirtyChange={setArtifactDirty}
+                    />
+                  </Suspense>
+                )}
               </div>
             )}
           </>

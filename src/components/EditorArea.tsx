@@ -1,7 +1,7 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import {
-  defineKlideMonacoThemes,
   getMonacoThemeId,
+  prepareMonaco,
   type ThemeId,
 } from "../theme";
 import { keysFor } from "../shortcuts";
@@ -136,7 +136,7 @@ export function EditorArea({
         height="100%"
         language={language}
         theme={editorTheme}
-        beforeMount={defineKlideMonacoThemes}
+        beforeMount={prepareMonaco}
         onMount={(editor) => onEditorMount?.(editor)}
         value={code}
         onChange={(v) => onChange(v ?? "")}

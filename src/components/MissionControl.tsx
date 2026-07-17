@@ -81,7 +81,8 @@ import { compactConversationMessages, runMessagesToMarkdown } from "../transcrip
 import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
 import { listCheckpoints } from "../agent/client";
-import type { ArtifactRequest, ArtifactTab } from "./ArtifactInspector";
+import type { ArtifactRequest } from "./ArtifactInspector";
+import { useArtifactInspector } from "../hooks/useArtifactInspector";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 import { ALL_PROVIDERS, DEFAULT_MODELS, isDelegateProvider, providerName } from "../agent/providers";
@@ -4766,12 +4767,16 @@ export function MissionControl({
   const [nextOffset, setNextOffset] = useState(0);
   const [error, setError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [artifactTabs, setArtifactTabs] = useState<ArtifactTab[]>([]);
-  const [activeArtifactKey, setActiveArtifactKey] = useState<number | null>(null);
-  const [artifactOpen, setArtifactOpen] = useState(false);
-  const [artifactDirty, setArtifactDirty] = useState(false);
-  const artifactKeyRef = useRef(0);
-  const artifactCloseTimer = useRef<number | null>(null);
+  const {
+    artifactTabs,
+    activeArtifactKey,
+    artifactOpen,
+    setActiveArtifactKey,
+    setArtifactDirty,
+    openArtifact,
+    closeArtifact,
+    closeArtifactTab,
+  } = useArtifactInspector();
   const [sourceFilter, setSourceFilter] = useState<RunSourceFilter>("all");
   // Default the project filter to the project Klide is currently rooted in, so a
   // user juggling several projects only sees the active one's runs on open. They
@@ -4792,12 +4797,6 @@ export function MissionControl({
   // Persisted sessions whose PTY is gone (CLI finished / app restarted) but
   // whose scrollback survives on disk — drives the strip's "Recent" rows.
   const [recentSessions, setRecentSessions] = useState<RecentDelegateSession[]>([]);
-  useEffect(
-    () => () => {
-      if (artifactCloseTimer.current !== null) window.clearTimeout(artifactCloseTimer.current);
-    },
-    []
-  );
   useEffect(() => {
     void refreshCustomCli().catch(() => {});
   }, []);
@@ -5143,97 +5142,6 @@ export function MissionControl({
       cancelled = true;
     };
   }, [selected?.id, selected?.source, selected?.kind]);
-
-  function artifactIdentity(request: ArtifactRequest): string {
-    if (request.kind === "file" || request.kind === "diff" || request.kind === "patch") {
-      return `${request.workspaceRoot}:${request.path}`;
-    }
-    return `${request.kind}:${request.runId}`;
-  }
-
-  function expandArtifactRequest(request: ArtifactRequest): ArtifactRequest[] {
-    if (request.kind !== "checkpoint-set") return [request];
-    return request.entries.map((entry) => ({
-      kind: "diff",
-      runId: request.runId,
-      workspaceRoot: entry.workspaceRoot,
-      path: entry.path,
-      original: entry.oldContent,
-      modified: entry.newContent,
-      isCreate: entry.isCreate,
-    }));
-  }
-
-  function openArtifact(request: ArtifactRequest) {
-    if (artifactCloseTimer.current !== null) {
-      window.clearTimeout(artifactCloseTimer.current);
-      artifactCloseTimer.current = null;
-    }
-
-    const requests = expandArtifactRequest(request);
-    if (requests.length === 0) return;
-
-    const next = [...artifactTabs];
-    let targetKey: number | null = null;
-    for (const nextRequest of requests) {
-      const identity = artifactIdentity(nextRequest);
-      const existingIndex = next.findIndex(
-        (tab) => artifactIdentity(tab.request) === identity
-      );
-      if (existingIndex >= 0) {
-        const existing = next[existingIndex];
-        if (
-          existing.request.kind === "file" &&
-          (nextRequest.kind === "diff" || nextRequest.kind === "patch")
-        ) {
-          next[existingIndex] = { ...existing, request: nextRequest };
-        }
-        targetKey ??= existing.key;
-        continue;
-      }
-
-      artifactKeyRef.current += 1;
-      const tab = { key: artifactKeyRef.current, request: nextRequest } satisfies ArtifactTab;
-      next.push(tab);
-      targetKey ??= tab.key;
-    }
-    setArtifactTabs(next);
-    setActiveArtifactKey(targetKey);
-    requestAnimationFrame(() => setArtifactOpen(true));
-  }
-
-  function dismissArtifactWorkspace() {
-    setArtifactDirty(false);
-    setArtifactOpen(false);
-    if (artifactCloseTimer.current !== null) window.clearTimeout(artifactCloseTimer.current);
-    artifactCloseTimer.current = window.setTimeout(() => {
-      setArtifactTabs([]);
-      setActiveArtifactKey(null);
-      artifactCloseTimer.current = null;
-    }, 300);
-  }
-
-  function closeArtifact(): boolean {
-    if (artifactDirty && !window.confirm("Close the Artifact Inspector without saving your changes?")) {
-      return false;
-    }
-    dismissArtifactWorkspace();
-    return true;
-  }
-
-  function closeArtifactTab(key: number) {
-    const index = artifactTabs.findIndex((tab) => tab.key === key);
-    if (index < 0) return;
-    const next = artifactTabs.filter((tab) => tab.key !== key);
-    if (next.length === 0) {
-      dismissArtifactWorkspace();
-      return;
-    }
-    setArtifactTabs(next);
-    if (activeArtifactKey === key) {
-      setActiveArtifactKey(next[Math.min(index, next.length - 1)].key);
-    }
-  }
 
   async function reviewRun(run: RunLedgerEntry) {
     if (run.source === "klide") {

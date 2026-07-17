@@ -3247,6 +3247,171 @@ textarea.klide-diff-comment-input:focus-visible {
   transform: translateX(0);
 }
 
+/* Docked editor overlay — the free-layout editor card. Same slide-in language
+   as the Artifact Inspector, but as an absolutely positioned overlay whose
+   width never animates: the glide is transform + opacity only, so it runs on
+   the compositor with zero reflow (floating panels don't re-clamp, Monaco
+   doesn't re-measure mid-flight). Wider track than the review inspector —
+   it's the primary editing surface, not a sidecar. */
+.editor-dock-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: clamp(480px, 52vw, 960px);
+  max-width: calc(100% - 12px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Fully connected to the right edge — same edge-dock language as the
+     Artifact Inspector: hairline on the open side only, no radius, soft
+     spill shadow onto the canvas. */
+  border-left: 1px solid color-mix(in srgb, var(--border-strong) 58%, var(--border));
+  background: var(--bg-elevated);
+  box-shadow:
+    inset 1px 0 0 var(--panel-highlight),
+    -12px 0 30px color-mix(in srgb, var(--fg-strong) 3.5%, transparent);
+  z-index: 1200;
+  transform: translateX(calc(100% + 32px));
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform;
+  transition:
+    transform 380ms var(--ease-soft),
+    opacity 200ms var(--ease-out),
+    background 240ms var(--ease-out),
+    box-shadow 240ms var(--ease-out),
+    visibility 0s linear 380ms;
+}
+
+.editor-dock-overlay[data-open="true"] {
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    transform 380ms var(--ease-soft),
+    opacity 160ms var(--ease-out),
+    background 240ms var(--ease-out),
+    box-shadow 240ms var(--ease-out),
+    visibility 0s;
+}
+
+/* Folded: the pane glides almost fully off-edge, leaving a slim document
+   spine so open files stay one click away. Same compositor-only transform as
+   open/close — folding is just another resting position. The folded sliver
+   softens: slightly translucent surface (color-mix, deliberately NOT
+   backdrop-filter — frosted glass re-composites over focused floating panels
+   in the webview) and a tighter shadow so it reads as chrome, not a hovering
+   card. */
+.editor-dock-overlay[data-open="true"][data-folded="true"] {
+  transform: translateX(calc(100% - 40px));
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  box-shadow:
+    inset 1px 0 0 var(--panel-highlight),
+    -6px 0 16px color-mix(in srgb, var(--fg-strong) 2.5%, transparent);
+}
+
+/* The pane's real content (tab strip, gutter, code). Folding fades it out
+   quickly — faster than the 380ms slide — so line numbers and tab fragments
+   never ghost through the translucent folded sliver; the glass shows the
+   canvas instead. Stays mounted, opacity only. */
+.editor-dock-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  transition: opacity 160ms var(--ease-out);
+}
+
+.editor-dock-overlay[data-folded="true"] .editor-dock-content {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms var(--ease-out);
+}
+
+.editor-dock-spine {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 8px;
+  z-index: 35;
+}
+
+.editor-dock-spine-btn {
+  position: relative;
+  width: 40px;
+  height: 34px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.editor-dock-spine-btn:hover {
+  color: var(--fg-strong);
+  background: var(--bg-hover);
+}
+
+.editor-dock-spine-btn[data-active="true"] {
+  color: var(--fg-strong);
+}
+
+/* Agent context files (CLAUDE.md / AGENTS.md) carry the accent — the one
+   file type worth spotting instantly in the dock. */
+.editor-dock-spine-btn[data-kind="agent"],
+.editor-dock-spine-btn[data-kind="agent"]:hover {
+  color: var(--accent);
+}
+
+/* Active document marker — a 2px accent spine on the edge, the same
+   indicator language as the activity bar, never a filled pill. */
+.editor-dock-spine-btn[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.editor-dock-spine-divider {
+  align-self: center;
+  width: 16px;
+  height: 1px;
+  margin: 6px 0;
+  background: var(--border);
+}
+
+.editor-dock-spine-monogram {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+
+.editor-dock-spine-dot {
+  position: absolute;
+  top: 8px;
+  right: 9px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .artifact-inspector-header {
   height: 40px;
   flex-shrink: 0;

@@ -1,5 +1,5 @@
 import { DiffEditor } from "@monaco-editor/react";
-import { defineKlideMonacoThemes, getMonacoThemeId, type ThemeId } from "../theme";
+import { getMonacoThemeId, prepareMonaco, type ThemeId } from "../theme";
 
 type Props = {
   path: string;
@@ -50,7 +50,7 @@ export function DiffViewerPanel({ path, original, modified, language = "plaintex
           modified={modified}
           language={language}
           theme={getMonacoThemeId(theme)}
-          beforeMount={defineKlideMonacoThemes}
+          beforeMount={prepareMonaco}
           options={{
             readOnly: true,
             renderSideBySide: true,

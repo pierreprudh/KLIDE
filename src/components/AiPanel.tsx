@@ -185,6 +185,11 @@ type Props = {
   worktreeName?: string;
   onFileWritten?: (path: string, newContent: string) => void;
   onWorkspaceChanged?: () => void;
+  /** Open this run's file changes in the workbench's docked Artifact
+   *  Inspector (same review surface as Mission Control). Wired only on
+   *  surfaces that dock one; without it the "N files changed" row is
+   *  plain text. */
+  onReviewChanges?: (info: { runId: string; title: string }) => void;
   visible: boolean;
   width: number;
   fill?: boolean;
@@ -447,6 +452,7 @@ export function AiPanel({
   worktreeName,
   onFileWritten,
   onWorkspaceChanged,
+  onReviewChanges,
   visible,
   width,
   fill,
@@ -3251,7 +3257,20 @@ This user request requires workspace inspection. Before answering, you MUST call
                       onBranchInWorktree={onForkConversationInWorktree ? () => branchMessageInWorktree(i) : undefined}
                       revert={
                         isLast && !streaming && revertableFiles > 0
-                          ? { files: revertableFiles, busy: reverting, onRevert: () => void revertThisRun() }
+                          ? {
+                              files: revertableFiles,
+                              busy: reverting,
+                              onRevert: () => void revertThisRun(),
+                              onReview: onReviewChanges
+                                ? () =>
+                                    onReviewChanges({
+                                      runId: currentId,
+                                      title:
+                                        msgs.find((msg) => msg.role === "user")?.content.split("\n")[0].slice(0, 80) ??
+                                        "Run changes",
+                                    })
+                                : undefined,
+                            }
                           : undefined
                       }
                     />

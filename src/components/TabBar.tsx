@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
+import { FileMark, fileMarkKind } from "./fileMarks";
 
 type Tab = { path: string; dirty: boolean; externalChanged?: boolean };
 type Props = {
@@ -35,6 +36,12 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
   if (tabs.length === 0) {
     return null;
   }
+
+  // Past a handful of tabs, full-width tabs with folder hints stop scanning
+  // well and shove the strip into a long horizontal scroll. Crowded tabs
+  // compress instead: tighter padding, no folder hint, and they may shrink
+  // down to a floor before the strip finally scrolls.
+  const crowded = tabs.length >= 5;
 
   return (
     <div
@@ -81,6 +88,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
         const isActive = i === activeIdx;
         const relative = displayPath(t.path, workspaceRoot);
         const filename = relative.split("/").pop() ?? relative;
+        const markKind = fileMarkKind(t.path);
         const folder = relative.includes("/")
           ? relative.split("/").slice(0, -1).join("/")
           : "";
@@ -97,7 +105,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               alignItems: "center",
               height: isActive ? 32 : 26,
               marginBottom: isActive ? 0 : 4,
-              padding: "0 14px",
+              padding: crowded ? "0 10px" : "0 14px",
               gap: 8,
               position: "relative",
               background: isActive ? "var(--bg)" : "transparent",
@@ -115,9 +123,9 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               fontSize: 13,
               fontWeight: isActive ? 500 : 400,
               cursor: "pointer",
-              minWidth: 0,
-              maxWidth: 240,
-              flexShrink: 0,
+              minWidth: crowded ? 72 : 0,
+              maxWidth: crowded ? 170 : 240,
+              flexShrink: crowded ? 1 : 0,
               transition:
                 "background var(--motion-slow) var(--ease-soft), color var(--motion-slow) var(--ease-soft)",
             }}
@@ -135,6 +143,21 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               }
             }}
           >
+            {markKind && (
+              <span
+                aria-hidden="true"
+                style={{
+                  flexShrink: 0,
+                  display: "inline-flex",
+                  marginRight: -3,
+                  // Agent context files carry the accent; markdown stays a
+                  // quiet dim glyph beside the name.
+                  color: markKind === "agent" ? "var(--accent)" : "var(--fg-dim)",
+                }}
+              >
+                <FileMark kind={markKind} size={12} />
+              </span>
+            )}
             <span
               style={{
                 flex: "0 1 auto",
@@ -164,7 +187,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
                 •
               </span>
             ) : null}
-            {folder && (
+            {folder && !crowded && (
               <span
                 style={{
                   flex: "0 1 auto",
