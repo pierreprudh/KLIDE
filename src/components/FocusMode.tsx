@@ -563,18 +563,20 @@ export function FocusMode({
             }}
           >
             {raceTabs && raceTabs.length > 0 && (
-              /* Race watch — one quiet text tab per racing agent. Active tab
-                 is weight + a 1.5px accent underline (no chips, no boxes);
-                 the panels themselves stay mounted in the parent, this strip
-                 only picks which one is visible. */
+              /* Race watch — one soft-segment tab per racing agent: the same
+                 design as the docked editor and Artifact Inspector strips.
+                 The active tab carries a quiet neutral fill (the hover token,
+                 not a saturated pill) as its only marker; the panels stay
+                 mounted in the parent, this strip only picks which is
+                 visible. */
               <div
                 role="tablist"
                 aria-label="Racing agents"
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 18,
-                  padding: "0 22px",
+                  gap: 4,
+                  padding: "0 16px",
                   height: 38,
                   flexShrink: 0,
                   borderBottom: "1px solid var(--border)",
@@ -591,23 +593,30 @@ export function FocusMode({
                       onClick={() => onSelectRaceTab?.(t.panelId)}
                       style={{
                         border: "none",
-                        background: "transparent",
+                        background: active ? "var(--bg-hover)" : "transparent",
                         font: "inherit",
                         fontSize: 12.5,
                         fontWeight: active ? 550 : 400,
                         color: active ? "var(--fg-strong)" : "var(--fg-subtle)",
-                        padding: 0,
-                        height: "100%",
+                        padding: "0 10px",
+                        height: 24,
+                        borderRadius: "var(--radius-sm)",
                         cursor: "pointer",
-                        boxShadow: active ? "inset 0 -1.5px 0 var(--accent)" : "none",
                         transition:
-                          "color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out)",
+                          "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
                       }}
                       onMouseEnter={(e) => {
-                        if (!active) e.currentTarget.style.color = "var(--fg-strong)";
+                        if (!active) {
+                          e.currentTarget.style.color = "var(--fg-strong)";
+                          e.currentTarget.style.background =
+                            "color-mix(in srgb, var(--bg-hover) 45%, transparent)";
+                        }
                       }}
                       onMouseLeave={(e) => {
-                        if (!active) e.currentTarget.style.color = "var(--fg-subtle)";
+                        if (!active) {
+                          e.currentTarget.style.color = "var(--fg-subtle)";
+                          e.currentTarget.style.background = "transparent";
+                        }
                       }}
                     >
                       {t.label}

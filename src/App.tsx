@@ -43,9 +43,10 @@ import { loadGridLayouts, type GridLayout, type PanelKind } from "./gridLayouts"
 import { GridWorkbench } from "./components/GridWorkbench";
 import { FloatingPanel } from "./components/FloatingPanel";
 import { AnchoredWorkbench } from "./components/AnchoredWorkbench";
-import { EditorDockSpine } from "./components/EditorDockSpine";
+import { isAgentFile } from "./components/fileMarks";
 import { SplitPane } from "./components/SplitPane";
-import { defaultLayout as defaultPanelLayout } from "./panelLayout";
+import { defaultLayout as defaultPanelLayout, PANEL_CONSTRAINTS, type PanelRect } from "./panelLayout";
+import { Z } from "./zLayers";
 import { CommandPalette } from "./components/CommandPalette";
 import { SearchPanel } from "./components/SearchPanel";
 import { useEditorTabs } from "./hooks/useEditorTabs";
@@ -495,6 +496,75 @@ function App() {
     if (active?.path) setEditorDockFolded(false);
   }, [active?.path]);
 
+  // When the docked editor is open in the free layout, the floating panels
+  // make room: any panel that would sit under the dock slides left — and
+  // shrinks if it must — into the remaining canvas. FloatingPanel's passive
+  // rect transition (380ms, same curve as the dock) turns the dock opening
+  // and the panels stepping aside into one choreographed motion. Also
+  // re-runs when a panel is dropped or resized under the open dock, easing
+  // it back out.
+  const editorDockOpen =
+    panelLayout.anchored === false &&
+    !editorDockFolded &&
+    (tabs.length > 0 || searchVisible);
+  // True-to-size memory: the first time the dock displaces a panel, its
+  // original rect is recorded here; closing/folding the dock glides every
+  // displaced panel back to it. Cleared after restore so a manual move while
+  // the dock is closed becomes the new truth.
+  const preDockRectsRef = useRef<{
+    fixed: Partial<Record<"explorer" | "terminal", PanelRect>>;
+    ai: Record<string, PanelRect>;
+  } | null>(null);
+  useEffect(() => {
+    if (!editorDockOpen || workbenchSize.w === 0) return;
+    const dockW =
+      editorDockWidth ?? Math.min(960, Math.max(480, Math.round(workbenchSize.w * 0.52)));
+    const remaining = Math.max(280, workbenchSize.w - dockW - 12);
+    const fit = (rect: PanelRect, minW: number): PanelRect | null => {
+      if (rect.x + rect.w <= remaining) return null;
+      const w = Math.max(minW, Math.min(rect.w, remaining - 12));
+      const x = Math.max(0, Math.min(rect.x, remaining - w));
+      // A panel wider than the remaining canvas can't fit — leave it rather
+      // than loop on an unsatisfiable constraint.
+      if (x === rect.x && w === rect.w) return null;
+      return { ...rect, x, w };
+    };
+    const saved = (preDockRectsRef.current ??= { fixed: {}, ai: {} });
+    for (const id of ["explorer", "terminal"] as const) {
+      const rect = panelLayout[id];
+      const fitted = rect ? fit(rect, PANEL_CONSTRAINTS[id].minW) : null;
+      if (fitted && rect) {
+        saved.fixed[id] ??= rect;
+        updatePanelRect(id, fitted);
+      }
+    }
+    for (const panel of aiPanels) {
+      const fitted = fit(panel.rect, PANEL_CONSTRAINTS.ai.minW);
+      if (fitted) {
+        saved.ai[panel.id] ??= panel.rect;
+        updateAiRect(panel.id, fitted);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorDockOpen, editorDockWidth, workbenchSize.w, panelLayout, aiPanels]);
+
+  // Dock closed (last tab gone) or folded → panels glide back to the exact
+  // rects they held before the dock displaced them.
+  useEffect(() => {
+    if (editorDockOpen) return;
+    const saved = preDockRectsRef.current;
+    if (!saved) return;
+    preDockRectsRef.current = null;
+    for (const id of ["explorer", "terminal"] as const) {
+      const rect = saved.fixed[id];
+      if (rect) updatePanelRect(id, rect);
+    }
+    for (const [panelId, rect] of Object.entries(saved.ai)) {
+      if (aiPanels.some((p) => p.id === panelId)) updateAiRect(panelId, rect);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorDockOpen]);
+
   function beginEditorDockResize(e: ReactMouseEvent<HTMLDivElement>) {
     e.preventDefault();
     const pane = e.currentTarget.parentElement;
@@ -518,6 +588,83 @@ function App() {
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  }
+
+  // Explorer presentation in the free layout: a drawer docked to the
+  // activity bar by default; the Settings toggle restores the draggable
+  // floating panel.
+  const [explorerFloating, setExplorerFloatingState] = useState<boolean>(
+    () => localStorage.getItem("klide-explorer-floating") === "true"
+  );
+  function setExplorerFloating(v: boolean) {
+    setExplorerFloatingState(v);
+    localStorage.setItem("klide-explorer-floating", String(v));
+  }
+
+  function beginExplorerDockResize(e: ReactMouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = explorerRect.w;
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    function onMove(ev: MouseEvent) {
+      const w = Math.min(
+        PANEL_CONSTRAINTS.explorer.maxW,
+        Math.max(PANEL_CONSTRAINTS.explorer.minW, startW + (ev.clientX - startX))
+      );
+      updatePanelRect("explorer", { ...explorerRect, w });
+    }
+    function onUp() {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  // The explorer surface itself (tree, optionally stacked with the skills
+  // slot) — identical whether it lives in the floating panel or the drawer.
+  function renderExplorerContent(): ReactNode {
+    const explorer = (
+      <Sidebar
+        fill
+        visible
+        showHidden={showHiddenFiles}
+        width={explorerRect.w}
+        workspaceRoot={workspaceRoot}
+        onOpen={openFile}
+        onRootChange={changeRoot}
+        onEntryRenamed={onEntryRenamed}
+        onEntryDeleted={onEntryDeleted}
+        onFilePreview={setPreviewPath}
+        activePath={active?.path ?? null}
+      />
+    );
+    if (!sidebarSlot2) return explorer;
+    return (
+      <SplitPane
+        top={explorer}
+        bottom={
+          sidebarSlot2 === "skills" ? (
+            <Suspense fallback={null}>
+              <SkillsModal
+                open
+                skills={skills}
+                onChange={setSkills}
+                onReloadFilesystemSkills={reloadFilesystemSkills}
+                onClose={() => setSidebarSlot2(null)}
+              />
+            </Suspense>
+          ) : null
+        }
+        defaultSplit={explorerRect.h * 0.45}
+        minPane={80}
+      />
+    );
   }
 
   async function reviewRunChanges({ runId, title }: { runId: string; title: string }) {
@@ -1769,6 +1916,8 @@ function App() {
               availableAiModels={panelModels["ai-main"] ?? [aiModel]}
               explorerVisible={explorerVisible}
               onExplorerVisibleChange={setExplorerVisible}
+              explorerFloating={explorerFloating}
+              onExplorerFloatingChange={setExplorerFloating}
               customLayouts={customLayouts}
               onCustomLayoutsChange={updateCustomLayouts}
               onApplyLayout={applyLayout}
@@ -1783,7 +1932,46 @@ function App() {
                 projects, Mission Control, profile). Overlay views opened from
                 it (Mission Control, Git) bring the rail back. */}
             {!(focusMode && view === "workbench") && (
-            <ActivityBar active={activityState} onToggle={togglePanel} />
+            <ActivityBar
+              active={activityState}
+              onToggle={togglePanel}
+              onSearch={() => setPaletteOpen(true)}
+              homeLabel={workspaceRoot?.split("/").filter(Boolean).pop()}
+              submenus={{
+                // Home is the project-level entry — switching lives there.
+                // Explorer stays purely "open the file tree".
+                home: {
+                  title: "Recent projects",
+                  items: recentFolders.slice(0, 6).map((folder) => ({
+                    key: folder,
+                    label: folder.split("/").filter(Boolean).pop() ?? folder,
+                    active: folder === workspaceRoot,
+                    onSelect: () => changeRoot(folder),
+                  })),
+                },
+                settings: {
+                  title: "Settings",
+                  items: (
+                    [
+                      ["general", "General"],
+                      ["appearance", "Appearance"],
+                      ["editor", "Editor"],
+                      ["ai", "AI & Harness"],
+                      ["api", "API Keys"],
+                      ["layout", "Layout"],
+                      ["stats", "Stats"],
+                    ] as const
+                  ).map(([section, label]) => ({
+                    key: section,
+                    label,
+                    onSelect: () => {
+                      setSettingsInitial(section);
+                      setView("settings");
+                    },
+                  })),
+                },
+              }}
+            />
             )}
             {view === "git-review" ? (
               <Suspense fallback={null}>
@@ -2024,7 +2212,7 @@ function App() {
                   // past the panel edge.
                 }}
               >
-                {explorerVisible && (
+                {explorerVisible && explorerFloating && (
                   <FloatingPanel
                     panelId="explorer"
                     rect={explorerRect}
@@ -2035,55 +2223,47 @@ function App() {
                     onResize={(next) => updatePanelRect("explorer", next)}
                     onMove={(next) => updatePanelRect("explorer", next)}
                   >
-                    {sidebarSlot2 ? (
-                      <SplitPane
-                        top={
-                          <Sidebar
-                            fill
-                            visible
-                            showHidden={showHiddenFiles}
-                            width={explorerRect.w}
-                            workspaceRoot={workspaceRoot}
-                            onOpen={openFile}
-                            onRootChange={changeRoot}
-                            onEntryRenamed={onEntryRenamed}
-                            onEntryDeleted={onEntryDeleted}
-                            onFilePreview={setPreviewPath}
-                            activePath={active?.path ?? null}
-                          />
-                        }
-                        bottom={
-                          sidebarSlot2 === "skills" ? (
-                            <Suspense fallback={null}>
-                              <SkillsModal
-                                open
-                                skills={skills}
-                                onChange={setSkills}
-                                onReloadFilesystemSkills={reloadFilesystemSkills}
-                                onClose={() => setSidebarSlot2(null)}
-                              />
-                            </Suspense>
-                          ) : null
-                        }
-                        defaultSplit={explorerRect.h * 0.45}
-                        minPane={80}
-                      />
-                    ) : (
-                      <Sidebar
-                        fill
-                        visible
-                        showHidden={showHiddenFiles}
-                        width={explorerRect.w}
-                        workspaceRoot={workspaceRoot}
-                        onOpen={openFile}
-                        onRootChange={changeRoot}
-                        onEntryRenamed={onEntryRenamed}
-                        onEntryDeleted={onEntryDeleted}
-                        onFilePreview={setPreviewPath}
-                        activePath={active?.path ?? null}
-                      />
-                    )}
+                    {renderExplorerContent()}
                   </FloatingPanel>
+                )}
+                {/* Docked explorer (default) — the Explorer as a drawer glued
+                    to the activity bar, not a floating window: it glides in
+                    from the left edge on click (same compositor-only motion
+                    as the editor dock) and slides away on toggle. The
+                    "Floating explorer" setting restores the draggable panel. */}
+                {!explorerFloating && (
+                  <div
+                    className="explorer-dock-overlay"
+                    data-open={explorerVisible ? "true" : "false"}
+                    aria-hidden={!explorerVisible}
+                    style={{ width: explorerRect.w, zIndex: Z.dock }}
+                  >
+                    {renderExplorerContent()}
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Resize explorer"
+                      onMouseDown={beginExplorerDockResize}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "linear-gradient(to left, var(--accent-soft), transparent)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                      style={{
+                        position: "absolute",
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: 7,
+                        cursor: "col-resize",
+                        zIndex: 30,
+                        background: "transparent",
+                        transition: "background var(--motion-fast) var(--ease-out)",
+                      }}
+                    />
+                  </div>
                 )}
                 {previewPath && (
                   <div
@@ -2213,8 +2393,11 @@ function App() {
                   className="editor-dock-overlay"
                   data-open={tabs.length > 0 || searchVisible ? "true" : "false"}
                   data-folded={editorDockFolded ? "true" : "false"}
-                  aria-hidden={tabs.length === 0 && !searchVisible}
-                  style={editorDockWidth !== null ? { width: editorDockWidth } : undefined}
+                  aria-hidden={(tabs.length === 0 && !searchVisible) || editorDockFolded}
+                  style={{
+                    zIndex: Z.dock,
+                    ...(editorDockWidth !== null ? { width: editorDockWidth } : null),
+                  }}
                 >
                   {/* Left-edge splitter — a wide invisible grab zone that
                       tints the pane's edge on hover, matching the anchored
@@ -2246,17 +2429,6 @@ function App() {
                       }}
                     />
                   )}
-                  {editorDockFolded && (
-                    <EditorDockSpine
-                      tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty }))}
-                      activeIdx={activeIdx}
-                      onSelectFile={(i) => {
-                        setActiveIdx(i);
-                        setEditorDockFolded(false);
-                      }}
-                      onUnfold={() => setEditorDockFolded(false)}
-                    />
-                  )}
                   {/* Everything below fades out while folded so the sliver
                       shows the canvas through the glass surface — not a
                       40px strip of line numbers and tab fragments. Content
@@ -2265,6 +2437,7 @@ function App() {
                   <div style={{ display: "flex", alignItems: "stretch", minWidth: 0 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <TabBar
+                        variant="flat"
                         tabs={tabs.map((t) => ({ path: t.path, dirty: t.dirty, externalChanged: t.externalChanged }))}
                         activeIdx={activeIdx}
                         onSelect={setActiveIdx}
@@ -2275,16 +2448,17 @@ function App() {
                     {tabs.length > 0 && !editorDockFolded && (
                       <button
                         type="button"
-                        title="Fold editor to the edge"
-                        aria-label="Fold editor to the edge"
+                        title="Fold editor — reopen from the status bar"
+                        aria-label="Fold editor"
                         onClick={() => setEditorDockFolded(true)}
                         style={{
                           width: 30,
                           flexShrink: 0,
                           border: "none",
+                          borderBottom: "1px solid var(--border)",
                           display: "grid",
                           placeItems: "center",
-                          background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
+                          background: "transparent",
                           color: "var(--fg-subtle)",
                           cursor: "pointer",
                           transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
@@ -2295,7 +2469,7 @@ function App() {
                         }}
                         onMouseLeave={(e) => {
                           e.currentTarget.style.color = "var(--fg-subtle)";
-                          e.currentTarget.style.background = "color-mix(in srgb, var(--bg-elevated) 72%, transparent)";
+                          e.currentTarget.style.background = "transparent";
                         }}
                       >
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2383,6 +2557,20 @@ function App() {
         onToggleTheme={() => setTheme((t) => getNextThemeId(t))}
         onResetLayout={resetPanelLayout}
         showLayoutControls={view === "workbench"}
+        foldedEditor={
+          view === "workbench" &&
+          !focusMode &&
+          !activeGrid &&
+          panelLayout.anchored === false &&
+          editorDockFolded &&
+          tabs.length > 0
+            ? {
+                files: tabs.length,
+                agentFile: tabs.find((t) => isAgentFile(t.path))?.path.split("/").pop() ?? null,
+                onOpen: () => setEditorDockFolded(false),
+              }
+            : null
+        }
       />
       {skillsVisible && sidebarSlot2 !== "skills" && (
         <Suspense fallback={null}>

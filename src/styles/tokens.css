@@ -116,7 +116,7 @@
   --fs-xxl:  24px;
 
   /* Layout sizes */
-  --size-activity-bar: 44px;
+  --size-activity-bar: 56px;
   --size-sidebar:      240px;
   --size-ai-panel:     360px;
   --size-tab-strip:    34px;
@@ -2404,11 +2404,19 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-activity-bar-item {
   transition:
     color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
     transform var(--motion-fast) var(--ease-out);
 }
 
+/* Hover previews the active fill at half strength — the same recipe as the
+   soft-segment tabs. The active tool's full fill is the FLIP indicator
+   sliding underneath, so active buttons skip their own background. */
 .klide-activity-bar-item:hover {
   color: var(--fg-strong);
+}
+
+.klide-activity-bar-item:hover:not([data-active="true"]) {
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
 }
 
 .klide-activity-bar-item[data-active="true"] {
@@ -2417,6 +2425,115 @@ textarea.klide-diff-comment-input:focus-visible {
 
 .klide-activity-bar-item:active {
   transform: scale(0.94);
+}
+
+/* Rail edge toggle — the chevron pebble straddling the rail's right edge
+   (the reference's ‹/›). Hidden until the rail is hovered so the edge stays
+   clean. */
+.klide-rail-toggle {
+  position: absolute;
+  top: 16px;
+  right: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--bg-elevated);
+  color: var(--fg-dim);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  z-index: 40;
+  box-shadow: var(--shadow-raised);
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.klide-rail:hover .klide-rail-toggle,
+.klide-rail-toggle:focus-visible {
+  opacity: 1;
+}
+
+.klide-rail-toggle:hover {
+  color: var(--fg-strong);
+  transform: scale(1.08);
+}
+
+/* Rail flyout — the hover submenu beside an activity-bar item: a soft
+   rounded card that unfolds from the rail (same origin motion as the
+   explorer drawer), quiet mono title, rows in the app-wide soft-fill
+   recipe. */
+.klide-rail-flyout {
+  position: fixed;
+  min-width: 188px;
+  max-width: 300px;
+  max-height: 330px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: var(--bg-elevated);
+  box-shadow: var(--panel-shadow);
+  transform-origin: left top;
+  animation: klide-rail-flyout-in 200ms var(--ease-soft) both;
+  /* z-index comes inline from zLayers.ts (Z.popover) */
+}
+
+@keyframes klide-rail-flyout-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.klide-rail-flyout-title {
+  padding: 6px 10px 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.klide-rail-flyout-row {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-subtle);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.klide-rail-flyout-row:hover {
+  color: var(--fg-strong);
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+}
+
+.klide-rail-flyout-row[data-active="true"] {
+  color: var(--fg-strong);
+  background: var(--bg-hover);
 }
 
 /* Dock-style dot indicator for bottom-zone destinations. A 3px disc
@@ -2443,20 +2560,24 @@ textarea.klide-diff-comment-input:focus-visible {
   opacity: 1;
 }
 
-/* The activity bar's FLIP indicator: 2px left accent bar plus a soft
-   32px gradient fill that flows from accent-soft to transparent. */
+/* The activity bar's FLIP indicator — a soft rounded-square fill that
+   slides between tools (the reference-rail treatment, same quiet-fill
+   language as the soft-segment tabs). This resolves the old TBD: the
+   active tool is marked by the fill + the icon going strong. */
 .klide-activity-bar-indicator {
   top: 0;
-  left: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-md);
-  /* TBD: revisit the active-state highlight later. The indicator
-     still FLIP-animates between rows; the only active-state signal
-     right now is the icon going to --fg-strong. */
-  background: transparent;
+  /* Rows carry an 8px horizontal margin in both rail modes — the fill must
+     start where the rows start (this was invisible while the indicator was
+     transparent; a visible fill at left:0 sat 8px off the icons). */
+  left: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--bg-hover);
   box-shadow: none;
-  transition: transform var(--motion-slow) var(--ease-soft);
+  transition:
+    transform var(--motion-slow) var(--ease-soft),
+    opacity var(--motion-fast) var(--ease-out);
 }
 
 [data-flip="false"] .klide-activity-bar-indicator {
@@ -2474,6 +2595,17 @@ textarea.klide-diff-comment-input:focus-visible {
 
 [data-flip="false"] .klide-tab-bar-indicator {
   transition: none;
+}
+
+/* Tab close buttons reveal on hover — a resting × on every tab is noise.
+   The button keeps its 18px footprint while hidden so tabs never shift.
+   Keyboard focus reveals it too. */
+.klide-tab .klide-tab-close {
+  opacity: 0;
+}
+.klide-tab:hover .klide-tab-close,
+.klide-tab .klide-tab-close:focus-visible {
+  opacity: 1;
 }
 
 /* Welcome screen recent-row — two buttons (open + remove) share a
@@ -3271,7 +3403,7 @@ textarea.klide-diff-comment-input:focus-visible {
   box-shadow:
     inset 1px 0 0 var(--panel-highlight),
     -12px 0 30px color-mix(in srgb, var(--fg-strong) 3.5%, transparent);
-  z-index: 1200;
+  /* z-index comes inline from zLayers.ts (Z.dock) */
   transform: translateX(calc(100% + 32px));
   opacity: 0;
   visibility: hidden;
@@ -3296,120 +3428,69 @@ textarea.klide-diff-comment-input:focus-visible {
     visibility 0s;
 }
 
-/* Folded: the pane glides almost fully off-edge, leaving a slim document
-   spine so open files stay one click away. Same compositor-only transform as
-   open/close — folding is just another resting position. The folded sliver
-   softens: slightly translucent surface (color-mix, deliberately NOT
-   backdrop-filter — frosted glass re-composites over focused floating panels
-   in the webview) and a tighter shadow so it reads as chrome, not a hovering
-   card. */
+/* Folded: the pane glides fully off-edge — no spine, no second rail (Zed
+   folds docks to nothing; the field agrees). Open documents wait in the
+   status bar's quiet "N files" item, and any file-open action auto-unfolds.
+   Same compositor-only transform as open/close. */
 .editor-dock-overlay[data-open="true"][data-folded="true"] {
-  transform: translateX(calc(100% - 40px));
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-  box-shadow:
-    inset 1px 0 0 var(--panel-highlight),
-    -6px 0 16px color-mix(in srgb, var(--fg-strong) 2.5%, transparent);
+  transform: translateX(calc(100% + 32px));
 }
 
-/* The pane's real content (tab strip, gutter, code). Folding fades it out
-   quickly — faster than the 380ms slide — so line numbers and tab fragments
-   never ghost through the translucent folded sliver; the glass shows the
-   canvas instead. Stays mounted, opacity only. */
+/* The pane's real content (tab strip, gutter, code). A plain layout column —
+   kept mounted through fold/unfold so Monaco never remounts. */
 .editor-dock-content {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  opacity: 1;
-  transition: opacity 160ms var(--ease-out);
 }
 
-.editor-dock-overlay[data-folded="true"] .editor-dock-content {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms var(--ease-out);
-}
-
-.editor-dock-spine {
+/* Explorer drawer — a soft sheet anchored at the activity bar, not a
+   full-height wall: small insets, rounded corners, the floating-panel
+   border + shadow language, so it reads as a sibling of the canvas's
+   panels that happens to live at the rail. It unfolds FROM the rail
+   (transform-origin left, a short 12px travel + gentle scale + fade)
+   rather than trucking in from off-screen — short origin motion reads
+   smoother than a long slide. Compositor-only: transform + opacity.
+   The "Floating explorer" setting swaps this for the draggable panel. */
+.explorer-dock-overlay {
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 40px;
+  top: 8px;
+  left: 0;
+  bottom: 8px;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  padding-top: 8px;
-  z-index: 35;
-}
-
-.editor-dock-spine-btn {
-  position: relative;
-  width: 40px;
-  height: 34px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--fg-subtle);
-  cursor: pointer;
+  overflow: hidden;
+  /* Flush against the activity bar — no gap, no left border, no left
+     radius: the drawer grows out of the rail. The soft-sheet treatment
+     (radius, border, shadow) lives on the free edges only. */
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border: 1px solid var(--panel-border);
+  border-left: none;
+  background: var(--bg-elevated);
+  box-shadow:
+    inset 0 1px 0 var(--panel-highlight),
+    var(--panel-shadow);
+  /* z-index comes inline from zLayers.ts (Z.dock) */
+  transform-origin: left center;
+  transform: translateX(-12px) scale(0.985);
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform, opacity;
   transition:
-    color var(--motion-fast) var(--ease-out),
-    background var(--motion-fast) var(--ease-out);
+    transform 260ms var(--ease-soft),
+    opacity 150ms var(--ease-out),
+    visibility 0s linear 260ms;
 }
 
-.editor-dock-spine-btn:hover {
-  color: var(--fg-strong);
-  background: var(--bg-hover);
-}
-
-.editor-dock-spine-btn[data-active="true"] {
-  color: var(--fg-strong);
-}
-
-/* Agent context files (CLAUDE.md / AGENTS.md) carry the accent — the one
-   file type worth spotting instantly in the dock. */
-.editor-dock-spine-btn[data-kind="agent"],
-.editor-dock-spine-btn[data-kind="agent"]:hover {
-  color: var(--accent);
-}
-
-/* Active document marker — a 2px accent spine on the edge, the same
-   indicator language as the activity bar, never a filled pill. */
-.editor-dock-spine-btn[data-active="true"]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: var(--accent);
-}
-
-.editor-dock-spine-divider {
-  align-self: center;
-  width: 16px;
-  height: 1px;
-  margin: 6px 0;
-  background: var(--border);
-}
-
-.editor-dock-spine-monogram {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-  line-height: 1;
-}
-
-.editor-dock-spine-dot {
-  position: absolute;
-  top: 8px;
-  right: 9px;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--accent);
+.explorer-dock-overlay[data-open="true"] {
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    transform 340ms var(--ease-soft),
+    opacity 180ms var(--ease-out),
+    visibility 0s;
 }
 
 .artifact-inspector-header {
@@ -3423,10 +3504,17 @@ textarea.klide-diff-comment-input:focus-visible {
   box-shadow: inset 0 1px 0 var(--panel-highlight);
 }
 
+/* Soft-segment tabs — the same design as the docked editor's strip: an inset
+   row of rounded tabs where the active tab carries a quiet neutral fill (the
+   hover token) and that fill is the only marker. No cell hairlines, no
+   underline. */
 .artifact-inspector-tabs {
   min-width: 0;
   flex: 1;
   display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
   align-self: stretch;
   overflow-x: auto;
   scrollbar-width: none;
@@ -3440,10 +3528,11 @@ textarea.klide-diff-comment-input:focus-visible {
   position: relative;
   width: clamp(104px, 12vw, 176px);
   min-width: 104px;
+  height: 24px;
   flex: 0 0 auto;
   display: flex;
-  align-items: stretch;
-  border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  align-items: center;
+  border-radius: var(--radius-sm);
   background: transparent;
   transition:
     background var(--motion-fast) var(--ease-out),
@@ -3451,12 +3540,11 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 .artifact-inspector-tab:hover {
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
 }
 
 .artifact-inspector-tab[data-active="true"] {
-  background: var(--bg-elevated);
-  box-shadow: inset 0 -1px 0 var(--fg-dim);
+  background: var(--bg-hover);
 }
 
 .artifact-inspector-tab-select {
@@ -3531,21 +3619,23 @@ textarea.klide-diff-comment-input:focus-visible {
   opacity: 1;
 }
 
+/* Header actions — bare icons, space-separated. No cluster background, no
+   divider, no hover/active fill boxes: color is the only state (hover →
+   strong, active view → accent). The Save action keeps its primary tone —
+   it's a real button, not a mode. */
 .artifact-inspector-actions {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 12px;
   align-self: stretch;
-  padding: 0 6px;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg));
-  box-shadow: -1px 0 0 color-mix(in srgb, var(--border) 76%, transparent);
+  padding: 0 12px;
 }
 
 .artifact-inspector-button {
-  min-width: 26px;
+  min-width: 16px;
   height: 26px;
-  padding: 0 6px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3566,13 +3656,11 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 .artifact-inspector-button:hover {
-  background: var(--bg-hover);
   color: var(--fg-strong);
 }
 
 .artifact-inspector-button[data-active="true"] {
-  background: color-mix(in srgb, var(--bg-hover) 88%, transparent);
-  color: var(--fg-strong);
+  color: var(--accent);
 }
 
 .artifact-inspector-button[data-tone="primary"] {
@@ -3601,13 +3689,6 @@ textarea.klide-diff-comment-input:focus-visible {
 .artifact-inspector-button:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-.artifact-inspector-action-divider {
-  width: 1px;
-  height: 14px;
-  margin: 0 2px;
-  background: var(--border);
 }
 
 .artifact-inspector-body {

@@ -48,12 +48,14 @@ export function FloatingPanel({
   // heavy AiPanel chat — 60+ times a second. State is committed once on
   // release.
   const panelRef = useRef<HTMLDivElement>(null);
+  // 380ms matches the docked editor's glide, so a dock opening and the
+  // panels making room for it read as one choreographed motion.
   const panelTransition = isInteracting
     ? "none"
-    : "left var(--motion-med) var(--ease-soft), " +
-      "top var(--motion-med) var(--ease-soft), " +
-      "width var(--motion-med) var(--ease-soft), " +
-      "height var(--motion-med) var(--ease-soft)";
+    : "left 380ms var(--ease-soft), " +
+      "top 380ms var(--ease-soft), " +
+      "width 380ms var(--ease-soft), " +
+      "height 380ms var(--ease-soft)";
 
   function beginResize(
     e: ReactMouseEvent<HTMLDivElement>,

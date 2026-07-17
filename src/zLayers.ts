@@ -20,6 +20,15 @@ export const Z = {
   /** Floating panels. A focused panel = `panel + <focus order>`; the band
    *  climbs as panels are focused, so keep every tier below well clear. */
   panel: 1_000,
+  /** Docked chrome — the free layout's docked editor pane and the explorer
+   *  drawer. Persistent surfaces that must stay above the climbing
+   *  floating-panel band (a dock the panels can hide behind is "in the
+   *  back", the thing docks exist to prevent) but below transient chrome. */
+  dock: 80_000,
+  /** The activity rail — its expand/collapse pebble straddles the rail's
+   *  right edge, exactly where the explorer drawer slides in, so the rail
+   *  must sit one tier above the docks. */
+  rail: 85_000,
   /** The race "ask both" bar — persistent workbench chrome that must stay
    *  above the floating-panel band (which climbs with focus events) but
    *  below every popover/menu. */

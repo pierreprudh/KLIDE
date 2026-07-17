@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
-import { FileMark, fileMarkKind } from "./fileMarks";
+import { AgentMark, FileTypeIcon, isAgentFile } from "./fileMarks";
 
 type Tab = { path: string; dirty: boolean; externalChanged?: boolean };
 type Props = {
@@ -9,6 +9,12 @@ type Props = {
   onSelect: (i: number) => void;
   onClose: (i: number) => void;
   workspaceRoot: string | null;
+  /** "raised" (default) — the desktop-style tab card that merges into the
+   *  editor surface below; drawn for the full-bleed editor. "flat" — the
+   *  docked pane's soft-segment strip: inset row, the active tab carries a
+   *  quiet rounded neutral fill (the hover token, not a saturated pill), no
+   *  underline. */
+  variant?: "raised" | "flat";
 };
 
 function displayPath(path: string, workspaceRoot: string | null): string {
@@ -18,7 +24,8 @@ function displayPath(path: string, workspaceRoot: string | null): string {
   return path;
 }
 
-export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Props) {
+export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot, variant = "raised" }: Props) {
+  const flat = variant === "flat";
   // The FLIP bar rides along the bottom of the active tab. The bar's
   // width follows the active tab's measured width.
   const activeTab = activeIdx >= 0 ? tabs[activeIdx]?.path : null;
@@ -49,46 +56,53 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
       style={{
         position: "relative",
         height: "var(--size-tab-strip)",
-        background: "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
+        background: flat
+          ? "transparent"
+          : "color-mix(in srgb, var(--bg-elevated) 72%, transparent)",
         display: "flex",
-        alignItems: "flex-end",
+        alignItems: flat ? "center" : "flex-end",
         overflowX: "auto",
-        backdropFilter: "blur(12px)",
+        backdropFilter: flat ? undefined : "blur(12px)",
+        borderBottom: flat ? "1px solid var(--border)" : undefined,
         flexShrink: 0,
-        padding: "0 10px",
-        gap: 2,
+        padding: flat ? "0 8px" : "0 10px",
+        gap: flat ? 4 : 2,
       }}
     >
-      <div
-        ref={flip.trackRef}
-        data-flip={flip.flip}
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          left: 10,
-          right: 10,
-          bottom: 0,
-          height: 2,
-          pointerEvents: "none",
-        }}
-      >
-        <span
-          className="klide-flip-indicator klide-tab-bar-indicator"
+      {!flat && (
+        <div
+          ref={flip.trackRef}
+          data-flip={flip.flip}
+          aria-hidden="true"
           style={{
-            ...flip.style,
+            position: "absolute",
+            left: 10,
+            right: 10,
+            bottom: 0,
             height: 2,
-            width: barWidth,
-            background: "var(--accent)",
-            borderRadius: "2px 2px 0 0",
+            pointerEvents: "none",
           }}
-        />
-      </div>
+        >
+          <span
+            className="klide-flip-indicator klide-tab-bar-indicator"
+            style={{
+              ...flip.style,
+              height: 2,
+              width: barWidth,
+              background: "var(--accent)",
+              borderRadius: "2px 2px 0 0",
+            }}
+          />
+        </div>
+      )}
 
+      {/* No underline indicator in the flat variant — the active fill is the
+          only marker (two systems was what felt strange). */}
       {tabs.map((t, i) => {
         const isActive = i === activeIdx;
         const relative = displayPath(t.path, workspaceRoot);
         const filename = relative.split("/").pop() ?? relative;
-        const markKind = fileMarkKind(t.path);
+        const isAgent = isAgentFile(t.path);
         const folder = relative.includes("/")
           ? relative.split("/").slice(0, -1).join("/")
           : "";
@@ -103,24 +117,27 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
             style={{
               display: "flex",
               alignItems: "center",
-              height: isActive ? 32 : 26,
-              marginBottom: isActive ? 0 : 4,
-              padding: crowded ? "0 10px" : "0 14px",
+              height: flat ? 24 : isActive ? 32 : 26,
+              marginBottom: flat ? 0 : isActive ? 0 : 4,
+              padding: flat ? (crowded ? "0 8px" : "0 10px") : crowded ? "0 10px" : "0 14px",
               gap: 8,
               position: "relative",
-              background: isActive ? "var(--bg)" : "transparent",
-              borderTop: isActive
+              // Flat: the active tab carries a quiet neutral fill — the hover
+              // token, not a saturated pill — and that fill is the only
+              // marker. Raised keeps the card that merges into the editor.
+              background: isActive ? (flat ? "var(--bg-hover)" : "var(--bg)") : "transparent",
+              borderTop: !flat && isActive
                 ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
                 : "1px solid transparent",
-              borderLeft: isActive
+              borderLeft: !flat && isActive
                 ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
                 : "1px solid transparent",
-              borderRight: isActive
+              borderRight: !flat && isActive
                 ? "1px solid color-mix(in srgb, var(--border) 65%, transparent)"
                 : "1px solid transparent",
-              borderRadius: isActive ? "8px 8px 0 0" : "8px",
+              borderRadius: flat ? "var(--radius-sm)" : isActive ? "8px 8px 0 0" : "8px",
               color: isActive ? "var(--fg-strong)" : "var(--fg-subtle)",
-              fontSize: 13,
+              fontSize: flat ? 12.5 : 13,
               fontWeight: isActive ? 500 : 400,
               cursor: "pointer",
               minWidth: crowded ? 72 : 0,
@@ -143,21 +160,20 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               }
             }}
           >
-            {markKind && (
-              <span
-                aria-hidden="true"
-                style={{
-                  flexShrink: 0,
-                  display: "inline-flex",
-                  marginRight: -3,
-                  // Agent context files carry the accent; markdown stays a
-                  // quiet dim glyph beside the name.
-                  color: markKind === "agent" ? "var(--accent)" : "var(--fg-dim)",
-                }}
-              >
-                <FileMark kind={markKind} size={12} />
-              </span>
-            )}
+            {/* Real file-type icon — the Explorer's set, at tab scale. Agent
+                context files keep their accent star instead: spotting the
+                file that steers the agent beats knowing it's markdown. */}
+            <span
+              aria-hidden="true"
+              style={{
+                flexShrink: 0,
+                display: "inline-flex",
+                marginRight: -2,
+                color: isAgent ? "var(--accent)" : undefined,
+              }}
+            >
+              {isAgent ? <AgentMark size={11} /> : <FileTypeIcon name={filename} size={13} />}
+            </span>
             <span
               style={{
                 flex: "0 1 auto",
@@ -210,6 +226,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
               }}
               title="Close"
               aria-label="Close tab"
+              className="klide-tab-close"
               style={{
                 color: "var(--fg-subtle)",
                 width: 18,
@@ -221,7 +238,7 @@ export function TabBar({ tabs, activeIdx, onSelect, onClose, workspaceRoot }: Pr
                 fontSize: 14,
                 lineHeight: 1,
                 transition:
-                  "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), transform var(--motion-fast) var(--ease-out)",
+                  "background var(--motion-med) var(--ease-out), color var(--motion-med) var(--ease-out), transform var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out)",
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = "var(--bg-hover)";

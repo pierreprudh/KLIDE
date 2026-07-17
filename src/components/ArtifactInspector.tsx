@@ -168,6 +168,15 @@ function DiffGlyph() {
   );
 }
 
+function CodeGlyph() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m9 8.5-4 3.5 4 3.5" />
+      <path d="m15 8.5 4 3.5-4 3.5" />
+    </svg>
+  );
+}
+
 function SaveGlyph() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -544,13 +553,13 @@ export function ArtifactInspector({
 
         <div className="artifact-inspector-actions">
           {canViewDiff && (
-            <InspectorButton label="View changes" active={state.view === "diff"} onClick={() => updateTabState(activeTab.key, { view: "diff" })}>
-              Diff
+            <InspectorButton label="View changes (diff)" active={state.view === "diff"} onClick={() => updateTabState(activeTab.key, { view: "diff" })}>
+              <DiffGlyph />
             </InspectorButton>
           )}
           {canOpenFile && (
-            <InspectorButton label="Open code" active={state.view === "file"} onClick={() => updateTabState(activeTab.key, { view: "file" })}>
-              Code
+            <InspectorButton label="Open code (edit the file)" active={state.view === "file"} onClick={() => updateTabState(activeTab.key, { view: "file" })}>
+              <CodeGlyph />
             </InspectorButton>
           )}
           {state.view === "file" && dirty && (
@@ -559,7 +568,6 @@ export function ArtifactInspector({
               <span>{state.saving ? "Saving…" : "Save"}</span>
             </InspectorButton>
           )}
-          <span className="artifact-inspector-action-divider" aria-hidden />
           <InspectorButton label="Close artifact inspector" onClick={onClose}>
             <CloseGlyph />
           </InspectorButton>

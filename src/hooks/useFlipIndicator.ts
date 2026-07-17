@@ -38,6 +38,10 @@ export type FlipOptions = {
   /** Whether the indicator moves on the X axis (e.g. a tab bar) or
    *  the Y axis (e.g. a vertical nav rail). Default "y". */
   axis?: "x" | "y";
+  /** Layout epoch: change this value whenever items can MOVE without the
+   *  active id changing (a list expanding above the active item, the track
+   *  switching density). The hook re-measures on every change. */
+  remeasureKey?: unknown;
 };
 
 export function useFlipIndicator(
@@ -67,7 +71,7 @@ export function useFlipIndicator(
       ? activeRect.top - trackRect.top
       : activeRect.left - trackRect.left;
     setRestPos(pos);
-  }, [activeId, options.active, options.size, axis]);
+  }, [activeId, options.active, options.size, axis, options.remeasureKey]);
 
   useLayoutEffect(() => {
     if (restPos === null) return;
@@ -96,7 +100,9 @@ export function useFlipIndicator(
       transform: restPos !== null
         ? `${translateFn}(${restPos + barOffset}px)`
         : `${translateFn}(0)`,
-      opacity: restPos !== null ? 1 : 0,
+      // Hide when nothing is active — a visible indicator must never haunt
+      // the last active item after the user has moved elsewhere.
+      opacity: restPos !== null && options.active ? 1 : 0,
     },
     flip,
     trackRef: (el) => { trackRef.current = el; },

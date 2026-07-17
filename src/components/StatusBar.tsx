@@ -2,6 +2,7 @@ import { getThemeMeta, type ThemeId } from "../theme";
 import { keysFor } from "../shortcuts";
 import { LayoutBento } from "./LayoutBento";
 import { Tooltip } from "./Tooltip";
+import { AgentMark } from "./fileMarks";
 import type { GridLayout } from "../gridLayouts";
 import type { GitStatus } from "../gitTypes";
 
@@ -29,6 +30,10 @@ type Props = {
   /** Terminal / layout / reset controls only make sense on the workbench —
    *  full-screen surfaces (Git Review, Mission Control) hide them. */
   showLayoutControls?: boolean;
+  /** Free layout only: the docked editor is folded away with documents still
+   *  open. The status bar is where they wait (Zed folds docks to nothing;
+   *  Obsidian leaves a toolbar chevron — no second rail). Click reopens. */
+  foldedEditor?: { files: number; agentFile: string | null; onOpen: () => void } | null;
 };
 
 function TerminalIcon() {
@@ -100,6 +105,7 @@ export function StatusBar({
   onToggleTheme,
   onResetLayout,
   showLayoutControls = true,
+  foldedEditor = null,
 }: Props) {
   const display = relativePath(path, workspaceRoot);
   const filename = path?.split("/").pop() ?? null;
@@ -187,6 +193,28 @@ export function StatusBar({
         </span>
       )}
       <div style={{ flex: 1 }} />
+      {foldedEditor && (
+        <Tooltip
+          label={
+            foldedEditor.agentFile
+              ? `Unfold editor — ${foldedEditor.files} file${foldedEditor.files === 1 ? "" : "s"} open, incl. ${foldedEditor.agentFile}`
+              : `Unfold editor — ${foldedEditor.files} file${foldedEditor.files === 1 ? "" : "s"} open`
+          }
+        >
+          <button
+            onClick={foldedEditor.onOpen}
+            aria-label="Unfold editor"
+            className="klide-status-chip-btn"
+          >
+            {foldedEditor.agentFile && (
+              <span aria-hidden style={{ display: "inline-flex", color: "var(--accent)" }}>
+                <AgentMark size={10} />
+              </span>
+            )}
+            {foldedEditor.files} file{foldedEditor.files === 1 ? "" : "s"}
+          </button>
+        </Tooltip>
+      )}
       <Tooltip label={autoTheme ? "Cycle theme preference (auto theme is on)" : "Cycle theme"}>
       <button
         onClick={onToggleTheme}

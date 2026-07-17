@@ -95,6 +95,8 @@ type Props = {
   availableAiModels: string[];
   explorerVisible: boolean;
   onExplorerVisibleChange: (visible: boolean) => void;
+  explorerFloating: boolean;
+  onExplorerFloatingChange: (floating: boolean) => void;
   customLayouts: LayoutPreset[];
   onCustomLayoutsChange: (next: LayoutPreset[]) => void;
   onApplyLayout: (layout: ResolvedLayout) => void;
@@ -356,6 +358,8 @@ export function SettingsPanel({
   availableAiModels,
   explorerVisible,
   onExplorerVisibleChange,
+  explorerFloating,
+  onExplorerFloatingChange,
   customLayouts,
   onCustomLayoutsChange,
   onApplyLayout,
@@ -913,6 +917,17 @@ export function SettingsPanel({
                       checked={explorerVisible}
                       onChange={onExplorerVisibleChange}
                       label="Show explorer"
+                    />
+                  }
+                />
+                <Row
+                  title="Floating explorer"
+                  description="In the free layout, let the explorer float as a draggable panel instead of docking beside the activity bar."
+                  control={
+                    <Toggle
+                      checked={explorerFloating}
+                      onChange={onExplorerFloatingChange}
+                      label="Floating explorer"
                     />
                   }
                 />
