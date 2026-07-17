@@ -111,6 +111,12 @@ export function DelegateTerminalSurface({
     let cancelled = false;
     let applied = false;
     let writtenThrough = -1;
+    // Replayed history contains terminal queries (cursor-position ESC[6n,
+    // device-attribute / color probes) the TUI sent on a previous attach.
+    // xterm.js answers them while parsing the replay; piping those stale
+    // answers into the PTY shows up as typed junk ("3R…") in the delegate's
+    // input. Swallow onData until every replay chunk has been parsed.
+    let replaying = true;
     const pending: { seq: number; data: string }[] = [];
 
     const unlisten = listen<{ sessionId: string; data: string; seq: number }>(
@@ -156,8 +162,12 @@ export function DelegateTerminalSurface({
         }
         pending.length = 0;
         applied = true;
+        // Writes are parsed FIFO, so this callback fires only after the
+        // snapshot + buffered chunks above are fully processed.
+        term.write("", () => { replaying = false; });
         syncSize();
       } catch (err) {
+        replaying = false;
         const msg = err instanceof Error ? err.message : String(err);
         term.writeln(`\x1b[31mFailed to start ${provider}: ${msg}\x1b[0m`);
         notify(`Couldn't start ${provider} — check it's installed and on your PATH.`, { tone: "error" });
@@ -165,7 +175,10 @@ export function DelegateTerminalSurface({
     };
     void start();
 
-    term.onData((data) => { void invoke("delegate_pty_write", { sessionId, data }); });
+    term.onData((data) => {
+      if (replaying) return;
+      void invoke("delegate_pty_write", { sessionId, data });
+    });
 
     const resize = new ResizeObserver(syncSize);
     resize.observe(ref.current);
