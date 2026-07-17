@@ -15,8 +15,12 @@
 //! - A connection that sends `subscribe` is upgraded to an event stream: it
 //!   receives every [`Event`] (output chunks, exits, detected session ids)
 //!   from then on, and nothing else.
-//! - The app process is the only intended client, but the protocol has no
-//!   secret handshake — `nc -U` works for debugging.
+//! - The app process is the only intended client. Every connection must send
+//!   an `auth` line first, carrying the per-data-dir token from
+//!   [`token_path`] — the socket lives in the shared temp dir, so possession
+//!   of the token (readable only via the app's own data dir, mode 0600) is
+//!   what proves a client is us. `nc -U` still works for debugging if you
+//!   paste the auth line first.
 //!
 //! Unix-only (macOS today): the socket, and the daemon's survival across the
 //! parent exiting, both lean on Unix process semantics. Windows would need a
@@ -64,6 +68,41 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
         .join(format!("ptyd-{hash:016x}.sock"))
 }
 
+/// The shared secret a client must present as its first request line. Lives
+/// inside the app data dir (not the world-readable temp dir where the socket
+/// sits), mode 0600 — being able to read it is the proof of identity.
+pub fn token_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("ptyd.token")
+}
+
+/// Read the existing token, or mint one from OS randomness and persist it
+/// 0600. Reusing the file keeps a restarting daemon compatible with clients
+/// that read it moments earlier.
+pub fn ensure_token(data_dir: &Path) -> Result<String, String> {
+    let path = token_path(data_dir);
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim().to_string();
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+    }
+    use base64::Engine;
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| format!("OS RNG unavailable: {e}"))?;
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| format!("write ptyd token: {e}"))?;
+    write!(file, "{token}").map_err(|e| format!("write ptyd token: {e}"))?;
+    Ok(token)
+}
+
 /// One request line from a client. Field names/shapes mirror the Tauri
 /// commands in pty.rs so the app-side proxy (Slice 3c) is a straight
 /// translation. `spawn.command` arrives prebuilt: all provider knowledge
@@ -72,6 +111,11 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// Must be the first line on every connection, carrying the token from
+    /// [`token_path`]. No ack on success — the next request's response is
+    /// the ack. A wrong or missing token gets one `Err` line and a closed
+    /// connection.
+    Auth { token: String },
     /// Liveness + version check. A client seeing a version mismatch after an
     /// app upgrade asks the daemon to shut down and starts a fresh one.
     Ping,
@@ -159,6 +203,9 @@ pub struct DaemonState {
     /// Last request or event, for the idle-exit check.
     active_ms: AtomicI64,
     data_dir: PathBuf,
+    /// The connection secret every client must present first (see
+    /// [`ensure_token`]).
+    token: String,
 }
 
 impl DaemonState {
@@ -245,8 +292,17 @@ pub fn bind_socket(data_dir: &Path) -> Result<UnixListener, String> {
             std::os::unix::fs::PermissionsExt::from_mode(0o700),
         );
     }
+    let restrict = |listener: UnixListener| {
+        // 0600 on the socket file itself — connect() checks write permission,
+        // so this is a second fence in front of the token handshake.
+        let _ = std::fs::set_permissions(
+            &path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        );
+        listener
+    };
     match UnixListener::bind(&path) {
-        Ok(listener) => Ok(listener),
+        Ok(listener) => Ok(restrict(listener)),
         Err(bind_err) => {
             // The file exists. A live daemon accepts connections; a stale
             // file refuses them and is safe to remove and rebind.
@@ -254,7 +310,9 @@ pub fn bind_socket(data_dir: &Path) -> Result<UnixListener, String> {
                 return Err(format!("another ptyd is already serving {path:?}"));
             }
             let _ = std::fs::remove_file(&path);
-            UnixListener::bind(&path).map_err(|_| bind_err.to_string())
+            UnixListener::bind(&path)
+                .map(restrict)
+                .map_err(|_| bind_err.to_string())
         }
     }
 }
@@ -270,12 +328,22 @@ pub fn daemon_main(data_dir: PathBuf) -> ! {
             std::process::exit(if e.contains("already serving") { 0 } else { 1 });
         }
     };
+    // After the bind: the bind is the daemon-uniqueness mutex, so only the
+    // winning daemon (re)writes the token file.
+    let token = match ensure_token(&data_dir) {
+        Ok(t) => t,
+        Err(e) => {
+            log_line(&data_dir, &format!("token setup failed: {e}"));
+            std::process::exit(1);
+        }
+    };
     let state = Arc::new(DaemonState {
         host: SessionHost::default(),
         subscribers: Mutex::new(HashMap::new()),
         next_client: AtomicU64::new(1),
         active_ms: AtomicI64::new(crate::pty_host::now_ms()),
         data_dir: data_dir.clone(),
+        token,
     });
     state.log(&format!(
         "ptyd v{} listening (pid {})",
@@ -324,6 +392,7 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
     };
     let mut writer = stream;
     let reader = BufReader::new(read_half);
+    let mut authed = false;
     for line in reader.lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -339,6 +408,27 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
                 continue;
             }
         };
+        // The handshake gate: nothing is served until this connection has
+        // presented the data-dir token. One Err line, then hang up — an
+        // unauthorized peer gets no second guess on the same connection.
+        if let Request::Auth { token } = &request {
+            if *token == state.token {
+                authed = true;
+                continue;
+            }
+            state.log("refused connection: bad token");
+            let _ = respond(&mut writer, &Response::Err {
+                message: "unauthorized".to_string(),
+            });
+            return;
+        }
+        if !authed {
+            state.log("refused connection: no auth line");
+            let _ = respond(&mut writer, &Response::Err {
+                message: "unauthorized: send auth first".to_string(),
+            });
+            return;
+        }
         match request {
             Request::Subscribe => {
                 let id = state.next_client.fetch_add(1, Ordering::Relaxed);
@@ -479,7 +569,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
         },
         // Handled in handle_client before reaching here (they own the
         // connection's lifecycle, not just a response).
-        Request::Subscribe | Request::Shutdown => unreachable!(),
+        Request::Auth { .. } | Request::Subscribe | Request::Shutdown => unreachable!(),
     }
 }
 
@@ -487,12 +577,14 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
 /// lifecycle (idle exit, socket cleanup) of [`daemon_main`].
 #[cfg(test)]
 pub fn test_state(data_dir: PathBuf) -> Arc<DaemonState> {
+    let token = ensure_token(&data_dir).expect("test token");
     Arc::new(DaemonState {
         host: SessionHost::default(),
         subscribers: Mutex::new(HashMap::new()),
         next_client: AtomicU64::new(1),
         active_ms: AtomicI64::new(crate::pty_host::now_ms()),
         data_dir,
+        token,
     })
 }
 
@@ -521,9 +613,19 @@ mod tests {
             Self { dir, state }
         }
 
-        fn connect(&self) -> (BufReader<UnixStream>, UnixStream) {
+        /// A raw connection with no auth line — for the refusal tests.
+        fn connect_unauthed(&self) -> (BufReader<UnixStream>, UnixStream) {
             let stream = UnixStream::connect(socket_path(&self.dir)).expect("connect");
             (BufReader::new(stream.try_clone().unwrap()), stream)
+        }
+
+        fn connect(&self) -> (BufReader<UnixStream>, UnixStream) {
+            let (reader, mut writer) = self.connect_unauthed();
+            let auth = Request::Auth {
+                token: ensure_token(&self.dir).unwrap(),
+            };
+            writeln!(writer, "{}", serde_json::to_string(&auth).unwrap()).unwrap();
+            (reader, writer)
         }
 
         fn roundtrip(&self, request: &Request) -> Response {
@@ -552,6 +654,48 @@ mod tests {
             }
             _ => panic!("expected pong"),
         }
+    }
+
+    #[test]
+    fn connections_without_the_token_are_refused_and_closed() {
+        let server = TestServer::start("auth");
+
+        // No auth line: the first real request gets an Err and EOF.
+        let (mut reader, mut writer) = server.connect_unauthed();
+        writeln!(writer, "{}", serde_json::to_string(&Request::Ping).unwrap()).unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Response>(&line).unwrap(),
+            Response::Err { .. }
+        ));
+        line.clear();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 0, "connection closed");
+
+        // Wrong token: same refusal.
+        let (mut reader, mut writer) = server.connect_unauthed();
+        let bad = Request::Auth {
+            token: "not-the-token".into(),
+        };
+        writeln!(writer, "{}", serde_json::to_string(&bad).unwrap()).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Response>(&line).unwrap(),
+            Response::Err { .. }
+        ));
+        line.clear();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 0, "connection closed");
+
+        // The token file is private to the user.
+        let mode = std::os::unix::fs::MetadataExt::mode(
+            &std::fs::metadata(token_path(&server.dir)).unwrap(),
+        );
+        assert_eq!(mode & 0o777, 0o600, "token file is 0600");
+        let sock_mode = std::os::unix::fs::MetadataExt::mode(
+            &std::fs::metadata(socket_path(&server.dir)).unwrap(),
+        );
+        assert_eq!(sock_mode & 0o777, 0o600, "socket file is 0600");
     }
 
     #[test]

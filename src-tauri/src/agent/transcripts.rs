@@ -42,6 +42,23 @@ pub fn app_runs_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// A run id must be a single plain path component — no separators, no parent
+/// refs — because it becomes a file name inside the runs dir (transcript,
+/// summary, checkpoint folder). Run ids are minted here (`run_{ts}_{hex}`) but
+/// also arrive from the frontend (conversation-id reuse in `agent_start_run`,
+/// and every read/checkpoint command), so without this check a hostile
+/// `{"runId": "../../x"}` over IPC would read or write outside the runs dir.
+pub fn validate_run_id(run_id: &str) -> Result<(), String> {
+    if run_id.contains('\\') {
+        return Err("Invalid run id.".into());
+    }
+    let mut components = Path::new(run_id).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err("Invalid run id.".into()),
+    }
+}
+
 fn summary_path(runs_dir: &Path, run_id: &str) -> PathBuf {
     runs_dir.join(format!("{run_id}.summary.json"))
 }
@@ -745,5 +762,23 @@ mod tests {
         assert!(on_disk.contains("\"filesChanged\": 1"), "got: {on_disk}");
         assert!(on_disk.contains("\"commandsRun\": 1"), "got: {on_disk}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_id_accepts_minted_and_frontend_ids() {
+        assert!(validate_run_id(&run_id()).is_ok());
+        assert!(validate_run_id("subagent_run_123_abc").is_ok());
+        assert!(validate_run_id("m3kq0z1x4f2a").is_ok()); // frontend convo id shape
+    }
+
+    #[test]
+    fn run_id_rejects_traversal_and_separators() {
+        assert!(validate_run_id("..").is_err());
+        assert!(validate_run_id("../../etc/passwd").is_err());
+        assert!(validate_run_id("a/b").is_err());
+        assert!(validate_run_id("/abs").is_err());
+        assert!(validate_run_id("a\\b").is_err());
+        assert!(validate_run_id(".").is_err());
+        assert!(validate_run_id("").is_err());
     }
 }

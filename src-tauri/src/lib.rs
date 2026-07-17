@@ -726,25 +726,40 @@ fn list_agent_runs(
     Ok(runs)
 }
 
+/// Sandbox: only ever read the known agent-log directories. Both sides are
+/// canonicalized before the containment check — a raw `starts_with` would
+/// pass `~/.claude/../../etc/x` (the prefix matches textually while `..`
+/// escapes it) and would follow a symlink planted inside a log dir.
+fn resolve_agent_log_path(home: &str, path: &str) -> Result<std::path::PathBuf, String> {
+    let canonical = std::path::Path::new(path)
+        .canonicalize()
+        .map_err(|e| format!("Unable to resolve run path: {e}"))?;
+    let allowed = [".claude", ".codex", ".omp"];
+    let inside = allowed.iter().any(|dir| {
+        std::path::Path::new(home)
+            .join(dir)
+            .canonicalize()
+            .map(|base| canonical.starts_with(&base))
+            .unwrap_or(false)
+    });
+    if inside {
+        Ok(canonical)
+    } else {
+        Err("Path is outside the agent log directories".to_string())
+    }
+}
+
 #[tauri::command]
 fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let p = std::path::Path::new(&path);
-    // Sandbox: only ever read the known agent-log directories. (OpenCode runs
-    // go through read_opencode_run instead — their key is a session id, not a
-    // path under home.)
-    let allowed = [".claude", ".codex", ".omp"];
-    if !allowed
-        .iter()
-        .any(|dir| p.starts_with(std::path::Path::new(&home).join(dir)))
-    {
-        return Err("Path is outside the agent log directories".to_string());
-    }
+    // (OpenCode runs go through read_opencode_run instead — their key is a
+    // session id, not a path under home.)
+    let path = resolve_agent_log_path(&home, &path)?;
     // Route through the registry so every delegate uses its own parser — an
     // unknown source errors loudly instead of being mis-read as Claude.
     let adapter = delegate::lookup(&source)
         .ok_or_else(|| format!("No delegate adapter for source: {source}"))?;
-    adapter.read_run(&home, &path)
+    adapter.read_run(&home, &path.to_string_lossy())
 }
 
 #[tauri::command]
@@ -1044,4 +1059,38 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod agent_log_path_tests {
+    use super::resolve_agent_log_path;
+
+    #[test]
+    fn resolves_only_inside_the_known_log_dirs() {
+        let home = std::env::temp_dir().join(format!("klide-loghome-{}", std::process::id()));
+        let logs = home.join(".claude").join("projects");
+        std::fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("run.jsonl");
+        std::fs::write(&transcript, "{}").unwrap();
+        let outside = home.join("secret.txt");
+        std::fs::write(&outside, "x").unwrap();
+        let home_str = home.to_string_lossy();
+
+        // A real transcript resolves.
+        assert!(resolve_agent_log_path(&home_str, &transcript.to_string_lossy()).is_ok());
+        // `..` escapes are caught even though the raw prefix matches.
+        let traversal = format!("{}/.claude/../secret.txt", home_str);
+        assert!(resolve_agent_log_path(&home_str, &traversal).is_err());
+        // Paths outside the log dirs are refused.
+        assert!(resolve_agent_log_path(&home_str, &outside.to_string_lossy()).is_err());
+        // A symlink planted inside a log dir pointing outside is refused.
+        #[cfg(unix)]
+        {
+            let link = logs.join("link.jsonl");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(resolve_agent_log_path(&home_str, &link.to_string_lossy()).is_err());
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }

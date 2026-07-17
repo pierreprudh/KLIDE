@@ -150,6 +150,23 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
 const INLINE_RE =
   /\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|`([^`]+)`|\*(.+?)\*|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
 
+// Only http(s)/mailto URLs may become clickable hrefs. Model output is
+// attacker-influenceable (prompt injection via a poisoned file the model
+// read), and React does not sanitize `javascript:` hrefs — a poisoned link
+// would execute script in the app webview on click. Anything else keeps its
+// link text but renders without an href.
+export function safeLinkHref(url: string): string | null {
+  try {
+    const scheme = new URL(url).protocol.toLowerCase();
+    return scheme === "http:" || scheme === "https:" || scheme === "mailto:"
+      ? url
+      : null;
+  } catch {
+    // Relative URLs / unparseable input: not navigable from the app webview.
+    return null;
+  }
+}
+
 function renderInline(text: string, keyBase: string): MdNode[] {
   const out: MdNode[] = [];
   let last = 0;
@@ -203,13 +220,19 @@ function renderInline(text: string, keyBase: string): MdNode[] {
         </span>
       );
     } else if (m[6] !== undefined) {
+      const href = safeLinkHref(m[7]);
+      if (!href) {
+        out.push(m[6]);
+        last = m.index + m[0].length;
+        continue;
+      }
       out.push(
         <a
           key={`${keyBase}-${key++}`}
-          href={m[7]}
+          href={href}
           target="_blank"
           rel="noreferrer"
-          title={m[8] ?? m[7]}
+          title={m[8] ?? href}
           style={{
             color: "var(--accent)",
             textDecoration: "underline",

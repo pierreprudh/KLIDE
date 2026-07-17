@@ -294,6 +294,18 @@ pub(crate) async fn install_skill(package: String) -> Result<SkillCommandResult,
     })
 }
 
+/// A skill folder name must be a single plain path component — no separators,
+/// no parent refs — so the renderer can only ever address a direct child of
+/// `~/.claude/skills`. Without this check `{"name": "../../.ssh"}` would make
+/// `uninstall_skill` delete an arbitrary user directory.
+fn validate_skill_folder_name(name: &str) -> Result<(), String> {
+    let mut components = std::path::Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err("Invalid skill name.".into()),
+    }
+}
+
 /// Remove a globally-installed skill by its folder name. Removes the
 /// `~/.claude/skills/<name>` directory if it exists.
 #[tauri::command]
@@ -302,6 +314,7 @@ pub(crate) async fn uninstall_skill(name: String) -> Result<SkillCommandResult, 
     if trimmed.is_empty() {
         return Err("Skill name is required.".into());
     }
+    validate_skill_folder_name(&trimmed)?;
     let trimmed_skill_name = trimmed.clone();
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -415,5 +428,21 @@ mod tests {
         // No author, no repo → Personal.
         assert_eq!(skill_group_label("home-agents", "", ""), "Personal");
         assert_eq!(skill_group_label("home-claude", "", ""), "Personal");
+    }
+
+    #[test]
+    fn skill_folder_name_accepts_plain_names() {
+        assert!(validate_skill_folder_name("frontend-design").is_ok());
+        assert!(validate_skill_folder_name("my_skill.v2").is_ok());
+    }
+
+    #[test]
+    fn skill_folder_name_rejects_traversal_and_separators() {
+        assert!(validate_skill_folder_name("..").is_err());
+        assert!(validate_skill_folder_name("../../.ssh").is_err());
+        assert!(validate_skill_folder_name("a/b").is_err());
+        assert!(validate_skill_folder_name("/etc").is_err());
+        assert!(validate_skill_folder_name(".").is_err());
+        assert!(validate_skill_folder_name("").is_err());
     }
 }

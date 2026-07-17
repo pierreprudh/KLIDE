@@ -27,6 +27,7 @@ shell-words = "1.1.1"
 # Account-snapshot identity: decode JWT claims (id_token) and fingerprint API
 # keys. Both already in the dependency tree (transitive), promoted to direct.
 base64 = "0.22"
+getrandom = "0.3"
 sha2 = "0.10"
 reqwest = { version = "0.13.3", features = ["json", "blocking"] }
 tauri-plugin-dialog = "2.7.1"

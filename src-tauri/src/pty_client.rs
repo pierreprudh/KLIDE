@@ -6,13 +6,26 @@
 
 #![cfg(unix)]
 
-use crate::pty_daemon::{socket_path, Request, Response};
+use crate::pty_daemon::{socket_path, token_path, Request, Response};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Every connection opens with the auth line — the daemon serves nothing
+/// before it. The token file is written by the daemon on startup; a missing
+/// file reads the same as a missing daemon (caller respawns and retries).
+fn write_auth(stream: &mut UnixStream, data_dir: &Path) -> Result<(), String> {
+    let token = std::fs::read_to_string(token_path(data_dir))
+        .map_err(|e| format!("connect: no ptyd token: {e}"))?;
+    let line = serde_json::to_string(&Request::Auth {
+        token: token.trim().to_string(),
+    })
+    .map_err(|e| e.to_string())?;
+    writeln!(stream, "{line}").map_err(|e| format!("send auth: {e}"))
+}
 
 /// One request → one response over a fresh connection. Unix-socket connects
 /// are microseconds; a connection per call keeps every call independent and
@@ -23,6 +36,7 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
     stream
         .set_read_timeout(Some(REQUEST_TIMEOUT))
         .map_err(|e| e.to_string())?;
+    write_auth(&mut stream, data_dir)?;
     let line = serde_json::to_string(request).map_err(|e| e.to_string())?;
     writeln!(stream, "{line}").map_err(|e| format!("send: {e}"))?;
     let mut reply = String::new();
@@ -91,6 +105,7 @@ pub fn subscribe(data_dir: &Path) -> Result<BufReader<UnixStream>, String> {
     stream
         .set_read_timeout(Some(REQUEST_TIMEOUT))
         .map_err(|e| e.to_string())?;
+    write_auth(&mut stream, data_dir)?;
     let line = serde_json::to_string(&Request::Subscribe).map_err(|e| e.to_string())?;
     writeln!(stream, "{line}").map_err(|e| format!("send: {e}"))?;
     let mut reader = BufReader::new(stream);

@@ -133,19 +133,13 @@ impl DelegateStatusState {
 /// An unguessable path segment, so nothing else on the machine can spoof
 /// status posts to the loopback port. Loopback-only + token is the same
 /// posture Orca ships; the worst a spoofed post could do is flip a label.
-fn fresh_token() -> String {
+/// OS randomness, not a hash of time/pid — those inputs are guessable by
+/// any local process, which is exactly who the token guards against.
+fn fresh_token() -> Result<String, String> {
     use base64::Engine;
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(format!(
-        "{:?}-{}-{:?}",
-        std::time::SystemTime::now(),
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let mut token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
-    token.truncate(22);
-    token
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| format!("OS RNG unavailable: {e}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// One accepted hook post, delivered to the app through the server's
@@ -172,7 +166,7 @@ pub fn start_hook_server(statuses: StatusMap, on_change: OnChange) -> Result<Hoo
         .to_ip()
         .map(|a| a.port())
         .ok_or_else(|| "hook server has no IP port".to_string())?;
-    let token = fresh_token();
+    let token = fresh_token()?;
     let thread_token = token.clone();
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {

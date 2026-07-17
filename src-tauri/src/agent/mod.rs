@@ -28,7 +28,7 @@ use self::tools::{
 };
 use self::transcripts::{
     app_runs_dir, append_event, list_summaries, now_ms, read_events, run_id, transcript_path,
-    write_summary,
+    validate_run_id, write_summary,
 };
 use self::types::{
     AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentRunStatus,
@@ -1574,6 +1574,8 @@ pub async fn agent_start_run(
         .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(run_id);
+    // The id names the transcript file — refuse anything path-shaped.
+    validate_run_id(&id)?;
     let cancel = CancellationToken::new();
 
     // Crash-loop quarantine: a conversation whose recent runs all errored on
@@ -2246,6 +2248,7 @@ pub async fn agent_compact_context(
     if summary.is_empty() {
         return Err("Refusing to compact with an empty summary".to_string());
     }
+    validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     let prior = read_events(&runs_dir, &run_id).unwrap_or_default();
     if prior.is_empty() {
@@ -2324,6 +2327,7 @@ pub async fn agent_read_run(
     app: tauri::AppHandle,
     run_id: String,
 ) -> Result<Vec<AgentEvent>, String> {
+    validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     read_events(&runs_dir, &run_id)
 }
@@ -2347,6 +2351,7 @@ pub async fn agent_export_evidence(
     run_id: String,
     workspace_root: Option<String>,
 ) -> Result<EvidenceExport, String> {
+    validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     let summary = transcripts::read_summary(&runs_dir, &run_id)?;
     let events = read_events(&runs_dir, &run_id)?;
@@ -2492,6 +2497,7 @@ pub async fn agent_list_checkpoints(
     app: tauri::AppHandle,
     run_id: String,
 ) -> Result<Vec<CheckpointEntry>, String> {
+    validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     list_checkpoints_at(&runs_dir, &run_id)
 }
@@ -2502,6 +2508,7 @@ pub async fn agent_revert_checkpoint(
     run_id: String,
     tool_call_id: String,
 ) -> Result<(), String> {
+    validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     revert_checkpoint_at(&runs_dir, &run_id, &tool_call_id)
 }
@@ -2511,6 +2518,7 @@ pub async fn agent_revert_run_checkpoints(
     app: tauri::AppHandle,
     run_id: String,
 ) -> Result<RevertCheckpointsResult, String> {
+    validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
     revert_all_checkpoints_at(&runs_dir, &run_id)
 }

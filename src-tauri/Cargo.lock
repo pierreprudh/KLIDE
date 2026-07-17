@@ -2110,6 +2110,7 @@ version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "getrandom 0.3.4",
  "keyring",
  "portable-pty",
  "reqwest",
