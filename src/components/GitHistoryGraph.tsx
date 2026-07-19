@@ -419,6 +419,34 @@ function trailerProvider(trailer: string): ProviderId | null {
   return null;
 }
 
+/** Which agent a branch belongs to — `codex/…` and `claude/…` are the
+ *  prefixes the CLIs create. Remote-qualified names (`origin/codex/…`) and
+ *  `HEAD -> codex/…` count too. */
+function branchAgent(ref: string): { provider: ProviderId; label: string; branch: string } | null {
+  const name = ref.startsWith("HEAD -> ") ? ref.slice("HEAD -> ".length) : ref;
+  const m = name.match(/(?:^|\/)((?:codex|claude)\/.+)$/);
+  if (!m) return null;
+  return m[1].startsWith("codex/")
+    ? { provider: "openai", label: "Codex", branch: m[1] }
+    : { provider: "anthropic", label: "Claude Code", branch: m[1] };
+}
+
+/** Agent credit for a commit that carries no Co-Authored-By trailer (Codex
+ *  stamps none on its commits): a merge of an agent branch — local
+ *  "Merge branch 'codex/…'" or GitHub "Merge pull request #N from owner/codex/…"
+ *  — or a commit whose refs sit on an agent branch. */
+function inferredAgentCredit(subject: string, refs: string[]): ReturnType<typeof branchAgent> {
+  const merged =
+    subject.match(/^Merge branch '([^']+)'/) ??
+    subject.match(/^Merge pull request #\d+ from (\S+)/);
+  if (merged) return branchAgent(merged[1]);
+  for (const ref of refs) {
+    const hit = branchAgent(ref);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 const CommitMessage = memo(function CommitMessage({ body }: { body: string }) {
   const { text, trailers } = useMemo(() => splitTrailers(body), [body]);
   const rendered = useMemo(() => (text ? renderMarkdown(reflowCommitBody(text)) : null), [text]);
@@ -524,6 +552,12 @@ export function CommitDetailPane({
     [detail.diff]
   );
   const fileCounts = useMemo(() => new Map(detail.files.map((f) => [f.path, f])), [detail.files]);
+  // A real Co-Authored-By trailer (rendered by CommitMessage) wins; this only
+  // fills in for agents that leave no trailer, keyed off the branch name.
+  const agentCredit = useMemo(() => {
+    if (splitTrailers(detail.body).trailers.some((t) => trailerProvider(t) !== null)) return null;
+    return inferredAgentCredit(detail.subject, detail.refs);
+  }, [detail.body, detail.subject, detail.refs]);
 
   const copyHash = () => {
     void navigator.clipboard.writeText(detail.hash);
@@ -621,6 +655,16 @@ export function CommitDetailPane({
           <RefLabels refs={detail.refs} />
         </div>
         {detail.body && <CommitMessage body={detail.body} />}
+        {agentCredit && (
+          <div style={{ padding: "0 16px", display: "flex", alignItems: "center", gap: 6, minHeight: 20, overflow: "hidden" }}>
+            <span style={{ display: "inline-flex", flexShrink: 0, color: "var(--fg-subtle)" }} title={agentCredit.provider}>
+              <ProviderLogo id={agentCredit.provider} size={12} />
+            </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Co-authored with {agentCredit.label} · {agentCredit.branch}
+            </span>
+          </div>
+        )}
         <div style={{ height: detail.body ? 4 : 8 }} />
         <DetailSection
           icon={sectionIcon.files}
