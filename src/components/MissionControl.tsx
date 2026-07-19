@@ -1729,6 +1729,23 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
   const [showProcessNotes, setShowProcessNotes] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  // The revealed blocks sit inline next to the turns they belong to — often
+  // below the fold — so a toggle click at the top would otherwise look like a
+  // no-op. Bring the first revealed block into view.
+  useEffect(() => {
+    if (!showTools) return;
+    bodyRef.current
+      ?.querySelector('[data-reveal="tools"]')
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [showTools]);
+  useEffect(() => {
+    if (!showProcessNotes) return;
+    bodyRef.current
+      ?.querySelector('[data-reveal="notes"]')
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [showProcessNotes]);
 
   useEffect(() => {
     // In-memory conversations (Klide's own panels) skip the disk read.
@@ -1817,6 +1834,7 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
         />
       </div>
       <div
+        ref={bodyRef}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -1826,7 +1844,11 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
       >
         {conversationItems.map((item, i) => {
           if (item.type === "process") {
-            return showProcessNotes ? <ProcessNoteStack key={`process-${i}`} notes={item.notes} /> : null;
+            return showProcessNotes ? (
+              <div key={`process-${i}`} data-reveal="notes">
+                <ProcessNoteStack notes={item.notes} defaultOpen />
+              </div>
+            ) : null;
           }
           const { message: m } = item;
           const isUser = m.role === "user";
@@ -1877,7 +1899,9 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
                   })}
                 </div>
                 {!isUser && showTools && item.tools.length > 0 && (
-                  <ToolStack tools={item.tools} />
+                  <div data-reveal="tools">
+                    <ToolStack tools={item.tools} />
+                  </div>
                 )}
               </div>
               {isUser && <ConversationAvatar source="klide" label={profileName} user />}
@@ -1911,7 +1935,9 @@ function ConversationReviewBar({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 8,
+        justifyContent: "space-between",
+        flex: 1,
+        gap: 12,
         minWidth: 0,
         color: "var(--fg-dim)",
         fontFamily: "var(--font-mono)",
@@ -1924,28 +1950,22 @@ function ConversationReviewBar({
         {turns} turns
       </span>
       {tools > 0 && (
-        <>
-          <ReviewDot />
-          <ReviewToggle
-            icon={ToolRunGlyph}
-            active={showTools}
-            label={`${tools} tools`}
-            title={showTools ? "Hide tool activity" : "Show tool activity"}
-            onClick={onToggleTools}
-          />
-        </>
+        <ReviewToggle
+          icon={ToolRunGlyph}
+          active={showTools}
+          label={`${tools} tools`}
+          title={showTools ? "Hide tool activity" : "Show tool activity"}
+          onClick={onToggleTools}
+        />
       )}
       {notes > 0 && (
-        <>
-          <ReviewDot />
-          <ReviewToggle
-            icon={NotesGlyph}
-            active={showNotes}
-            label={`${notes} notes`}
-            title={showNotes ? "Hide working notes" : "Show working notes"}
-            onClick={onToggleNotes}
-          />
-        </>
+        <ReviewToggle
+          icon={NotesGlyph}
+          active={showNotes}
+          label={`${notes} notes`}
+          title={showNotes ? "Hide working notes" : "Show working notes"}
+          onClick={onToggleNotes}
+        />
       )}
     </div>
   );
@@ -1970,14 +1990,6 @@ const NotesGlyph = (
   </Glyph>
 );
 
-function ReviewDot() {
-  return (
-    <span aria-hidden style={{ color: "var(--fg-dim)", opacity: 0.6 }}>
-      ·
-    </span>
-  );
-}
-
 function ReviewToggle({
   active,
   icon,
@@ -1991,9 +2003,8 @@ function ReviewToggle({
   title: string;
   onClick: () => void;
 }) {
-  // Hidden sections read as struck-through counts — type does the state work,
-  // no chip container needed. The strike stays on the words; the glyph only
-  // dims, so it keeps reading as an icon.
+  // Hidden sections read as dimmed counts, shown ones as bright — color does
+  // the state work, no chip container needed.
   return (
     <button
       type="button"
@@ -2020,19 +2031,18 @@ function ReviewToggle({
       }}
     >
       {icon}
-      <span
-        style={{
-          textDecoration: active ? "none" : "line-through",
-          textDecorationColor: "color-mix(in srgb, var(--fg-dim) 70%, transparent)",
-        }}
-      >
+      <span>
         {label}
       </span>
     </button>
   );
 }
 
-function ProcessNoteStack({ notes }: { notes: string[] }) {
+function ProcessNoteStack({ notes, defaultOpen }: { notes: string[]; defaultOpen?: boolean }) {
+  // Controlled <details> so we can arrive expanded when the review-bar toggle
+  // reveals the stack (one click shows the notes, not a second collapsed box)
+  // while still letting the reader fold it back.
+  const [open, setOpen] = useState(!!defaultOpen);
   return (
     <div
       style={{
@@ -2044,6 +2054,8 @@ function ProcessNoteStack({ notes }: { notes: string[] }) {
     >
       <div />
       <details
+        open={open}
+        onToggle={(e) => setOpen(e.currentTarget.open)}
         style={{
           width: "min(360px, 100%)",
           border: "1px solid var(--border)",
@@ -3924,16 +3936,19 @@ function RunDetail({
           noisiest rows but the least-glanced-at, so they sit behind a
           disclosure rather than pushing the conversation further down. */}
       {(run.forkedFrom || run.path || run.cwd) && (
-        <details style={{ margin: "0 0 22px" }}>
+        <details className="klide-disclosure" style={{ margin: "0 0 22px" }}>
           <summary
             style={{
-              cursor: "pointer",
               color: "var(--fg-subtle)",
               fontSize: 12,
               marginBottom: 8,
-              userSelect: "none",
             }}
           >
+            <span className="klide-disclosure-chevron" aria-hidden>
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+                <path d="M3.5 2L7 5L3.5 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
             More details
           </summary>
           <dl

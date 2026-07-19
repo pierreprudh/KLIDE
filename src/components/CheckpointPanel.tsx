@@ -84,6 +84,14 @@ const AddMarkGlyph = (
   </Glyph>
 );
 
+// Same thin caret as the Mission Control disclosure — rotates 90° when the
+// turn group is expanded.
+const CaretGlyph = (
+  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+    <path d="M3.5 2L7 5L3.5 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 const RevertGlyph = (
   <Glyph>
     <path d="M9 14L4 9l5-5" />
@@ -166,7 +174,9 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   const [reverting, setReverting] = useState<string | null>(null);
   const [revertingAll, setRevertingAll] = useState(false);
   const [revertingTurn, setRevertingTurn] = useState<number | null>(null);
-  const [hoverId, setHoverId] = useState<string | null>(null);
+  // Per-turn expansion overrides; a turn with no entry falls back to the
+  // default of "latest turn open, older turns folded".
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -186,9 +196,6 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   }, [load]);
 
   async function handleRevert(entry: CheckpointEntry) {
-    // The blocking confirm can swallow mouseleave — drop hover state first so
-    // row actions can't stay stuck visible after the dialog closes.
-    setHoverId(null);
     // Match the bulk/turn paths: confirm before an overwrite that can't be
     // undone. Single-file revert was the one destructive path without a guard.
     if (!window.confirm(`Revert ${entry.path} to its checkpoint? This overwrites the current file and can't be undone.`)) return;
@@ -206,7 +213,6 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   }
 
   async function handleRevertAll() {
-    setHoverId(null);
     if (!window.confirm(`Revert all ${entries.length} remaining file change${entries.length === 1 ? "" : "s"} for this run?`)) return;
     setRevertingAll(true);
     setError(null);
@@ -224,7 +230,6 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   }
 
   async function handleRevertTurn(turn: number, group: CheckpointEntry[]) {
-    setHoverId(null);
     if (!window.confirm(`Revert ${group.length} file change${group.length === 1 ? "" : "s"} from turn ${turn}?`)) return;
     setRevertingTurn(turn);
     setError(null);
@@ -253,20 +258,39 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
   if (entries.length === 0) return <div style={muted}>No file changes to revert.</div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {groups.map(({ turn, entries: group }, groupIdx) => (
-        <div key={turn}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {groups.map(({ turn, entries: group }, groupIdx) => {
+        const open = expanded[turn] ?? groupIdx === 0;
+        const toggle = () => setExpanded((prev) => ({ ...prev, [turn]: !open }));
+        return (
+        <div key={turn} className="klide-checkpoint-group">
           <div
+            className="klide-checkpoint-header"
+            role="button"
+            tabIndex={0}
+            aria-expanded={open}
+            onClick={toggle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggle();
+              }
+            }}
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               gap: 8,
-              marginBottom: 2,
+              padding: "4px 2px",
+              userSelect: "none",
             }}
           >
-            <div
+            <span
+              className="klide-checkpoint-label"
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 7,
                 fontSize: 10,
                 letterSpacing: "0.06em",
                 textTransform: "uppercase",
@@ -274,9 +298,18 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
                 fontFamily: "var(--font-mono)",
               }}
             >
+              <span className="klide-checkpoint-caret">{CaretGlyph}</span>
               Turn {turn} · {group.length} file{group.length === 1 ? "" : "s"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            </span>
+            {/* Turn-level reverts stay invisible until the group is pointed
+                at (or holds focus) — the header reads as pure label at rest.
+                Clicks here must not toggle the fold. */}
+            <span
+              className="klide-checkpoint-turn-actions"
+              data-busy={revertingTurn === turn || revertingAll}
+              style={{ display: "flex", alignItems: "center", gap: 2 }}
+              onClick={(e) => e.stopPropagation()}
+            >
               <QuietAction
                 icon={revertGlyphSmall}
                 label="Revert turn"
@@ -300,28 +333,29 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
                   onClick={() => void handleRevertAll()}
                 />
               )}
-            </div>
+            </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column" }}>
+          <div className="klide-checkpoint-body" data-open={open}>
+          <div>
+          <div style={{ display: "flex", flexDirection: "column", padding: "2px 0 0" }}>
             {group.map((entry, idx) => {
               const rowBusy = reverting === entry.toolCallId;
-              const showActions = hoverId === entry.toolCallId || rowBusy;
               return (
                 <div
                   key={entry.toolCallId}
-                  onMouseEnter={() => setHoverId(entry.toolCallId)}
-                  onMouseLeave={() => setHoverId((prev) => (prev === entry.toolCallId ? null : prev))}
+                  className="klide-checkpoint-row"
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
-                    padding: "5px 2px",
+                    padding: "5px 8px",
                     minHeight: 30,
                     borderTop:
                       idx === 0
                         ? "1px solid transparent"
                         : "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
                     fontSize: 12,
+                    animationDelay: `${Math.min(groupIdx * 3 + idx, 10) * 22}ms`,
                   }}
                 >
                   <span
@@ -360,52 +394,52 @@ export function CheckpointPanel({ runId, onOpenFile, onOpenDiff }: Props) {
                   >
                     {entry.path}
                   </button>
-                  {/* Right slot: timestamp at rest, actions while hovered.
-                      Conditional render (not opacity stacking) so nothing can
-                      bleed through; minWidth keeps the swap shift-free. */}
-                  <span
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      alignItems: "center",
-                      gap: 2,
-                      minWidth: 64,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {showActions ? (
-                      <>
-                        <QuietAction
-                          icon={EyeGlyph}
-                          label="View diff"
-                          showLabel={false}
-                          onClick={() => {
-                            if (onOpenDiff) onOpenDiff(entry);
-                            else setPreview(entry);
-                          }}
-                        />
-                        <QuietAction
-                          icon={RevertGlyph}
-                          label="Revert file"
-                          showLabel={false}
-                          danger
-                          busy={rowBusy}
-                          disabled={revertingAll || revertingTurn !== null}
-                          onClick={() => void handleRevert(entry)}
-                        />
-                      </>
-                    ) : (
-                      <span style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}>
-                        {relativeTime(entry.ts)}
-                      </span>
-                    )}
+                  {/* Right slot: timestamp at rest, actions on hover. Both
+                      are stacked in one grid cell and crossfaded in CSS; the
+                      hidden layer keeps pointer-events off so nothing can
+                      bleed through, and the shared cell keeps it shift-free. */}
+                  <span className="klide-checkpoint-swap" style={{ minWidth: 64, flexShrink: 0 }}>
+                    <span
+                      className="klide-checkpoint-time"
+                      data-hidden={rowBusy}
+                      style={{ fontSize: 10, color: "var(--fg-dim)", whiteSpace: "nowrap" }}
+                    >
+                      {relativeTime(entry.ts)}
+                    </span>
+                    <span
+                      className="klide-checkpoint-actions"
+                      data-busy={rowBusy}
+                      style={{ display: "flex", alignItems: "center", gap: 2 }}
+                    >
+                      <QuietAction
+                        icon={EyeGlyph}
+                        label="View diff"
+                        showLabel={false}
+                        onClick={() => {
+                          if (onOpenDiff) onOpenDiff(entry);
+                          else setPreview(entry);
+                        }}
+                      />
+                      <QuietAction
+                        icon={RevertGlyph}
+                        label="Revert file"
+                        showLabel={false}
+                        danger
+                        busy={rowBusy}
+                        disabled={revertingAll || revertingTurn !== null}
+                        onClick={() => void handleRevert(entry)}
+                      />
+                    </span>
                   </span>
                 </div>
               );
             })}
           </div>
+          </div>
+          </div>
         </div>
-      ))}
+        );
+      })}
 
       {preview && (
         <DiffModal
