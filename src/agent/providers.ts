@@ -14,7 +14,7 @@ export const PROVIDER_GROUPS: ProviderGroup[] = [
     items: [
       { id: "ollama", name: "Ollama", available: true },
       { id: "mlx", name: "MLX (Apple Silicon)", available: true },
-      { id: "lmstudio", name: "LM Studio", available: false },
+      { id: "lmstudio", name: "LM Studio", available: true },
       { id: "llamacpp", name: "llama.cpp", available: false },
       { id: "vllm", name: "vLLM", available: false },
     ],

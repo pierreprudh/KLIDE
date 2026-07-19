@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readValidatedArray } from "./persistedStore";
 import type { RunStatus } from "./runs";
-import type { DelegateId } from "./delegates";
+import { isDelegateId, type DelegateId } from "./delegates";
 
 // Every delegate can be dispatched to a task. Derives from the one delegate
 // list so a new delegate is offerable without editing this file.
@@ -52,8 +52,7 @@ function safeStatus(status: unknown): RunStatus {
 }
 
 function safeSource(source: unknown): TaskSource | null {
-  if (source === "claude-code" || source === "codex" || source === "opencode") return source;
-  return null;
+  return typeof source === "string" && isDelegateId(source) ? source : null;
 }
 
 function readTasks(): TaskSession[] {
@@ -149,9 +148,7 @@ export function getTaskBuffer(id: string): string {
 // landing an agent on a todo is one click.
 export function lastAgent(): TaskSource {
   const stored = localStorage.getItem("klide-last-agent");
-  if (stored === "codex") return "codex";
-  if (stored === "opencode") return "opencode";
-  return "claude-code";
+  return stored && isDelegateId(stored) ? stored : "claude-code";
 }
 
 // The model last used for a given source, persisted separately per source so
