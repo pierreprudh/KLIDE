@@ -2,6 +2,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -71,11 +72,17 @@ import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
 import { eventsToMsgs } from "./ai/eventsToMsgs";
 import { createTurnDriver } from "./ai/turnDriver";
+import {
+  conversationSessionReducer,
+  restoreConversationSession,
+  snapshotConversationSession,
+  type ConversationSessionAction,
+  type ConversationRunActivity,
+} from "./ai/conversationSession";
 import { buildRunHandoff, type HandoffSummary } from "../agentHandoff";
 import {
   genId,
   deriveTitle,
-  messagesForPersist,
   estimateTokens,
   messageTokenEstimate,
   countMessageTokens,
@@ -83,9 +90,7 @@ import {
   loadConversations,
   persistConversation,
   saveConversations,
-  loadPanelSession,
   savePanelSession,
-  latestRestorableConversationId,
 } from "./ai/utils";
 
 import type { Msg, QueuedTurn, Conversation } from "./ai/types";
@@ -196,12 +201,9 @@ type Props = {
   /**
    * Stable identity for this panel (provider/model prefs are keyed by it).
    * When the workbench view is unmounted (user switches to Settings /
-   * Mission Control) the AiPanel unmounts with it. On remount we re-attach
-   * to the *in-flight* conversation only — see the per-panel `PanelSession`
-   * record (`loadPanelSession`/`savePanelSession`). If the previous chat had
-   * already finished, the panel starts a fresh conversation instead of
-   * reopening it, so quick chats don't pile into one ever-growing transcript.
-   * Finished chats remain resumable from the history dropdown.
+   * Mission Control) the AiPanel unmounts with it. On remount Conversation
+   * Session restores the Conversation this panel was showing from the durable
+   * panel binding. The explicit new-chat action rotates that identity.
    */
   panelId?: string;
   model: string;
@@ -457,7 +459,7 @@ export function AiPanel({
   width,
   fill,
   panelId,
-  model,
+  model: hostModel,
   onModelChange,
   availableModels,
   onAvailableModelsChange,
@@ -490,57 +492,96 @@ export function AiPanel({
   onOpenMemory,
   onSkillGenerated,
 }: Props) {
-  const [provider, setProvider] = useState<ProviderId>(() => {
-    if (initialProvider) return initialProvider;
-    if (panelId) {
-      const perPanel = localStorage.getItem(`klide.provider.${panelId}`) as ProviderId | null;
-      if (perPanel) return perPanel;
-    }
-    return (localStorage.getItem("klide.provider") as ProviderId) || "ollama";
-  });
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [streaming, setStreaming] = useState(false);
-  const [activity, setActivity] = useState<"thinking" | "waiting" | null>(null);
+  const requestedProviderRef = useRef<ProviderId>(
+    initialProvider ??
+      (panelId
+        ? (localStorage.getItem(`klide.provider.${panelId}`) as ProviderId | null)
+        : null) ??
+      (localStorage.getItem("klide.provider") as ProviderId | null) ??
+      "ollama",
+  );
+  const [conversationSession, dispatchConversationSession] = useReducer(
+    conversationSessionReducer,
+    undefined,
+    () =>
+      restoreConversationSession({
+        panelId,
+        initialConversationId,
+        provider: requestedProviderRef.current,
+        model: hostModel,
+        workspaceRoot,
+      }),
+  );
+  // Async Run callbacks need the latest identity even before React commits the
+  // reducer update. This ref and the message ref are advanced synchronously by
+  // the one transition function below.
+  const conversationSessionRef = useRef(conversationSession);
+  const msgsRef = useRef<Msg[]>(conversationSession.messages);
+  function transitionConversation(action: ConversationSessionAction) {
+    const next = conversationSessionReducer(conversationSessionRef.current, action);
+    conversationSessionRef.current = next;
+    msgsRef.current = next.messages;
+    dispatchConversationSession(action);
+    return next;
+  }
+  function setMsgs(messages: Msg[]) {
+    transitionConversation({ type: "messages-replaced", messages });
+  }
+  function startConversationRun(activity: ConversationRunActivity = null) {
+    transitionConversation({ type: "run-started", activity });
+  }
+  function settleConversationRun() {
+    transitionConversation({ type: "run-settled" });
+  }
+  const currentId = conversationSession.conversationId;
+  const msgs = conversationSession.messages;
+  const provider = conversationSession.provider;
+  const model = conversationSession.model;
+  const currentForkedFrom = conversationSession.forkedFrom;
+  const conversationGitMeta = useMemo(
+    () => ({
+      branch: conversationSession.branch,
+      worktree: conversationSession.worktree,
+    }),
+    [conversationSession.branch, conversationSession.worktree],
+  );
+  const streaming = conversationSession.run.active;
+  const activity = conversationSession.run.activity;
   void activity;
-  // Declared near the top because the publish effect below (which keeps
-  // Mission Control's "running" / "waiting" row alive) closes over it.
-  // Was further down; the view-switch bug surfaced when we replaced a
-  // random UUID with this stable id and TypeScript started complaining.
-  const [currentId, setCurrentId] = useState<string>(() => {
-    // Re-attach to the panel's last conversation on remount (e.g. after a view
-    // switch), whether it's still in-flight or already finished — so the chat
-    // you were looking at, and its answer, is still on screen when you come
-    // back. The hydration effect below reloads that conversation's messages.
-    // Each chat already gets its own id (the "+" / new-chat action rotates it
-    // and persists the new one via savePanelSession), so re-attaching shows
-    // the *current* thread rather than piling every chat into one. Panel
-    // identity (provider/model prefs) still lives under `panelId` separately.
-    // Reattach to a live delegate session takes precedence: binding to its
-    // convo id makes the rebuilt terminal land on the same PTY session.
-    if (initialConversationId) return initialConversationId;
-    const prior = panelId ? loadPanelSession(panelId) : null;
-    if (prior) return prior.convoId;
-    // Restore-the-latest-conversation is an app-relaunch nicety for the
-    // primary panel only. A *secondary* panel (duplicate, worktree panel)
-    // mounting without a session must start a fresh thread — falling back to
-    // "latest" would bind it to the SAME conversation id the original panel
-    // is showing, and the two panels would then clobber each other's saves.
-    if (!isDelegateProvider(provider) && (!panelId || panelId === "ai-main")) {
-      const latest = latestRestorableConversationId(workspaceRoot, provider);
-      if (latest) return latest;
+  function changeModel(nextModel: string) {
+    transitionConversation({ type: "configured", model: nextModel });
+    onModelChange(nextModel);
+  }
+  // A restored Conversation owns its Provider/model pair. Notify the host on
+  // first mount instead of letting the host's stale panel preferences overwrite
+  // that pair; subsequent host model changes are ordinary configuration edits.
+  const modelSyncStartedRef = useRef(false);
+  useEffect(() => {
+    if (!modelSyncStartedRef.current) {
+      modelSyncStartedRef.current = true;
+      if (conversationSessionRef.current.model !== hostModel) {
+        onModelChange(conversationSessionRef.current.model);
+      }
+      return;
     }
-    return genId();
-  });
-  const [currentForkedFrom, setCurrentForkedFrom] = useState<Conversation["forkedFrom"]>(null);
-  const currentForkedFromRef = useRef<Conversation["forkedFrom"]>(null);
-  const [conversationGitMeta, setConversationGitMeta] = useState<{ branch: string | null; worktree: string | null }>({
-    branch: null,
-    worktree: null,
-  });
-  const conversationGitMetaRef = useRef<{ branch: string | null; worktree: string | null }>({
-    branch: null,
-    worktree: null,
-  });
+    if (conversationSessionRef.current.model !== hostModel) {
+      transitionConversation({ type: "configured", model: hostModel });
+    }
+  }, [hostModel, onModelChange]);
+  useEffect(() => {
+    if (conversationSessionRef.current.workspaceRoot !== workspaceRoot) {
+      transitionConversation({ type: "configured", workspaceRoot });
+    }
+  }, [workspaceRoot]);
+  useEffect(() => {
+    const restoredProvider = conversationSessionRef.current.provider;
+    if (restoredProvider === requestedProviderRef.current) return;
+    if (panelId) localStorage.setItem(`klide.provider.${panelId}`, restoredProvider);
+    onProviderChange?.(restoredProvider);
+    // Restore notification is intentionally mount-only; live Provider changes
+    // go through selectProvider below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [input, setInput] = useState("");
   const [queuedTurns, setQueuedTurns] = useState<QueuedTurn[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -750,7 +791,9 @@ export function AiPanel({
   // reattaching to the same session — which, with the ptyd daemon on, is
   // still alive and waiting.
   useEffect(() => {
-    if (panelId && providerDelegatesWork) savePanelSession(panelId, currentId, true);
+    if (panelId && providerDelegatesWork) {
+      savePanelSession(panelId, { convoId: currentId, provider, workspaceRoot });
+    }
   }, [panelId, providerDelegatesWork, currentId]);
   // Portalled to <body> like the composer popovers: the menu is taller than
   // the panel's clip region (`.floating-panel` is overflow: hidden), so an
@@ -829,11 +872,15 @@ export function AiPanel({
     setExpandedGroups(new Set(activeGroup ? [activeGroup.label] : []));
   }, [providerOpen]);
   function selectProvider(id: ProviderId) {
-    setProvider(id);
+    const nextModel = switchModelForProvider(id);
+    transitionConversation({ type: "configured", provider: id, model: nextModel });
     onProviderChange?.(id);
-    if (panelId) localStorage.setItem(`klide.provider.${panelId}`, id);
+    if (panelId) {
+      localStorage.setItem(`klide.provider.${panelId}`, id);
+      savePanelSession(panelId, { convoId: currentId, provider: id, workspaceRoot });
+    }
     localStorage.setItem("klide.provider", id);
-    onModelChange(switchModelForProvider(id));
+    onModelChange(nextModel);
     closeProviderMenu();
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
@@ -1352,7 +1399,6 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations<Conversation>());
   const [historyOpen, setHistoryOpen] = useState(false);
-  const msgsRef = useRef<Msg[]>([]);
   const queueRef = useRef<QueuedTurn[]>([]);
   const processingQueueRef = useRef(false);
   const queueGenerationRef = useRef(0);
@@ -1416,8 +1462,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // tokens as stale and bails before it can start another turn.
     queueGenerationRef.current += 1;
     processingQueueRef.current = false;
-    setStreaming(false);
-    setActivity(null);
+    settleConversationRun();
     // The harness is being aborted; the run loop will emit a paused-state
     // exit on its own. Clear any visible Q&A card so the UI doesn't show a
     // question whose answer can never arrive.
@@ -1508,46 +1553,12 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
-  // Tracks the live active conversation id so the mount reconnect effect can
-  // bail if the user switches conversations while it's awaiting async work.
-  const currentIdRef = useRef(currentId);
-  useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
-  // Live provider/model for the unmount flush below — its [] closure would
-  // otherwise stamp the conversation with the MOUNT-time pair, reverting any
-  // provider/model switch made during the session when the panel unmounts.
-  const providerModelRef = useRef({ provider, model });
-  useEffect(() => { providerModelRef.current = { provider, model }; }, [provider, model]);
-  useEffect(() => { currentForkedFromRef.current = currentForkedFrom; }, [currentForkedFrom]);
-  useEffect(() => { conversationGitMetaRef.current = conversationGitMeta; }, [conversationGitMeta]);
 
-  // Restore the persisted conversation for `currentId` on first mount so a
-  // view switch back from Mission Control / Settings / Git Review re-opens
-  // the same chat, not an empty panel. The persist effect below keeps this
-  // fresh during streaming too. Ref-guarded so loading a different chat
-  // from history (which mutates currentId) is not undone on remount.
-  const initialRestoreRef = useRef(false);
+  // Restoration itself is synchronous and atomic in Conversation Session.
+  // This mount-only effect only reconnects the restored identity to a live
+  // Harness Run, if one exists.
   useEffect(() => {
-    if (initialRestoreRef.current) return;
-    initialRestoreRef.current = true;
-    const saved = loadConversations<Conversation>().find((c) => c.id === currentId);
-    if (saved && saved.msgs.length > 0) {
-      setMsgs(saved.msgs);
-      msgsRef.current = saved.msgs;
-      setCurrentForkedFrom(saved.forkedFrom ?? null);
-      setConversationGitMeta({ branch: saved.branch ?? null, worktree: saved.worktree ?? null });
-      // Adopt the conversation's provider LOCALLY too — onProviderChange only
-      // updates the parent's panel record, and `provider` state is what send()
-      // snapshots into the turn. Restoring only the model would leave the pair
-      // split (old provider + this convo's model): the first send then hits
-      // the old provider's wire with a foreign model id (Ollama 404), and the
-      // klide.model.<provider> persist effect stores the mismatch.
-      if (saved.provider && saved.provider !== provider) {
-        setProvider(saved.provider);
-        if (panelId) localStorage.setItem(`klide.provider.${panelId}`, saved.provider);
-        onProviderChange?.(saved.provider);
-      }
-      if (saved.model && saved.model !== model) onModelChange(saved.model);
-    }
+    const restored = conversationSessionRef.current;
     // Reconnect to a run that progressed while the panel was unmounted: the
     // harness keeps running in Rust and writes the transcript, but the request-
     // scoped event channel from startAgentRun dies with the old mount. So we (1)
@@ -1555,8 +1566,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     // reply — and (2) if the run is STILL going, follow the global reattach
     // stream so it keeps updating instead of freezing at a stale snapshot.
     // Klide runs only (currentId == transcript id); delegates use the PTY.
-    if (!providerDelegatesWork) {
-      const reattachId = currentId;
+    if (!isDelegateProvider(restored.provider)) {
+      const reattachId = restored.conversationId;
       const baseLen = msgsRef.current.length;
       void (async () => {
         // Re-read the transcript and adopt the replay, guarding against a
@@ -1574,7 +1585,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           );
           const replayed = [...eventsToMsgs(events), ...queuedLocal];
           const safe =
-            currentIdRef.current === reattachId &&
+            conversationSessionRef.current.conversationId === reattachId &&
             (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen) &&
             replayed.length >= msgsRef.current.length;
           if (safe) {
@@ -1596,16 +1607,18 @@ This user request requires workspace inspection. Before answering, you MUST call
         // Is the run still live in Rust? If not, the snapshot is the final word.
         let status: string | null = null;
         try { status = await getAgentRunStatus(reattachId); } catch { /* ignore */ }
-        if (!isActiveRunStatus(status) || currentIdRef.current !== reattachId) return;
+        if (
+          !isActiveRunStatus(status) ||
+          conversationSessionRef.current.conversationId !== reattachId
+        ) return;
 
         // Follow it live. Every persisted event just signals "re-read the
         // transcript" — disk is the source of truth, so there are no gaps to
         // reconcile and dedup is implicit in the full replay.
-        setStreaming(true);
+        startConversationRun();
         activeHarnessRunRef.current = reattachId;
         const settle = () => {
-          setStreaming(false);
-          setActivity(null);
+          settleConversationRun();
           if (activeHarnessRunRef.current === reattachId) activeHarnessRunRef.current = null;
           reattachRef.current?.detach();
           reattachRef.current = null;
@@ -1616,7 +1629,11 @@ This user request requires workspace inspection. Before answering, you MUST call
         });
         // A conversation switch during the listen await would have moved
         // currentId — drop the fresh listener instead of leaking it.
-        if (currentIdRef.current !== reattachId) { reatt.detach(); setStreaming(false); return; }
+        if (conversationSessionRef.current.conversationId !== reattachId) {
+          reatt.detach();
+          settleConversationRun();
+          return;
+        }
         reattachRef.current = reatt;
         // Close the snapshot→subscribe race: a terminal event emitted while we
         // were registering the listener won't arrive live. Re-read the tail
@@ -1663,8 +1680,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     settleKlideConvo(currentId);
     setHistoryOpen(false);
     abortActiveHarnessRun();
-    setMsgs([]);
-    msgsRef.current = [];
+    const nid = genId();
+    transitionConversation({ type: "fresh-started", conversationId: nid });
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
     setCompactError(null);
@@ -1672,8 +1689,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     queueGenerationRef.current += 1;
     setQueuedTurns([]);
     processingQueueRef.current = false;
-    setStreaming(false);
-    setActivity(null);
     setInput("");
     // The auto-save notice belongs to the previous conversation — clear it
     // so the fresh chat starts on a clean slate.
@@ -1691,19 +1706,11 @@ This user request requires workspace inspection. Before answering, you MUST call
     // re-threading the previous transcript into the new run via the
     // agent harness's replay path, so "new conversation" silently
     // inherited the old one's memory. The first conversation in a
-    // panel still uses `panelId` (see the `useState` initialiser
-    // above) so the panel's persistent identity survives reloads;
-    // every subsequent chat gets its own transcript.
-    setMeasuredPromptTokens(null);
-    setMeasuredUsageTokens(null);
-    const nid = genId();
-    setCurrentId(nid);
-    setCurrentForkedFrom(null);
-    setConversationGitMeta({ branch: null, worktree: null });
-    // Fresh chat, no run yet → inactive. A remount before the first send
-    // simply starts fresh again (nothing to lose); the first send flips it
-    // active so a mid-run view switch re-attaches.
-    if (panelId) savePanelSession(panelId, nid, false);
+    // panel is restored through Conversation Session, while every subsequent
+    // chat gets its own transcript identity.
+    // Persist the fresh identity immediately so a view switch does not rotate
+    // it again before the first Run starts.
+    if (panelId) savePanelSession(panelId, { convoId: nid, provider, workspaceRoot });
   }
 
   // Focus-home handoff: the hero composer's text arrives as `initialMessage`.
@@ -1848,23 +1855,23 @@ This user request requires workspace inspection. Before answering, you MUST call
   function loadConversation(c: Conversation) {
     setHistoryOpen(false);
     abortActiveHarnessRun();
-    setCurrentId(c.id);
-    setCurrentForkedFrom(c.forkedFrom ?? null);
-    setConversationGitMeta({ branch: c.branch ?? null, worktree: c.worktree ?? null });
-    setMsgs(c.msgs);
-    msgsRef.current = c.msgs;
-    // Same provider adoption as the mount-restore effect: keep the local
-    // provider state, the parent record, and the model a consistent trio.
+    transitionConversation({ type: "resumed", conversation: c });
+    // Keep the host's panel record aligned with the atomically adopted
+    // Conversation configuration.
     if (c.provider && c.provider !== provider) {
-      setProvider(c.provider);
       if (panelId) localStorage.setItem(`klide.provider.${panelId}`, c.provider);
       onProviderChange?.(c.provider);
     }
     if (c.model && c.model !== model) onModelChange(c.model);
-    // Explicit resume is intent to continue this thread, so keep it pinned
-    // across a remount (view switch) until it finishes or the user starts a
-    // new chat — mirrors the in-flight re-attach path.
-    if (panelId) savePanelSession(panelId, c.id, true);
+    // Explicit resume is intent to continue this Conversation, so keep it
+    // bound across a remount until the user starts a new one.
+    if (panelId) {
+      savePanelSession(panelId, {
+        convoId: c.id,
+        provider: c.provider ?? provider,
+        workspaceRoot,
+      });
+    }
     // No usage stored with history → estimate until this chat's next turn.
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
@@ -1896,12 +1903,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     setConversations((prev) => { const next = prev.filter((c) => c.id !== id); saveConversations(next); return next; });
     deleteKlideConvo(id);
     if (id === currentId) {
-      setMsgs([]);
       const nid = genId();
-      setCurrentId(nid);
-      setCurrentForkedFrom(null);
-      setConversationGitMeta({ branch: null, worktree: null });
-      if (panelId) savePanelSession(panelId, nid, false);
+      transitionConversation({ type: "fresh-started", conversationId: nid });
+      if (panelId) savePanelSession(panelId, { convoId: nid, provider, workspaceRoot });
       setMeasuredPromptTokens(null);
       setMeasuredUsageTokens(null);
     }
@@ -1953,51 +1957,23 @@ This user request requires workspace inspection. Before answering, you MUST call
   }, [input]);
 
   useEffect(() => {
-    // Persist the conversation as it changes, dropping only a trailing empty
-    // assistant placeholder — the user message before it must survive a view
-    // switch even in the brief pre-token window. See `messagesForPersist`.
-    const toSave = messagesForPersist(msgs);
-    if (toSave.length === 0) return;
+    const snapshot = snapshotConversationSession(conversationSession);
+    if (!snapshot) return;
     setConversations((prev) => {
-      const conv: Conversation = {
-        id: currentId,
-        title: deriveTitle(toSave),
-        msgs: toSave,
-        updatedAt: Date.now(),
-        provider,
-        model,
-        cwd: workspaceRoot,
-        branch: conversationGitMeta.branch,
-        worktree: conversationGitMeta.worktree,
-        forkedFrom: currentForkedFrom ?? null,
-      };
-      return persistConversation(conv, prev);
+      return persistConversation(snapshot, prev);
     });
-  }, [msgs, currentId, provider, model, workspaceRoot, currentForkedFrom, conversationGitMeta]);
+  }, [conversationSession]);
 
   // Flush whatever the latest commit was on unmount so a view switch
   // mid-stream doesn't drop the in-flight conversation. `msgsRef` is
   // already kept in sync above, and the persist effect above will
   // have run for the most recent state when React re-rendered.
   useEffect(() => () => {
-    const snapshot = messagesForPersist(msgsRef.current);
-    if (snapshot.length === 0) return;
-    persistConversation({
-      id: currentIdRef.current,
-      title: deriveTitle(snapshot),
-      msgs: snapshot,
-      updatedAt: Date.now(),
-      provider: providerModelRef.current.provider,
-      model: providerModelRef.current.model,
-      cwd: workspaceRoot,
-      branch: conversationGitMetaRef.current.branch,
-      worktree: conversationGitMetaRef.current.worktree,
-      forkedFrom: currentForkedFromRef.current ?? null,
-    });
-    // Everything mutable reads through refs: this [] cleanup runs with
-    // first-render values otherwise, which both mis-filed the snapshot under
-    // the mount-time conversation id after a history switch AND reverted the
-    // persisted provider/model to the mount-time pair.
+    const snapshot = snapshotConversationSession(conversationSessionRef.current);
+    if (snapshot) persistConversation(snapshot);
+    // Everything mutable reads through the Conversation Session ref: this []
+    // cleanup otherwise sees first-render values after a history or Provider
+    // switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2042,14 +2018,14 @@ This user request requires workspace inspection. Before answering, you MUST call
         // starred favourite that is, then fall back to the list head.
         if (next.length > 0 && !next.includes(model)) {
           const fav = favModelsFor(provider).find((m) => next.includes(m));
-          onModelChange(fav ?? next[0]);
+          changeModel(fav ?? next[0]);
         }
       } catch {
         if (cancelled) return;
         setConnected(false);
         const fallback = storedModelForProvider(provider);
         onAvailableModelsChange([fallback]);
-        if (model !== fallback) onModelChange(fallback);
+        if (model !== fallback) changeModel(fallback);
       }
     }
     void loadProviderModels();
@@ -2181,8 +2157,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     const assistantIndex = userIndex + 1;
     msgsRef.current = nextMsgs;
     setMsgs(nextMsgs);
-    setStreaming(true);
-    setActivity("thinking");
+    startConversationRun("thinking");
     // A fresh assistant turn is the one place we want to yank the user
     // back to the bottom even if they were scrolled up reading context.
     // Their action (sending a message) implies "I want to see the reply".
@@ -2371,8 +2346,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           // if the channel was disrupted, leaving "Working…" stuck. Safe: this
           // fires once per finished run, never mid-run, so it can't race a
           // queued turn into a concurrent run. The post-await cleanup still runs.
-          setStreaming(false);
-          setActivity(null);
+          settleConversationRun();
           break;
         }
         case "run_error": {
@@ -2387,8 +2361,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           }
           // Same safety as run_result: leave the working state on the observed
           // terminal event, not only via `await session.done`.
-          setStreaming(false);
-          setActivity(null);
+          settleConversationRun();
           break;
         }
       }
@@ -2434,9 +2407,11 @@ This user request requires workspace inspection. Before answering, you MUST call
       const maxTurns = harnessSettings?.maxTurns;
       const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
       const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
-      // Mark this conversation in-flight so a mid-run view switch re-attaches
-      // to it rather than starting fresh on remount.
-      if (panelId) savePanelSession(panelId, currentId, true);
+      // Ensure the binding is durable before the Run starts so a mid-run view
+      // switch reattaches to this Conversation.
+      if (panelId) {
+        savePanelSession(panelId, { convoId: currentId, provider, workspaceRoot });
+      }
       // A subagent turn runs as its OWN child run (parentId = the conversation
       // run), so Mission Control nests it under the convo. Events still stream
       // through `handleEvent`, so the delegation + any diffs render inline here.
@@ -2473,14 +2448,9 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (turn.provider === "mlx") mlxWarmedRef.current = null;
       commit(next);
     }
-    // Turn settled (done or errored): record it no longer in-flight. The panel
-    // still re-attaches to this conversation on remount (so the answer stays on
-    // screen); starting a brand-new chat is the explicit "+" action.
-    if (panelId) savePanelSession(panelId, currentId, false);
     // Cancel the batch timer + render any delta still pending.
     driver.finish();
-    setStreaming(false);
-    setActivity(null);
+    settleConversationRun();
     setPendingDiff(null);
     if (isDelegateProvider(turn.provider)) onWorkspaceChanged?.();
     // Auto-summarize on a clean `run_result` (no harness error, not user-
@@ -2648,17 +2618,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     const newMsgs = msgs.slice(0, i + 1);
     if (newMsgs.length === 0) return;
     const nid = genId();
-    const lineage: Conversation["forkedFrom"] = {
-      conversationId: currentId,
-      title: deriveTitle(msgsRef.current),
+    transitionConversation({
+      type: "branched",
+      conversationId: nid,
       messageIndex: i,
-      createdAt: Date.now(),
       mode: "chat",
-    };
-    setCurrentId(nid);
-    setCurrentForkedFrom(lineage);
-    setMsgs(newMsgs);
-    if (panelId) savePanelSession(panelId, nid, false);
+      createdAt: Date.now(),
+    });
+    if (panelId) savePanelSession(panelId, { convoId: nid, provider, workspaceRoot });
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
     // The msgs/currentId persist effect will write the branched chat; the
@@ -3725,7 +3692,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                 model={model}
                 availableModels={availableModels}
                 disabled={streaming}
-                onChange={onModelChange}
+                onChange={changeModel}
               />
               {(
                 <div style={{ position: "relative", flexShrink: 0 }}>

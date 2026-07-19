@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ProviderId } from "../../agent/types";
 import type { Conversation, Msg } from "./types";
 import { estimateProjectContextTokens } from "../../contextTray";
 
@@ -190,18 +191,17 @@ export function latestRestorableConversationId(
 
 // A panel's *conversation* identity is separate from its *panel* identity
 // (provider/model prefs, keyed by panelId). We persist a tiny per-panel
-// record so a transient unmount (view switch) mid-run can re-attach to the
-// in-flight conversation, while reopening the panel after the conversation
-// finished starts a fresh one — otherwise quick chats pile into a single
-// ever-growing transcript that replays its whole history on every turn.
+// record so a transient unmount (view switch) can re-attach to the Conversation
+// the panel was showing. Workspace + Provider prevent a durable Delegate
+// binding from leaking into another Workspace. Run activity belongs to
+// Conversation Session; it was previously written here as `active` but never
+// read, so older records may contain that harmless extra field.
 const PANEL_SESSION_PREFIX = "klide.panelSession.";
 
 export interface PanelSession {
   convoId: string;
-  /** True while a run is in-flight (or a history convo was explicitly
-   *  resumed). On the next mount, only an active session re-attaches; an
-   *  inactive one means the conversation is done, so the panel starts fresh. */
-  active: boolean;
+  workspaceRoot?: string | null;
+  provider?: ProviderId;
 }
 
 export function loadPanelSession(panelId: string): PanelSession | null {
@@ -209,8 +209,15 @@ export function loadPanelSession(panelId: string): PanelSession | null {
     const raw = localStorage.getItem(PANEL_SESSION_PREFIX + panelId);
     if (!raw) return null;
     const p = JSON.parse(raw);
-    if (p && typeof p.convoId === "string" && typeof p.active === "boolean") {
-      return p as PanelSession;
+    if (p && typeof p.convoId === "string") {
+      return {
+        convoId: p.convoId,
+        workspaceRoot:
+          p.workspaceRoot === null || typeof p.workspaceRoot === "string"
+            ? p.workspaceRoot
+            : undefined,
+        provider: typeof p.provider === "string" ? p.provider as ProviderId : undefined,
+      };
     }
     return null;
   } catch {
@@ -218,11 +225,11 @@ export function loadPanelSession(panelId: string): PanelSession | null {
   }
 }
 
-export function savePanelSession(panelId: string, convoId: string, active: boolean) {
+export function savePanelSession(panelId: string, session: PanelSession) {
   try {
     localStorage.setItem(
       PANEL_SESSION_PREFIX + panelId,
-      JSON.stringify({ convoId, active })
+      JSON.stringify(session)
     );
   } catch {
     /* storage full or unavailable */

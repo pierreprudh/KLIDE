@@ -1301,6 +1301,23 @@ pub(crate) async fn git_worktree_list(workspace_root: String) -> Result<Vec<Work
     .await
 }
 
+/// Merge-commit message for an agent branch. Codex branches (`codex/…`) get
+/// the same Co-Authored-By credit Claude Code stamps on its own commits —
+/// Codex doesn't add one itself, so without this the merge commit carries no
+/// trace of who did the work, while the history panel already renders such
+/// trailers with the provider's mark. `claude/…` (Claude Code web) is covered
+/// for the same reason. None → git composes its default message.
+fn agent_merge_message(branch: &str) -> Option<String> {
+    let coauthor = if branch.starts_with("codex/") {
+        "Codex <noreply@openai.com>"
+    } else if branch.starts_with("claude/") {
+        "Claude <noreply@anthropic.com>"
+    } else {
+        return None;
+    };
+    Some(format!("Merge branch '{branch}'\n\nCo-Authored-By: {coauthor}"))
+}
+
 /// Merge a worktree's `branch` into the branch currently checked out in the
 /// main `workspace_root` — the "pull the fleet's work back" action. Refuses if
 /// the target has uncommitted changes (a merge would entangle them). On
@@ -1327,7 +1344,14 @@ pub(crate) async fn git_worktree_merge(
     let target = git_output(&workspace_root, &["rev-parse", "--abbrev-ref", "HEAD"])?
         .trim()
         .to_string();
-    match run_git(&workspace_root, &["merge", "--no-ff", branch]) {
+    let message = agent_merge_message(branch);
+    let mut merge_args = vec!["merge", "--no-ff"];
+    if let Some(msg) = message.as_deref() {
+        merge_args.push("-m");
+        merge_args.push(msg);
+    }
+    merge_args.push(branch);
+    match run_git(&workspace_root, &merge_args) {
         Ok(()) => Ok(format!("Merged {branch} into {target}.")),
         Err(merge_err) => {
             let conflicts =
@@ -1783,6 +1807,35 @@ detached
                 .unwrap()
                 .trim(),
             "false"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Merging an agent branch stamps the provider's Co-Authored-By credit on
+    /// the merge commit (Codex leaves none on its own commits); a plain branch
+    /// keeps git's default message untouched.
+    #[tokio::test]
+    async fn worktree_merge_credits_the_agent_on_agent_branches() {
+        let (base, repo) = temp_repo("wt-merge-credit");
+        for (branch, file) in [("codex/fix-thing", "codex.txt"), ("plain-branch", "plain.txt")] {
+            run_git(&repo, &["checkout", "-b", branch]).unwrap();
+            std::fs::write(std::path::Path::new(&repo).join(file), "w").unwrap();
+            run_git(&repo, &["add", "."]).unwrap();
+            run_git(&repo, &["commit", "-m", "work"]).unwrap();
+            run_git(&repo, &["checkout", "main"]).unwrap();
+            git_worktree_merge(repo.clone(), branch.to_string())
+                .await
+                .expect("merge succeeds");
+        }
+        let log = git_output(&repo, &["log", "--format=%B", "-2"]).unwrap();
+        assert!(
+            log.contains("Merge branch 'codex/fix-thing'")
+                && log.contains("Co-Authored-By: Codex <noreply@openai.com>"),
+            "codex merge carries the credit trailer: {log}"
+        );
+        assert!(
+            log.contains("Merge branch 'plain-branch'") && log.matches("Co-Authored-By").count() == 1,
+            "plain merge keeps git's default message: {log}"
         );
         let _ = std::fs::remove_dir_all(&base);
     }

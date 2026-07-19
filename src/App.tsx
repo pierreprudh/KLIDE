@@ -72,6 +72,7 @@ import {
   type WorktreeInfo,
   type WorktreeSetupDone,
 } from "./worktrees";
+import { createListenerScope } from "./tauriEvents";
 import "./styles/tokens.css";
 
 const MissionControl = lazy(() => import("./components/MissionControl").then((m) => ({ default: m.MissionControl })));
@@ -1614,11 +1615,11 @@ function App() {
   // finishes an interactive run.
   useEffect(() => {
     if (!workspaceRoot || !("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | undefined;
-    void listen("delegate-pty:exit", () => {
+    const listeners = createListenerScope();
+    listeners.add(listen("delegate-pty:exit", () => {
       refreshGitStatus(workspaceRoot);
-    }).then((u) => { unlisten = u; });
-    return () => { unlisten?.(); };
+    }));
+    return listeners.dispose;
   }, [workspaceRoot]);
 
   // Worktree setup scripts (recipe: .klide/worktree.json) run on a Rust
@@ -1626,8 +1627,8 @@ function App() {
   // surface their outcome the moment they finish, whichever view is open.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | undefined;
-    void listen<WorktreeSetupDone>("worktree-setup:done", (e) => {
+    const listeners = createListenerScope();
+    listeners.add(listen<WorktreeSetupDone>("worktree-setup:done", (e) => {
       const name = worktreeName(e.payload);
       if (e.payload.ok) {
         notify(`Worktree setup finished · ${name}`);
@@ -1636,8 +1637,8 @@ function App() {
         const tail = lines[lines.length - 1] ?? "";
         notify(`Worktree setup failed · ${name}${tail ? ` — ${tail}` : ""}`, { tone: "error" });
       }
-    }).then((u) => { unlisten = u; });
-    return () => { unlisten?.(); };
+    }));
+    return listeners.dispose;
   }, []);
 
   // The editor's no-file launcher rows fire the same handlers as their
@@ -1829,35 +1830,33 @@ function App() {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    const unlisteners: (() => void)[] = [];
-    void (async () => {
-      unlisteners.push(await listen("menu:command-palette", () => {
-        setPaletteQuery("> ");
-        setPaletteOpen(true);
-      }));
-      unlisteners.push(await listen("menu:find-in-files", () => {
-        setSearchVisible((v) => !v);
-      }));
-      unlisteners.push(await listen("menu:toggle-terminal", () => {
-        setTerminalVisible((v) => !v);
-      }));
-      unlisteners.push(await listen("menu:toggle-search", () => {
-        setSearchVisible((v) => !v);
-      }));
-      unlisteners.push(await listen("menu:open-settings", () => {
-        setView("settings");
-      }));
-      unlisteners.push(await listen("menu:close-tab", () => {
-        if (activeIdx >= 0 && activeIdx < tabs.length) closeTab(activeIdx);
-      }));
-      unlisteners.push(await listen("menu:close-window", () => {
-        // On macOS, window close is handled by the system; this is a fallback
-      }));
-      unlisteners.push(await listen("menu:open-folder", () => {
-        openFolderDialog();
-      }));
-    })();
-    return () => { unlisteners.forEach((u) => u()); };
+    const listeners = createListenerScope();
+    listeners.add(listen("menu:command-palette", () => {
+      setPaletteQuery("> ");
+      setPaletteOpen(true);
+    }));
+    listeners.add(listen("menu:find-in-files", () => {
+      setSearchVisible((v) => !v);
+    }));
+    listeners.add(listen("menu:toggle-terminal", () => {
+      setTerminalVisible((v) => !v);
+    }));
+    listeners.add(listen("menu:toggle-search", () => {
+      setSearchVisible((v) => !v);
+    }));
+    listeners.add(listen("menu:open-settings", () => {
+      setView("settings");
+    }));
+    listeners.add(listen("menu:close-tab", () => {
+      if (activeIdx >= 0 && activeIdx < tabs.length) closeTab(activeIdx);
+    }));
+    listeners.add(listen("menu:close-window", () => {
+      // On macOS, window close is handled by the system; this is a fallback
+    }));
+    listeners.add(listen("menu:open-folder", () => {
+      openFolderDialog();
+    }));
+    return listeners.dispose;
   }, [activeIdx, tabs]);
 
   const language = active ? detectLanguage(active.path) : null;
