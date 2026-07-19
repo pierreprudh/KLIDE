@@ -2570,9 +2570,11 @@ textarea.klide-diff-comment-input:focus-visible {
      start where the rows start (this was invisible while the indicator was
      transparent; a visible fill at left:0 sat 8px off the icons). */
   left: 8px;
+  /* Mirrors rowStyle() in ActivityBar.tsx (height 36, radius 8, 8px side
+     margins) — a mismatch makes the fill overhang the rows. */
   width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  height: 36px;
+  border-radius: 8px;
   background: var(--bg-hover);
   box-shadow: none;
   transition:
@@ -2874,7 +2876,7 @@ textarea.klide-diff-comment-input:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 38px;
+  height: 36px;
   padding: 0 6px 0 10px;
   user-select: none;
 }
@@ -3040,12 +3042,12 @@ textarea.klide-diff-comment-input:focus-visible {
   grid-template-columns: 16px 16px 1fr auto;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: 23px;
   padding: 0 8px 0 0;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   color: var(--fg);
-  font-size: 13px;
+  font-size: 12.5px;
   cursor: pointer;
   user-select: none;
   min-width: 0;
@@ -3174,6 +3176,75 @@ textarea.klide-diff-comment-input:focus-visible {
   }
   .klide-explorer-tree ul ul::before {
     transition: none;
+  }
+}
+
+/* ====================================================== Workbench idle */
+
+/* Empty-canvas launchers (free layout) — shown when the AI panels, editor
+   dock and terminal are all away, so closing the last surface never lands
+   on a blank field. Type-only rows in the quiet-hover recipe; the whole
+   layer fades in late so a quick panel toggle doesn't flash it. The
+   container ignores pointer events — only the rows are interactive. */
+.workbench-idle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  z-index: 1;
+  pointer-events: none;
+  animation: workbench-idle-in 0.32s var(--ease-out) 0.18s both;
+}
+
+@keyframes workbench-idle-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.workbench-idle-row {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 260px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.workbench-idle-row:hover {
+  color: var(--fg-strong);
+  background: var(--bg-hover);
+}
+
+.workbench-idle-row > span:first-child {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-idle {
+    animation: none;
   }
 }
 
@@ -3484,6 +3555,104 @@ textarea.klide-diff-comment-input:focus-visible {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* Docked terminal — the free layout's full-width bottom drawer. Same
+   edge-dock language as the editor pane: fully connected to the bottom
+   edge (no radius), soft spill shadow onto the canvas, compositor-only
+   glide (transform + opacity — the height only changes by user drag, so
+   xterm never re-measures mid-flight). TerminalPanel draws its own top
+   hairline, so the shell adds no border of its own. */
+.terminal-dock-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 72%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* The surface itself is translucent (TerminalPanel paints a see-through
+     wash and xterm runs with a transparent canvas) so the canvas ghosts
+     through — real translucency, NO backdrop-filter (off-brand + the
+     webview bug that hides focused floating panels behind it). */
+  background: transparent;
+  box-shadow: 0 -18px 44px color-mix(in srgb, var(--fg-strong) 5%, transparent);
+  /* z-index comes inline from zLayers.ts (Z.dock) */
+  /* Materialize, don't truck in: a short rise while the whole drawer
+     condenses from a blur (self-filter — safe, unlike backdrop-filter).
+     Closing is the reverse — it thins back into mist in place. */
+  transform: translateY(26px);
+  opacity: 0;
+  filter: blur(14px);
+  visibility: hidden;
+  will-change: transform, opacity, filter;
+  transition:
+    transform 420ms var(--ease-soft),
+    opacity 240ms var(--ease-out),
+    filter 420ms var(--ease-soft),
+    visibility 0s linear 420ms;
+}
+
+.terminal-dock-overlay[data-open="true"] {
+  transform: none;
+  opacity: 1;
+  filter: blur(0);
+  visibility: visible;
+  transition:
+    transform 460ms var(--ease-soft),
+    opacity 200ms var(--ease-out),
+    filter 460ms var(--ease-soft),
+    visibility 0s;
+}
+
+/* One-shot "breath" — as the drawer settles, a faint sage glow crosses the
+   top hairline and fades. The only chromatic moment, gone in a second. */
+.terminal-dock-overlay::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--accent) 55%, transparent),
+    transparent
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.terminal-dock-overlay[data-open="true"]::after {
+  animation: terminal-dock-breath 1.4s var(--ease-out) 320ms both;
+}
+
+@keyframes terminal-dock-breath {
+  0% {
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-dock-overlay {
+    transform: none;
+    filter: none;
+    transition: opacity 120ms linear, visibility 0s linear 120ms;
+  }
+  .terminal-dock-overlay[data-open="true"] {
+    transition: opacity 120ms linear, visibility 0s;
+  }
+  .terminal-dock-overlay[data-open="true"]::after {
+    animation: none;
+  }
 }
 
 /* Explorer drawer — a soft sheet anchored at the activity bar, not a

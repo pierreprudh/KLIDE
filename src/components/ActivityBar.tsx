@@ -376,9 +376,10 @@ export function ActivityBar({ active, onToggle, onSearch, homeLabel, submenus }:
 
   // ONE row geometry for both modes — this is what makes the collapse read
   // as a single motion. Icons sit at the same x in both states (margin 8 +
-  // padding 11); collapsed just means the rail is 56px so the row is a 40px
-  // square and the label clips away under overflow:hidden while it fades.
-  // Nothing ever jumps — only the width animates and the text dissolves.
+  // padding 11); collapsed just means the rail is 56px so the row is a
+  // 40px-wide strip and the label clips away under overflow:hidden while it
+  // fades. Nothing ever jumps — only the width animates and the text
+  // dissolves.
   function rowStyle(isActive: boolean): React.CSSProperties {
     return {
       position: "relative",
@@ -386,10 +387,12 @@ export function ActivityBar({ active, onToggle, onSearch, homeLabel, submenus }:
       display: "flex",
       alignItems: "center",
       gap: 10,
-      height: 40,
+      // NOTE: height + radius are mirrored by .klide-activity-bar-indicator
+      // in tokens.css — the FLIP fill must hug the row exactly.
+      height: 36,
       margin: "0 8px",
       padding: "0 11px",
-      borderRadius: 10,
+      borderRadius: 8,
       textAlign: "left",
       overflow: "hidden",
       whiteSpace: "nowrap",
@@ -564,8 +567,8 @@ export function ActivityBar({ active, onToggle, onSearch, homeLabel, submenus }:
             className="klide-activity-bar-item"
             style={{
               ...rowStyle(false),
-              marginTop: 10,
-              marginBottom: 4,
+              marginTop: 8,
+              marginBottom: 2,
               border: "1px solid var(--border)",
             }}
           >
@@ -606,7 +609,7 @@ export function ActivityBar({ active, onToggle, onSearch, homeLabel, submenus }:
             display: "flex",
             flexDirection: "column",
             alignItems: "stretch",
-            gap: 8,
+            gap: 6,
           }}
         >
           <span
