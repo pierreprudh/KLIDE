@@ -86,6 +86,13 @@ notes collapsed). Parsed by the transcript module (`src/transcripts.ts`),
 independent of any view, so Mission Control, Memory, and export share one parser.
 _Avoid_: chat log, message list, thread
 
+**Conversation session**:
+The live AI-panel state that binds one Conversation to its Provider, model,
+Workspace, lineage, Git metadata, and current Run activity. It owns navigation
+between fresh, restored, resumed, and branched Conversations; it is not itself
+a Run, because one Conversation session may be idle between Runs.
+_Avoid_: chat state, thread state, panel globals
+
 **Provider**:
 A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. Differs only in wire format; behaviour behind the seam is shared.
 _Avoid_: vendor, backend, LLM
