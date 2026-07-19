@@ -584,21 +584,19 @@ export function ActivityBar({ active, onToggle, onSearch, homeLabel, submenus }:
           </button>
         )}
 
-        {/* Section label — always occupies its line so the rows below never
-            shift on toggle; only the text fades. */}
+        {/* Section break — a gradient hairline instead of a written label
+            (same recipe as the explorer header divider). Works at both rail
+            widths, so nothing fades or shifts on toggle. */}
         <div
-          className="klide-rail-flyout-title"
-          aria-hidden={!expanded}
+          aria-hidden="true"
           style={{
-            padding: "12px 19px 4px",
-            opacity: expanded ? 1 : 0,
-            transition: "opacity 180ms var(--ease-out)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
+            height: 1,
+            margin: "12px 12px 8px",
+            background:
+              "linear-gradient(to right, transparent 0%, var(--border) 18%, var(--border) 82%, transparent 100%)",
+            pointerEvents: "none",
           }}
-        >
-          Main
-        </div>
+        />
 
         <div
           ref={flip.trackRef}

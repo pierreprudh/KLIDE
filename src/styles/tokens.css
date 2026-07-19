@@ -2994,10 +2994,48 @@ textarea.klide-diff-comment-input:focus-visible {
   padding: 0;
 }
 
+/* Keyboard focus on rows. The tree container is the single tab stop and
+   forwards focus straight to a row (it only keeps focus — and the global
+   [tabindex] ring — when the tree has no rows). Rows are roving-tabindex
+   (-1), which the global
+   [tabindex] ring rule deliberately skips — ring them here. Negative
+   offset keeps the ring inside the scroll container so the top/bottom
+   rows aren't clipped by overflow: auto. */
+.klide-explorer-row:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: -2px;
+}
+
+/* Indent guides — one hairline per open folder, aligned under its
+   chevron centre (--guide-x is set inline per depth). Hidden at rest;
+   revealed while the pointer or keyboard focus is in the tree — the
+   same hover-reveal recipe as the header actions. Rows are positioned
+   so their hover/selected fills paint over the line. */
+.klide-explorer-tree ul ul {
+  position: relative;
+}
+.klide-explorer-tree ul ul::before {
+  content: "";
+  position: absolute;
+  left: var(--guide-x, 16px);
+  top: 1px;
+  bottom: 1px;
+  width: 1px;
+  background: var(--border);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-med) var(--ease-out);
+}
+.klide-explorer-tree:hover ul ul::before,
+.klide-explorer-tree:focus-within ul ul::before {
+  opacity: 1;
+}
+
 /* Tree rows. The grid is: [chevron] [icon] [name] [decoration]. 16px
    chevron column, 16px icon column, name takes the rest and
    truncates, decoration floats right. */
 .klide-explorer-row {
+  position: relative; /* paints hover/selected fills above the indent guides */
   display: grid;
   grid-template-columns: 16px 16px 1fr auto;
   align-items: center;
@@ -3132,6 +3170,9 @@ textarea.klide-diff-comment-input:focus-visible {
     transition: none;
   }
   .klide-explorer-row {
+    transition: none;
+  }
+  .klide-explorer-tree ul ul::before {
     transition: none;
   }
 }

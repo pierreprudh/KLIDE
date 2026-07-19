@@ -1,6 +1,7 @@
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties, FocusEvent, KeyboardEvent } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
 import { FileTypeIcon } from "./fileMarks";
 import type { GitFile, GitStatus } from "../gitTypes";
@@ -321,6 +322,86 @@ export function Sidebar({
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [fsNotice, setFsNotice] = useState<string | null>(null);
+  const treeRef = useRef<HTMLDivElement>(null);
+
+  // Keyboard navigation over the visible rows. Rows carry tabIndex={-1}
+  // (roving focus): the tree container is the single tab stop and forwards
+  // focus to the active row; arrows walk the flattened visible list read
+  // straight from the DOM, so no parallel index has to stay in sync with
+  // the expand/collapse state.
+  function visibleRows(): HTMLElement[] {
+    const el = treeRef.current;
+    return el
+      ? Array.from(el.querySelectorAll<HTMLElement>('.klide-explorer-row[data-nav="true"]'))
+      : [];
+  }
+
+  function handleTreeFocus(event: FocusEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget) return;
+    const rows = visibleRows();
+    const active = rows.find((row) => row.dataset.active === "true");
+    (active ?? rows[0])?.focus();
+  }
+
+  function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (editing) return; // the inline rename/create input owns the keys
+    const rows = visibleRows();
+    if (rows.length === 0) return;
+    const current =
+      document.activeElement instanceof HTMLElement &&
+      rows.includes(document.activeElement)
+        ? document.activeElement
+        : null;
+    const index = current ? rows.indexOf(current) : -1;
+    const focusRow = (i: number) =>
+      rows[Math.max(0, Math.min(rows.length - 1, i))]?.focus();
+
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusRow(index + 1);
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusRow(index - 1);
+        break;
+      case "Home":
+        event.preventDefault();
+        focusRow(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusRow(rows.length - 1);
+        break;
+      case "ArrowRight":
+        if (current?.dataset.dir !== "true") return;
+        event.preventDefault();
+        if (current.dataset.expanded === "true") focusRow(index + 1);
+        else current.click();
+        break;
+      case "ArrowLeft": {
+        if (!current) return;
+        event.preventDefault();
+        if (current.dataset.dir === "true" && current.dataset.expanded === "true") {
+          current.click(); // collapse
+        } else {
+          // Walk out to the enclosing folder's row: li > div.row, li > ul.
+          current
+            .closest("ul")
+            ?.closest("li")
+            ?.querySelector<HTMLElement>(":scope > .klide-explorer-row")
+            ?.focus();
+        }
+        break;
+      }
+      case "Enter":
+      case " ":
+        if (!current) return;
+        event.preventDefault();
+        current.click();
+        break;
+    }
+  }
 
   // File-operation errors surface here instead of dying in the console.
   useEffect(() => {
@@ -773,8 +854,16 @@ export function Sidebar({
           <li key={path}>
             <div
               className="klide-explorer-row"
+              role="treeitem"
+              tabIndex={-1}
+              aria-level={depth + 1}
+              aria-expanded={isDir ? isExpanded : undefined}
+              aria-selected={isActive}
+              data-nav="true"
               data-active={isActive}
               data-virtual={isVirtual}
+              data-dir={isDir}
+              data-expanded={isDir ? isExpanded : undefined}
               onClick={() => {
                 if (isDir) toggleFolder(path, isVirtual);
                 else if (!isVirtual) pick(path);
@@ -816,7 +905,12 @@ export function Sidebar({
               )}
             </div>
             {isDir && isExpanded && (
-              <ul>
+              <ul
+                role="group"
+                // Indent guide x-position: this folder's chevron centre
+                // (row padding 8 + depth*14, chevron column is 16px wide).
+                style={{ "--guide-x": `${16 + depth * 14}px` } as CSSProperties}
+              >
                 {isLoading ? (
                   <li>
                     <div
@@ -1010,13 +1104,21 @@ export function Sidebar({
           so it scrolls. Without min-height: 0, the natural content
           height would force the panel to grow past the workbench. */}
       {root && (
-        <div className="klide-explorer-tree">
+        <div
+          ref={treeRef}
+          className="klide-explorer-tree"
+          role="tree"
+          aria-label="Files"
+          tabIndex={0}
+          onFocus={handleTreeFocus}
+          onKeyDown={handleTreeKeyDown}
+        >
           {entries.length === 0 && !(editing?.mode === "create" && editing.parent === root) ? (
             <div className="klide-explorer-message" style={{ marginTop: 14 }}>
               This folder is empty.
             </div>
           ) : (
-            <ul>{renderEntries(entries, root)}</ul>
+            <ul role="none">{renderEntries(entries, root)}</ul>
           )}
         </div>
       )}
