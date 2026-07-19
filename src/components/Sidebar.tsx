@@ -287,7 +287,7 @@ function InlineNameInput({
         flex: 1,
         minWidth: 0,
         font: "inherit",
-        fontSize: 13,
+        fontSize: 12.5,
         color: "var(--fg-strong)",
         background: "var(--bg)",
         border: "1px solid var(--accent)",
@@ -807,7 +807,7 @@ export function Sidebar({
     // Indent per depth. The grid is fixed (chevron + icon + name +
     // decoration), and the *whole row* is offset by `depth` levels
     // via padding-left. Linear's tree does it this way too.
-    const indent = 8 + depth * 14;
+    const indent = 8 + depth * 12;
 
     // Input row for "New File…" / "New Folder…" targeting this folder.
     const createRow =
@@ -908,8 +908,8 @@ export function Sidebar({
               <ul
                 role="group"
                 // Indent guide x-position: this folder's chevron centre
-                // (row padding 8 + depth*14, chevron column is 16px wide).
-                style={{ "--guide-x": `${16 + depth * 14}px` } as CSSProperties}
+                // (row padding 8 + depth*12, chevron column is 16px wide).
+                style={{ "--guide-x": `${16 + depth * 12}px` } as CSSProperties}
               >
                 {isLoading ? (
                   <li>

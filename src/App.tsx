@@ -16,6 +16,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea, type EditorEmptyAction } from "./components/EditorArea";
 import { WelcomeScreen } from "./components/WelcomeScreen";
+import { KbdFor } from "./components/Kbd";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AiPanel } from "./components/AiPanel";
 import { StatusBar } from "./components/StatusBar";
@@ -508,6 +509,23 @@ function App() {
     panelLayout.anchored === false &&
     !editorDockFolded &&
     (tabs.length > 0 || searchVisible);
+  // Idle canvas: every content surface is away (AI panels hidden, editor
+  // dock closed or folded, terminal hidden) — without this the free layout
+  // is a blank field the moment the last panel closes. The canvas then
+  // offers quiet type-only launchers (see .workbench-idle).
+  const canvasIdle =
+    panelLayout.anchored === false &&
+    (!aiVisible || aiPanels.length === 0) &&
+    !terminalVisible &&
+    !editorDockOpen;
+  // The terminal dock's content mounts on first open and then stays mounted
+  // (the drawer hides via transform, like the editor dock) — so the shell,
+  // its scrollback and any running process survive toggling. Lazy so an
+  // unopened terminal never spawns a PTY at startup.
+  const [terminalMounted, setTerminalMounted] = useState(terminalVisible);
+  useEffect(() => {
+    if (terminalVisible) setTerminalMounted(true);
+  }, [terminalVisible]);
   // True-to-size memory: the first time the dock displaces a panel, its
   // original rect is recorded here; closing/folding the dock glides every
   // displaced panel back to it. Cleared after restore so a manual move while
@@ -531,7 +549,9 @@ function App() {
       return { ...rect, x, w };
     };
     const saved = (preDockRectsRef.current ??= { fixed: {}, ai: {} });
-    for (const id of ["explorer", "terminal"] as const) {
+    // Only the explorer can still float here — the terminal lives in the
+    // bottom drawer and never needs displacing.
+    for (const id of ["explorer"] as const) {
       const rect = panelLayout[id];
       const fitted = rect ? fit(rect, PANEL_CONSTRAINTS[id].minW) : null;
       if (fitted && rect) {
@@ -556,7 +576,7 @@ function App() {
     const saved = preDockRectsRef.current;
     if (!saved) return;
     preDockRectsRef.current = null;
-    for (const id of ["explorer", "terminal"] as const) {
+    for (const id of ["explorer"] as const) {
       const rect = saved.fixed[id];
       if (rect) updatePanelRect(id, rect);
     }
@@ -616,6 +636,35 @@ function App() {
         Math.max(PANEL_CONSTRAINTS.explorer.minW, startW + (ev.clientX - startX))
       );
       updatePanelRect("explorer", { ...explorerRect, w });
+    }
+    function onUp() {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousSelect;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  function beginTerminalDockResize(e: ReactMouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = terminalRect.h;
+    const maxH = Math.min(
+      PANEL_CONSTRAINTS.terminal.maxH,
+      Math.max(160, Math.round(workbenchSize.h * 0.72))
+    );
+    const previousCursor = document.body.style.cursor;
+    const previousSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    function onMove(ev: MouseEvent) {
+      const h = Math.min(
+        maxH,
+        Math.max(PANEL_CONSTRAINTS.terminal.minH, startH - (ev.clientY - startY))
+      );
+      updatePanelRect("terminal", { ...terminalRect, h });
     }
     function onUp() {
       document.body.style.cursor = previousCursor;
@@ -2211,6 +2260,55 @@ function App() {
                   // past the panel edge.
                 }}
               >
+                {/* Idle canvas — quiet launchers so closing the last panel
+                    never strands the user on a blank field. Type-only rows,
+                    delayed fade-in (quick toggles don't flash it), under
+                    every dock and floating panel. */}
+                {canvasIdle && (
+                  <div className="workbench-idle">
+                    <button
+                      type="button"
+                      className="workbench-idle-row"
+                      onClick={() => {
+                        setPaletteQuery("");
+                        setPaletteOpen(true);
+                      }}
+                    >
+                      <span>Open a file</span>
+                      <KbdFor id="go-to-file" />
+                    </button>
+                    <button
+                      type="button"
+                      className="workbench-idle-row"
+                      onClick={() => {
+                        if (aiPanels.length === 0) ensureAiRect();
+                        setAiVisible(true);
+                        focusPanel(aiPanels[0]?.id ?? "ai-main");
+                      }}
+                    >
+                      <span>New chat</span>
+                    </button>
+                    {tabs.length > 0 && (
+                      <button
+                        type="button"
+                        className="workbench-idle-row"
+                        onClick={() => setEditorDockFolded(false)}
+                      >
+                        <span>
+                          Show editor — {tabs.length} {tabs.length === 1 ? "file" : "files"} docked
+                        </span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="workbench-idle-row"
+                      onClick={() => setTerminalVisible(true)}
+                    >
+                      <span>Open terminal</span>
+                      <KbdFor id="toggle-terminal" />
+                    </button>
+                  </div>
+                )}
                 {explorerVisible && explorerFloating && (
                   <FloatingPanel
                     panelId="explorer"
@@ -2323,27 +2421,6 @@ function App() {
                       />
                     </Suspense>
                   </div>
-                )}
-                {terminalVisible && (
-                  <FloatingPanel
-                    panelId="terminal"
-                    rect={terminalRect}
-                    workbenchW={workbenchSize.w}
-                    workbenchH={workbenchSize.h}
-                    zIndex={zMap["terminal"] ?? 10}
-                    onFocus={() => focusPanel("terminal")}
-                    onResize={(next) => updatePanelRect("terminal", next)}
-                    onMove={(next) => updatePanelRect("terminal", next)}
-                  >
-                    <TerminalPanel
-                      fill
-                      visible
-                      theme={theme}
-                      height={terminalRect.h}
-                      workspaceRoot={workspaceRoot}
-                      onToggle={() => setTerminalVisible((v) => !v)}
-                    />
-                  </FloatingPanel>
                 )}
                 {aiVisible && aiPanels.map((panel, idx) => {
                   return (
@@ -2500,6 +2577,53 @@ function App() {
                     />
                   </div>
                   </div>
+                </div>
+                {/* Docked terminal — a full-width drawer glued to the bottom
+                    edge. Same compositor-only slide language as the editor
+                    dock (transform + opacity only; the height changes by
+                    user drag, never by animation). Rendered after the editor
+                    dock at the same Z.dock, so it slides over the dock's
+                    lower edge. Content mounts on first open, then stays. */}
+                <div
+                  className="terminal-dock-overlay"
+                  data-open={terminalVisible ? "true" : "false"}
+                  aria-hidden={!terminalVisible}
+                  style={{ height: terminalRect.h, zIndex: Z.dock }}
+                >
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label="Resize terminal"
+                    onMouseDown={beginTerminalDockResize}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background =
+                        "linear-gradient(to bottom, var(--accent-soft), transparent)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 7,
+                      cursor: "row-resize",
+                      zIndex: 30,
+                      background: "transparent",
+                      transition: "background var(--motion-fast) var(--ease-out)",
+                    }}
+                  />
+                  {terminalMounted && (
+                    <TerminalPanel
+                      fill
+                      visible
+                      theme={theme}
+                      height={terminalRect.h}
+                      workspaceRoot={workspaceRoot}
+                      onToggle={() => setTerminalVisible(false)}
+                    />
+                  )}
                 </div>
               </div>
             )}
