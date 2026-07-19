@@ -629,6 +629,127 @@ textarea.klide-diff-comment-input:focus-visible {
   background: var(--bg-hover);
 }
 
+/* Disclosure ("More details" in Mission Control) — quiet until hovered, and
+   the chevron rotates in place instead of the browser swapping ▶/▼ glyphs. */
+.klide-disclosure > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.5;
+  transition: opacity 0.18s var(--ease-out);
+}
+.klide-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.klide-disclosure > summary:hover,
+.klide-disclosure[open] > summary {
+  opacity: 1;
+}
+.klide-disclosure-chevron {
+  display: inline-flex;
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+.klide-disclosure[open] .klide-disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+/* Checkpoint list — quiet macOS-style rows. Hover lives in CSS (not React
+   state) so pointing at the list never re-renders it: soft wash on the row,
+   timestamp ⇄ actions crossfade in the right slot, turn-level revert actions
+   revealed on group hover. Rows enter with a small staggered fade. */
+.klide-checkpoint-row {
+  border-radius: 6px;
+  transition: background var(--motion-fast) var(--ease-out);
+  animation: klide-checkpoint-row-in 0.28s var(--ease-out) both;
+}
+.klide-checkpoint-row:hover {
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+@keyframes klide-checkpoint-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.klide-checkpoint-swap {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+}
+.klide-checkpoint-swap > * {
+  grid-area: 1 / 1;
+  transition: opacity 0.16s var(--ease-out);
+}
+.klide-checkpoint-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+.klide-checkpoint-row:hover .klide-checkpoint-actions,
+.klide-checkpoint-row:focus-within .klide-checkpoint-actions,
+.klide-checkpoint-actions[data-busy="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.klide-checkpoint-row:hover .klide-checkpoint-time,
+.klide-checkpoint-row:focus-within .klide-checkpoint-time,
+.klide-checkpoint-time[data-hidden="true"] {
+  opacity: 0;
+}
+.klide-checkpoint-turn-actions {
+  opacity: 0;
+  transition: opacity 0.18s var(--ease-out);
+}
+.klide-checkpoint-group:hover .klide-checkpoint-turn-actions,
+.klide-checkpoint-group:focus-within .klide-checkpoint-turn-actions,
+.klide-checkpoint-turn-actions[data-busy="true"] {
+  opacity: 1;
+}
+/* Turn groups are collapsible cards: the header is the toggle, the caret
+   rotates in place, and the body animates open/closed via the 0fr → 1fr
+   grid-row trick (the only way to transition to an auto height in CSS). */
+.klide-checkpoint-header {
+  cursor: pointer;
+}
+.klide-checkpoint-label {
+  opacity: 0.38;
+  transition: opacity 0.18s var(--ease-out);
+}
+.klide-checkpoint-header:hover .klide-checkpoint-label {
+  opacity: 1;
+}
+.klide-checkpoint-caret {
+  display: inline-flex;
+  color: var(--fg-subtle);
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+.klide-checkpoint-header[aria-expanded="true"] .klide-checkpoint-caret {
+  transform: rotate(90deg);
+}
+.klide-checkpoint-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.26s cubic-bezier(0.2, 0, 0, 1);
+}
+.klide-checkpoint-body[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.klide-checkpoint-body > div {
+  overflow: hidden;
+  min-height: 0;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease-out);
+}
+.klide-checkpoint-body[data-open="true"] > div {
+  opacity: 1;
+}
+
 .klide-settings-row:last-child {
   border-bottom: none;
 }
