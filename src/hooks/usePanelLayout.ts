@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProviderId } from "../agent/types";
-import { PROVIDER_GROUPS } from "../agent/providers";
+import { isProviderId } from "../agent/providers";
 import {
   defaultLayout as defaultPanelLayout,
   loadLayout as loadPanelLayout,
@@ -37,15 +37,7 @@ function newAiPanelId(): string {
 }
 
 function storedAiProvider(id: string | undefined): ProviderId | undefined {
-  if (!id) return undefined;
-  // Custom (self-hosted) ids aren't in the static PROVIDER_GROUPS — they're
-  // minted at runtime — but the `custom:` prefix makes them recognisable, so
-  // a persisted custom selection survives a reload.
-  if (id.startsWith("custom:")) return id as ProviderId;
-  const known = PROVIDER_GROUPS.some((group) =>
-    group.items.some((item) => item.id === id)
-  );
-  return known ? (id as ProviderId) : undefined;
+  return id && isProviderId(id) ? id : undefined;
 }
 
 // Local copy of the numeric-setting reader — used only by the one-time

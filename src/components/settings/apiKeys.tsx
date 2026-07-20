@@ -4,6 +4,11 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  listProviderModels,
+  readProviderKeyStatus,
+  type ProviderKeyStatus,
+} from "../../ipc/aiProviders";
 import { DotGridLoader, ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import { notify } from "../../toast";
@@ -25,7 +30,7 @@ export const API_KEY_PROVIDERS: {
   { id: "openrouter", title: "OpenRouter", envVar: "OPENROUTER_API_KEY", placeholder: "sk-or-..." },
 ];
 
-export type KeyStatus = { hasKey: boolean; source: "keychain" | "env" | "reference" | "none" };
+export type KeyStatus = ProviderKeyStatus;
 
 // One provider's key control: shows where the key comes from (keychain / env /
 // none), lets you paste a new one (saved into the keychain via Rust), and clear
@@ -42,7 +47,7 @@ export function ApiKeySummary() {
       await Promise.all(
         API_KEY_PROVIDERS.map(async (p) => {
           try {
-            const st = await invoke<KeyStatus>("ai_provider_key_status", { provider: p.id });
+            const st = await readProviderKeyStatus(p.id);
             if (st.hasKey) n += 1;
           } catch { /* ignore */ }
         }),
@@ -92,9 +97,7 @@ export function ApiKeyRow({
 
   const refresh = useCallback(async () => {
     try {
-      const next = await invoke<KeyStatus>("ai_provider_key_status", {
-        provider: id,
-      });
+      const next = await readProviderKeyStatus(id);
       setStatus(next);
       // Reflect the saved method so reopening Settings shows how it's wired.
       if (next.source === "reference") setMethod("ref");
@@ -124,7 +127,7 @@ export function ApiKeyRow({
       // Validate against the live provider before claiming success.
       setVerify("checking");
       try {
-        const models = await invoke<string[]>("ai_provider_models", { provider: id });
+        const models = await listProviderModels(id);
         if (models.length > 0) {
           setVerify("ok");
           notify(`${title} key verified`, { tone: "success" });
@@ -828,4 +831,3 @@ export function MethodToggle({
     </div>
   );
 }
-

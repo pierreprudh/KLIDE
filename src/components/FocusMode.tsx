@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listProviderModels } from "../ipc/aiProviders";
 import { Z } from "../zLayers";
 import { loadConversations, relativeTime, isSubsequence } from "./ai/utils";
 import type { Conversation } from "./ai/types";
@@ -1230,7 +1231,7 @@ function FocusHome({
     let cancelled = false;
     const fallback = [model, DEFAULT_MODELS[provider]].filter(Boolean) as string[];
     setModels(Array.from(new Set(fallback)));
-    invoke<string[]>("ai_provider_models", { provider })
+    listProviderModels(provider)
       .then((list) => {
         if (!cancelled && Array.isArray(list) && list.length > 0) setModels(list);
       })
