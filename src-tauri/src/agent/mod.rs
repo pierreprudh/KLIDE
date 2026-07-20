@@ -264,7 +264,15 @@ fn settle_run(
     // done clears it, cancellation is the user's call and says nothing.
     match status {
         AgentRunStatus::Error => sup.note_terminal(id, &summary.provider, &summary.model, true),
-        AgentRunStatus::Done => sup.note_terminal(id, &summary.provider, &summary.model, false),
+        AgentRunStatus::Done => {
+            sup.note_terminal(id, &summary.provider, &summary.model, false);
+            // Persist the run's edits onto its branch. Headless worktree runs
+            // (races, fleets) auto-apply edits into the working tree but never
+            // commit, so without this the branch stays empty and merging a
+            // winner would carry nothing. Guarded to linked worktrees only, so
+            // this can never commit on the user's main checkout.
+            commit_worktree_on_done(summary);
+        }
         _ => {}
     }
     write_summary(
@@ -276,6 +284,48 @@ fn settle_run(
             ..summary.clone()
         },
     )
+}
+
+/// Commit a finished run's working-tree edits onto its branch.
+///
+/// Only ever touches a **linked worktree**: `worktree_label` returns `Some`
+/// exactly when the checkout's `.git` is a gitdir-pointer file, which is never
+/// the case for the repo's main working copy — so a normal Klide run in the
+/// user's checkout is left untouched and only isolated race/fleet worktrees get
+/// an auto-commit. A no-op when the tree is clean. Best-effort: a git failure
+/// here must not turn a successful run into an error, so results are ignored
+/// and the worst case is the pre-existing "branch has no commit" state.
+fn commit_worktree_on_done(summary: &AgentRunSummary) {
+    let Some(cwd) = summary.cwd.as_deref() else {
+        return;
+    };
+    if crate::delegate::worktree_label(cwd).is_none() {
+        return;
+    }
+    let dirty = std::process::Command::new("git")
+        .args(["-C", cwd, "status", "--porcelain"])
+        .output()
+        .ok()
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
+    if !dirty {
+        return;
+    }
+    let subject = format!("klide: {}", title_from_text(&summary.title));
+    let message = format!(
+        "{subject}\n\nKlide agent run {}\nCo-Authored-By: {} <noreply@klide.local>",
+        summary.id, summary.model
+    );
+    if std::process::Command::new("git")
+        .args(["-C", cwd, "add", "-A"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        let _ = std::process::Command::new("git")
+            .args(["-C", cwd, "commit", "-m", &message])
+            .status();
+    }
 }
 
 fn run_status_wire(status: &AgentRunStatus) -> &'static str {

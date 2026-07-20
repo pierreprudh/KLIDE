@@ -67,7 +67,7 @@ import {
 import { readWorkspaceTextFile } from "./workspaceFs";
 import { modelLabel } from "./components/ai/ModelPicker";
 import { RaceFollowUpBar } from "./components/ai/RaceFollowUpBar";
-import type { RaceGroup } from "./races";
+import { raceForRun, removeRace, type RaceGroup } from "./races";
 import {
   worktreeSetupSummary,
   worktreeName,
@@ -1231,11 +1231,58 @@ function App() {
       setFileNotice("Run did not execute in a linked worktree.");
       return;
     }
-    if (!confirm(`Merge ${run.branch} into the main checkout?`)) return;
+    // A race resolves as a unit: merging the winner discards the losing
+    // siblings. Outside a race a worktree run is standalone — merge, then tear
+    // down its own checkout so a resolved run never lingers as an orphan.
+    const race = raceForRun(run.id);
+    const losers = race
+      ? race.members.filter((m) => m.branch !== run.branch)
+      : [];
+    const confirmMsg = race
+      ? losers.length > 0
+        ? `Merge ${run.branch} into the main checkout, then discard the ${losers.length} losing worktree${losers.length === 1 ? "" : "s"} and end the race? This can't be undone.`
+        : `Merge ${run.branch} into the main checkout and clear the race?`
+      : `Merge ${run.branch} into the main checkout, then remove its worktree?`;
+    if (!confirm(confirmMsg)) return;
     try {
       const msg = await invoke<string>("git_worktree_merge", { workspaceRoot, branch: run.branch });
+      // Teardown is best-effort and post-merge: the work is already in main, so
+      // a cleanup hiccup must not read as a failed merge. Collect what we
+      // couldn't remove and report it alongside the success.
+      const failures: string[] = [];
+      const removeWorktree = async (path: string, branch: string, force: boolean) => {
+        try {
+          await invoke("git_worktree_remove", {
+            workspaceRoot,
+            path,
+            force,
+            cleanFiles: null,
+            deleteBranch: branch,
+          });
+        } catch (e) {
+          failures.push(`${branch}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      };
+      if (race) {
+        // Winner: its work is committed + merged, so a non-force removal
+        // succeeds and refuses only if there's genuinely unmerged work left.
+        const winner = race.members.find((m) => m.branch === run.branch);
+        if (winner) await removeWorktree(winner.worktreePath, winner.branch, false);
+        // Losers are discarded by the operator's choice — force past their
+        // uncommitted work.
+        for (const loser of losers) await removeWorktree(loser.worktreePath, loser.branch, true);
+        removeRace(race.id);
+      } else if (run.cwd) {
+        await removeWorktree(run.cwd, run.branch, false);
+      }
       await refreshGitStatus(workspaceRoot);
-      setFileNotice(msg);
+      setFileNotice(
+        failures.length > 0
+          ? `${msg} Cleanup incomplete — ${failures.join("; ")}`
+          : race
+          ? `${msg} Race resolved and worktrees cleaned up.`
+          : `${msg} Worktree removed.`,
+      );
     } catch (e) {
       setFileNotice(e instanceof Error ? e.message : String(e));
     }
