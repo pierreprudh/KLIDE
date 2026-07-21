@@ -15,6 +15,18 @@ import type { AiPanelInstance } from "../../hooks/usePanelLayout";
  *  AI panel when none has been explicitly created keys off this. */
 export const DEFAULT_AI_PANEL_ID = "ai-main";
 
+/** React identity for one rendered Conversation session. A panel keeps its
+ * state while moving between surfaces in the same Workspace, but changing the
+ * effective Workspace remounts it so messages and Run identity cannot migrate
+ * into another checkout. */
+export function conversationSessionKey(
+  panelId: string,
+  workspaceRoot: string | null,
+  surfaceKey?: string,
+): string {
+  return `${surfaceKey ?? panelId}::${workspaceRoot ?? "no-workspace"}`;
+}
+
 /** A queued Mission Control → AI panel handoff: open panel `panelId` pinned to
  *  `provider`, optionally resuming an on-disk session or reattaching to a live
  *  conversation. The host queues one per spawned panel (a race "watch live"

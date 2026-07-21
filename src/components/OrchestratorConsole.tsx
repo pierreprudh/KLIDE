@@ -13,7 +13,7 @@
 // for the diff-review surface, which this view doesn't host yet.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { listProviderModels } from "../ipc/aiProviders";
 import {
   routeTask,
   DEFAULT_ROUTING_POLICY,
@@ -478,7 +478,7 @@ function ModelChooser({
 
   const loadModels = (id: ProviderId) => {
     setCache((c) => (c[id] ? c : { ...c, [id]: { state: "loading", models: [] } }));
-    invoke<string[]>("ai_provider_models", { provider: id })
+    listProviderModels(id)
       .then((models) => setCache((c) => ({ ...c, [id]: { state: "ok", models } })))
       .catch(() => setCache((c) => ({ ...c, [id]: { state: "error", models: [] } })));
   };

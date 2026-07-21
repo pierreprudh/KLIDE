@@ -5,6 +5,10 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  listProviderModels,
+  modelSupportsReflection as queryModelSupportsReflection,
+} from "../ipc/aiProviders";
 import { THEMES } from "../theme";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
@@ -306,7 +310,7 @@ function AdvisorControl({
   const [models, setModels] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
-    invoke<string[]>("ai_provider_models", { provider })
+    listProviderModels(provider)
       .then((list) => alive && setModels(list))
       .catch(() => alive && setModels([]));
     return () => {
@@ -446,10 +450,7 @@ export function SettingsPanel({
     let cancelled = false;
     async function checkReflectionSupport() {
       try {
-        const supports = await invoke<boolean>("ai_model_supports_reflection", {
-          provider: settingsProvider,
-          model: aiModel,
-        });
+        const supports = await queryModelSupportsReflection(settingsProvider, aiModel);
         if (!cancelled) setModelSupportsReflection(supports);
       } catch {
         if (!cancelled) setModelSupportsReflection(false);
@@ -542,7 +543,7 @@ export function SettingsPanel({
           invoke<SubscriptionStatus>("ai_subscription_status", {
             provider: provider.id,
           }),
-          invoke<string[]>("ai_provider_models", { provider: provider.id }),
+          listProviderModels(provider.id),
         ]);
         return {
           id: provider.id,

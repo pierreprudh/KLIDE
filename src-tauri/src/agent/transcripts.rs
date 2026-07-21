@@ -202,18 +202,17 @@ pub(crate) fn summarize_validation(events: &[AgentEvent]) -> AgentValidationSumm
                     command_ids.insert(tool_call_id.clone());
                 }
             }
-            AgentEvent::PermissionRequested { request, .. } => {
+            AgentEvent::PermissionRequested { request, .. }
                 if request
                     .get("input")
                     .and_then(|input| input.get("command"))
                     .and_then(|command| command.as_str())
                     .is_some()
-                {
+                => {
                     if let Some(tool_call_id) = request.get("toolCallId").and_then(|v| v.as_str()) {
                         command_ids.insert(tool_call_id.to_string());
                     }
                 }
-            }
             AgentEvent::PermissionResolved { decision, .. } => {
                 if decision.get("behavior").and_then(|b| b.as_str()) == Some("allow") {
                     permissions_approved += 1;
@@ -225,19 +224,18 @@ pub(crate) fn summarize_validation(events: &[AgentEvent]) -> AgentValidationSumm
                 tool_call_id,
                 result,
                 ..
-            } => {
-                if command_ids.contains(tool_call_id)
+            }
+                if (command_ids.contains(tool_call_id)
                     || tool_names
                         .get(tool_call_id)
                         .map(|name| name == "run_command")
-                        == Some(true)
-                {
+                        == Some(true))
+                => {
                     commands_run += 1;
                     if !result.ok {
                         commands_failed += 1;
                     }
                 }
-            }
             AgentEvent::DiffResolved { decision, .. } => {
                 diff_reviews += 1;
                 if decision.get("behavior").and_then(|b| b.as_str()) == Some("apply") {

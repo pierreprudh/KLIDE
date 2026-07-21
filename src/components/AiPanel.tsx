@@ -10,6 +10,15 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  listProviderModels,
+  modelSupportsReflection as queryModelSupportsReflection,
+  modelSupportsTools as queryModelSupportsTools,
+  readLocalProviderStatus,
+  readProviderContextWindow,
+  readProviderKeyStatus,
+  startLocalProvider,
+} from "../ipc/aiProviders";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
@@ -32,21 +41,20 @@ import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { TodoStrip } from "./TodoStrip";
 import {
   CLI_DEFAULT_MODEL,
-  DEFAULT_MODELS,
+  defaultModelForProvider,
   isDelegateProvider,
+  isManagedLocalProvider,
   normalizeAgentMode,
   providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
 import { isDelegateId } from "../delegates";
 import {
-  customDefaultModel,
   isCustomProvider,
   refreshCustomProviders,
   type CustomProvider,
 } from "../customProviders";
 import {
-  customCliDefaultModel,
   refreshCustomCli,
   type CustomCli,
 } from "../customCli";
@@ -373,15 +381,6 @@ function normalizeReflectionLevel(level: string | undefined | null): string | un
   }
 }
 
-// The default model for a provider. Built-ins read the static map; custom
-// (self-hosted) providers read their configured default from the cache,
-// since DEFAULT_MODELS has no entry for a runtime id.
-function defaultModelFor(id: ProviderId): string {
-  if (isCustomProvider(id)) return customDefaultModel(id);
-  if (id.startsWith("cli:")) return customCliDefaultModel(id);
-  return DEFAULT_MODELS[id] ?? "";
-}
-
 // The model a provider SWITCH lands on: the top favourite for that provider
 // when one is starred, else the last-used/stored model. Continuing an existing
 // conversation still restores that conversation's own model — this only seeds
@@ -436,7 +435,7 @@ function storedModelForProvider(id: ProviderId): string {
     // MLX expects Hugging Face-style ids or local paths. Ignore stale
     // Ollama-style tags such as `gemma4:12b-mlx` from earlier shared-model UI.
     const looksLikeMlx = stored.includes("/") || stored.startsWith(".");
-    if (!looksLikeMlx || stored.includes(":")) return defaultModelFor(id);
+    if (!looksLikeMlx || stored.includes(":")) return defaultModelForProvider(id);
   }
   if ((id === "claude-code" || id === "codex") && stored) {
     // These CLIs take bare model names ("opus", "gpt-5.3-codex") — a stored
@@ -444,9 +443,9 @@ function storedModelForProvider(id: ProviderId): string {
     // another provider's model that leaked in via a stale-persist bug; never
     // hand it to the CLI. (OpenCode/omp legitimately use provider/model ids,
     // so they are exempt.)
-    if (stored.includes("/") || stored.includes(":")) return defaultModelFor(id);
+    if (stored.includes("/") || stored.includes(":")) return defaultModelForProvider(id);
   }
-  return stored || defaultModelFor(id);
+  return stored || defaultModelForProvider(id);
 }
 
 export function AiPanel({
@@ -568,11 +567,6 @@ export function AiPanel({
       transitionConversation({ type: "configured", model: hostModel });
     }
   }, [hostModel, onModelChange]);
-  useEffect(() => {
-    if (conversationSessionRef.current.workspaceRoot !== workspaceRoot) {
-      transitionConversation({ type: "configured", workspaceRoot });
-    }
-  }, [workspaceRoot]);
   useEffect(() => {
     const restoredProvider = conversationSessionRef.current.provider;
     if (restoredProvider === requestedProviderRef.current) return;
@@ -781,7 +775,7 @@ export function AiPanel({
   const mentionTotal = subagentMatches.length + mentionMatches.length;
 
   const providerDelegatesWork = isDelegateProvider(provider);
-  const isLocalProvider = provider === "ollama" || provider === "mlx";
+  const isLocalProvider = isManagedLocalProvider(provider);
   // A delegate conversation's identity IS its PTY session id
   // (`{convoId}:{provider}`), so persist the panel↔convo pairing the moment
   // the provider/convo binds — not on turn start like hosted chats, because a
@@ -859,7 +853,7 @@ export function AiPanel({
       await Promise.all(
         apiGroup.items.map(async (it) => {
           try {
-            const st = await invoke<{ hasKey: boolean }>("ai_provider_key_status", { provider: it.id });
+            const st = await readProviderKeyStatus(it.id);
             if (!st.hasKey) missing.add(it.id);
           } catch { /* unreachable status → leave unbadged */ }
         }),
@@ -2003,10 +1997,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function loadProviderModels() {
       try {
-        const names = await invoke<string[]>("ai_provider_models", { provider });
+        const names = await listProviderModels(provider);
         if (cancelled) return;
         if (!isLocalProvider) setConnected(true);
-        const fallbackModel = defaultModelFor(provider);
+        const fallbackModel = defaultModelForProvider(provider);
         const next = names.length > 0 ? [...names] : fallbackModel ? [fallbackModel] : [];
         // Built-in delegate CLIs always offer "default" first: spawn with no
         // model flag, so the CLI opens on its own configured default model.
@@ -2040,7 +2034,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let timer: ReturnType<typeof setInterval>;
     async function check() {
       try {
-        const running = await invoke<boolean>("ai_local_server_status", { provider });
+        const running = await readLocalProviderStatus(provider);
         setServerRunning(running);
         setConnected(running);
         if (running) setServerError(null);
@@ -2058,7 +2052,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function checkToolSupport() {
       try {
-        const supports = await invoke<boolean>("ai_model_supports_tools", { provider, model });
+        const supports = await queryModelSupportsTools(provider, model);
         if (!cancelled) setModelSupportsTools(supports);
       } catch { if (!cancelled) setModelSupportsTools(!isLocalProvider); }
     }
@@ -2070,7 +2064,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function checkReflectionSupport() {
       try {
-        const supports = await invoke<boolean>("ai_model_supports_reflection", { provider, model });
+        const supports = await queryModelSupportsReflection(provider, model);
         if (!cancelled) setModelSupportsReflection(supports);
       } catch { if (!cancelled) setModelSupportsReflection(false); }
     }
@@ -2082,7 +2076,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function loadContextWindow() {
       try {
-        const windowSize = await invoke<number>("ai_context_window", { provider, model });
+        const windowSize = await readProviderContextWindow(provider, model);
         if (!cancelled && Number.isFinite(windowSize) && windowSize > 0) setContextLimit(windowSize);
       } catch { if (!cancelled) setContextLimit(128_000); }
     }
@@ -2520,7 +2514,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (!isLocalProvider) return true;
     setServerError(null);
     try {
-      const running = await invoke<boolean>("ai_local_server_status", { provider });
+      const running = await readLocalProviderStatus(provider);
       // For MLX, "port is up" isn't enough — the model may still be cold. Only
       // take the fast path once we've warmed this exact model; otherwise fall
       // through to start, which warms it (and shows the starting animation).
@@ -2535,7 +2529,11 @@ This user request requires workspace inspection. Before answering, you MUST call
 
     setServerStarting(true);
     try {
-      const started = await invoke<boolean>("ai_local_server_start", { provider, model, concurrency: harnessSettings?.serverConcurrency });
+      const started = await startLocalProvider({
+        provider,
+        model,
+        concurrency: harnessSettings?.serverConcurrency,
+      });
       setServerRunning(started);
       setConnected(started);
       if (!started) {

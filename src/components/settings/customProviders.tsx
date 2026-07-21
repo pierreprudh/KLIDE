@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { listProviderModels, readProviderKeyStatus } from "../../ipc/aiProviders";
 import { Z } from "../../zLayers";
 import { ChevronDown, ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
@@ -56,11 +56,11 @@ export function CustomEndpointRow({
     setLoading(true);
     setError(null);
     try {
-      const ks = await invoke<KeyStatus>("ai_provider_key_status", {
-        provider: endpoint.id,
-      }).catch(() => ({ hasKey: false, source: "none" }) as KeyStatus);
+      const ks = await readProviderKeyStatus(endpoint.id).catch(
+        () => ({ hasKey: false, source: "none" }) as KeyStatus,
+      );
       setKeyStatus(ks);
-      const m = await invoke<string[]>("ai_provider_models", { provider: endpoint.id });
+      const m = await listProviderModels(endpoint.id);
       setModels(m);
     } catch (e) {
       setError(String(e));
@@ -1034,4 +1034,3 @@ export function CustomCliAgentsBlock({
     </>
   );
 }
-

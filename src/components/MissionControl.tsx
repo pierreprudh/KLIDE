@@ -1,6 +1,7 @@
 import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { listProviderModels } from "../ipc/aiProviders";
 import { Tooltip } from "./Tooltip";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
@@ -77,6 +78,7 @@ import {
   type RunLedgerMetadataStore,
   type RunSourceFilter,
 } from "../runLedger";
+import { resolveRunInspection } from "../runInspection";
 import { compactConversationMessages, runMessagesToMarkdown } from "../transcripts";
 import { DELEGATE_IDS, isDelegateId, type DelegateId } from "../delegates";
 import { CheckpointPanel } from "./CheckpointPanel";
@@ -85,7 +87,12 @@ import type { ArtifactRequest } from "./ArtifactInspector";
 import { useArtifactInspector } from "../hooks/useArtifactInspector";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
-import { ALL_PROVIDERS, DEFAULT_MODELS, isDelegateProvider, providerName } from "../agent/providers";
+import {
+  DEFAULT_MODELS,
+  isDelegateProvider,
+  providerName,
+  selectableProviders,
+} from "../agent/providers";
 import { ModelPicker } from "./ai/ModelPicker";
 import { dispatchRace, PartialRaceError, type RaceAgentPick } from "../agent/race";
 import { listRaces, raceForRun, subscribeRaces, type RaceGroup, type RaceMember } from "../races";
@@ -2471,13 +2478,13 @@ function RaceAgentRow({
 }) {
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const providers = ALL_PROVIDERS.filter((p) => !isDelegateProvider(p.id));
+  const providers = selectableProviders({ includeDelegates: false });
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setModels([]);
-    invoke<string[]>("ai_provider_models", { provider: pick.provider })
+    listProviderModels(pick.provider)
       .then((list) => {
         if (cancelled) return;
         setModels(list);
@@ -3049,7 +3056,7 @@ function TaskDetail({ task, theme }: { task: TaskSession; theme: ThemeId }) {
     setLoadingModels(true);
     setModels([]);
     setModel("");
-    invoke<string[]>("ai_provider_models", { provider: agent })
+    listProviderModels(agent)
       .then((list) => {
         if (cancelled) return;
         setModels(list);
@@ -5072,50 +5079,32 @@ export function MissionControl({
     }
   }, [filtered, selectedId, pinnedId, allRuns]);
 
-  const selectedTask = tasks.find((t) => t.id === selectedId) ?? null;
-  // Prefer the on-disk run over the in-memory convo for the same id: it has the
-  // full transcript and a working resume. The convo only renders when no
-  // on-disk twin exists yet (e.g. a brand-new chat before the runs list
-  // refreshes).
-  const selectedConvo = selectedTask || runs.some((r) => r.id === selectedId)
-    ? null
-    : convos.find((c) => c.id === selectedId && (!workspaceRoot || !c.cwd || c.cwd === workspaceRoot)) ?? null;
-  const selectedConvoRun =
-    selectedTask || runs.some((r) => r.id === selectedId)
-      ? null
-      : allRuns.find((r) => r.id === selectedId && r.origin === "klide-convo") ?? null;
-  const selected =
-    selectedTask || selectedConvoRun
-      ? null
-      : allRuns.find((r) => r.id === selectedId) ?? null;
-  const forkChildrenByParent = useMemo(() => {
-    const byParent = new Map<string, RunLedgerEntry[]>();
-    for (const run of allRuns) {
-      const parentId = run.forkedFrom?.conversationId;
-      if (!parentId) continue;
-      const children = byParent.get(parentId) ?? [];
-      children.push(run);
-      byParent.set(parentId, children);
-    }
-    for (const children of byParent.values()) {
-      children.sort((a, b) => b.updatedMs - a.updatedMs || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-    }
-    return byParent;
-  }, [allRuns]);
-  const selectedRunForLineage = selectedConvoRun ?? selected;
-  const selectedForkParent = selectedRunForLineage?.forkedFrom
-    ? allRuns.find((r) => r.id === selectedRunForLineage.forkedFrom?.conversationId) ?? null
-    : null;
-  const selectedForkChildren = selectedRunForLineage
-    ? forkChildrenByParent.get(selectedRunForLineage.id) ?? []
-    : [];
+  const inspection = useMemo(
+    () =>
+      resolveRunInspection({
+        selectedId,
+        tasks,
+        conversations: convos,
+        entries: allRuns,
+        workspaceRoot,
+      }),
+    [selectedId, tasks, convos, allRuns, workspaceRoot],
+  );
+  const selectedTask = inspection?.kind === "task" ? inspection.task : null;
+  const selectedRun = inspection?.kind === "run" ? inspection.run : null;
+  const selectedConvo =
+    inspection?.kind === "run" ? inspection.liveConversation : null;
+  const selectedForkParent =
+    inspection?.kind === "run" ? inspection.lineage.parent : null;
+  const selectedForkChildren =
+    inspection?.kind === "run" ? inspection.lineage.children : [];
 
   // Race grouping for the detail pane: when the selected run was dispatched
   // as part of a race, surface its siblings so their evidence can be compared.
   const selectedRace = useMemo(
-    () => (selectedRunForLineage ? raceForRun(selectedRunForLineage.id) : null),
+    () => (selectedRun ? raceForRun(selectedRun.id) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedRunForLineage?.id, raceTick],
+    [selectedRun?.id, raceTick],
   );
   const selectedRaceEntries = useMemo(
     () =>
@@ -5132,20 +5121,20 @@ export function MissionControl({
   // build the prompt we'll hand off to a fresh delegate session if the user
   // opens this run in another CLI.
   useEffect(() => {
-    if (!selected || selected.source !== "klide" || selected.kind !== "run") {
+    if (!selectedRun || selectedRun.source !== "klide" || selectedRun.kind !== "run") {
       setHandoffPrompt((current) => (current === null ? current : null));
       return;
     }
     let cancelled = false;
     setHandoffPrompt((current) => (current === null ? current : null));
-    fetchRunMessages(selected)
+    fetchRunMessages(selectedRun)
       .then((msgs) => {
         if (cancelled) return;
         const handoff = buildRunHandoff({
-          title: selected.title,
-          sourceLabel: runAgentLabel(selected),
-          cwd: selected.cwd,
-          model: selected.model,
+          title: selectedRun.title,
+          sourceLabel: runAgentLabel(selectedRun),
+          cwd: selectedRun.cwd,
+          model: selectedRun.model,
           messages: msgs.map((m) => ({ role: m.role, text: m.text })),
         });
         setHandoffPrompt(handoff.delegatePrompt);
@@ -5156,7 +5145,7 @@ export function MissionControl({
     return () => {
       cancelled = true;
     };
-  }, [selected?.id, selected?.source, selected?.kind]);
+  }, [selectedRun?.id, selectedRun?.source, selectedRun?.kind]);
 
   async function reviewRun(run: RunLedgerEntry) {
     if (run.source === "klide") {
@@ -5897,42 +5886,26 @@ export function MissionControl({
       <div className="mission-control-detail" style={{ flex: 1, minWidth: 0 }}>
         {selectedTask ? (
           <TaskDetail task={selectedTask} theme={theme} />
-        ) : selectedConvo && selectedConvoRun ? (
+        ) : selectedRun ? (
           <RunDetail
-            run={selectedConvoRun}
+            run={selectedRun}
             workspaceRoot={workspaceRoot}
-            messages={selectedConvo.messages}
-            handoffPrompt={buildRunHandoff({
-              title: selectedConvo.title,
-              sourceLabel: runAgentLabel(selectedConvoRun),
-              cwd: selectedConvo.cwd,
-              model: selectedConvo.model,
-              messages: selectedConvo.messages.map((m) => ({ role: m.role, text: m.text })),
-            }).delegatePrompt}
-            hasMemory={memoryRunIds.has(selectedConvo.id)}
-            onRename={renameLedgerRun}
-            onArchive={archiveLedgerRun}
-            onFork={onForkRun}
-            onForkInWorktree={onForkRunInWorktree}
-            onMergeWorktree={onMergeWorktreeRun}
-            forkParent={selectedForkParent}
-            forkChildren={selectedForkChildren}
-            onSelectLineageRun={selectLineageRun}
-            race={selectedRace}
-            raceEntries={selectedRaceEntries}
-            onOpenInAiPanel={onOpenInAiPanel}
-            onResumeKlide={onResumeKlideRun}
-            onReviewRun={(run) => void reviewRun(run)}
-            onOpenArtifact={openArtifact}
-            onSaveMemory={onSaveMemory}
-            summarizingFromRunId={summarizingFromRunId}
-          />
-        ) : selected ? (
-          <RunDetail
-            run={selected}
-            workspaceRoot={workspaceRoot}
-            handoffPrompt={handoffPrompt}
-            hasMemory={memoryRunIds.has(selected.id)}
+            messages={selectedConvo?.messages}
+            handoffPrompt={
+              selectedConvo
+                ? buildRunHandoff({
+                    title: selectedConvo.title,
+                    sourceLabel: runAgentLabel(selectedRun),
+                    cwd: selectedConvo.cwd,
+                    model: selectedConvo.model,
+                    messages: selectedConvo.messages.map((message) => ({
+                      role: message.role,
+                      text: message.text,
+                    })),
+                  }).delegatePrompt
+                : handoffPrompt
+            }
+            hasMemory={memoryRunIds.has(selectedRun.id)}
             onRename={renameLedgerRun}
             onArchive={archiveLedgerRun}
             onFork={onForkRun}

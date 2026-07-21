@@ -1,11 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AI_PANEL_ID,
+  conversationSessionKey,
   initialHandoffFor,
   panelWorkspace,
   resumeConversationFor,
   type PendingAiPanel,
 } from "./panelHost";
+
+describe("conversationSessionKey", () => {
+  it("keeps panel identity stable inside one Workspace", () => {
+    expect(conversationSessionKey("ai-main", "/workspace")).toBe(
+      conversationSessionKey("ai-main", "/workspace"),
+    );
+  });
+
+  it("rotates panel identity when its effective Workspace changes", () => {
+    expect(conversationSessionKey("ai-main", "/workspace-a")).not.toBe(
+      conversationSessionKey("ai-main", "/workspace-b"),
+    );
+  });
+
+  it("preserves a surface-specific key while still scoping it to the Workspace", () => {
+    expect(conversationSessionKey("ai-racer", "/workspace", "focus-ai-racer")).toBe(
+      "focus-ai-racer::/workspace",
+    );
+  });
+});
 
 const pendingFor = (panelId: string, extra?: Partial<PendingAiPanel>): PendingAiPanel => ({
   panelId,

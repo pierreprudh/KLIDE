@@ -1,5 +1,5 @@
 import type { AgentMode, ProviderId } from "./types";
-import { customProviderSync } from "../customProviders";
+import { customProviderSync, isCustomProvider } from "../customProviders";
 import { customCliSync, isCustomCli } from "../customCli";
 import { isDelegateId } from "../delegates";
 
@@ -8,40 +8,25 @@ export type ProviderGroup = {
   items: { id: ProviderId; name: string; available: boolean }[];
 };
 
-export const PROVIDER_GROUPS: ProviderGroup[] = [
-  {
-    label: "Local",
-    items: [
-      { id: "ollama", name: "Ollama", available: true },
-      { id: "mlx", name: "MLX (Apple Silicon)", available: true },
-      { id: "lmstudio", name: "LM Studio", available: true },
-      { id: "llamacpp", name: "llama.cpp", available: false },
-      { id: "vllm", name: "vLLM", available: false },
-    ],
-  },
-  {
-    label: "Subscription",
-    items: [
-      { id: "claude-code", name: "Claude Code", available: true },
-      { id: "codex", name: "Codex", available: true },
-      { id: "opencode", name: "OpenCode", available: true },
-      { id: "omp", name: "Omp", available: true },
-    ],
-  },
-  {
-    label: "API",
-    items: [
-      { id: "anthropic", name: "Anthropic", available: true },
-      { id: "openai", name: "OpenAI", available: true },
-      { id: "gemini", name: "Google Gemini", available: false },
-      { id: "mistral", name: "Mistral", available: true },
-      { id: "xai", name: "xAI Grok", available: true },
-      { id: "openrouter", name: "OpenRouter", available: true },
-    ],
-  },
-];
+export type ProviderGroupId = "local" | "subscription" | "api";
+export type ProviderRuntime =
+  | "managed-local"
+  | "external-local"
+  | "delegate"
+  | "hosted"
+  | "custom";
 
-export const ALL_PROVIDERS = PROVIDER_GROUPS.flatMap((g) => g.items);
+/** One frontend Provider row. Picker grouping, availability, defaults, and
+ * runtime capabilities all derive from this catalog so adding a Provider is a
+ * one-row change instead of a hunt through parallel maps and predicates. */
+export type ProviderDefinition = {
+  id: ProviderId;
+  name: string;
+  group: ProviderGroupId;
+  runtime: ProviderRuntime;
+  available: boolean;
+  defaultModel: string;
+};
 
 export const MLX_MODEL_PRESETS = [
   "mlx-community/Llama-3.1-8B-Instruct-4bit",
@@ -63,23 +48,46 @@ export const OLLAMA_MODEL_PRESETS = ["pierreprudh/klide-8b"] as const;
  *  hardcoded model here made every Claude Code session open on Sonnet. */
 export const CLI_DEFAULT_MODEL = "default";
 
-export const DEFAULT_MODELS: Record<ProviderId, string> = {
-  ollama: "llama3.1:8b",
-  mlx: MLX_MODEL_PRESETS[0],
-  lmstudio: "local-model",
-  llamacpp: "local-model",
-  vllm: "local-model",
-  "claude-code": CLI_DEFAULT_MODEL,
-  codex: CLI_DEFAULT_MODEL,
-  opencode: CLI_DEFAULT_MODEL,
-  omp: CLI_DEFAULT_MODEL,
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-4.1",
-  gemini: "gemini-2.5-pro",
-  mistral: "mistral-large-latest",
-  xai: "grok-4",
-  openrouter: "openai/gpt-4o",
-};
+export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
+  { id: "ollama", name: "Ollama", group: "local", runtime: "managed-local", available: true, defaultModel: "llama3.1:8b" },
+  { id: "mlx", name: "MLX (Apple Silicon)", group: "local", runtime: "managed-local", available: true, defaultModel: MLX_MODEL_PRESETS[0] },
+  { id: "lmstudio", name: "LM Studio", group: "local", runtime: "external-local", available: true, defaultModel: "local-model" },
+  { id: "llamacpp", name: "llama.cpp", group: "local", runtime: "external-local", available: false, defaultModel: "local-model" },
+  { id: "vllm", name: "vLLM", group: "local", runtime: "external-local", available: false, defaultModel: "local-model" },
+  { id: "claude-code", name: "Claude Code", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
+  { id: "codex", name: "Codex", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
+  { id: "opencode", name: "OpenCode", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
+  { id: "omp", name: "Omp", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
+  { id: "anthropic", name: "Anthropic", group: "api", runtime: "hosted", available: true, defaultModel: "claude-sonnet-4-6" },
+  { id: "openai", name: "OpenAI", group: "api", runtime: "hosted", available: true, defaultModel: "gpt-4.1" },
+  { id: "gemini", name: "Google Gemini", group: "api", runtime: "hosted", available: false, defaultModel: "gemini-2.5-pro" },
+  { id: "mistral", name: "Mistral", group: "api", runtime: "hosted", available: true, defaultModel: "mistral-large-latest" },
+  { id: "xai", name: "xAI Grok", group: "api", runtime: "hosted", available: true, defaultModel: "grok-4" },
+  { id: "openrouter", name: "OpenRouter", group: "api", runtime: "hosted", available: true, defaultModel: "openai/gpt-4o" },
+] as const;
+
+const GROUPS: Array<{ id: ProviderGroupId; label: string }> = [
+  { id: "local", label: "Local" },
+  { id: "subscription", label: "Subscription" },
+  { id: "api", label: "API" },
+];
+
+export const PROVIDER_GROUPS: ProviderGroup[] = GROUPS.map((group) => ({
+  label: group.label,
+  items: PROVIDER_CATALOG
+    .filter((provider) => provider.group === group.id)
+    .map(({ id, name, available }) => ({ id, name, available })),
+}));
+
+export const ALL_PROVIDERS = PROVIDER_CATALOG.map(({ id, name, available }) => ({
+  id,
+  name,
+  available,
+}));
+
+export const DEFAULT_MODELS = Object.fromEntries(
+  PROVIDER_CATALOG.map((provider) => [provider.id, provider.defaultModel]),
+) as Record<ProviderId, string>;
 
 export const MODE_OPTIONS: { id: AgentMode; label: string; title: string }[] = [
   { id: "chat", label: "Chat", title: "Answer without tools." },
@@ -87,19 +95,60 @@ export const MODE_OPTIONS: { id: AgentMode; label: string; title: string }[] = [
   { id: "goal", label: "Goal", title: "Use tools and propose diff-reviewed edits." },
 ];
 
-export function providerName(id: ProviderId): string {
-  const builtin = ALL_PROVIDERS.find((p) => p.id === id)?.name;
+export function providerDefinition(id: ProviderId): ProviderDefinition | undefined {
+  const builtin = PROVIDER_CATALOG.find((provider) => provider.id === id);
   if (builtin) return builtin;
-  // Self-hosted providers aren't in the static list — resolve their label
-  // from the custom-provider cache, falling back to a humanised id so we
-  // never mislabel a custom endpoint as "Ollama".
-  if (id.startsWith("custom:")) {
-    return customProviderSync(id)?.label ?? (id.slice("custom:".length) || "Custom");
+  if (isCustomProvider(id)) {
+    const custom = customProviderSync(id);
+    return {
+      id,
+      name: custom?.label ?? (id.slice("custom:".length) || "Custom"),
+      group: "api",
+      runtime: "custom",
+      available: true,
+      defaultModel: custom?.defaultModel ?? "",
+    };
   }
-  if (id.startsWith("cli:")) {
-    return customCliSync(id)?.label ?? (id.slice("cli:".length) || "Custom CLI");
+  if (isCustomCli(id)) {
+    const custom = customCliSync(id);
+    return {
+      id,
+      name: custom?.label ?? (id.slice("cli:".length) || "Custom CLI"),
+      group: "subscription",
+      runtime: "delegate",
+      available: true,
+      defaultModel: custom?.defaultModel ?? CLI_DEFAULT_MODEL,
+    };
   }
-  return "Ollama";
+  return undefined;
+}
+
+export function isProviderId(id: string): id is ProviderId {
+  return (
+    PROVIDER_CATALOG.some((provider) => provider.id === id) ||
+    isCustomProvider(id) ||
+    isCustomCli(id)
+  );
+}
+
+export function defaultModelForProvider(id: ProviderId): string {
+  return providerDefinition(id)?.defaultModel ?? "";
+}
+
+export function isManagedLocalProvider(id: ProviderId): boolean {
+  return providerDefinition(id)?.runtime === "managed-local";
+}
+
+export function selectableProviders(options: { includeDelegates?: boolean } = {}): ProviderDefinition[] {
+  return PROVIDER_CATALOG.filter(
+    (provider) =>
+      provider.available &&
+      (options.includeDelegates !== false || provider.runtime !== "delegate"),
+  );
+}
+
+export function providerName(id: ProviderId): string {
+  return providerDefinition(id)?.name ?? "Unknown Provider";
 }
 
 /** PROVIDER_GROUPS plus a dynamic "Self-hosted" group built from the
@@ -134,7 +183,7 @@ export function providerGroupsWithCustom(
 }
 
 export function isDelegateProvider(id: ProviderId): boolean {
-  return isDelegateId(id) || isCustomCli(id);
+  return providerDefinition(id)?.runtime === "delegate" || isDelegateId(id);
 }
 
 export function normalizeAgentMode(value: string | null): AgentMode {

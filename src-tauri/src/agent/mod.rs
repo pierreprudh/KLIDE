@@ -2035,7 +2035,7 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
 
-            let tool_result: ToolResult;
+            
 
             let kind = match plan_tool_step(&request.mode, &call, kind) {
                 ToolStepPlan::Execute { kind } => kind,
@@ -2081,13 +2081,13 @@ async fn run_agent_loop(
                     None => no_workspace_result(),
                 }),
             };
-            match outcome {
-                ToolOutcome::Produced(result) => tool_result = result,
+            let tool_result: ToolResult = match outcome {
+                ToolOutcome::Produced(result) => result,
                 ToolOutcome::Cancelled => {
                     finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
                     return Ok(());
                 }
-            }
+            };
 
             emit(AgentEvent::ToolCallFinished {
                 run_id: id.clone(),
@@ -2341,7 +2341,7 @@ pub async fn agent_list_runs(
                     | AgentRunStatus::Paused
             )
         })
-        .map(|(id, handle)| (id.clone(), handle.status.clone()))
+        .map(|(id, handle)| (id.clone(), handle.status))
         .collect::<HashMap<_, _>>();
     let mut summaries = list_summaries(&runs_dir, limit, offset)?;
     for summary in &mut summaries {

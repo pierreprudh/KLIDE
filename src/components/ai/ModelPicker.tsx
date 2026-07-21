@@ -10,9 +10,12 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { MLX_MODEL_PRESETS, OLLAMA_MODEL_PRESETS, providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
+import {
+  listProviderModelMetadata,
+  type ProviderModelMetadata,
+} from "../../ipc/aiProviders";
 import { ProviderLogo } from "./icons";
 import { modelBrand } from "../../modelBrand";
 import { Z } from "../../zLayers";
@@ -20,14 +23,6 @@ import { isFavModel, toggleFavModel, subscribeFavModels } from "../../favModels"
 
 /** Per-model metadata for the picker badges, from `ai_provider_model_meta`.
  *  Only OpenAI-wire aggregators (OpenRouter) populate it; others return []. */
-type ModelMetaWire = {
-  id: string;
-  contextLength?: number | null;
-  supportsTools?: boolean | null;
-  inputPerMillion?: number | null;
-  outputPerMillion?: number | null;
-};
-
 /** Compact context-window label: 1_048_576 → "1M", 128_000 → "128k". */
 function formatCtx(n: number): string {
   if (n >= 1_000_000) {
@@ -162,13 +157,13 @@ export function ModelPicker({
   // badges. Fetched once per provider; the Rust side caches the underlying
   // `/models` call, and returns [] for providers that don't expose it (local,
   // plain OpenAI) so non-aggregator pickers stay badge-free with no network.
-  const [modelMeta, setModelMeta] = useState<Record<string, ModelMetaWire>>({});
+  const [modelMeta, setModelMeta] = useState<Record<string, ProviderModelMetadata>>({});
   useEffect(() => {
     let cancelled = false;
-    invoke<ModelMetaWire[]>("ai_provider_model_meta", { provider })
+    listProviderModelMetadata(provider)
       .then((rows) => {
         if (cancelled) return;
-        const map: Record<string, ModelMetaWire> = {};
+        const map: Record<string, ProviderModelMetadata> = {};
         for (const r of rows) map[r.id] = r;
         setModelMeta(map);
       })

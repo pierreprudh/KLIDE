@@ -2,7 +2,11 @@
 // from SettingsPanel.tsx.
 
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  readLocalProviderStatus,
+  startLocalProvider,
+  stopLocalProvider,
+} from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
 
 export function LocalServerRow({
@@ -22,7 +26,7 @@ export function LocalServerRow({
     let timer: ReturnType<typeof setInterval>;
     async function check() {
       try {
-        const ok = await invoke<boolean>("ai_local_server_status", { provider });
+        const ok = await readLocalProviderStatus(provider);
         setRunning(ok);
       } catch {
         setRunning(false);
@@ -39,10 +43,10 @@ export function LocalServerRow({
     setStarting(true);
     try {
       if (running) {
-        await invoke("ai_local_server_stop", { provider });
+        await stopLocalProvider(provider);
         setRunning(false);
       } else {
-        const started = await invoke<boolean>("ai_local_server_start", { provider, model: defaultModel });
+        const started = await startLocalProvider({ provider, model: defaultModel });
         setRunning(started);
       }
     } catch (e) {
@@ -89,4 +93,3 @@ export function LocalServerRow({
     />
   );
 }
-

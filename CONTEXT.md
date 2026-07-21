@@ -93,6 +93,12 @@ between fresh, restored, resumed, and branched Conversations; it is not itself
 a Run, because one Conversation session may be idle between Runs.
 _Avoid_: chat state, thread state, panel globals
 
+**Panel fleet**:
+The host-owned collection of live Conversation sessions. It routes targeted
+resumes, startup handoffs, race tabs, and follow-up messages by panel id. Panel
+geometry is not fleet state; the layout module owns placement and persistence.
+_Avoid_: global panel state, panel list
+
 **Provider**:
 A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. Differs only in wire format; behaviour behind the seam is shared.
 _Avoid_: vendor, backend, LLM
@@ -102,6 +108,12 @@ _Avoid_: vendor, backend, LLM
 **Mission Control**:
 The board aggregating every run in the workspace — Klide convos and delegate tasks side by side — with observe / take over / stop controls.
 _Avoid_: dashboard, agent panel
+
+**Run inspection**:
+The resolved detail subject for one Mission Control selection. It prefers a
+durable Transcript over its live Klide convo twin, supplies live messages only
+until that Transcript lands, and resolves fork lineage around the same Run.
+_Avoid_: selected row state, detail-pane data
 
 **Task**:
 A queued todo on Mission Control. Starts as a plain item; "send an agent" dispatches a delegate to work on it. A task is the intent, the run is the work.

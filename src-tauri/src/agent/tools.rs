@@ -1270,7 +1270,7 @@ pub async fn run_command_capture_in(
     }
     if !stderr.trim().is_empty() {
         if !body.is_empty() {
-            body.push_str("\n");
+            body.push('\n');
         }
         body.push_str("stderr:\n");
         body.push_str(stderr.trim_end());
@@ -1351,8 +1351,8 @@ fn path_candidates(token: &str, home: Option<&str>, base: &Path) -> Vec<PathBuf>
     let mut out = Vec::new();
     for raw in token.split('=') {
         let trimmed = raw
-            .trim_start_matches(|c| matches!(c, '<' | '>' | '&' | '"' | '\''))
-            .trim_end_matches(|c| matches!(c, ',' | ';' | '"' | '\''));
+            .trim_start_matches(['<', '>', '&', '"', '\''])
+            .trim_end_matches([',', ';', '"', '\'']);
         if trimmed.is_empty() {
             continue;
         }
