@@ -2035,8 +2035,6 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
 
-            
-
             let kind = match plan_tool_step(&request.mode, &call, kind) {
                 ToolStepPlan::Execute { kind } => kind,
                 ToolStepPlan::Blocked { result } => {
@@ -3090,6 +3088,47 @@ mod turn_decision_tests {
             }
             _ => panic!("expected Continue"),
         }
+    }
+
+    #[test]
+    fn native_and_text_tool_calls_in_one_response_are_merged() {
+        // klide-8b-style mix: one structured native call plus a second call
+        // narrated as `<|tool_call_start|>` text in the same response. Both must
+        // survive — the text one used to be dropped to raw output — and their
+        // fallback ids must not collide.
+        let content =
+            "On it. <|tool_call_start|>[write_file(path='a.rs', content='x')]<|tool_call_end|>";
+        let resp = response(
+            content,
+            None,
+            vec![serde_json::json!({ "function": { "name": "read_file", "arguments": { "path": "b.rs" } } })],
+        );
+        let step = decide_turn(&resp, 0, 0);
+        match step.decision {
+            TurnDecision::Continue {
+                tool_calls,
+                content,
+            } => {
+                assert_eq!(tool_calls.len(), 2, "both calls kept");
+                assert_eq!(tool_calls[0].name, "read_file");
+                assert_eq!(tool_calls[1].name, "write_file");
+                // Fallback ids are unique across the merged list.
+                assert_eq!(tool_calls[0].id, "turn0_tool_0");
+                assert_eq!(tool_calls[1].id, "turn0_tool_1");
+                // The delimited tokens are stripped from the rendered text.
+                assert!(content.iter().any(|b| matches!(
+                    b,
+                    AgentContentBlock::Text { text }
+                        if text.contains("On it.") && !text.contains("tool_call_start")
+                )));
+            }
+            _ => panic!("expected Continue"),
+        }
+        // Both calls replay to the model on the next turn.
+        assert_eq!(
+            step.assistant_message["tool_calls"].as_array().unwrap().len(),
+            2
+        );
     }
 
     fn tool_msg(name: &str, content: &str) -> serde_json::Value {

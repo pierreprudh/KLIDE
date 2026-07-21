@@ -183,10 +183,13 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
     let mut raw_tool_calls = response.tool_calls.clone();
     let mut content_text = response.content.clone();
     let mut thinking_text = response.thinking.clone();
-    // Recovery path: some local models (LFM2/LFM2.5) emit tool calls as
-    // `<|tool_call_start|>...<|tool_call_end|>` text instead of the structured
-    // field — and route that text into either the content or thinking channel.
+    // Recovery path: some local models (LFM2/LFM2.5, and fine-tunes like
+    // klide-8b) emit tool calls as `<|tool_call_start|>...<|tool_call_end|>`
+    // text instead of the structured field — and route that text into either
+    // the content or thinking channel.
     if tool_calls.is_empty() {
+        // No native calls: run the full recovery (delimited form plus the
+        // fuzzy JSON-action / "Applied:" fallbacks) over content, then thinking.
         let (mut recovered, mut cleaned_content) = recover_text_tool_calls(&content_text);
         if recovered.is_empty() {
             if let Some(th) = thinking_text.as_deref() {
@@ -214,14 +217,32 @@ pub(super) fn decide_turn(response: &AiChatResponse, prior_turns: usize, turn: u
             tool_calls = recovered;
             content_text = cleaned_content;
         }
+    } else if content_text.contains("<|tool_call_start|>") {
+        // A native call is present but the model ALSO narrated a call in the
+        // unambiguous delimited form in the same response (small models mix
+        // formats). Merge the delimited call so it isn't rendered as raw tokens
+        // to the user. Guarded on the marker so the fuzzy JSON-action fallback
+        // never mistakes a strong model's JSON answer for a tool call.
+        let (extra, cleaned) = recover_text_tool_calls(&content_text);
+        if !extra.is_empty() {
+            content_text = cleaned;
+            for c in &extra {
+                raw_tool_calls.push(serde_json::json!({
+                    "function": { "name": c.name, "arguments": c.input }
+                }));
+            }
+            tool_calls.extend(extra);
+        }
     }
 
-    // Fallback ids ("tool_<idx>") are only unique within one response —
-    // stamp the turn so ids stay unique across the whole run.
+    // Fallback ids ("tool_<idx>") are only unique within one response — and a
+    // text-recovered call merged in above can reuse an index a native call
+    // already took. Stamp the turn AND the call's position in the merged list
+    // so every fallback id stays unique across the whole run.
     let turn_label = prior_turns + turn;
-    for call in tool_calls.iter_mut() {
+    for (idx, call) in tool_calls.iter_mut().enumerate() {
         if call.id.starts_with("tool_") {
-            call.id = format!("turn{turn_label}_{}", call.id);
+            call.id = format!("turn{turn_label}_tool_{idx}");
         }
     }
     let tool_calls = tool_calls;
@@ -301,15 +322,29 @@ pub(super) fn plan_tool_step(
     }
     if let Some(kind) = kind {
         if !tool_allowed_in_mode(mode, kind) {
+            // Chat is conversation-only — it offers no tools at all. When a
+            // model (especially an agentic fine-tune) calls one anyway, give an
+            // actionable nudge rather than a bare capability error, so the model
+            // stops retrying and the user knows which mode to switch to.
+            let content = match mode {
+                AgentMode::Chat => format!(
+                    "Chat is a conversation-only mode with no tools, so '{}' ({} capability) \
+                     is not available in Chat mode. Switch to Goal mode to let me edit files and \
+                     run commands, or Plan mode for read-only tools.",
+                    call.name,
+                    tool_kind_label(kind),
+                ),
+                _ => format!(
+                    "Tool '{}' has {} capability and is not available in {:?} mode.",
+                    call.name,
+                    tool_kind_label(kind),
+                    mode
+                ),
+            };
             return ToolStepPlan::Blocked {
                 result: ToolResult {
                     ok: false,
-                    content: format!(
-                        "Tool '{}' has {} capability and is not available in {:?} mode.",
-                        call.name,
-                        tool_kind_label(kind),
-                        mode
-                    ),
+                    content,
                     metadata: None,
                 },
             };
