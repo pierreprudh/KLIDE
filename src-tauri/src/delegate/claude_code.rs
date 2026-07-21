@@ -223,8 +223,8 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
             }
         }
         match v.get("type").and_then(|t| t.as_str()) {
-            Some("user") => {
-                if counts_as_main {
+            Some("user")
+                if counts_as_main => {
                     count += 1;
                     if title.is_none() {
                         if let Some(t) = v.get("message").and_then(extract_user_text) {
@@ -232,7 +232,6 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                         }
                     }
                 }
-            }
             Some("assistant") => {
                 if counts_as_main {
                     count += 1;

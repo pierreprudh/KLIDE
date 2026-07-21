@@ -331,7 +331,7 @@ pub(crate) fn response_error(provider: &str, status: reqwest::StatusCode, body: 
             "timed out waiting for the model (~100s proxy limit) — it may be cold or busy. \
              Try a smaller or pre-warmed model, or a shorter conversation.",
         ),
-        520 | 521 | 522 | 523 => {
+        520..=523 => {
             Some("the endpoint's edge could not reach its origin server — check the host is up.")
         }
         _ => None,

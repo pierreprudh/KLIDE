@@ -713,7 +713,7 @@ fn merge_commit_files(name_status: &str, numstat: &str) -> Vec<CommitFile> {
             let mut cols = l.split('\t');
             let status = cols.next()?.trim();
             // Renames carry two paths (old, new) — show the new one.
-            let path = cols.last()?.trim();
+            let path = cols.next_back()?.trim();
             let (additions, deletions) = counts.get(i).copied().unwrap_or((0, 0));
             Some(CommitFile {
                 path: path.to_string(),
