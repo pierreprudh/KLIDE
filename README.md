@@ -135,14 +135,13 @@ Read the [Harness contract](./HARNESS_CONTRACT.md) for the trust model and [Harn
 
 ## Project status
 
-Klide is at version 0.5 and remains under active development. Unsigned Apple Silicon bundles and source builds are available now; Apple-notarized bundles are not yet published.
+Klide v0.5 is feature-complete and remains under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now; Apple-notarized bundles are not yet published.
 
 Current priorities:
 
-- Harden race/restart/merge behavior through daily dogfooding
-- Make worktree-per-run isolation the default parallel-agent flow
-- Complete provider-aware lifecycle signals for historical delegate runs
-- Publish signed macOS builds, then validate Windows and Linux
+- v0.5.1: dogfood race/restart/merge behavior, default worktree isolation, and historical Delegate lifecycle signals
+- v0.5.1: publish a signed/notarized macOS build, then validate Windows and Linux
+- v0.6: make Missions, budgets, capacity, routing, and validation contracts one dependable orchestration layer
 
 See the [changelog](./CHANGELOG.md) for shipped milestones.
 

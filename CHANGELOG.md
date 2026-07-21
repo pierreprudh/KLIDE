@@ -2,7 +2,7 @@
 
 Notable changes per milestone. Dates are completion dates.
 
-## v0.5.0 — Agent Operations (2026-07-16)
+## v0.5.0 — Agent Operations (2026-07-16; closeout 2026-07-21)
 
 - Race the same task across two Harness runs in isolated worktrees, keep sibling
   runs together in Mission Control, and compare status, validation, files,
@@ -16,7 +16,10 @@ Notable changes per milestone. Dates are completion dates.
 - Run frontend tests/build and Rust tests automatically on pushes to `main` and
   on pull requests.
 - Verify that the release profile produces a 26 MB Apple Silicon `Klide.app`;
-  distribution signing and notarization remain the publishing gate.
+  the final closeout reran the frontend suite, production build, and full Rust
+  suite (including PTY socket integration), then booted the bundled app and
+  embedded frontend successfully. Distribution signing and notarization remain
+  the publishing gate.
 
 - Git Review grew into a full workbench: branch diff against the recorded fork base, PR list/create/open/checkout/merge actions, a commit history graph, and a structured commit-detail pane with avatars and full-width diffs.
 - Delegate live status moved to hooks for Claude Code, Codex, and OpenCode, so Mission Control can show working/waiting/blocked state without scraping terminal output.

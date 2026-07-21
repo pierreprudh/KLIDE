@@ -180,14 +180,20 @@ Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (
 - **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; `MemoryModal` is the centered overlay (same pattern as `SkillsModal`).
 - **Trigger** — the AI panel header has a "Summarize" bookmark button (`src/components/ai/summarize.ts`) that calls the model once with a structured prompt, parses the response, and writes via `memory_write`. The first user message becomes the title; file paths are extracted from the conversation; the model produces Notes + Decisions + Goal.
 
-### v0.5 release-candidate focus
+### v0.5 closeout and next milestone
 
-v0.5 is functionally complete and under active hardening. Mission Control is the
+v0.5 was declared feature-complete on 2026-07-21. Mission Control is the
 operations surface for Klide Harness runs and Delegate runs; review evidence,
 worktree fleets, mission chaining, subagents, advisor escalation, and two-agent
-races are shipped. The current focus is race/restart/merge dogfooding, default
-worktree-per-run isolation, provider-aware historical lifecycle signals, CI,
-and the first signed/notarized macOS bundle.
+races are shipped. v0.5.1 owns release hardening and publishing: full
+race/restart/merge dogfooding, default worktree isolation, provider-aware
+historical lifecycle signals, the first signed/notarized macOS bundle, and
+Windows/Linux validation.
+
+The next product milestone is v0.6, dependable orchestration: Missions as
+outcomes, visible budget and capacity, capability-based worker routing,
+automatic validation contracts, and durable background execution. Do not
+unpark scheduling or proactive suggestions ahead of those foundations.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.

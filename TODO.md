@@ -6,16 +6,22 @@ mode, provider, context, skills, rules, diffs, and history. Avoid always-visible
 dashboards, seeded demos, and telemetry panels unless the user explicitly opens
 them.
 
-## v0.5 Release Candidate — started 2026-07-15
+## v0.5 — Agent Operations (feature-complete 2026-07-21)
 
 - [x] Add direct race-flow regression coverage: persistence, malformed state,
   bounded history, isolated dispatch, partial failure, and orphan cleanup.
 - [x] Remove a race worktree when its Harness run fails to start without forcing
   deletion of a dirty checkout.
 - [x] Add CI gates for frontend tests/build and Rust tests.
-- [x] Build the release-profile Apple Silicon `.app` bundle locally.
+- [x] Build and boot-verify the release-profile Apple Silicon `.app` bundle,
+  including the embedded frontend and `ptyd` entry point.
 - [x] Reconcile the README, changelog, and agent context with the actual v0.5
   product state.
+- [x] Merge the architecture-deepening work through PR #17 and keep the full
+  frontend/build/Rust validation gates green.
+
+## v0.5.1 — Release hardening and publishing
+
 - [ ] Dogfood the full Tauri race path: dispatch, permission pause, restart,
   evidence comparison, winner merge, and explicit worktree cleanup.
 - [ ] Publish the first signed/notarized macOS bundle.
@@ -23,6 +29,19 @@ them.
   selection with target-specific backends.
 - [ ] Make worktree-per-run isolation the default parallel-agent flow.
 - [ ] Complete provider-aware waiting/exit markers for historical delegate runs.
+
+## v0.6 — Dependable orchestration
+
+- [ ] Make a Mission the primary outcome object: intent, task graph, acceptance
+  criteria, worker Runs, and final evidence.
+- [ ] Add visible budget and capacity controls for dispatch, queues, retries,
+  escalation, and stop conditions.
+- [ ] Route bounded work by capability between the native Harness, local
+  models, and Delegate CLIs without hard-coding provider brands into policy.
+- [ ] Apply validation contracts automatically: static checks, tests, Diff
+  scope, semantic review, budget, memory, and human approval.
+- [ ] Add durable background execution and local-to-cloud handoff before
+  unparking natural-language scheduling or proactive suggestions.
 
 ## Stabilize v0.2
 

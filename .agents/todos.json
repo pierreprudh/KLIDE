@@ -10,16 +10,16 @@
     {
       "id": "T2",
       "text": "Run integration tests against the Tauri backend AND verify PTY/terminal output",
-      "done": false,
+      "done": true,
       "created_at": 1781717033207,
-      "updated_at": 1781717040355
+      "updated_at": 1784647241000
     },
     {
       "id": "T3",
-      "text": "Do a manual smoke test in the editor UI",
+      "text": "Run the hands-on Tauri editor/race smoke before publishing a signed build",
       "done": false,
       "created_at": 1781717035962,
-      "updated_at": 1781717035962
+      "updated_at": 1784647241000
     }
   ],
   "next_id": 4,
@@ -68,7 +68,25 @@
       "previous_text": "Run integration tests against the Tauri backend",
       "done": false,
       "at": 1781717040355
+    },
+    {
+      "seq": 6,
+      "action": "complete",
+      "todo_id": "T2",
+      "text": null,
+      "previous_text": null,
+      "done": true,
+      "at": 1784647241000
+    },
+    {
+      "seq": 7,
+      "action": "edit",
+      "todo_id": "T3",
+      "text": "Run the hands-on Tauri editor/race smoke before publishing a signed build",
+      "previous_text": "Do a manual smoke test in the editor UI",
+      "done": false,
+      "at": 1784647241000
     }
   ],
-  "next_event_id": 6
+  "next_event_id": 8
 }
