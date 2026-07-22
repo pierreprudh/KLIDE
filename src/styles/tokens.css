@@ -836,12 +836,55 @@ textarea.klide-diff-comment-input:focus-visible {
   --w-glass:       rgba(255, 255, 255, 0.045);
   --w-glass-hover: rgba(255, 255, 255, 0.085);
   --w-border:      rgba(255, 255, 255, 0.10);
+  /* Blue atmosphere halo behind the blue-ocean planet. Focus/interactive
+     states use brand sage (lightened here to read on the dark card). */
   --w-atmos:       #6f9bff;
-  /* Quiet, near-flat gutter — colour lives inside the framed card, not the
-     whole surface. */
-  background: linear-gradient(180deg, #07090e 0%, #080b11 100%);
+  --w-ring:        rgba(122, 160, 100, 0.34);
+  --w-ring-solid:  rgba(122, 160, 100, 0.55);
+  /* Values that were once hardcoded white/black so the light-theme override
+     below only has to flip this token block, never the rules. */
+  --w-border-strong:  rgba(255, 255, 255, 0.18);
+  --w-primary-fg:     #0a0d14;
+  --w-primary-hover:  #ffffff;
+  --w-input-focus-bg: rgba(255, 255, 255, 0.06);
+  --w-remove-hover:   rgba(255, 255, 255, 0.10);
+  --w-placeholder-bg: rgba(255, 255, 255, 0.02);
+  /* Gutter follows the active theme's own elevated surface — in every theme,
+     light OR dark — so the welcome never drifts from the rest of the app
+     (VS Code Dark #252526, Solarized #073642, Klide Light #fcfbf8, …). Colour
+     lives inside the framed cosmos card; the gutter is the calm backdrop it
+     floats on, and the near-black card always stays the darkest element. */
+  background: var(--bg-elevated);
   container-type: size;
   isolation: isolate;
+}
+
+/* Light themes: the welcome chrome (gutter, text, buttons, recent rows)
+   flips to dark-on-light so it follows the app's light/dark — including
+   auto-mode, which writes the resolved theme to documentElement.data-theme.
+   The framed cosmos card stays a dark "window into space" in both modes;
+   here it floats on the theme's own background instead of a dark gutter. */
+:root[data-theme="klide-light"] .klide-welcome,
+:root[data-theme="github-light"] .klide-welcome {
+  --w-fg:          #1c1c1c;
+  --w-dim:         rgba(28, 28, 28, 0.62);
+  --w-faint:       rgba(28, 28, 28, 0.42);
+  --w-ghost:       rgba(28, 28, 28, 0.14);
+  --w-glass:       rgba(20, 22, 30, 0.045);
+  --w-glass-hover: rgba(20, 22, 30, 0.08);
+  --w-border:      rgba(20, 22, 30, 0.12);
+  --w-border-strong:  rgba(20, 22, 30, 0.22);
+  --w-primary-fg:     var(--bg);
+  --w-primary-hover:  #000000;
+  --w-input-focus-bg: rgba(20, 22, 30, 0.05);
+  --w-remove-hover:   rgba(20, 22, 30, 0.08);
+  --w-placeholder-bg: rgba(20, 22, 30, 0.03);
+  /* Core brand sage on the off-white — no need to lighten here. */
+  --w-ring:        rgba(90, 123, 76, 0.30);
+  --w-ring-solid:  rgba(90, 123, 76, 0.55);
+  /* Gutter is inherited from the base rule (var(--bg-elevated)) — in light
+     themes that resolves to the calm off-white (#fcfbf8 / #F6F8FA), the
+     competitor idiom rather than flat cream or clinical pure white. */
 }
 
 /* Two-pane split: content column on the left, framed cosmos card on the
@@ -982,9 +1025,9 @@ textarea.klide-diff-comment-input:focus-visible {
   white-space: pre;
 }
 
-/* Diagonal cool gradient painted across the glyphs — bright on the lit
-   upper-left, deepening into night toward the lower-right. */
-.klide-cosmos-layer.is-planet {
+/* Ocean — the diagonal blue day/night gradient: bright on the lit upper-left,
+   deepening into night toward the lower-right. */
+.klide-cosmos-layer.is-planet-ocean {
   opacity: 0.94;
   background-image: linear-gradient(
     135deg,
@@ -1000,6 +1043,28 @@ textarea.klide-diff-comment-input:focus-visible {
   color: transparent;
   -webkit-text-fill-color: transparent;
   text-shadow: 0 0 6px rgba(20, 90, 160, 0.16);
+}
+
+/* Continents — brand-leaning green, sharing the ocean's 135deg light
+   direction so land and sea read as one lit sphere. Stacked over the ocean
+   layer; the two masks never overlap, so together they paint the whole globe.
+   Nudged a touch brighter/opaque so the land sits visually above the water. */
+.klide-cosmos-layer.is-planet-land {
+  opacity: 0.96;
+  background-image: linear-gradient(
+    135deg,
+    #e4f3cf 0%,
+    #aad080 22%,
+    #6f9e4f 46%,
+    #4c7838 66%,
+    #2c4d24 84%,
+    #1d331b 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 6px rgba(60, 120, 50, 0.20);
 }
 
 .klide-cosmos-layer.is-planet-glow {
@@ -1055,7 +1120,8 @@ textarea.klide-diff-comment-input:focus-visible {
   50%      { opacity: 0.62; transform: translate(-50%, -50%) scale(1.04); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .klide-cosmos-layer.is-planet,
+  .klide-cosmos-layer.is-planet-ocean,
+  .klide-cosmos-layer.is-planet-land,
   .klide-cosmos-layer.is-planet-glow {
     animation: klide-cosmos-float 11s var(--ease-in-out, ease-in-out) infinite;
     will-change: transform;
@@ -1098,7 +1164,7 @@ textarea.klide-diff-comment-input:focus-visible {
 
 .klide-welcome-glass-btn:hover {
   background: var(--w-glass);
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: var(--w-border-strong);
 }
 
 .klide-welcome-glass-btn:focus-visible,
@@ -1106,7 +1172,7 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-welcome-rrow-remove:focus-visible {
   outline: none;
   box-shadow:
-    0 0 0 3px rgba(111, 155, 255, 0.24),
+    0 0 0 3px var(--w-ring),
     inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
@@ -1114,13 +1180,13 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-welcome-glass-btn[data-primary="true"] {
   background: var(--w-fg);
   border-color: var(--w-fg);
-  color: #0a0d14;
+  color: var(--w-primary-fg);
   font-weight: 600;
 }
 
 .klide-welcome-glass-btn[data-primary="true"]:hover {
-  background: #ffffff;
-  border-color: #ffffff;
+  background: var(--w-primary-hover);
+  border-color: var(--w-primary-hover);
 }
 
 /* Quiet secondary — borderless ghost, demoted next to the primary. */
@@ -1140,7 +1206,7 @@ textarea.klide-diff-comment-input:focus-visible {
 /* Active (its composer is open) — subtle persistent wash. */
 .klide-welcome-glass-btn[data-active="true"] {
   background: var(--w-glass);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--w-border-strong);
 }
 
 .klide-welcome-glass-btn:disabled {
@@ -1199,8 +1265,8 @@ textarea.klide-diff-comment-input:focus-visible {
 
 .klide-welcome-input:focus {
   outline: none;
-  border-color: rgba(111, 155, 255, 0.5);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--w-ring-solid);
+  background: var(--w-input-focus-bg);
 }
 
 .klide-welcome-composer-hint {
@@ -1241,12 +1307,12 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-welcome-rrow.is-placeholder {
   height: 44px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--w-placeholder-bg);
   border-color: transparent;
 }
 
 .klide-welcome-rrow.is-placeholder:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--w-placeholder-bg);
   border-color: transparent;
 }
 
@@ -1299,7 +1365,7 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 .klide-welcome-rrow-remove:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--w-remove-hover);
   color: #ff8b80;
 }
 
@@ -1332,10 +1398,6 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 
 @media (max-width: 720px) {
-  .klide-welcome {
-    background: linear-gradient(180deg, #07090e 0%, #080b11 100%);
-  }
-
   .klide-welcome-glass-btn[data-primary="true"] {
     flex: 1 1 170px;
     justify-content: center;

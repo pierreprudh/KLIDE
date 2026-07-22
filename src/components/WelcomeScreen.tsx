@@ -75,7 +75,15 @@ function fbm(x: number, y: number): number {
 }
 
 type Starfield = { stars: string; brightStars: string };
-type Globe = { body: string; rim: string };
+// The globe splits its surface into two glyph masks — `ocean` and `land` — so
+// each can be tinted independently (blue sea, green continents). Every on-disc
+// cell lands in exactly one; stacked, they repaint the whole sphere. `rim` is
+// the atmosphere limb, drawn on top.
+type Globe = { ocean: string; land: string; rim: string };
+
+// Continent-noise cutoff: cells whose low-frequency `tex` sits above this are
+// land (green), the rest are ocean (blue). Higher = more sea (a bluer planet).
+const LAND_THRESHOLD = 0.54;
 
 // The starfield is the static backdrop — positions never rotate with the
 // planet, but each star twinkles on its own clock: a per-star sine drives a
@@ -144,7 +152,8 @@ function buildStarfield(cols: number, rows: number, t: number): Starfield {
 // atan2(nx,nz), latitude via asin(ny) — so continents compress toward the limb
 // the way a real globe's do, and glyphs shift frame to frame.
 function buildGlobe(cols: number, rows: number, phase: number): Globe {
-  const body: string[] = [];
+  const ocean: string[] = [];
+  const land: string[] = [];
   const rim: string[] = [];
   const cx = (cols - 1) / 2;
   const cy = (rows - 1) / 2;
@@ -160,7 +169,8 @@ function buildGlobe(cols: number, rows: number, phase: number): Globe {
   const Lz = lz / llen;
 
   for (let row = 0; row < rows; row++) {
-    let bodyLine = "";
+    let oceanLine = "";
+    let landLine = "";
     let rimLine = "";
     for (let col = 0; col < cols; col++) {
       const dx = (col - cx) * GLYPH_ASPECT;
@@ -168,7 +178,8 @@ function buildGlobe(cols: number, rows: number, phase: number): Globe {
       const nd = Math.sqrt(dx * dx + dy * dy) / radius;
 
       if (nd > 1) {
-        bodyLine += " ";
+        oceanLine += " ";
+        landLine += " ";
         rimLine += " ";
         continue;
       }
@@ -194,22 +205,33 @@ function buildGlobe(cols: number, rows: number, phase: number): Globe {
       // instead of reading as a hard-edged blob. The threshold is cell-fixed,
       // so cells flip in/out as `v` crosses it — that's the rotation reveal.
       if (hash2(col * 5 + 1, row * 5 + 1) > 0.42 + v * 0.66) {
-        bodyLine += " ";
+        oceanLine += " ";
+        landLine += " ";
         rimLine += " ";
         continue;
       }
 
       const idx = Math.max(0, Math.min(SURFACE_RAMP.length - 1, Math.round(v * (SURFACE_RAMP.length - 1))));
-      bodyLine += SURFACE_RAMP[idx];
+      const glyph = SURFACE_RAMP[idx];
+      // Same glyph either way — only which colour layer it lands on differs, so
+      // the sphere's shading stays continuous across the coastline.
+      if (tex > LAND_THRESHOLD) {
+        landLine += glyph;
+        oceanLine += " ";
+      } else {
+        oceanLine += glyph;
+        landLine += " ";
+      }
       rimLine +=
         nd > 0.86 && light > 0.08
           ? SURFACE_RAMP[Math.min(SURFACE_RAMP.length - 1, idx + 3)]
           : " ";
     }
-    body.push(bodyLine);
+    ocean.push(oceanLine);
+    land.push(landLine);
     rim.push(rimLine);
   }
-  return { body: body.join("\n"), rim: rim.join("\n") };
+  return { ocean: ocean.join("\n"), land: land.join("\n"), rim: rim.join("\n") };
 }
 
 export function WelcomeScreen({
@@ -581,7 +603,8 @@ export function WelcomeScreen({
             <div className="klide-cosmos-glow" />
             <pre className="klide-cosmos-layer is-stars">{starfield.stars}</pre>
             <pre className="klide-cosmos-layer is-bright-stars">{starfield.brightStars}</pre>
-            <pre className="klide-cosmos-layer is-planet">{globe.body}</pre>
+            <pre className="klide-cosmos-layer is-planet-ocean">{globe.ocean}</pre>
+            <pre className="klide-cosmos-layer is-planet-land">{globe.land}</pre>
             <pre className="klide-cosmos-layer is-planet-glow">{globe.rim}</pre>
           </div>
         </div>
