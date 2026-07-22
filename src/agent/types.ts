@@ -290,4 +290,7 @@ export type StartAgentRunInput = {
   testAfterEditCommand?: string;
   /** When this run is a spawned sub-agent, the parent run's id. */
   parentId?: string;
+  /** Optional durable Mission attempt linkage. Task id and Run id stay distinct. */
+  missionId?: string;
+  missionTaskId?: string;
 };

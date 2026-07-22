@@ -23,9 +23,13 @@ import type { AgentEvent, AgentMode, ProviderId, StartAgentRunInput } from "./ty
  *  the board owns the `prompt` — the actual instruction the model receives,
  *  which is NOT the same as a card's display title. */
 export type DispatchableTask = {
-  /** Becomes the run id, which is also the on-disk transcript id and the
-   *  Mission Control row id (existing one-id invariant). */
+  /** Stable Mission task identity. Never reused as a Harness run id. */
   taskId: string;
+  /** One concrete attempt of this Task. Omit outside a durable Mission and the
+   *  Rust Harness will mint a run id. Retries/races each receive a fresh id. */
+  attemptRunId?: string;
+  /** Durable Mission linkage for Rust-side acceptance recording. */
+  missionId?: string;
   /** The instruction text sent to the model — distinct from the card title. */
   prompt: string;
   /** plan = read + propose; goal = tool-using, diff-reviewed edits. */
@@ -81,7 +85,7 @@ export function planDispatch(
   }
 
   const input: StartAgentRunInput = {
-    runId: task.taskId,
+    runId: task.attemptRunId,
     workspaceRoot: ctx.workspaceRoot,
     mode: task.mode,
     provider,
@@ -89,6 +93,8 @@ export function planDispatch(
     text: task.prompt,
     attachments: [],
     requireDiffReview: ctx.requireDiffReview,
+    missionId: task.missionId,
+    missionTaskId: task.missionId ? task.taskId : undefined,
   };
 
   return { kind: "harness", provider, model, input };

@@ -43,6 +43,34 @@ them.
 - [ ] Add durable background execution and local-to-cloud handoff before
   unparking natural-language scheduling or proactive suggestions.
 
+### v0.6 Slice 1 — durable Mission tracer bullet (started 2026-07-22)
+
+- [x] Make Rust the durable Mission authority under `.klide/missions/`: one
+  `mission.md`, task Markdown files, and an append-only `events.jsonl`.
+- [x] Replace `MissionTask.runId` with multiple Run attempts plus one accepted
+  attempt; retries and races no longer overload Task identity.
+- [x] Compile authored Markdown + Rust events into the TypeScript
+  `MissionState` projection and reconstruct the latest Mission on reopen.
+- [x] Approve a plan, prepare a fresh attempt in Rust, dispatch through the
+  existing Harness, and attach the Run to its Task.
+- [x] Have the Rust Harness record its persisted validation summary back to the
+  Mission after settling; downstream tasks unlock only after acceptance, not
+  process exit.
+- [x] Keep the first surface an editable task list/tier board. Graph layout and
+  cycle validation remain slice 2.
+- [x] Freeze each task's worker kind, provider, model, and diff-review policy
+  into its Markdown spec when the plan is approved.
+- [x] Move one-at-a-time dispatch/chaining into a Rust Mission supervisor so
+  the next accepted-ready task starts while every frontend surface is closed;
+  rejected attempts park for explicit retry and independent branches proceed.
+- [x] Reattach the tier-board surface to Rust-started Runs from transcript plus
+  the global event stream so permission/diff pauses remain operable on reopen.
+- [ ] Reconcile orphaned active attempts and resume approved Missions after a
+  full desktop-process restart. The current supervisor survives surface closure,
+  not termination of the Rust process.
+- [ ] Slice 2: add the task graph view, cycle validation, and Markdown-backed
+  dependency manipulation without introducing a second graph state model.
+
 ## Stabilize v0.2
 
 - [x] Reconcile README with real delegate PTYs, Mission Control handoff, Project Memory, and Context Lens status.

@@ -195,6 +195,21 @@ outcomes, visible budget and capacity, capability-based worker routing,
 automatic validation contracts, and durable background execution. Do not
 unpark scheduling or proactive suggestions ahead of those foundations.
 
+The first v0.6 tracer bullet establishes the durability boundary: Rust owns
+`.klide/missions/<id>/mission.md`, `tasks/*.md`, and append-only
+`events.jsonl`; TypeScript only compiles those documents/events into
+`MissionState`. A Mission Task owns zero or more Run attempts and one accepted
+attempt — Task id and Run id are never the same lifecycle object. The detached
+Rust Harness writes validation back to the linked Mission after it settles,
+and dependency readiness gates on an accepted attempt, never on process exit.
+Approval freezes the worker kind, provider, model, and diff-review policy into
+each task Markdown file. A one-at-a-time Rust Mission supervisor now selects an
+unattempted ready task, attaches and starts its Harness Run headlessly, and
+re-enters after validation; rejected attempts park for explicit retry. The
+tier-board only observes events and reattaches to operator pauses. Full
+desktop-process restart/orphan reconciliation and the graph editor remain the
+next durability/UI slices.
+
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.
 - Treat Project Memory as the continuity surface. The older Context Lens/project-graph path is parked unless it feeds memory or summarization directly.

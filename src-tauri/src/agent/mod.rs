@@ -1603,10 +1603,30 @@ take a different approach or ask the user what they'd prefer.",
 #[tauri::command]
 pub async fn agent_start_run(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
+    request: StartRunRequest,
+    on_event: Channel<AgentEvent>,
+) -> Result<StartRunResponse, String> {
+    start_run(app, request, on_event).await
+}
+
+/// Start a Harness run without a request-scoped frontend channel. Structural
+/// events are still appended to the transcript and broadcast on
+/// `agent-run:<id>`, so a surface can reattach later. Durable Mission
+/// supervision uses this path while every frontend surface is closed.
+pub(crate) async fn start_background_run(
+    app: tauri::AppHandle,
+    request: StartRunRequest,
+) -> Result<StartRunResponse, String> {
+    let on_event = Channel::<AgentEvent>::new(|_| Ok(()));
+    start_run(app, request, on_event).await
+}
+
+async fn start_run(
+    app: tauri::AppHandle,
     mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
+    let state = app.state::<AgentSupervisorState>();
     if let Some(root) = request.workspace_root.as_deref() {
         for command in command_allowlist::list(root)? {
             if !request.command_allowlist.iter().any(|c| c == &command) {
@@ -1626,6 +1646,20 @@ pub async fn agent_start_run(
         .unwrap_or_else(run_id);
     // The id names the transcript file — refuse anything path-shaped.
     validate_run_id(&id)?;
+    let mission_link = match (
+        request.workspace_root.clone(),
+        request.mission_id.clone(),
+        request.mission_task_id.clone(),
+    ) {
+        (Some(root), Some(mission_id), Some(task_id)) => Some((root, mission_id, task_id)),
+        (_, None, None) => None,
+        _ => {
+            return Err(
+                "A Mission-linked Run requires workspaceRoot, missionId, and missionTaskId."
+                    .to_string(),
+            )
+        }
+    };
     let cancel = CancellationToken::new();
 
     // Crash-loop quarantine: a conversation whose recent runs all errored on
@@ -1684,9 +1718,10 @@ pub async fn agent_start_run(
     // Detach the loop so this command returns the run id immediately; the UI
     // follows progress through the event channel and can abort via the token.
     let supervisor: Arc<dyn RunSupervisor> = Arc::new(TauriSupervisor::new(app.clone()));
+    let mission_app = app.clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(err) = run_agent_loop(
+        let result = run_agent_loop(
             supervisor,
             runs_dir,
             task_id.clone(),
@@ -1695,8 +1730,19 @@ pub async fn agent_start_run(
             cancel,
             RealProviderCaller,
         )
-        .await
-        {
+        .await;
+        if let Some((root, mission_id, mission_task_id)) = mission_link {
+            if let Err(err) = crate::missions::record_linked_attempt_validation(
+                &mission_app,
+                &root,
+                &mission_id,
+                &mission_task_id,
+                &task_id,
+            ) {
+                eprintln!("mission attempt {task_id} validation failed: {err}");
+            }
+        }
+        if let Err(err) = result {
             eprintln!("agent run {task_id} failed: {err}");
         }
     });

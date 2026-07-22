@@ -7,10 +7,9 @@
 //   · spacing on the Design.md scale (8/12/16/24), --fs ramp, --radius tiers.
 //
 // The routing + budget math is real (routeTask / budget presets / capacity).
-// The planner (goal → task list) is still a stub — decomposition is its own
-// slice. Plan-mode (read-only) cards dispatch as REAL harness runs through the
-// slice-1 dispatcher seam and stream a live activity line; goal-mode cards wait
-// for the diff-review surface, which this view doesn't host yet.
+// The model planner authors the task list; approval freezes routing into the
+// durable Markdown specs. Rust supervises Harness attempts while this surface
+// projects progress and reattaches to operator permission/diff pauses.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listProviderModels } from "../ipc/aiProviders";
@@ -24,13 +23,18 @@ import {
 } from "../agent/routingPolicy";
 import { BUDGET_PRESETS, createBudgetLedger, type BudgetPreset } from "../agent/budgetLedger";
 import { createCapacityState } from "../agent/capacityPlanner";
-import { dispatchAssignment, type DispatchableTask } from "../agent/dispatcher";
-import { chainStep } from "../agent/missionChain";
+import {
+  approveDurableMission,
+  compileDurableMissionBundle,
+  createDurableMission,
+  dispatchDurableMissionTask,
+  listDurableMissions,
+  saveDurableMissionTask,
+  type DurableMissionBundle,
+  type DurableMissionTaskDispatch,
+} from "../agent/durableMissions";
 import type { AgentEvent, DiffProposal, PermissionRequest, ProviderId } from "../agent/types";
-import { resolveDiff, resolvePermission } from "../agent/client";
-import { resolveAdvisor } from "../agent/advisor";
-import { serviceAdvisorConsult } from "../agent/advisorConsult";
-import { getSetting, SETTINGS } from "../settingsStore";
+import { readAgentRunEvents, reattachAgentRun, resolveDiff, resolvePermission } from "../agent/client";
 import { DiffModal } from "./DiffModal";
 import { planGoal, resolvePlannerModel, stubPlan, type PlannedTask } from "../agent/planner";
 import { PROVIDER_GROUPS, providerName, isDelegateProvider, DEFAULT_MODELS } from "../agent/providers";
@@ -139,56 +143,66 @@ type Pending =
   | { kind: "diff"; proposal: DiffProposal }
   | { kind: "permission"; request: PermissionRequest };
 
-function useRealDispatch(workspaceRoot: string | null, story: string) {
+function useMissionRunObserver() {
   const [live, setLive] = useState<Record<string, LiveCard>>({});
   const [pending, setPending] = useState<Pending[]>([]);
-  const counter = useRef(0);
+  const attached = useRef(new Map<string, () => void>());
+  const attaching = useRef(new Set<string>());
 
-  async function run(task: PlannedTask, assignment: WorkerAssignment, requireReview: boolean, override?: ModelSel | null) {
-    counter.current += 1;
-    // Every task prompt opens with the mission's user story (the goal as it was
-    // planned), so an agent working one card still knows the big picture. The
-    // fuller description (when the planner produced one) is the real
-    // instruction; fall back to the title.
-    const storyLine = story ? `User story: ${story}\n\n` : "";
-    const dispatchable: DispatchableTask = {
-      taskId: `orch-${task.taskId}-${counter.current}`,
-      prompt: storyLine + `Task: ${task.title}` + (task.description ? `\n\n${task.description}` : ""),
-      mode: task.mode,
-    };
-    // A per-task override swaps the provider/model the routing chose. Recompute
-    // workerKind so the dispatcher takes the right path (delegate vs harness).
-    const eff: WorkerAssignment = override
-      ? { ...assignment, provider: override.provider, model: override.model, workerKind: isDelegateProvider(override.provider) ? "delegate" : "api-model" }
-      : assignment;
-    setLive((s) => ({ ...s, [task.taskId]: { status: "running", activity: "starting…" } }));
-    try {
-      const { plan } = await dispatchAssignment(
-        dispatchable,
-        eff,
-        { workspaceRoot, requireDiffReview: requireReview },
-        (ev) => {
-          setLive((s) => (s[task.taskId] ? { ...s, [task.taskId]: activityFromEvent(s[task.taskId], ev) } : s));
-          // Enqueue operator pauses (auto-accept skips diff pauses; permission
-          // pauses still arrive so command-running tasks never hang silently).
-          if (ev.type === "diff_proposed") setPending((q) => [...q, { kind: "diff", proposal: ev.proposal }]);
-          else if (ev.type === "permission_requested") setPending((q) => [...q, { kind: "permission", request: ev.request }]);
-          // The crew member escalated a hard decision. Service it with this
-          // tier's advisor (falling back to the global harness advisor) —
-          // without this, an orchestrator run that calls consult_advisor parks
-          // forever, since only the AI panel used to answer the event.
-          else if (ev.type === "advisor_requested") {
-            const advisor = eff.advisor ?? resolveAdvisor(getSetting(SETTINGS.harnessSettings));
-            void serviceAdvisorConsult({ event: ev, advisor, workspaceRoot });
-          }
-        }
-      );
-      if (plan.kind !== "harness") {
-        setLive((s) => ({ ...s, [task.taskId]: { status: "error", activity: plan.reason } }));
-      }
-    } catch (e) {
-      setLive((s) => ({ ...s, [task.taskId]: { status: "error", activity: String(e).slice(0, 80) } }));
+  useEffect(() => () => {
+    attached.current.forEach((detach) => detach());
+    attached.current.clear();
+  }, []);
+
+  function consume(taskId: string, event: AgentEvent) {
+    setLive((current) => {
+      const previous = current[taskId] ?? { status: "running", activity: "running…" };
+      return { ...current, [taskId]: activityFromEvent(previous, event) };
+    });
+    if (event.type === "diff_proposed") {
+      setPending((queue) => queue.some((item) => item.kind === "diff" && item.proposal.id === event.proposal.id)
+        ? queue
+        : [...queue, { kind: "diff", proposal: event.proposal }]);
+    } else if (event.type === "permission_requested") {
+      setPending((queue) => queue.some((item) => item.kind === "permission" && item.request.id === event.request.id)
+        ? queue
+        : [...queue, { kind: "permission", request: event.request }]);
+    } else if (event.type === "diff_resolved") {
+      setPending((queue) => queue.filter((item) => item.kind !== "diff" || item.proposal.id !== event.proposalId));
+    } else if (event.type === "permission_resolved") {
+      setPending((queue) => queue.filter((item) => item.kind !== "permission" || item.request.id !== event.requestId));
     }
+  }
+
+  function observe(taskId: string, runId: string) {
+    if (attached.current.has(runId) || attaching.current.has(runId)) return;
+    attaching.current.add(runId);
+    setLive((current) => ({
+      ...current,
+      [taskId]: current[taskId] ?? { status: "running", activity: "starting…" },
+    }));
+    void (async () => {
+      const buffered: Array<{ event: AgentEvent; seq: number }> = [];
+      let snapshotLength: number | null = null;
+      try {
+        const reattachment = await reattachAgentRun(runId, 0, (event, seq) => {
+          if (snapshotLength === null) buffered.push({ event, seq });
+          else if (seq >= snapshotLength) consume(taskId, event);
+        });
+        attached.current.set(runId, reattachment.detach);
+        const snapshot = await readAgentRunEvents(runId);
+        snapshot.forEach((event) => consume(taskId, event));
+        snapshotLength = snapshot.length;
+        buffered.filter(({ seq }) => seq >= snapshot.length).forEach(({ event }) => consume(taskId, event));
+      } catch (error) {
+        setLive((current) => ({
+          ...current,
+          [taskId]: { status: "error", activity: String(error).slice(0, 80) },
+        }));
+      } finally {
+        attaching.current.delete(runId);
+      }
+    })();
   }
 
   // A new plan reuses task ids (t1..tN), so stale card statuses from the last
@@ -221,7 +235,7 @@ function useRealDispatch(workspaceRoot: string | null, story: string) {
     pop();
   }
 
-  return { live, run, reset, head, applyDiff, rejectDiff, decidePermission };
+  return { live, observe, reset, head, applyDiff, rejectDiff, decidePermission };
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────
@@ -681,13 +695,13 @@ function PermissionPrompt({ request, onAllow, onDeny }: { request: PermissionReq
 // ── Console ───────────────────────────────────────────────────────────────
 export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: string | null }) {
   const [goal, setGoal] = useState("add rate limiting to the API");
-  // The user story — the goal as it was when Plan was pressed. Editing the
-  // input afterwards doesn't drift the story the running mission refers to.
-  const [story, setStory] = useState("");
   const [mode, setMode] = useState<ModeKey>("balanced");
   // The current plan (model-produced). Empty until the user plans — the board
   // shows an inviting empty state rather than a fake default plan.
   const [tasks, setTasks] = useState<PlannedTask[]>([]);
+  // Rust-authored Mission Markdown + append-only runtime events. This is the
+  // durable authority; the board's React state is only its current projection.
+  const [durableBundle, setDurableBundle] = useState<DurableMissionBundle | null>(null);
   const [planning, setPlanning] = useState(false);
   // Review every edit (default) vs auto-apply. Permission prompts still surface
   // either way, so command-running tasks never run silently.
@@ -699,9 +713,17 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
   const [overrides, setOverrides] = useState<Record<string, ModelSel>>({});
   // Which card is expanded to show its full description + model + cost.
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   // Bumped on every (re)plan so the board remounts and replays the build-in.
   const [planSeq, setPlanSeq] = useState(0);
   const { routed, byTier, totalCost, totalMs, envelope, readyCount } = useOrchestratorModel(tasks, mode);
+  const durableState = useMemo(
+    () => durableBundle ? compileDurableMissionBundle(durableBundle) : null,
+    [durableBundle]
+  );
+  const planApproved = durableBundle
+    ? durableState?.missions[durableBundle.mission.id]?.approvedAtMs != null
+    : false;
 
   // Global build order, row-major across the lanes — so cards lay in as one
   // continuous left-to-right wave across the full width ("brick by brick"),
@@ -718,73 +740,253 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
     }
     return order;
   }, [byTier]);
-  const real = useRealDispatch(workspaceRoot ?? null, story);
+  const real = useMissionRunObserver();
   const titleById = useMemo(() => Object.fromEntries(routed.map((r) => [r.task.taskId, r.task.title])), [routed]);
 
-  // ── Mission chaining ──────────────────────────────────────────────────────
-  // "Run mission" dispatches the dep-free tasks immediately, and as each run
-  // settles, tasks whose dependencies are all done dispatch next — the board
-  // drains the dependency graph instead of firing one wave. The unlock/block/
-  // settle rules live in the pure `chainStep` (src/agent/missionChain.ts).
+  // ── Mission supervision ───────────────────────────────────────────────────
+  // Rust owns selection, attempt attachment, Harness launch, validation, and
+  // accept-gated continuation. React only observes the durable projection and
+  // answers explicit permission/diff pauses after reattaching to a Run.
   const [missionOn, setMissionOn] = useState(false);
-  // Tasks this mission already launched — guards double-dispatch while the
-  // "running" status is still landing in `real.live`.
-  const chainLaunched = useRef<Set<string>>(new Set());
 
-  const launchTask = (id: string) => {
-    const r = routed.find((x) => x.task.taskId === id);
-    if (!r) return;
-    chainLaunched.current.add(id);
-    void real.run(r.task, r.assignment, reviewEdits, overrides[id] ?? null);
-  };
+  // Reconstruct the latest Mission after this surface remounts. The authored
+  // task Markdown restores the list; events restore attempts and acceptance.
+  useEffect(() => {
+    let cancelled = false;
+    if (!workspaceRoot) return;
+    void listDurableMissions(workspaceRoot).then((bundles) => {
+      if (cancelled || bundles.length === 0) return;
+      const latest = bundles[0];
+      const projection = compileDurableMissionBundle(latest);
+      setDurableBundle(latest);
+      setGoal(latest.mission.intent);
+      setTasks(latest.tasks.map((task) => ({
+        taskId: task.id,
+        title: task.title,
+        description: task.bodyMarkdown || undefined,
+        acceptanceCriteria: task.acceptanceCriteria,
+        phase: task.phase,
+        mode: task.mode,
+        risk: task.risk,
+        writesFiles: task.writesFiles,
+        dependsOn: task.dependencies.length ? task.dependencies : undefined,
+        needsRepoWideContext: task.needsRepoWideContext || undefined,
+        needsStrongReasoning: task.needsStrongReasoning || undefined,
+        needsDelegateCli: task.needsDelegateCli || undefined,
+        needsVisualReview: task.needsVisualReview || undefined,
+      })));
+      setOverrides(Object.fromEntries(latest.tasks.flatMap((task) => task.dispatch
+        ? [[task.id, { provider: task.dispatch.provider as ProviderId, model: task.dispatch.model }]]
+        : [])));
+      setPlanSeq((seq) => seq + 1);
+      const mission = projection.missions[latest.mission.id];
+      const lastLifecycle = [...latest.events].reverse().find((line) =>
+        line.event.type === "mission_completed" || line.event.type === "mission_parked"
+      );
+      const hasAttemptAfterLifecycle = lastLifecycle
+        ? latest.events.some((line) => line.seq > lastLifecycle.seq && line.event.type === "attempt_attached")
+        : false;
+      if (mission?.approvedAtMs != null && (!lastLifecycle || hasAttemptAfterLifecycle)) {
+        setMissionOn(true);
+      }
+    }).catch((error) => {
+      if (!cancelled) notify(`Couldn't reopen Missions — ${String(error)}`, { tone: "warn" });
+    });
+    return () => { cancelled = true; };
+  }, [workspaceRoot]);
 
-  function runMission() {
-    chainLaunched.current = new Set();
-    const step = chainStep(routed.map((r) => r.task), () => undefined, chainLaunched.current);
-    step.launch.forEach(launchTask);
-    setMissionOn(true);
+  // A mounted console observes Rust-owned background progress. Polling reads
+  // events only; the Harness itself appends validation even if this view is
+  // closed, so reopening loses no acceptance decision.
+  useEffect(() => {
+    if (!missionOn || !workspaceRoot || !durableBundle) return;
+    let cancelled = false;
+    const missionId = durableBundle.mission.id;
+    const timer = window.setInterval(() => {
+      void listDurableMissions(workspaceRoot).then((bundles) => {
+        if (cancelled) return;
+        const latest = bundles.find((bundle) => bundle.mission.id === missionId);
+        if (!latest) return;
+        setDurableBundle((current) => {
+          const currentSeq = current?.events[current.events.length - 1]?.seq ?? -1;
+          const latestSeq = latest.events[latest.events.length - 1]?.seq ?? -1;
+          return latestSeq > currentSeq ? latest : current;
+        });
+      });
+    }, 750);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [missionOn, workspaceRoot, durableBundle?.mission.id]);
+
+  // Reattach the control surface to attempts Rust started headlessly. The
+  // transcript snapshot closes the remount gap; the global stream supplies
+  // subsequent permission/diff requests and activity.
+  useEffect(() => {
+    if (!durableState || !durableBundle) return;
+    for (const taskId of durableBundle.mission.taskIds) {
+      const task = durableState.tasks[taskId];
+      for (const attempt of task?.attempts ?? []) {
+        if (attempt.status === "running") real.observe(taskId, attempt.runId);
+      }
+    }
+  }, [durableState, durableBundle, real]);
+
+  useEffect(() => {
+    if (!durableBundle) return;
+    const terminal = [...durableBundle.events].reverse().find((line) =>
+      line.event.type === "mission_completed" || line.event.type === "mission_parked"
+    );
+    if (!terminal) return;
+    const continued = durableBundle.events.some((line) =>
+      line.seq > terminal.seq && line.event.type === "attempt_attached"
+    );
+    if (continued) return;
+    setMissionOn(false);
+    if (terminal.event.type === "mission_completed") {
+      notify("Mission complete — every task has an accepted Run", { tone: "success" });
+    } else if (terminal.event.type === "mission_parked") {
+      notify(`Mission parked — ${terminal.event.reason}`, { tone: "warn" });
+    }
+  }, [durableBundle]);
+
+  function approvalTasks(): Array<DurableMissionTaskDispatch & { taskId: string }> {
+    return routed.map(({ task, assignment }) => {
+      const override = overrides[task.taskId];
+      const provider = override?.provider ?? assignment.provider;
+      if (!provider) throw new Error(`Task “${task.title}” has no runnable provider.`);
+      const model = override?.model || assignment.model || resolvedModelFor(provider);
+      if (!model) throw new Error(`Task “${task.title}” has no runnable model.`);
+      const delegate = override ? isDelegateProvider(override.provider) : assignment.workerKind === "delegate";
+      return {
+        taskId: task.taskId,
+        workerKind: delegate ? "delegate" : "harness",
+        provider,
+        model,
+        requireDiffReview: reviewEdits,
+      };
+    });
   }
 
-  // The chain reactor: every live-state change re-checks the graph. Launch
-  // whatever became unblocked; when nothing is running and nothing new can
-  // launch, the mission has drained — settle and report.
-  useEffect(() => {
-    if (!missionOn) return;
-    const status = (id: string) => real.live[id]?.status;
-    const step = chainStep(routed.map((r) => r.task), status, chainLaunched.current);
-    if (step.launch.length > 0) {
-      step.launch.forEach(launchTask);
-      return;
+  async function runMission() {
+    if (!workspaceRoot || !durableBundle) return;
+    try {
+      const approved = await approveDurableMission(workspaceRoot, durableBundle.mission.id, {
+        tasks: approvalTasks(),
+        autoStart: true,
+      });
+      setDurableBundle(approved);
+      setMissionOn(true);
+    } catch (error) {
+      notify(`Couldn't approve Mission — ${error instanceof Error ? error.message : String(error)}`, { tone: "warn" });
     }
-    if (step.settled) {
-      setMissionOn(false);
-      const done = routed.filter((r) => status(r.task.taskId) === "done").length;
-      const failed = routed.filter((r) => status(r.task.taskId) === "error").length;
-      const parked = routed.length - done - failed;
-      if (failed > 0) notify(`Mission settled — ${done} done, ${failed} failed${parked ? `, ${parked} blocked` : ""}`, { tone: "warn" });
-      else notify(`Mission complete — ${done} task${done === 1 ? "" : "s"} done`, { tone: "success" });
+  }
+
+  function patchPlannedTask(taskId: string, patch: Partial<PlannedTask>) {
+    setTasks((current) => current.map((task) => task.taskId === taskId ? { ...task, ...patch } : task));
+  }
+
+  async function saveTaskEdit(task: PlannedTask) {
+    if (!workspaceRoot || !durableBundle || savingTaskId) return;
+    setSavingTaskId(task.taskId);
+    try {
+      const saved = await saveDurableMissionTask(workspaceRoot, durableBundle.mission.id, {
+        id: task.taskId,
+        title: task.title,
+        bodyMarkdown: task.description ?? "",
+        phase: task.phase,
+        mode: task.mode,
+        risk: task.risk,
+        writesFiles: task.writesFiles,
+        dependencies: task.dependsOn ?? [],
+        acceptanceCriteria: task.acceptanceCriteria?.length
+          ? task.acceptanceCriteria
+          : [task.description ?? `The task outcome satisfies: ${task.title}`],
+        needsRepoWideContext: task.needsRepoWideContext === true,
+        needsStrongReasoning: task.needsStrongReasoning === true,
+        needsDelegateCli: task.needsDelegateCli === true,
+        needsVisualReview: task.needsVisualReview === true,
+      });
+      setDurableBundle(saved);
+      notify("Task saved to Mission Markdown", { tone: "success" });
+    } catch (error) {
+      notify(`Couldn't save task — ${error instanceof Error ? error.message : String(error)}`, { tone: "warn" });
+    } finally {
+      setSavingTaskId(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [missionOn, real.live, routed, reviewEdits, overrides]);
+  }
+
+  async function runSingleTask(taskId: string) {
+    if (!workspaceRoot || !durableBundle) return;
+    try {
+      if (durableState?.missions[durableBundle.mission.id]?.approvedAtMs == null) {
+        const approved = await approveDurableMission(workspaceRoot, durableBundle.mission.id, {
+          tasks: approvalTasks(),
+          autoStart: false,
+        });
+        setDurableBundle(approved);
+      }
+      const dispatched = await dispatchDurableMissionTask(
+        workspaceRoot,
+        durableBundle.mission.id,
+        taskId
+      );
+      setDurableBundle(dispatched);
+      setMissionOn(true);
+    } catch (error) {
+      notify(`Couldn't run task — ${error instanceof Error ? error.message : String(error)}`, { tone: "warn" });
+    }
+  }
 
   async function plan() {
     if (!goal.trim() || planning) return;
     setPlanning(true);
-    setStory(goal.trim());
     // Task ids restart at t1 on every plan — drop the old plan's statuses and
     // any in-flight mission so the new board starts clean.
     setMissionOn(false);
-    chainLaunched.current = new Set();
     real.reset();
+    setDurableBundle(null);
+    let result: PlannedTask[];
+    let usedFallback = false;
     try {
-      const result = await planGoal(goal, plannerSel);
-      setTasks(result);
-      setOverrides({});
-      notify(`Planned ${result.length} task${result.length === 1 ? "" : "s"}`, { tone: "success" });
+      result = await planGoal(goal, plannerSel);
     } catch (e) {
       // Model unreachable / unparseable → keep the board usable with a template.
-      setTasks(stubPlan(goal));
+      result = stubPlan(goal);
+      usedFallback = true;
       notify(`Couldn't plan with the model — showing a generic template. (${e instanceof Error ? e.message : String(e)})`, { tone: "warn" });
+    }
+    setTasks(result);
+    setOverrides({});
+    try {
+      if (!workspaceRoot) throw new Error("Open a workspace to persist this Mission.");
+      const bundle = await createDurableMission(workspaceRoot, {
+        title: goal.trim().slice(0, 120),
+        intent: goal.trim(),
+        mode: "goal",
+        tasks: result.map((task) => ({
+          id: task.taskId,
+          title: task.title,
+          bodyMarkdown: task.description ?? "",
+          phase: task.phase,
+          mode: task.mode,
+          risk: task.risk,
+          writesFiles: task.writesFiles,
+          dependencies: task.dependsOn ?? [],
+          acceptanceCriteria: task.acceptanceCriteria?.length
+            ? task.acceptanceCriteria
+            : [task.description ?? `The task outcome satisfies: ${task.title}`],
+          needsRepoWideContext: task.needsRepoWideContext === true,
+          needsStrongReasoning: task.needsStrongReasoning === true,
+          needsDelegateCli: task.needsDelegateCli === true,
+          needsVisualReview: task.needsVisualReview === true,
+        })),
+      });
+      setDurableBundle(bundle);
+      if (!usedFallback) notify(`Planned and saved ${result.length} task${result.length === 1 ? "" : "s"}`, { tone: "success" });
+    } catch (error) {
+      notify(`Plan is visible but not durable — ${error instanceof Error ? error.message : String(error)}`, { tone: "warn" });
     } finally {
       setPlanSeq((n) => n + 1);
       setPlanning(false);
@@ -955,8 +1157,19 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                       const t = r.task;
                       const dep = t.dependsOn?.[0];
                       const liveCard = real.live[t.taskId];
-                      const status: CardStatus = liveCard?.status ?? "idle";
-                      const canRunReal = !!workspaceRoot && status !== "running";
+                      const durableTask = durableState?.tasks[t.taskId];
+                      const lastAttempt = durableTask?.attempts[durableTask.attempts.length - 1];
+                      const projectedStatus: CardStatus = durableTask?.acceptedRunId
+                        ? "done"
+                        : lastAttempt?.status === "running"
+                          ? "running"
+                          : lastAttempt
+                            ? "error"
+                            : "idle";
+                      const status: CardStatus = projectedStatus === "done" || projectedStatus === "error"
+                        ? projectedStatus
+                        : liveCard?.status ?? projectedStatus;
+                      const canRunReal = !!workspaceRoot && !!durableBundle && status !== "running" && !missionOn;
                       const ov = overrides[t.taskId] ?? null;
                       const isOpen = expanded === t.taskId;
                       const effWorker = ov ? providerName(ov.provider) : WORKER_LABEL[r.assignment.workerKind];
@@ -993,14 +1206,40 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                               <StatusBadge status={status} />
                             </span>
                           </div>
-                          <div style={{ fontSize: "var(--fs-base)", color: "var(--fg-strong)", lineHeight: 1.4, marginBottom: 8, letterSpacing: "-0.003em" }}>{t.title}</div>
-                          {isOpen && t.description && (
-                            <div className="klide-orch-activity" style={{ fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.5, marginBottom: 8 }}>{t.description}</div>
+                          {isOpen ? (
+                            <div onClick={(event) => event.stopPropagation()} style={{ display: "grid", gap: 7, marginBottom: 9 }}>
+                              <input
+                                value={t.title}
+                                disabled={planApproved}
+                                onChange={(event) => patchPlannedTask(t.taskId, { title: event.target.value })}
+                                aria-label="Task title"
+                                style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg)", color: "var(--fg-strong)", padding: "6px 8px", font: "inherit", fontSize: "var(--fs-base)", fontWeight: 500 }}
+                              />
+                              <textarea
+                                value={t.description ?? ""}
+                                disabled={planApproved}
+                                onChange={(event) => patchPlannedTask(t.taskId, { description: event.target.value })}
+                                aria-label="Task Markdown"
+                                rows={4}
+                                placeholder="Task context in Markdown"
+                                style={{ width: "100%", resize: "vertical", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg)", color: "var(--fg-subtle)", padding: "7px 8px", font: "inherit", fontSize: 12, lineHeight: 1.5 }}
+                              />
+                              <button
+                                className="klide-button klide-button-ghost"
+                                disabled={planApproved || !durableBundle || savingTaskId !== null || !t.title.trim()}
+                                onClick={() => void saveTaskEdit(t)}
+                                style={{ justifySelf: "end", minHeight: 26, padding: "3px 9px", fontSize: 10.5 }}
+                              >
+                                {planApproved ? "Plan approved" : savingTaskId === t.taskId ? "Saving…" : "Save task"}
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: "var(--fs-base)", color: "var(--fg-strong)", lineHeight: 1.4, marginBottom: 8, letterSpacing: "-0.003em" }}>{t.title}</div>
                           )}
                           {dep && (() => {
                             // Mission-aware dep line: parked upstream failure →
                             // blocked; waiting its turn in a live mission → queued.
-                            const depFailed = (t.dependsOn ?? []).some((d) => real.live[d]?.status === "error");
+                            const depFailed = (t.dependsOn ?? []).some((d) => durableState?.tasks[d]?.status === "failed");
                             const queued = missionOn && !liveCard && !depFailed;
                             const depTitle = (titleById[dep] ?? dep).slice(0, 24);
                             return (
@@ -1043,7 +1282,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                           {/* Footer — worker/model on a hairline shelf. Expanded:
                               the worker becomes a chooser so you can reroute it. */}
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)" }}>
-                            {isOpen ? (
+                            {isOpen && !planApproved ? (
                               <ModelChooser
                                 value={ov}
                                 onChange={(v) => setOverrides((m) => { const n = { ...m }; if (v) n[t.taskId] = v; else delete n[t.taskId]; return n; })}
@@ -1055,7 +1294,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                               {canRunReal && (
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); real.run(t, r.assignment, reviewEdits, ov); }}
+                                  onClick={(e) => { e.stopPropagation(); void runSingleTask(t.taskId); }}
                                   title="Dispatch this task as a real run — edits surface for review"
                                   className="klide-orch-run"
                                   style={{
@@ -1114,8 +1353,8 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                 Est. time <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums", color: "var(--fg)" }}>{fmtMin(totalMs)}</span>
               </div>
             </div>
-            <button className="klide-button klide-button-primary" onClick={runMission} disabled={!workspaceRoot || readyCount === 0 || missionOn}>
-              {!workspaceRoot ? "Open a workspace" : missionOn ? "Mission running…" : `Run mission · ${routed.length} task${routed.length === 1 ? "" : "s"}`}
+            <button className="klide-button klide-button-primary" onClick={() => void runMission()} disabled={!workspaceRoot || !durableBundle || readyCount === 0 || missionOn}>
+              {!workspaceRoot ? "Open a workspace" : !durableBundle ? "Mission not saved" : missionOn ? "Mission running…" : `Run mission · ${routed.length} task${routed.length === 1 ? "" : "s"}`}
             </button>
             {/* Review toggle — review every edit, or auto-apply (still checkpointed). */}
             <button
@@ -1131,7 +1370,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             </button>
             <div className="klide-surface" style={{ padding: 18, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
               <div style={{ ...eyebrow, marginBottom: 8 }}>How it works</div>
-              Run mission dispatches the dep-free tasks first; as each finishes, the tasks waiting on it launch next. A failed task blocks its dependents. Edits pause for review (or auto-apply); commands ask permission. Specialist/delegate tiers are recognised but not yet spawned.
+              Approval freezes each task’s worker, provider, model, and review policy into Mission Markdown. The Rust supervisor dispatches one ready task and continues only after Harness validation accepts it. Rejected work parks for an explicit retry. Specialist/delegate tiers are recorded but not yet spawned.
             </div>
           </div>
         </div>

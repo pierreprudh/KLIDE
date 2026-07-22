@@ -7,6 +7,7 @@ mod delegate;
 mod git;
 mod local_servers;
 mod memory;
+mod missions;
 mod models;
 mod pricing;
 mod providers;
@@ -785,6 +786,7 @@ pub fn run() {
         .manage(pty::DaemonBridge::default())
         .manage(delegate::status::DelegateStatusState::default())
         .manage(agent::AgentSupervisorState::default())
+        .manage(missions::MissionStoreState::default())
         .manage(local_servers::LocalServerState::default())
         .manage(models::ReflectionProbeCache::default())
         .plugin(tauri_plugin_dialog::init())
@@ -1032,6 +1034,15 @@ pub fn run() {
             memory_write,
             memory_list,
             memory_read,
+            missions::mission_create,
+            missions::mission_read,
+            missions::mission_list,
+            missions::mission_save_task,
+            missions::mission_approve,
+            missions::mission_dispatch_task,
+            missions::mission_prepare_attempt,
+            missions::mission_fail_attempt_dispatch,
+            missions::mission_validate_attempt,
             git::github::create_pr,
             git::git_log,
             git::git_graph,

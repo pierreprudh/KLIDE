@@ -15,14 +15,50 @@ export type MissionStatus =
 
 export type MissionTaskStatus =
   | "queued"
+  | "ready"
   | "blocked"
   | "assigned"
   | "running"
+  | "validating"
   | "waiting"
   | "review"
   | "done"
   | "failed"
   | "cancelled";
+
+export type MissionTaskAttemptStatus =
+  | "running"
+  | "dispatch-failed"
+  | "accepted"
+  | "rejected";
+
+export type MissionAttemptValidation = {
+  status: string;
+  checks: Array<{
+    id: string;
+    label: string;
+    status: string;
+    required: boolean;
+    evidence?: string;
+  }>;
+  filesChanged: number;
+  commandsRun: number;
+  commandsFailed: number;
+  diffReviews: number;
+  permissionsApproved: number;
+  permissionsDenied: number;
+  warnings: string[];
+};
+
+/** A Task is the durable unit of intent; Runs are replaceable attempts. */
+export type MissionTaskAttempt = {
+  runId: string;
+  status: MissionTaskAttemptStatus;
+  attachedMs: number;
+  settledMs: number | null;
+  validation: MissionAttemptValidation | null;
+  message?: string;
+};
 
 export type MissionTask = {
   id: string;
@@ -33,7 +69,9 @@ export type MissionTask = {
   status: MissionTaskStatus;
   risk: "low" | "medium" | "high";
   dependencies: string[];
-  runId: string | null;
+  attempts: MissionTaskAttempt[];
+  /** The attempt whose validation accepted this Task. Dependencies gate on this. */
+  acceptedRunId: string | null;
   assignmentId: string | null;
   validationContractId: string | null;
   createdMs: number;
@@ -49,6 +87,7 @@ export type Mission = {
   orchestratorRunId: string | null;
   budgetId: string | null;
   taskIds: string[];
+  approvedAtMs: number | null;
   createdMs: number;
   updatedMs: number;
 };
@@ -64,10 +103,13 @@ export type MissionAction =
   | { type: "mission_created"; mission: Mission }
   | { type: "mission_updated"; missionId: string; patch: Partial<Omit<Mission, "id" | "createdMs">>; ts: number }
   | { type: "mission_activated"; missionId: string | null }
+  | { type: "mission_plan_approved"; missionId: string; ts: number }
   | { type: "task_added"; task: MissionTask }
   | { type: "task_updated"; taskId: string; patch: Partial<Omit<MissionTask, "id" | "missionId" | "createdMs">>; ts: number }
   | { type: "task_assigned"; taskId: string; assignment: WorkerAssignment; validationContractId?: string; ts: number }
   | { type: "task_run_attached"; taskId: string; runId: string; ts: number }
+  | { type: "task_attempt_dispatch_failed"; taskId: string; runId: string; message: string; ts: number }
+  | { type: "task_attempt_validated"; taskId: string; runId: string; accepted: boolean; validation: MissionAttemptValidation; ts: number }
   | { type: "task_status_changed"; taskId: string; status: MissionTaskStatus; ts: number }
   | { type: "mission_status_derived"; missionId: string; ts: number };
 
@@ -78,6 +120,7 @@ export type MissionInspection = {
   progress: {
     total: number;
     done: number;
+    ready: number;
     running: number;
     blocked: number;
     failed: number;
@@ -110,6 +153,7 @@ export function createMission(input: {
     orchestratorRunId: input.orchestratorRunId ?? null,
     budgetId: input.budgetId ?? null,
     taskIds: [],
+    approvedAtMs: null,
     createdMs: nowMs,
     updatedMs: nowMs,
   };
@@ -135,7 +179,8 @@ export function createMissionTask(input: {
     status: "queued",
     risk: input.risk ?? "medium",
     dependencies: input.dependencies ?? [],
-    runId: null,
+    attempts: [],
+    acceptedRunId: null,
     assignmentId: null,
     validationContractId: null,
     createdMs: nowMs,
@@ -157,6 +202,25 @@ export function missionReducer(
 
   if (action.type === "mission_activated") {
     return { ...state, activeMissionId: action.missionId };
+  }
+
+  if (action.type === "mission_plan_approved") {
+    const mission = state.missions[action.missionId];
+    if (!mission) return state;
+    const tasks = projectTaskReadiness(mission, state.tasks);
+    return {
+      ...state,
+      tasks,
+      missions: {
+        ...state.missions,
+        [mission.id]: {
+          ...mission,
+          approvedAtMs: mission.approvedAtMs ?? action.ts,
+          status: "dispatching",
+          updatedMs: action.ts,
+        },
+      },
+    };
   }
 
   if (action.type === "mission_updated") {
@@ -225,7 +289,24 @@ export function missionReducer(
   }
 
   if (action.type === "task_run_attached") {
-    return updateTaskStatus(state, action.taskId, "running", action.ts, { runId: action.runId });
+    return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
+      kind: "attached",
+    });
+  }
+
+  if (action.type === "task_attempt_dispatch_failed") {
+    return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
+      kind: "dispatch-failed",
+      message: action.message,
+    });
+  }
+
+  if (action.type === "task_attempt_validated") {
+    return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
+      kind: "validated",
+      accepted: action.accepted,
+      validation: action.validation,
+    });
   }
 
   if (action.type === "task_status_changed") {
@@ -254,11 +335,11 @@ export function deriveMissionStatus(
   const tasks = mission.taskIds.map((taskId) => tasksById[taskId]).filter((task): task is MissionTask => Boolean(task));
   if (tasks.length === 0) return mission.status;
   if (tasks.some((task) => task.status === "failed")) return "failed";
-  if (tasks.some((task) => task.status === "waiting" || task.status === "blocked")) return "waiting";
-  if (tasks.some((task) => task.status === "review")) return "reviewing";
   if (tasks.some((task) => task.status === "running")) return "running";
+  if (tasks.some((task) => task.status === "review" || task.status === "validating")) return "reviewing";
   if (tasks.every((task) => task.status === "done")) return "done";
-  if (tasks.some((task) => task.status === "assigned")) return "dispatching";
+  if (tasks.some((task) => task.status === "ready" || task.status === "assigned")) return "dispatching";
+  if (tasks.some((task) => task.status === "waiting" || task.status === "blocked")) return "waiting";
   return mission.status === "draft" ? "planning" : mission.status;
 }
 
@@ -274,10 +355,116 @@ export function inspectMission(state: MissionState, missionId: string): MissionI
     progress: {
       total: tasks.length,
       done: tasks.filter((task) => task.status === "done").length,
+      ready: tasks.filter((task) => task.status === "ready").length,
       running: tasks.filter((task) => task.status === "running").length,
       blocked: tasks.filter((task) => task.status === "blocked" || task.status === "waiting").length,
       failed: tasks.filter((task) => task.status === "failed").length,
     },
+  };
+}
+
+/** A dependency is satisfied only by an accepted attempt, never by process exit. */
+export function taskDependenciesAccepted(
+  task: MissionTask,
+  tasksById: Record<string, MissionTask>
+): boolean {
+  return task.dependencies.every((dependencyId) => tasksById[dependencyId]?.acceptedRunId != null);
+}
+
+export function readyMissionTaskIds(state: MissionState, missionId: string): string[] {
+  const mission = state.missions[missionId];
+  if (!mission || mission.approvedAtMs === null) return [];
+  return mission.taskIds.filter((taskId) => {
+    const task = state.tasks[taskId];
+    if (!task || task.acceptedRunId !== null) return false;
+    if (task.attempts.some((attempt) => attempt.status === "running")) return false;
+    return taskDependenciesAccepted(task, state.tasks);
+  });
+}
+
+function projectTaskReadiness(
+  mission: Mission,
+  tasksById: Record<string, MissionTask>
+): Record<string, MissionTask> {
+  const tasks = { ...tasksById };
+  for (const taskId of mission.taskIds) {
+    const task = tasks[taskId];
+    if (!task || (task.status !== "queued" && task.status !== "blocked")) continue;
+    tasks[taskId] = {
+      ...task,
+      status: taskDependenciesAccepted(task, tasksById) ? "ready" : "blocked",
+    };
+  }
+  return tasks;
+}
+
+type AttemptUpdate =
+  | { kind: "attached" }
+  | { kind: "dispatch-failed"; message: string }
+  | { kind: "validated"; accepted: boolean; validation: MissionAttemptValidation };
+
+function updateTaskAttempt(
+  state: MissionState,
+  taskId: string,
+  runId: string,
+  ts: number,
+  update: AttemptUpdate
+): MissionState {
+  const task = state.tasks[taskId];
+  if (!task) return state;
+  const existing = task.attempts.find((attempt) => attempt.runId === runId);
+  const base: MissionTaskAttempt = existing ?? {
+    runId,
+    status: "running",
+    attachedMs: ts,
+    settledMs: null,
+    validation: null,
+  };
+  const attempt: MissionTaskAttempt = update.kind === "attached"
+    ? { ...base, status: "running" }
+    : update.kind === "dispatch-failed"
+      ? { ...base, status: "dispatch-failed", settledMs: ts, message: update.message }
+      : {
+          ...base,
+          status: update.accepted ? "accepted" : "rejected",
+          settledMs: ts,
+          validation: update.validation,
+        };
+  const attempts = existing
+    ? task.attempts.map((item) => item.runId === runId ? attempt : item)
+    : [...task.attempts, attempt];
+  const status: MissionTaskStatus = update.kind === "attached"
+    ? "running"
+    : update.kind === "validated" && update.accepted
+      ? "done"
+      : "failed";
+  const mission = state.missions[task.missionId];
+  let tasks: Record<string, MissionTask> = {
+    ...state.tasks,
+    [task.id]: {
+      ...task,
+      attempts,
+      acceptedRunId: update.kind === "validated" && update.accepted ? runId : task.acceptedRunId,
+      status,
+      updatedMs: ts,
+    },
+  };
+  if (mission?.approvedAtMs != null && update.kind === "validated" && update.accepted) {
+    tasks = projectTaskReadiness(mission, tasks);
+  }
+  return {
+    ...state,
+    tasks,
+    missions: mission
+      ? {
+          ...state.missions,
+          [mission.id]: {
+            ...mission,
+            status: deriveMissionStatus(mission, tasks),
+            updatedMs: ts,
+          },
+        }
+      : state.missions,
   };
 }
 
