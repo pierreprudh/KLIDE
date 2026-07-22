@@ -216,6 +216,10 @@ function reasonToneColor(tone: RunBoardReasonTone): string {
 function RunReasonChip({ run }: { run: Run }) {
   const reason = runBoardReason(run);
   if (reason.tone === "success") return null;
+  // Sub-agents finish into a "needs review" ("Waiting") state, but their review
+  // rolls up to the parent run — so retire that chip on the sub-agent's own row
+  // to keep the board quiet. (accent tone is only ever the review-pending state.)
+  if (run.parentId && reason.tone === "accent") return null;
   return (
     <Tooltip label={reason.detail}>
       <span style={boardReasonChipStyle(reason.tone)}>{reason.label}</span>
@@ -262,6 +266,32 @@ function modelShortName(model: string | null): string | null {
   if (!model) return null;
   const slash = model.indexOf("/");
   return slash >= 0 ? model.slice(slash + 1) : model;
+}
+
+// Providers whose model ids carry an "org/repo" prefix the row can drop —
+// OpenRouter (deepseek/deepseek-v4-flash) and MLX (mlx-community/Qwen2.5-7B).
+const MODEL_PREFIX_PROVIDERS = new Set(["openrouter", "mlx"]);
+
+// Runtimes/routers that run *other makers'* models. For these the small
+// subtitle mark shows the model's own maker (DeepSeek, Qwen, Google/Gemma, …)
+// rather than repeating the runtime logo the avatar already carries; it falls
+// back to the runtime mark when the maker isn't recognised.
+const RUNTIME_MODEL_PROVIDERS = new Set([
+  "openrouter",
+  "mlx",
+  "ollama",
+  "lmstudio",
+  "llamacpp",
+  "vllm",
+]);
+
+// The model name as shown on a run row — "org/" prefix stripped for the
+// prefixed providers, otherwise the id verbatim.
+function runModelLabel(run: { provider?: string | null; model?: string | null }): string | null {
+  if (!run.model) return null;
+  return run.provider && MODEL_PREFIX_PROVIDERS.has(run.provider)
+    ? modelShortName(run.model)
+    : run.model;
 }
 
 function ModelProviderBadge({ model }: { model: string | null }) {
@@ -442,11 +472,13 @@ function resolveModelLogo(model: string, size: number): React.ReactElement | nul
     const Logo = rule.Comp;
     return <Logo size={size} />;
   }
-  if (/gemini/i.test(model)) return <ProviderLogo id="gemini" size={size} />;
+  // Gemma is Google's — it wears the Google mark regardless of runtime, so an
+  // MLX- or Ollama-served Gemma no longer wrongly borrows the Ollama logo.
+  if (/gemini|gemma/i.test(model)) return <ProviderLogo id="gemini" size={size} />;
   if (/grok/i.test(model)) return <ProviderLogo id="xai" size={size} />;
-  // Remaining on-device families (gemma, phi, nomic, …) served through
-  // Ollama — wear the runtime's mark.
-  if (/gemma|phi-?\d|nomic|mxbai|granite|smollm|starcoder/i.test(model))
+  // Remaining on-device families (phi, nomic, …) with no distinct maker mark
+  // fall back to the local-runtime (Ollama) glyph.
+  if (/phi-?\d|nomic|mxbai|granite|smollm|starcoder/i.test(model))
     return <ProviderLogo id="ollama" size={size} />;
   return null;
 }
@@ -656,7 +688,17 @@ function RunAvatar({
 }
 
 function RunSubtitleMark({ run, compact }: { run: RunLedgerEntry; compact?: boolean }) {
-  if (run.source === "klide" && run.provider) return providerMark(run.provider, 11);
+  if (run.source === "klide" && run.provider) {
+    // Runtimes/routers (OpenRouter, MLX, Ollama, …) run other makers' models —
+    // the avatar already wears the runtime mark, so the small subtitle mark
+    // shows the model's own maker (DeepSeek, Qwen, Google/Gemma, …). Falls back
+    // to the provider mark when the model has no recognisable maker.
+    if (RUNTIME_MODEL_PROVIDERS.has(run.provider) && run.model) {
+      const modelLogo = resolveModelLogo(run.model, 11);
+      if (modelLogo) return modelLogo;
+    }
+    return providerMark(run.provider, 11);
+  }
   if (run.source === "klide" && !compact && run.model) return <ModelBadge model={run.model} size={13} />;
   if (run.source === "klide" && !compact) return null;
   if (run.source === "claude-code") return null;
@@ -672,7 +714,6 @@ function RunRow({
   action,
   dismissAction,
   compact,
-  hasMemory,
 }: {
   run: RunLedgerEntry;
   selected: boolean;
@@ -699,8 +740,6 @@ function RunRow({
     dragXRef.current = x;
     setDragX(x);
   };
-  const tokenSummary = runTokenSummary(run);
-  const showEvidence = run.status !== "error";
   // The row stays quiet: just the passive attention badge, or a single
   // contextual action (resume / quick-send / sub-agent count) that swaps in
   // on hover. Per-run actions (review diff, save memory, resume) live in the
@@ -895,43 +934,31 @@ function RunRow({
             <RunSubtitleMark run={run} compact={compact} />
             {run.source === "opencode" && run.model ? (
               <>
-                {modelProvider(run.model)} . {modelShortName(run.model)}
+                {modelProvider(run.model)}
+                {modelShortName(run.model) ? (
+                  <span style={{ marginLeft: 5, fontSize: 10 }}>{modelShortName(run.model)}</span>
+                ) : null}
               </>
             ) : run.source === "claude-code" ? (
               <>
                 <AnthropicMark size={11} />
                 {SOURCE_LABEL[run.source]}
-                {run.model ? <> · {run.model}</> : null}
+                {run.model ? <span style={{ marginLeft: 5, fontSize: 10 }}>{runModelLabel(run)}</span> : null}
               </>
             ) : run.source === "klide" && run.provider ? (
               <>
                 {runAgentLabel(run)}
-                {run.model ? <> · {run.model}</> : null}
+                {run.model ? <span style={{ marginLeft: 5, fontSize: 10 }}>{runModelLabel(run)}</span> : null}
               </>
             ) : (
               <>
                 {SOURCE_LABEL[run.source]}
-                {run.model ? <> · {run.model}</> : null}
+                {run.model ? <span style={{ marginLeft: 5, fontSize: 10 }}>{runModelLabel(run)}</span> : null}
               </>
             )}
-            {run.branch ? ` · ${run.branch}` : ""}
-            {showEvidence && run.worktree ? ` · in ${run.worktree}` : ""}
-            {showEvidence && formatFilesTouched(run.filesTouched) ? ` · ${formatFilesTouched(run.filesTouched)}` : ""}
-            {showEvidence && formatCost(run.costUsd) ? ` · ${formatCost(run.costUsd)}` : ""}
-            {showEvidence && tokenSummary ? ` · ${tokenSummary}` : ""}
-            {showEvidence && run.subagentCount
-              ? ` · ${run.subagentCount} sub-agent${run.subagentCount > 1 ? "s" : ""}`
-              : ""}
-            {" · "}
-            {relativeTime(run.updatedMs)}
-            {hasMemory ? (
-              <span
-                title="A Project Memory note is saved for this run"
-                style={{ color: "var(--accent)" }}
-              >
-                {" · "}memory
-              </span>
-            ) : null}
+            {/* Row stays minimal: status + provider + model. Branch, cost,
+                tokens, files, worktree, memory and last-seen all live in the
+                run detail pane (RunEvidenceStrip), one click away. */}
           </span>
       </span>
       {rightRail}
@@ -1411,7 +1438,8 @@ function RaceCompareTable({
               fontWeight: current ? 600 : 400,
             }}
           >
-            {providerName(member.provider as ProviderId)} · {member.model}
+            {providerName(member.provider as ProviderId)}
+            <span style={{ marginLeft: 10 }}>{member.model}</span>
           </button>
         );
       })}
@@ -3929,7 +3957,7 @@ function RunDetail({
                 : run.source === "klide"
                 ? resolveModelLogo(run.model, 13) ?? <ProviderLogo id={run.source as any} size={13} />
                 : <ProviderLogo id={run.source as any} size={13} />}
-              {run.model}
+              {runModelLabel(run)}
             </>
           ) : null}
         </dd>
