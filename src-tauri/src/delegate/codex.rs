@@ -142,6 +142,7 @@ impl Delegate for Codex {
                     // Codex flattens tool activity into its own text stream; no
                     // structured tool parts to surface here.
                     tools: vec![],
+                    images: vec![],
                 });
             }
         }

@@ -837,6 +837,78 @@ pub(crate) async fn ai_model_supports_tools(
     Ok(true)
 }
 
+/// Whether the model can accept image input, so the composer only offers image
+/// attach where the model can actually see it. Best-effort per provider:
+/// Anthropic is all-multimodal; Ollama advertises "vision" in its capability
+/// list; MLX text servers are not multimodal; every other (OpenAI-wire)
+/// provider falls back to a name heuristic over the model id. Conservative on
+/// the unknown side — a wrong `false` just hides the attach button, whereas a
+/// wrong `true` sends an image to a blind model and errors.
+#[tauri::command]
+pub(crate) async fn ai_model_supports_vision(
+    provider: String,
+    model: String,
+) -> Result<bool, String> {
+    if provider == "anthropic" {
+        return Ok(true);
+    }
+    if provider == "ollama" {
+        return Ok(ollama_advertises_vision(&model).await.unwrap_or(false));
+    }
+    if provider == "mlx" {
+        // Vision on Apple silicon needs mlx-vlm; mlx_lm.server is text-only.
+        return Ok(false);
+    }
+    Ok(openai_wire_model_supports_vision(&model))
+}
+
+fn openai_wire_model_supports_vision(model: &str) -> bool {
+    let lower = model.trim().to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    // Explicit vision builds + the "-VL" multimodal families (Qwen2-VL, …).
+    if name.contains("vision") || name.contains("-vl") || name.contains("vl-") {
+        return true;
+    }
+    name.starts_with("gpt-4o")
+        || name.starts_with("chatgpt-4o")
+        || name.starts_with("gpt-4.1")
+        || name.starts_with("gpt-4-turbo")
+        || name.starts_with("gpt-5")
+        || name.starts_with("o1")
+        || name.starts_with("o3")
+        || name.starts_with("o4")
+        || name.starts_with("claude-3")
+        || name.starts_with("claude-opus")
+        || name.starts_with("claude-sonnet")
+        || name.starts_with("claude-haiku")
+        || name.starts_with("gemini")
+        || name.starts_with("pixtral")
+        || name.starts_with("llava")
+        || name.contains("llama-3.2")
+        || name.starts_with("grok-4")
+}
+
+async fn ollama_advertises_vision(model: &str) -> Result<bool, String> {
+    let res = reqwest::Client::new()
+        .post(format!("{OLLAMA_URL}/api/show"))
+        .json(&serde_json::json!({ "model": model }))
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(response_error("Ollama", status, &body));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
+    Ok(value
+        .get("capabilities")
+        .and_then(|v| v.as_array())
+        .map(|caps| caps.iter().any(|c| c.as_str() == Some("vision")))
+        .unwrap_or(false))
+}
+
 #[tauri::command]
 pub(crate) async fn ai_model_supports_reflection(
     state: tauri::State<'_, ReflectionProbeCache>,

@@ -1929,9 +1929,38 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
                       : "color-mix(in srgb, var(--bg-elevated) 88%, var(--bg))",
                   }}
                 >
-                  {renderMarkdown(item.text, {
-                    renderTool: (name, summary) => <ToolCard name={name} summary={summary} />,
-                  })}
+                  {m.images && m.images.length > 0 && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        marginBottom: item.text ? 10 : 0,
+                      }}
+                    >
+                      {m.images.map((src, gi) => (
+                        <img
+                          key={gi}
+                          src={src}
+                          alt="Attached image"
+                          loading="lazy"
+                          style={{
+                            maxWidth: "100%",
+                            maxHeight: 340,
+                            width: "auto",
+                            borderRadius: 8,
+                            border: "1px solid var(--border)",
+                            objectFit: "contain",
+                            display: "block",
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {item.text &&
+                    renderMarkdown(item.text, {
+                      renderTool: (name, summary) => <ToolCard name={name} summary={summary} />,
+                    })}
                 </div>
                 {!isUser && showTools && item.tools.length > 0 && (
                   <div data-reveal="tools">

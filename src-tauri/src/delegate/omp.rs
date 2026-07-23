@@ -116,6 +116,7 @@ impl Delegate for Omp {
                     role: role.to_string(),
                     text,
                     tools,
+                    images: vec![],
                 });
             }
         }

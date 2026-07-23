@@ -14,6 +14,7 @@ import {
   listProviderModels,
   modelSupportsReflection as queryModelSupportsReflection,
   modelSupportsTools as queryModelSupportsTools,
+  modelSupportsVision as queryModelSupportsVision,
   readLocalProviderStatus,
   readProviderContextWindow,
   readProviderKeyStatus,
@@ -691,6 +692,14 @@ export function AiPanel({
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
   const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
+  const [modelSupportsVision, setModelSupportsVision] = useState(false);
+  // Images pasted/dropped into the composer, staged as data-URI attachments
+  // until the turn is sent. Only offered when the model can see them.
+  const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
+  // Whether an image is being dragged over the panel (drives the drop overlay).
+  const [imageDragOver, setImageDragOver] = useState(false);
+  // A conversation image opened full-size (data URI), or null when closed.
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const {
     open: modeOpen,
     pos: modeMenuPos,
@@ -1108,6 +1117,54 @@ export function AiPanel({
     if (mode === "chat") flashMode("chat mode · no tools");
     else if (mode === "plan") flashMode("plan mode · read-only", "warning");
     else flashMode(review ? "reviewing every edit" : "auto-accept edits on", review ? "muted" : "accent");
+  }
+
+  // Stage pasted/dropped image files as data-URI attachments. Guarded by
+  // vision support so we never offer to attach where the model is blind, and
+  // capped at ~6 MB/image to match the harness's per-image guard.
+  async function addImageFiles(files: File[]) {
+    if (!modelSupportsVision || providerDelegatesWork) return;
+    const images = files.filter((f) => f.type.startsWith("image/")).slice(0, 8);
+    if (images.length === 0) return;
+    const read = await Promise.all(
+      images.map(
+        (f) =>
+          new Promise<Attachment | null>((resolve) => {
+            if (f.size > 6_000_000) {
+              notify(`${f.name || "Image"} is too large to attach (max 6 MB).`, { tone: "warn" });
+              resolve(null);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+              const dataUri = typeof reader.result === "string" ? reader.result : "";
+              resolve(dataUri ? { path: f.name || "pasted-image", content: "", mime: f.type, dataUri } : null);
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(f);
+          }),
+      ),
+    );
+    const ok = read.filter((a): a is Attachment => a !== null);
+    if (ok.length) setPendingImages((prev) => [...prev, ...ok].slice(0, 12));
+  }
+
+  const canAttachImages = modelSupportsVision && !providerDelegatesWork;
+
+  function onComposerPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (files.length && canAttachImages) {
+      e.preventDefault();
+      void addImageFiles(files);
+    }
+  }
+
+  function onComposerDrop(e: React.DragEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (files.length && canAttachImages) {
+      e.preventDefault();
+      void addImageFiles(files);
+    }
   }
 
   async function collectAttachments(text: string): Promise<Attachment[]> {
@@ -2073,6 +2130,31 @@ This user request requires workspace inspection. Before answering, you MUST call
   }, [provider, model]);
 
   useEffect(() => {
+    if (!lightboxImage) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightboxImage(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxImage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkVisionSupport() {
+      try {
+        const supports = await queryModelSupportsVision(provider, model);
+        if (cancelled) return;
+        setModelSupportsVision(supports);
+        // Switching to a non-vision model drops any staged images so we never
+        // send them somewhere blind.
+        if (!supports) setPendingImages([]);
+      } catch {
+        if (!cancelled) setModelSupportsVision(false);
+      }
+    }
+    void checkVisionSupport();
+    return () => { cancelled = true; };
+  }, [provider, model]);
+
+  useEffect(() => {
     let cancelled = false;
     async function loadContextWindow() {
       try {
@@ -2666,8 +2748,13 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   async function send(opts?: { text?: string; mode?: AgentMode }) {
     const text = opts?.text ?? input;
-    if (!text.trim() || serverStarting) return;
+    const stagedImages = pendingImages;
+    if (serverStarting) return;
+    // An image-only turn (no text) is valid; a bare empty turn is not.
+    if (!text.trim() && stagedImages.length === 0) return;
     if (providerDelegatesWork) {
+      // Delegate TUIs take text only — images aren't wired to their stdin.
+      if (!text.trim()) return;
       setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
       await invoke("delegate_pty_write", { sessionId: `${currentId}:${provider}`, data: `${text}\r` });
       return;
@@ -2692,7 +2779,10 @@ This user request requires workspace inspection. Before answering, you MUST call
         ? "plan"
         : availableMode;
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
-    const attachments = await collectAttachments(effectiveText);
+    setPendingImages([]);
+    const collected = await collectAttachments(effectiveText);
+    // Staged images ride ahead of @-mention file attachments on the turn.
+    const attachments = [...stagedImages, ...collected];
     const activeProjectContext = lensItemsForPrompt(projectContext, effectiveText, contextMode);
     enqueueTurn({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools, modelSupportsReflection, reflectionLevel, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
     // A subagent named *inside* a larger message (not a leading directive) runs
@@ -2834,7 +2924,33 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   return (
     <>
-    <aside className="floating-panel" style={{ width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
+    {lightboxImage && createPortal(
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Image preview"
+        onClick={() => setLightboxImage(null)}
+        style={{ position: "fixed", inset: 0, zIndex: Z.modal, display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--modal-scrim) 55%, transparent)", padding: 40, cursor: "zoom-out" }}
+      >
+        <img src={lightboxImage} alt="Attached image" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8, boxShadow: "0 12px 48px rgba(0, 0, 0, 0.4)" }} />
+      </div>,
+      document.body,
+    )}
+    <aside className="floating-panel" style={{ width: fill ? "100%" : width, height: fill ? "100%" : undefined, margin: fill ? 0 : "4px 4px 4px 0", display: fill || visible ? "flex" : "none", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}
+      onDragOver={(e) => { if (canAttachImages && Array.from(e.dataTransfer?.types ?? []).includes("Files")) { e.preventDefault(); setImageDragOver(true); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setImageDragOver(false); }}
+      onDrop={(e) => {
+        if (!canAttachImages) return;
+        e.preventDefault();
+        setImageDragOver(false);
+        const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith("image/"));
+        if (files.length) void addImageFiles(files);
+      }}>
+      {imageDragOver && canAttachImages && (
+        <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: 45, pointerEvents: "none", display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--accent-soft) 55%, transparent)", border: "2px dashed var(--accent)", borderRadius: "inherit" }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", background: "var(--bg-elevated)", padding: "6px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>Drop image to attach</div>
+        </div>
+      )}
       <header style={{ padding: "8px 10px", fontSize: 11, color: "var(--fg-subtle)", letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 500, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, position: "relative", zIndex: 40 }}>
         <div style={{ position: "relative", minWidth: 0, textTransform: "none", letterSpacing: 0 }}>
           <button ref={providerTriggerRef} onClick={() => (providerOpen ? closeProviderMenu() : openProviderMenu())}
@@ -3110,6 +3226,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             const queued = m.queueState === "queued";
             const running = m.queueState === "running";
             const isEditing = editingIdx === i;
+            const imageAtts = m.attachments?.filter((a) => a.dataUri) ?? [];
             return (
               <div key={i} className="ai-msg-in" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", margin: "14px 0 12px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
                 {m.subagent && (
@@ -3131,10 +3248,30 @@ This user request requires workspace inspection. Before answering, you MUST call
                     style={{ maxWidth: "88%", width: "min(440px, 88%)", resize: "none", font: "inherit", fontSize: 13, lineHeight: 1.55, padding: "8px 12px", borderRadius: "12px 12px 4px 12px", border: "1px solid color-mix(in srgb, var(--accent) 50%, var(--border))", background: "var(--accent-soft)", color: "var(--fg-strong)", whiteSpace: "pre-wrap", wordBreak: "break-word", boxSizing: "border-box" }}
                   />
                 ) : (
-                  <div
-                    style={{ maxWidth: "88%", background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
-                    {m.content}
-                  </div>
+                  <>
+                    {imageAtts.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end", maxWidth: "88%", marginBottom: m.content.trim() ? 6 : 0 }}>
+                        {imageAtts.map((a, gi) => (
+                          <button
+                            key={gi}
+                            type="button"
+                            title="Open image"
+                            aria-label={`Open ${a.path || "image"}`}
+                            onClick={() => setLightboxImage(a.dataUri ?? null)}
+                            style={{ padding: 0, width: 92, height: 92, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", background: "var(--bg-elevated)", cursor: "zoom-in", flexShrink: 0, display: "block" }}
+                          >
+                            <img src={a.dataUri} alt={a.path || "Attached image"} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {m.content.trim() && (
+                      <div
+                        style={{ maxWidth: "88%", background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
+                        {m.content}
+                      </div>
+                    )}
+                  </>
                 )}
                 {!queued && !running && m.content.trim() && !isEditing && (
                   <MessageActions
@@ -3595,6 +3732,24 @@ This user request requires workspace inspection. Before answering, you MUST call
             </div>
           )}
           <div style={{ overflow: "hidden", borderRadius: "var(--radius-lg)" }}>
+          {pendingImages.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 2px" }}>
+              {pendingImages.map((img, i) => (
+                <div key={i} style={{ position: "relative", width: 52, height: 52, borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)", flexShrink: 0 }}>
+                  <img src={img.dataUri} alt={img.path} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  <button
+                    type="button"
+                    aria-label={`Remove ${img.path}`}
+                    title="Remove"
+                    onClick={() => setPendingImages((prev) => prev.filter((_, j) => j !== i))}
+                    style={{ position: "absolute", top: 2, right: 2, width: 16, height: 16, display: "grid", placeItems: "center", padding: 0, border: "none", borderRadius: "50%", background: "color-mix(in srgb, var(--bg) 70%, transparent)", color: "var(--fg-strong)", cursor: "pointer", lineHeight: 1 }}
+                  >
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea ref={taRef} value={input}
             onChange={(e) => handleComposerChange(e.target.value, e.target.selectionStart)}
             onKeyDown={(e) => {
@@ -3616,7 +3771,10 @@ This user request requires workspace inspection. Before answering, you MUST call
             }}
             onFocus={() => { setComposerFocused(true); }}
             onBlur={() => { setComposerFocused(false); setMention(null); setSlash(null); }}
-            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : "Ask anything, @ to attach a file…"}
+            onPaste={onComposerPaste}
+            onDrop={onComposerDrop}
+            onDragOver={(e) => { if (canAttachImages && Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === "file")) e.preventDefault(); }}
+            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachImages ? "Ask anything, @ to attach a file, paste an image…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
             style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block" }}

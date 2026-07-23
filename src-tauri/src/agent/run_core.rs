@@ -38,15 +38,15 @@ impl ProviderCaps {
     }
 }
 
-/// Fold an attachment block into a message's text — the "[Files attached for
+/// Fold text attachments into a message's text — the "[Files attached for
 /// context]" suffix shared by the live initial turn and both replay shapes.
-/// No-op when there are no attachments.
+/// Image attachments (those carrying a `data_uri`) are skipped here: they ride
+/// the message's neutral `images` array instead (see `user_provider_message`).
+/// No-op when there are no text attachments.
 pub(super) fn append_attachments(content: &mut String, attachments: &[AgentAttachment]) {
-    if attachments.is_empty() {
-        return;
-    }
     let attached = attachments
         .iter()
+        .filter(|a| a.data_uri.is_none())
         .map(|a| format!("File: {}\n```\n{}\n```", a.path, a.content))
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -55,6 +55,28 @@ pub(super) fn append_attachments(content: &mut String, attachments: &[AgentAttac
     }
     content.push_str("\n\n[Files attached for context]\n");
     content.push_str(&attached);
+}
+
+/// Assemble a provider user message from a turn's text + attachments. Text
+/// attachments fold into the content string; image attachments become a
+/// neutral message-level `images` array (data URIs) that each provider adapter
+/// translates to its own wire shape. Shared by the live initial turn and both
+/// replay shapes so images survive a reopened conversation.
+pub(super) fn user_provider_message(
+    text: &str,
+    attachments: &[AgentAttachment],
+) -> serde_json::Value {
+    let mut content = text.to_string();
+    append_attachments(&mut content, attachments);
+    let mut message = serde_json::json!({ "role": "user", "content": content });
+    let images: Vec<String> = attachments
+        .iter()
+        .filter_map(|a| a.data_uri.clone())
+        .collect();
+    if !images.is_empty() {
+        message["images"] = serde_json::json!(images);
+    }
+    message
 }
 
 /// The system message that stands in for everything before a compaction
@@ -97,8 +119,6 @@ pub(super) fn provider_messages(
     system: String,
     run_id: &str,
 ) -> Vec<serde_json::Value> {
-    let mut user_text = request.initial_text.clone();
-    append_attachments(&mut user_text, &request.attachments);
     let mut messages = vec![serde_json::json!({ "role": "system", "content": system })];
     // Inject initial todo list as context for tool-capable/project turns.
     // Local chat should stay tiny; sending project metadata to MLX/Ollama for
@@ -113,7 +133,10 @@ pub(super) fn provider_messages(
             }
         }
     }
-    messages.push(serde_json::json!({ "role": "user", "content": user_text }));
+    messages.push(user_provider_message(
+        &request.initial_text,
+        &request.attachments,
+    ));
     messages
 }
 
@@ -422,7 +445,26 @@ pub(super) const KEEP_RECENT_TOOL_RESULTS: usize = 8;
 /// counts `tool_calls` and JSON punctuation, which biases the estimate high —
 /// the safe direction (compact a little early rather than overflow).
 pub(super) fn estimate_prompt_tokens(messages: &[serde_json::Value]) -> usize {
-    messages.iter().map(|m| m.to_string().len()).sum::<usize>() / 4
+    // Images cost tokens by resolution (~1–1.6K for a typical screenshot), not
+    // by base64 length. Counting the data URI — hundreds of KB per image —
+    // would wildly overcount and trigger needless tool-result compaction, so
+    // exclude the `images` payload from the char count and add a flat estimate.
+    let mut chars = 0usize;
+    let mut images = 0usize;
+    for m in messages {
+        match m.get("images").and_then(|v| v.as_array()) {
+            Some(arr) => {
+                images += arr.len();
+                let mut without = m.clone();
+                if let Some(obj) = without.as_object_mut() {
+                    obj.remove("images");
+                }
+                chars += without.to_string().len();
+            }
+            None => chars += m.to_string().len(),
+        }
+    }
+    chars / 4 + images * 1200
 }
 
 /// Prompt-token budget above which older tool results get compacted. Carves

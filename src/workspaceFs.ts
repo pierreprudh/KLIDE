@@ -41,6 +41,25 @@ export function writeWorkspaceTextFile(
   });
 }
 
+/** Read a file as a self-contained `data:<mime>;base64,…` URI — for binary
+ *  files (images) the text reader would corrupt. */
+export function readWorkspaceFileDataUri(workspaceRoot: string, path: string): Promise<string> {
+  return invoke<string>("read_file_data_uri", {
+    workspaceRoot,
+    path: workspacePath(workspaceRoot, path),
+  });
+}
+
+const IMAGE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif", "apng",
+]);
+
+/** Whether a path looks like an image we render as a picture rather than text. */
+export function isImagePath(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
 export function workspacePathExists(workspaceRoot: string, path: string): Promise<boolean> {
   return invoke<boolean>("path_exists", {
     workspaceRoot,
