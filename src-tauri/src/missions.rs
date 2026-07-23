@@ -805,6 +805,66 @@ fn validation_accepts(summary_status: &str, validation: &AgentValidationSummary)
             .any(|check| check.required && check.status == "failed")
 }
 
+/// The first dependency cycle in an id→dependencies graph, as the ids on the
+/// cycle in traversal order (with the closing id repeated), or `None` when the
+/// graph is acyclic. Missing dependency ids are skipped — callers reject those
+/// separately with a clearer message. Kept pure so the acyclic invariant is
+/// unit-testable away from Tauri; the frontend mirrors it in `missionGraph.ts`
+/// for pre-write feedback, but this Rust check is the durable authority — a
+/// cyclic plan can never reach disk, so `task_is_ready` always terminates.
+fn first_dependency_cycle(deps_by_id: &HashMap<String, Vec<String>>) -> Option<Vec<String>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        Visiting,
+        Done,
+    }
+    fn walk<'a>(
+        node: &'a str,
+        deps_by_id: &'a HashMap<String, Vec<String>>,
+        mark: &mut HashMap<&'a str, Mark>,
+        stack: &mut Vec<&'a str>,
+    ) -> Option<Vec<String>> {
+        mark.insert(node, Mark::Visiting);
+        stack.push(node);
+        if let Some(deps) = deps_by_id.get(node) {
+            for dep in deps {
+                let dep = dep.as_str();
+                if !deps_by_id.contains_key(dep) {
+                    continue; // missing dependency — reported by the caller
+                }
+                match mark.get(dep) {
+                    Some(Mark::Done) => {}
+                    Some(Mark::Visiting) => {
+                        let start = stack.iter().position(|n| *n == dep).unwrap_or(0);
+                        let mut cycle: Vec<String> =
+                            stack[start..].iter().map(|n| n.to_string()).collect();
+                        cycle.push(dep.to_string());
+                        return Some(cycle);
+                    }
+                    None => {
+                        if let Some(found) = walk(dep, deps_by_id, mark, stack) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+        }
+        stack.pop();
+        mark.insert(node, Mark::Done);
+        None
+    }
+    let mut mark: HashMap<&str, Mark> = HashMap::new();
+    for id in deps_by_id.keys() {
+        if !mark.contains_key(id.as_str()) {
+            let mut stack: Vec<&str> = Vec::new();
+            if let Some(cycle) = walk(id.as_str(), deps_by_id, &mut mark, &mut stack) {
+                return Some(cycle);
+            }
+        }
+    }
+    None
+}
+
 fn do_create(
     workspace_root: &str,
     input: CreateMissionInput,
@@ -860,6 +920,16 @@ fn do_create(
                 ));
             }
         }
+    }
+    let deps_by_id: HashMap<String, Vec<String>> = tasks
+        .iter()
+        .map(|task| (task.id.clone(), task.dependencies.clone()))
+        .collect();
+    if let Some(cycle) = first_dependency_cycle(&deps_by_id) {
+        return Err(format!(
+            "Task dependencies form a cycle: {}.",
+            cycle.join(" → ")
+        ));
     }
 
     let mission = MissionSpec {
@@ -955,12 +1025,21 @@ pub fn mission_save_task(
     mission_id: String,
     input: SaveMissionTaskInput,
 ) -> Result<DurableMissionBundle, String> {
+    do_save_task(&state, &workspace_root, &mission_id, input)
+}
+
+fn do_save_task(
+    state: &MissionStoreState,
+    workspace_root: &str,
+    mission_id: &str,
+    input: SaveMissionTaskInput,
+) -> Result<DurableMissionBundle, String> {
     let _guard = state
         .write_gate
         .lock()
         .map_err(|_| "Mission store is unavailable.".to_string())?;
     validate_id(&input.id, "task")?;
-    let dir = mission_dir(&workspace_root, &mission_id, true)?;
+    let dir = mission_dir(workspace_root, mission_id, true)?;
     let mut bundle = load_bundle_from_dir(&dir)?;
     if fold_runtime(&bundle).approved {
         return Err(
@@ -990,11 +1069,29 @@ pub fn mission_save_task(
             return Err("A task cannot depend on itself.".to_string());
         }
     }
+    let deps_by_id: HashMap<String, Vec<String>> = bundle
+        .tasks
+        .iter()
+        .map(|task| {
+            let dependencies = if task.id == input.id {
+                input.dependencies.clone()
+            } else {
+                task.dependencies.clone()
+            };
+            (task.id.clone(), dependencies)
+        })
+        .collect();
+    if let Some(cycle) = first_dependency_cycle(&deps_by_id) {
+        return Err(format!(
+            "Task dependencies form a cycle: {}.",
+            cycle.join(" → ")
+        ));
+    }
     let now = now_ms();
     let updated = MissionTaskSpec {
         schema_version: MISSION_SCHEMA_VERSION,
         id: input.id.clone(),
-        mission_id: mission_id.clone(),
+        mission_id: mission_id.to_string(),
         title: clean_title(&input.title, "Task")?,
         body_markdown: input.body_markdown,
         phase: input.phase,
@@ -1024,7 +1121,7 @@ pub fn mission_save_task(
     .map_err(|e| format!("Unable to update mission.md: {e}"))?;
     append_event(
         &dir,
-        &mission_id,
+        mission_id,
         MissionEvent::TaskUpdated {
             task_id: updated.id,
         },
@@ -1585,6 +1682,69 @@ mod tests {
             permissions_denied: 0,
             warnings: vec![],
         }
+    }
+
+    fn deps(pairs: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(id, ds)| {
+                (
+                    id.to_string(),
+                    ds.iter().map(|d| d.to_string()).collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cycle_detection_finds_direct_and_indirect_loops() {
+        assert!(first_dependency_cycle(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])])).is_none());
+        // A missing dependency is not a cycle — the caller reports it instead.
+        assert!(first_dependency_cycle(&deps(&[("a", &["ghost"])])).is_none());
+        assert!(first_dependency_cycle(&deps(&[("a", &["b"]), ("b", &["a"])])).is_some());
+        let three = first_dependency_cycle(&deps(&[("a", &["b"]), ("b", &["c"]), ("c", &["a"])]))
+            .expect("a→b→c→a is a cycle");
+        assert_eq!(three.first(), three.last());
+    }
+
+    #[test]
+    fn create_rejects_a_cyclic_plan() {
+        let root = temp_workspace("create-cycle");
+        let mut input = sample_input();
+        // inspect now also depends on implement, and implement depends on inspect.
+        input.tasks[0].dependencies = vec!["implement".to_string()];
+        let err = do_create(root.to_str().unwrap(), input).unwrap_err();
+        assert!(err.contains("cycle"), "unexpected error: {err}");
+        assert!(!root.join(".klide/missions/mission-one").exists());
+    }
+
+    #[test]
+    fn save_task_rejects_an_edit_that_introduces_a_cycle() {
+        let root = temp_workspace("save-cycle");
+        let store = MissionStoreState::default();
+        do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        // implement already depends on inspect; making inspect depend on implement
+        // would close the loop.
+        let input = SaveMissionTaskInput {
+            id: "inspect".to_string(),
+            title: "Inspect the seam".to_string(),
+            body_markdown: "Read the existing Harness evidence.".to_string(),
+            phase: MissionTaskPhase::Understand,
+            mode: MissionMode::Plan,
+            risk: MissionTaskRisk::Low,
+            writes_files: false,
+            dependencies: vec!["implement".to_string()],
+            acceptance_criteria: vec!["The seam is identified".to_string()],
+            needs_repo_wide_context: false,
+            needs_strong_reasoning: false,
+            needs_delegate_cli: false,
+            needs_visual_review: false,
+        };
+        let err = do_save_task(&store, root.to_str().unwrap(), "mission-one", input).unwrap_err();
+        assert!(err.contains("cycle"), "unexpected error: {err}");
+        // The on-disk task Markdown is untouched by the rejected edit.
+        let bundle = load_bundle(root.to_str().unwrap(), "mission-one").unwrap();
+        assert!(bundle.tasks[0].dependencies.is_empty());
     }
 
     #[test]

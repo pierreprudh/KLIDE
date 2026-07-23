@@ -68,8 +68,13 @@ them.
 - [ ] Reconcile orphaned active attempts and resume approved Missions after a
   full desktop-process restart. The current supervisor survives surface closure,
   not termination of the Rust process.
-- [ ] Slice 2: add the task graph view, cycle validation, and Markdown-backed
+- [x] Slice 2: add the task graph view, cycle validation, and Markdown-backed
   dependency manipulation without introducing a second graph state model.
+  Graph derives from the same task `dependencies` (`missionGraph.ts` layout +
+  cycle mirror; `MissionGraph.tsx` SVG view with a Board/Graph switch). Edge
+  edits write the dependent task's Markdown back through `mission_save_task`,
+  which now rejects cycles in Rust (`first_dependency_cycle`) as the durable
+  authority. Edits are pre-approval only.
 
 ## Stabilize v0.2
 

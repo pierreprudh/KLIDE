@@ -33,9 +33,11 @@ import {
   type DurableMissionBundle,
   type DurableMissionTaskDispatch,
 } from "../agent/durableMissions";
+import { wouldCreateCycle, type GraphTask } from "../agent/missionGraph";
 import type { AgentEvent, DiffProposal, PermissionRequest, ProviderId } from "../agent/types";
 import { readAgentRunEvents, reattachAgentRun, resolveDiff, resolvePermission } from "../agent/client";
 import { DiffModal } from "./DiffModal";
+import { MissionGraph, type MissionGraphMeta } from "./MissionGraph";
 import { planGoal, resolvePlannerModel, stubPlan, type PlannedTask } from "../agent/planner";
 import { PROVIDER_GROUPS, providerName, isDelegateProvider, DEFAULT_MODELS } from "../agent/providers";
 import { ProviderLogo, DotGridLoader } from "./ai/icons";
@@ -714,6 +716,9 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
   // Which card is expanded to show its full description + model + cost.
   const [expanded, setExpanded] = useState<string | null>(null);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  // Board = model-routing lanes; Graph = the dependency DAG. Both project the
+  // same tasks — the graph is a view, not a second state model.
+  const [viewMode, setViewMode] = useState<"board" | "graph">("board");
   // Bumped on every (re)plan so the board remounts and replays the build-in.
   const [planSeq, setPlanSeq] = useState(0);
   const { routed, byTier, totalCost, totalMs, envelope, readyCount } = useOrchestratorModel(tasks, mode);
@@ -915,6 +920,42 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
     } finally {
       setSavingTaskId(null);
     }
+  }
+
+  // The graph's source of truth is the same task list the board routes; edges
+  // are the tasks' own dependencies. Editing an edge writes the dependent
+  // task's Markdown back through the durable store (blocked once approved).
+  const graphTasks: GraphTask[] = useMemo(
+    () => tasks.map((task) => ({ id: task.taskId, dependencies: task.dependsOn ?? [] })),
+    [tasks]
+  );
+  const graphMeta: Record<string, MissionGraphMeta> = useMemo(() => {
+    const out: Record<string, MissionGraphMeta> = {};
+    for (const task of tasks) {
+      out[task.taskId] = {
+        title: task.title,
+        phase: task.phase,
+        status: durableState?.tasks[task.taskId]?.status ?? "queued",
+      };
+    }
+    return out;
+  }, [tasks, durableState]);
+
+  async function toggleDependency(dependentId: string, prerequisiteId: string) {
+    const task = tasks.find((candidate) => candidate.taskId === dependentId);
+    if (!task || savingTaskId) return;
+    const current = task.dependsOn ?? [];
+    const linked = current.includes(prerequisiteId);
+    if (!linked && wouldCreateCycle(graphTasks, dependentId, prerequisiteId)) {
+      notify("That link would create a dependency cycle.", { tone: "warn" });
+      return;
+    }
+    const nextDeps = linked
+      ? current.filter((id) => id !== prerequisiteId)
+      : [...current, prerequisiteId];
+    const updated: PlannedTask = { ...task, dependsOn: nextDeps.length ? nextDeps : undefined };
+    patchPlannedTask(dependentId, { dependsOn: updated.dependsOn });
+    await saveTaskEdit(updated);
   }
 
   async function runSingleTask(taskId: string) {
@@ -1125,7 +1166,45 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
           </div>
         )}
 
+        {/* View switch — Board routes by model tier, Graph shows the dependency
+            DAG. Both are projections of the same tasks. */}
         {tasks.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 14 }}>
+            {(["board", "graph"] as const).map((view) => (
+              <button
+                key={view}
+                onClick={() => setViewMode(view)}
+                style={{
+                  appearance: "none",
+                  border: "none",
+                  background: "transparent",
+                  padding: "3px 4px",
+                  marginRight: 8,
+                  fontSize: 12.5,
+                  fontWeight: viewMode === view ? 600 : 500,
+                  color: viewMode === view ? "var(--fg-strong)" : "var(--fg-dim)",
+                  borderBottom: viewMode === view ? "1.5px solid var(--accent)" : "1.5px solid transparent",
+                  cursor: "pointer",
+                  transition: "color var(--motion-fast) var(--ease-out)",
+                }}
+              >
+                {view === "board" ? "Board" : "Graph"}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tasks.length > 0 && viewMode === "graph" && (
+          <MissionGraph
+            tasks={graphTasks}
+            meta={graphMeta}
+            editable={!planApproved}
+            savingTaskId={savingTaskId}
+            onToggleDependency={toggleDependency}
+          />
+        )}
+
+        {tasks.length > 0 && viewMode === "board" && (
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
           {/* tier columns — content-height + top-aligned, so lanes never become
               giant empty wells. */}
