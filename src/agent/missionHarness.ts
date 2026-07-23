@@ -29,6 +29,7 @@ export type MissionTaskStatus =
 export type MissionTaskAttemptStatus =
   | "running"
   | "dispatch-failed"
+  | "interrupted"
   | "accepted"
   | "rejected";
 
@@ -109,6 +110,7 @@ export type MissionAction =
   | { type: "task_assigned"; taskId: string; assignment: WorkerAssignment; validationContractId?: string; ts: number }
   | { type: "task_run_attached"; taskId: string; runId: string; ts: number }
   | { type: "task_attempt_dispatch_failed"; taskId: string; runId: string; message: string; ts: number }
+  | { type: "task_attempt_interrupted"; taskId: string; runId: string; reason: string; ts: number }
   | { type: "task_attempt_validated"; taskId: string; runId: string; accepted: boolean; validation: MissionAttemptValidation; ts: number }
   | { type: "task_status_changed"; taskId: string; status: MissionTaskStatus; ts: number }
   | { type: "mission_status_derived"; missionId: string; ts: number };
@@ -301,6 +303,13 @@ export function missionReducer(
     });
   }
 
+  if (action.type === "task_attempt_interrupted") {
+    return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
+      kind: "interrupted",
+      message: action.reason,
+    });
+  }
+
   if (action.type === "task_attempt_validated") {
     return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
       kind: "validated",
@@ -401,6 +410,7 @@ function projectTaskReadiness(
 type AttemptUpdate =
   | { kind: "attached" }
   | { kind: "dispatch-failed"; message: string }
+  | { kind: "interrupted"; message: string }
   | { kind: "validated"; accepted: boolean; validation: MissionAttemptValidation };
 
 function updateTaskAttempt(
@@ -424,6 +434,8 @@ function updateTaskAttempt(
     ? { ...base, status: "running" }
     : update.kind === "dispatch-failed"
       ? { ...base, status: "dispatch-failed", settledMs: ts, message: update.message }
+      : update.kind === "interrupted"
+        ? { ...base, status: "interrupted", settledMs: ts, message: update.message }
       : {
           ...base,
           status: update.accepted ? "accepted" : "rejected",

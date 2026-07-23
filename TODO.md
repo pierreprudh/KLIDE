@@ -65,9 +65,10 @@ them.
   rejected attempts park for explicit retry and independent branches proceed.
 - [x] Reattach the tier-board surface to Rust-started Runs from transcript plus
   the global event stream so permission/diff pauses remain operable on reopen.
-- [ ] Reconcile orphaned active attempts and resume approved Missions after a
-  full desktop-process restart. The current supervisor survives surface closure,
-  not termination of the Rust process.
+- [x] Reconcile Missions once when a workspace becomes active after a full
+  desktop-process restart. Terminal Harness summaries recover validation and
+  continue the graph; missing/non-terminal summaries become
+  `attempt_interrupted` and park for explicit retry instead of replaying edits.
 - [x] Slice 2: add the task graph view, cycle validation, and Markdown-backed
   dependency manipulation without introducing a second graph state model.
   Graph derives from the same task `dependencies` (`missionGraph.ts` layout +

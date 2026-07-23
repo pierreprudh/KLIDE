@@ -206,9 +206,11 @@ Approval freezes the worker kind, provider, model, and diff-review policy into
 each task Markdown file. A one-at-a-time Rust Mission supervisor now selects an
 unattempted ready task, attaches and starts its Harness Run headlessly, and
 re-enters after validation; rejected attempts park for explicit retry. The
-tier-board only observes events and reattaches to operator pauses. Full
-desktop-process restart/orphan reconciliation and the graph editor remain the
-next durability/UI slices.
+tier-board only observes events and reattaches to operator pauses. When a
+workspace becomes active after process restart, Rust validates terminal orphan
+summaries and marks ambiguous missing/non-terminal Runs `attempt_interrupted`
+without replaying them. The Board/Graph switch reads and edits the same task
+Markdown dependencies; Rust rejects dependency cycles at the write boundary.
 
 - Keep the Rust harness as the only durable agent loop. Do not reintroduce a frontend tool-dispatch loop.
 - Treat Mission Control as the place to inspect runs and hand them off; delegate TUIs resume in AI panels.

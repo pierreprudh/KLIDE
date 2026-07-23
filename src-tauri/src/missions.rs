@@ -35,6 +35,9 @@ pub struct MissionStoreState {
     /// validation/approval signal arrived while running and one more decision
     /// pass is owed before releasing the claim.
     driving: Mutex<HashMap<String, bool>>,
+    /// Workspace activation can fire more than once in one desktop session.
+    /// Restart reconciliation is a launch-time repair pass, not a poll.
+    reconciled_workspaces: Mutex<HashSet<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -232,6 +235,11 @@ pub enum MissionEvent {
         task_id: String,
         run_id: String,
         message: String,
+    },
+    AttemptInterrupted {
+        task_id: String,
+        run_id: String,
+        reason: String,
     },
     AttemptValidationRecorded {
         task_id: String,
@@ -606,6 +614,9 @@ fn fold_runtime(bundle: &DurableMissionBundle) -> FoldedMissionRuntime {
                 task.active.insert(run_id.clone());
             }
             MissionEvent::AttemptDispatchFailed {
+                task_id, run_id, ..
+            }
+            | MissionEvent::AttemptInterrupted {
                 task_id, run_id, ..
             } => {
                 runtime
@@ -1589,6 +1600,190 @@ fn validate_attempt_from_runs_dir(
     load_bundle_from_dir(&dir)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum AttemptRecoveryDecision {
+    LeaveLive,
+    ValidateTerminal,
+    Interrupt(String),
+}
+
+fn attempt_recovery_decision(
+    live_in_this_process: bool,
+    summary_status: Option<&str>,
+) -> AttemptRecoveryDecision {
+    if live_in_this_process {
+        return AttemptRecoveryDecision::LeaveLive;
+    }
+    match summary_status {
+        Some("done" | "error" | "cancelled") => AttemptRecoveryDecision::ValidateTerminal,
+        Some(status) => AttemptRecoveryDecision::Interrupt(format!(
+            "Klide restarted while the Harness summary was `{status}`."
+        )),
+        None => AttemptRecoveryDecision::Interrupt(
+            "Klide restarted before the Harness wrote a Run summary.".to_string(),
+        ),
+    }
+}
+
+/// Repair active Mission attempts from Harness evidence after a process
+/// restart. A terminal summary is safe to validate. A missing/non-terminal
+/// summary is ambiguous—edits may already have landed—so it becomes an
+/// interrupted attempt and must never be replayed automatically.
+fn reconcile_orphaned_attempts_from_runs_dir(
+    runs_dir: &Path,
+    workspace_root: &str,
+    mission_id: &str,
+    is_live: impl Fn(&str) -> bool,
+) -> Result<usize, String> {
+    let dir = mission_dir(workspace_root, mission_id, true)?;
+    let bundle = load_bundle_from_dir(&dir)?;
+    let runtime = fold_runtime(&bundle);
+    let mut active = Vec::new();
+    for task in &bundle.tasks {
+        let mut run_ids = runtime
+            .tasks
+            .get(&task.id)
+            .map(|task| task.active.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        run_ids.sort();
+        active.extend(run_ids.into_iter().map(|run_id| (task.id.clone(), run_id)));
+    }
+
+    let mut repaired = 0;
+    for (task_id, run_id) in active {
+        let summary = read_summary(runs_dir, &run_id).ok();
+        match attempt_recovery_decision(
+            is_live(&run_id),
+            summary.as_ref().map(|summary| summary.status.as_str()),
+        ) {
+            AttemptRecoveryDecision::LeaveLive => {}
+            AttemptRecoveryDecision::ValidateTerminal => {
+                if let Err(error) = validate_attempt_from_runs_dir(
+                    runs_dir,
+                    workspace_root,
+                    mission_id,
+                    &task_id,
+                    &run_id,
+                ) {
+                    append_event(
+                        &dir,
+                        mission_id,
+                        MissionEvent::AttemptInterrupted {
+                            task_id,
+                            run_id,
+                            reason: format!(
+                                "Klide found a terminal Run but could not recover its validation: {error}"
+                            )
+                            .chars()
+                            .take(500)
+                            .collect(),
+                        },
+                    )?;
+                }
+                repaired += 1;
+            }
+            AttemptRecoveryDecision::Interrupt(reason) => {
+                append_event(
+                    &dir,
+                    mission_id,
+                    MissionEvent::AttemptInterrupted {
+                        task_id,
+                        run_id,
+                        reason,
+                    },
+                )?;
+                repaired += 1;
+            }
+        }
+    }
+    Ok(repaired)
+}
+
+fn mission_should_resume(bundle: &DurableMissionBundle) -> bool {
+    let runtime = fold_runtime(bundle);
+    runtime.approved
+        && !matches!(
+            bundle.events.last().map(|line| &line.event),
+            Some(MissionEvent::MissionCompleted | MissionEvent::MissionParked { .. })
+        )
+}
+
+/// Called when the frontend activates/restores a workspace. The pass runs once
+/// per canonical workspace per desktop launch, then gives every non-terminal
+/// approved Mission one supervisor decision pass.
+pub(crate) async fn reconcile_workspace(
+    app: tauri::AppHandle,
+    workspace_root: String,
+) -> Result<(), String> {
+    let workspace = Workspace::new(&workspace_root)?;
+    let canonical_root = workspace.root().to_string_lossy().to_string();
+    {
+        let state = app.state::<MissionStoreState>();
+        let mut reconciled = state
+            .reconciled_workspaces
+            .lock()
+            .map_err(|_| "Mission recovery state is unavailable.".to_string())?;
+        if !reconciled.insert(canonical_root.clone()) {
+            return Ok(());
+        }
+    }
+
+    let result = async {
+        let runs_dir = app_runs_dir(&app)?;
+        let resume_ids = {
+            let state = app.state::<MissionStoreState>();
+            let _guard = state
+                .write_gate
+                .lock()
+                .map_err(|_| "Mission store is unavailable.".to_string())?;
+            let root = PathBuf::from(&canonical_root).join(".klide/missions");
+            if !root.is_dir() {
+                return Ok(());
+            }
+            let mut mission_ids = Vec::new();
+            for entry in
+                std::fs::read_dir(root).map_err(|e| format!("Unable to list Missions: {e}"))?
+            {
+                let entry = entry.map_err(|e| format!("Unable to read Mission entry: {e}"))?;
+                if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let Ok(bundle) = load_bundle_from_dir(&entry.path()) else {
+                    continue;
+                };
+                reconcile_orphaned_attempts_from_runs_dir(
+                    &runs_dir,
+                    &canonical_root,
+                    &bundle.mission.id,
+                    |run_id| crate::agent::run_is_active(&app, run_id),
+                )?;
+                let repaired = load_bundle(&canonical_root, &bundle.mission.id)?;
+                if mission_should_resume(&repaired) {
+                    mission_ids.push(bundle.mission.id);
+                }
+            }
+            mission_ids
+        };
+
+        for mission_id in resume_ids {
+            drive_mission(app.clone(), canonical_root.clone(), mission_id).await?;
+        }
+        Ok(())
+    }
+    .await;
+
+    if result.is_err() {
+        if let Ok(mut reconciled) = app
+            .state::<MissionStoreState>()
+            .reconciled_workspaces
+            .lock()
+        {
+            reconciled.remove(&canonical_root);
+        }
+    }
+    result
+}
+
 /// Called by the detached Rust Harness after a linked attempt settles. This is
 /// the durable validation writer; a mounted UI may observe it but is not
 /// required to make acceptance happen.
@@ -1684,6 +1879,50 @@ mod tests {
         }
     }
 
+    fn write_test_summary(
+        runs_dir: &Path,
+        workspace_root: &Path,
+        run_id: &str,
+        status: &str,
+        validation_status: &str,
+    ) {
+        std::fs::create_dir_all(runs_dir).unwrap();
+        let summary = serde_json::json!({
+            "id": run_id,
+            "path": runs_dir.join(format!("{run_id}.jsonl")).to_string_lossy(),
+            "source": "klide",
+            "title": "Recovered Mission attempt",
+            "status": status,
+            "provider": "mock",
+            "model": "mock-model",
+            "cwd": workspace_root.to_string_lossy(),
+            "project": "test",
+            "gitBranch": null,
+            "createdMs": 1,
+            "updatedMs": 2,
+            "messageCount": 2,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "filesTouched": 0,
+            "validation": {
+                "status": validation_status,
+                "checks": [],
+                "filesChanged": 0,
+                "commandsRun": 0,
+                "commandsFailed": 0,
+                "diffReviews": 0,
+                "permissionsApproved": 0,
+                "permissionsDenied": 0,
+                "warnings": []
+            }
+        });
+        std::fs::write(
+            runs_dir.join(format!("{run_id}.summary.json")),
+            serde_json::to_string_pretty(&summary).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn deps(pairs: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
         pairs
             .iter()
@@ -1698,7 +1937,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_finds_direct_and_indirect_loops() {
-        assert!(first_dependency_cycle(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])])).is_none());
+        assert!(
+            first_dependency_cycle(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])])).is_none()
+        );
         // A missing dependency is not a cycle — the caller reports it instead.
         assert!(first_dependency_cycle(&deps(&[("a", &["ghost"])])).is_none());
         assert!(first_dependency_cycle(&deps(&[("a", &["b"]), ("b", &["a"])])).is_some());
@@ -1934,6 +2175,124 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn restart_recovery_decision_never_interrupts_a_live_run() {
+        assert_eq!(
+            attempt_recovery_decision(true, Some("running")),
+            AttemptRecoveryDecision::LeaveLive
+        );
+        assert_eq!(
+            attempt_recovery_decision(false, Some("done")),
+            AttemptRecoveryDecision::ValidateTerminal
+        );
+        assert!(matches!(
+            attempt_recovery_decision(false, Some("waiting_for_diff")),
+            AttemptRecoveryDecision::Interrupt(reason) if reason.contains("waiting_for_diff")
+        ));
+        assert!(matches!(
+            attempt_recovery_decision(false, None),
+            AttemptRecoveryDecision::Interrupt(reason) if reason.contains("before the Harness wrote")
+        ));
+    }
+
+    #[test]
+    fn restart_marks_an_orphan_interrupted_without_replaying_it() {
+        let root = temp_workspace("restart-interrupted");
+        do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptAttached {
+                task_id: "inspect".to_string(),
+                run_id: "run-orphaned".to_string(),
+            },
+        )
+        .unwrap();
+
+        let runs_dir = root.join("runs");
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        assert_eq!(
+            reconcile_orphaned_attempts_from_runs_dir(
+                &runs_dir,
+                root.to_str().unwrap(),
+                "mission-one",
+                |_| false,
+            )
+            .unwrap(),
+            1
+        );
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert!(matches!(
+            bundle.events.last().map(|line| &line.event),
+            Some(MissionEvent::AttemptInterrupted { run_id, .. }) if run_id == "run-orphaned"
+        ));
+        let runtime = fold_runtime(&bundle);
+        assert!(runtime.tasks["inspect"].active.is_empty());
+        assert!(matches!(
+            supervisor_decision(&bundle, &runtime).unwrap(),
+            SupervisorDecision::Park(_)
+        ));
+        assert_eq!(
+            reconcile_orphaned_attempts_from_runs_dir(
+                &runs_dir,
+                root.to_str().unwrap(),
+                "mission-one",
+                |_| false,
+            )
+            .unwrap(),
+            0,
+            "recovery is idempotent once the attempt is no longer active"
+        );
+    }
+
+    #[test]
+    fn restart_recovers_terminal_validation_and_unlocks_the_next_task() {
+        let root = temp_workspace("restart-terminal");
+        do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptAttached {
+                task_id: "inspect".to_string(),
+                run_id: "run-finished-before-restart".to_string(),
+            },
+        )
+        .unwrap();
+        let runs_dir = root.join("runs");
+        write_test_summary(
+            &runs_dir,
+            &root,
+            "run-finished-before-restart",
+            "done",
+            "skipped",
+        );
+
+        assert_eq!(
+            reconcile_orphaned_attempts_from_runs_dir(
+                &runs_dir,
+                root.to_str().unwrap(),
+                "mission-one",
+                |_| false,
+            )
+            .unwrap(),
+            1
+        );
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        let runtime = fold_runtime(&bundle);
+        assert_eq!(
+            runtime.tasks["inspect"].accepted_run_id.as_deref(),
+            Some("run-finished-before-restart")
+        );
+        assert_eq!(
+            supervisor_decision(&bundle, &runtime).unwrap(),
+            SupervisorDecision::Dispatch("implement".to_string())
+        );
     }
 
     #[test]

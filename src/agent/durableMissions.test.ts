@@ -137,4 +137,42 @@ describe("durable Mission projection", () => {
     expect(state.tasks.implement.status).toBe("blocked");
     expect(readyMissionTaskIds(state, "mission-one")).toEqual(["inspect"]);
   });
+
+  it("projects a restart-interrupted Run as a failed retryable attempt", () => {
+    const state = compileDurableMissionBundle(bundle([
+      { schemaVersion: 1, missionId: "mission-one", seq: 0, ts: 1, event: { type: "plan_approved" } },
+      { schemaVersion: 1, missionId: "mission-one", seq: 1, ts: 2, event: { type: "attempt_attached", taskId: "inspect", runId: "run-orphaned" } },
+      {
+        schemaVersion: 1,
+        missionId: "mission-one",
+        seq: 2,
+        ts: 3,
+        event: {
+          type: "attempt_interrupted",
+          taskId: "inspect",
+          runId: "run-orphaned",
+          reason: "Klide restarted before the Harness wrote a Run summary.",
+        },
+      },
+      {
+        schemaVersion: 1,
+        missionId: "mission-one",
+        seq: 3,
+        ts: 4,
+        event: {
+          type: "mission_parked",
+          reason: "No unattempted task is ready.",
+        },
+      },
+    ]));
+
+    expect(state.tasks.inspect.status).toBe("failed");
+    expect(state.tasks.inspect.attempts[0]).toMatchObject({
+      runId: "run-orphaned",
+      status: "interrupted",
+      message: "Klide restarted before the Harness wrote a Run summary.",
+    });
+    expect(readyMissionTaskIds(state, "mission-one")).toEqual(["inspect"]);
+    expect(state.tasks.implement.status).toBe("blocked");
+  });
 });

@@ -82,6 +82,7 @@ export type DurableMissionEvent =
   | { type: "plan_approved" }
   | { type: "attempt_attached"; taskId: string; runId: string }
   | { type: "attempt_dispatch_failed"; taskId: string; runId: string; message: string }
+  | { type: "attempt_interrupted"; taskId: string; runId: string; reason: string }
   | {
       type: "attempt_validation_recorded";
       taskId: string;
@@ -168,6 +169,14 @@ export function compileDurableMissionBundle(bundle: DurableMissionBundle): Missi
         taskId: event.taskId,
         runId: event.runId,
         message: event.message,
+        ts: line.ts,
+      });
+    } else if (event.type === "attempt_interrupted") {
+      state = missionReducer(state, {
+        type: "task_attempt_interrupted",
+        taskId: event.taskId,
+        runId: event.runId,
+        reason: event.reason,
         ts: line.ts,
       });
     } else if (event.type === "attempt_validation_recorded") {
