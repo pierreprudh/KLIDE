@@ -117,7 +117,7 @@ function useOrchestratorModel(tasks: PlannedTask[], mode: ModeKey) {
 }
 
 // ── Real dispatch (slice-1 seam) ─────────────────────────────────────────────
-type CardStatus = "idle" | "running" | "done" | "error";
+type CardStatus = "idle" | "running" | "done" | "error" | "interrupted";
 type LiveCard = { status: CardStatus; activity: string };
 
 function activityFromEvent(prev: LiveCard, ev: AgentEvent): LiveCard {
@@ -340,7 +340,7 @@ function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey
 // "done" recedes to a quiet muted check so the live work stays the focus.
 function StatusBadge({ status }: { status: CardStatus }) {
   if (status === "done") return <span style={{ display: "inline-flex", color: "var(--fg-subtle)" }}><IconCheck size={11} /></span>;
-  const color = status === "error" ? "var(--danger)" : status === "running" ? "var(--accent)" : "var(--fg-dim)";
+  const color = status === "error" ? "var(--danger)" : status === "interrupted" ? "var(--warning)" : status === "running" ? "var(--accent)" : "var(--fg-dim)";
   return (
     <span
       style={{
@@ -351,7 +351,7 @@ function StatusBadge({ status }: { status: CardStatus }) {
         lineHeight: 1,
       }}
     >
-      {status === "error" ? "error" : status === "running" ? "working" : "idle"}
+      {status === "error" ? "error" : status === "interrupted" ? "interrupted" : status === "running" ? "working" : "idle"}
     </span>
   );
 }
@@ -1075,6 +1075,10 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
         .klide-orch-card[data-live="error"] {
           box-shadow: inset 2px 0 0 var(--danger) !important;
         }
+        /* Interrupted by a restart — an amber rail says "retry", not "failed". */
+        .klide-orch-card[data-live="interrupted"] {
+          box-shadow: inset 2px 0 0 var(--warning) !important;
+        }
         /* Lanes + summary build in with the SAME spring rise as the cards, just
            sequenced earlier — so on create the structure assembles, then the
            bricks lay into it. */
@@ -1242,10 +1246,12 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                         ? "done"
                         : lastAttempt?.status === "running"
                           ? "running"
-                          : lastAttempt
-                            ? "error"
-                            : "idle";
-                      const status: CardStatus = projectedStatus === "done" || projectedStatus === "error"
+                          : lastAttempt?.status === "interrupted"
+                            ? "interrupted"
+                            : lastAttempt
+                              ? "error"
+                              : "idle";
+                      const status: CardStatus = projectedStatus === "done" || projectedStatus === "error" || projectedStatus === "interrupted"
                         ? projectedStatus
                         : liveCard?.status ?? projectedStatus;
                       const canRunReal = !!workspaceRoot && !!durableBundle && status !== "running" && !missionOn;
@@ -1263,7 +1269,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                           // continuous full-width wave, brick by brick.
                           key={`${t.taskId}-${mode}-${planSeq}`}
                           className="klide-orch-card"
-                          data-live={status === "running" ? "running" : status === "error" ? "error" : undefined}
+                          data-live={status === "running" ? "running" : status === "error" ? "error" : status === "interrupted" ? "interrupted" : undefined}
                           onClick={() => setExpanded((e) => (e === t.taskId ? null : t.taskId))}
                           style={{
                             padding: 16,
@@ -1317,15 +1323,17 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                           )}
                           {dep && (() => {
                             // Mission-aware dep line: parked upstream failure →
-                            // blocked; waiting its turn in a live mission → queued.
+                            // blocked; an interrupted upstream → retry (amber, not
+                            // a failure); waiting its turn in a live mission → queued.
                             const depFailed = (t.dependsOn ?? []).some((d) => durableState?.tasks[d]?.status === "failed");
-                            const queued = missionOn && !liveCard && !depFailed;
+                            const depInterrupted = !depFailed && (t.dependsOn ?? []).some((d) => durableState?.tasks[d]?.status === "interrupted");
+                            const queued = missionOn && !liveCard && !depFailed && !depInterrupted;
                             const depTitle = (titleById[dep] ?? dep).slice(0, 24);
                             return (
-                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: depFailed ? "var(--danger)" : "var(--fg-dim)", marginBottom: 8 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: depFailed ? "var(--danger)" : depInterrupted ? "var(--warning)" : "var(--fg-dim)", marginBottom: 8 }}>
                                 <IconDep size={11} />
                                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  {depFailed ? `blocked · ${depTitle} failed` : queued ? `queued · after ${depTitle}` : `after ${depTitle}`}
+                                  {depFailed ? `blocked · ${depTitle} failed` : depInterrupted ? `blocked · ${depTitle} interrupted` : queued ? `queued · after ${depTitle}` : `after ${depTitle}`}
                                 </span>
                               </div>
                             );

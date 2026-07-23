@@ -715,6 +715,20 @@ fn supervisor_decision(
     ))
 }
 
+/// A failed `dispatch_task` only parks the mission when the failure was
+/// actually recorded as an `AttemptDispatchFailed` for this task. A transient
+/// "not ready" — the dispatch race where another actor (a manual dispatch, or a
+/// second supervisor loop) attached this task first — records nothing, so the
+/// mission is running normally and must not be parked. Pure so the accept vs
+/// spurious-park edge is testable without the Tauri/harness plumbing.
+fn dispatch_failure_should_park(bundle: &DurableMissionBundle, task_id: &str) -> bool {
+    matches!(
+        bundle.events.last().map(|line| &line.event),
+        Some(MissionEvent::AttemptDispatchFailed { task_id: failed_task, .. })
+            if failed_task == task_id
+    )
+}
+
 fn agent_mode(mode: &MissionMode) -> AgentMode {
     match mode {
         MissionMode::Plan => AgentMode::Plan,
@@ -1321,13 +1335,18 @@ async fn drive_mission_inner(
                     .lock()
                     .map_err(|_| "Mission store is unavailable.".to_string())?;
                 let dir = mission_dir(workspace_root, mission_id, true)?;
-                append_lifecycle_event(
-                    &dir,
-                    mission_id,
-                    MissionEvent::MissionParked {
-                        reason: format!("Task `{task_id}` could not start: {error}"),
-                    },
-                )?;
+                let bundle = load_bundle_from_dir(&dir)?;
+                // Only a genuinely recorded dispatch failure parks the mission
+                // (mirrors `mission_dispatch_task`); a "not ready" race must not.
+                if dispatch_failure_should_park(&bundle, &task_id) {
+                    append_lifecycle_event(
+                        &dir,
+                        mission_id,
+                        MissionEvent::MissionParked {
+                            reason: format!("Task `{task_id}` could not start: {error}"),
+                        },
+                    )?;
+                }
             }
             Ok(())
         }
@@ -1357,7 +1376,16 @@ pub(crate) async fn drive_mission(
     workspace_root: String,
     mission_id: String,
 ) -> Result<(), String> {
-    let key = format!("{workspace_root}\0{mission_id}");
+    // Single-flight per (workspace, mission). Callers reach us with the root in
+    // different string forms — the raw frontend string (approve / validation
+    // writeback) or the already-canonical form (restart reconcile). Key on the
+    // canonical root so those forms can't split into two concurrently-driving
+    // loops, which would make the loser's dispatch see "not ready" and
+    // spuriously park a mission that is in fact running normally.
+    let canonical_root = Workspace::new(&workspace_root)
+        .map(|workspace| workspace.root().to_string_lossy().to_string())
+        .unwrap_or_else(|_| workspace_root.clone());
+    let key = format!("{canonical_root}\0{mission_id}");
     {
         let state = app.state::<MissionStoreState>();
         let mut driving = state
@@ -1436,14 +1464,7 @@ pub async fn mission_dispatch_task(
             .map_err(|_| "Mission store is unavailable.".to_string())?;
         let dir = mission_dir(&workspace_root, &mission_id, true)?;
         let bundle = load_bundle_from_dir(&dir)?;
-        let dispatch_was_recorded = matches!(
-            bundle.events.last().map(|line| &line.event),
-            Some(MissionEvent::AttemptDispatchFailed {
-                task_id: failed_task,
-                ..
-            }) if failed_task == &task_id
-        );
-        if !dispatch_was_recorded {
+        if !dispatch_failure_should_park(&bundle, &task_id) {
             return Err(error);
         }
         append_lifecycle_event(
@@ -2086,6 +2107,49 @@ mod tests {
         let task = runtime.tasks.get("inspect").unwrap();
         assert_eq!(task.attempts, vec!["run-a", "run-b"]);
         assert!(task.active.is_empty());
+    }
+
+    #[test]
+    fn dispatch_race_does_not_park_but_a_recorded_failure_does() {
+        let root = temp_workspace("dispatch-park");
+        do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+
+        // Nothing recorded yet → a stray dispatch error can't justify a park.
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert!(!dispatch_failure_should_park(&bundle, "inspect"));
+
+        // The dispatch race: another actor attached this task first, so our
+        // dispatch returns "not ready" without recording anything. The mission
+        // is running normally and must NOT be parked (regression: it was).
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptAttached {
+                task_id: "inspect".to_string(),
+                run_id: "run-inspect".to_string(),
+            },
+        )
+        .unwrap();
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert!(!dispatch_failure_should_park(&bundle, "inspect"));
+
+        // A genuine, recorded dispatch failure for this task DOES park it.
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptDispatchFailed {
+                task_id: "inspect".to_string(),
+                run_id: "run-inspect".to_string(),
+                message: "harness offline".to_string(),
+            },
+        )
+        .unwrap();
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert!(dispatch_failure_should_park(&bundle, "inspect"));
+        // ...but not attributed to a different task than the failure recorded.
+        assert!(!dispatch_failure_should_park(&bundle, "implement"));
     }
 
     #[test]

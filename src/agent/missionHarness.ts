@@ -23,6 +23,10 @@ export type MissionTaskStatus =
   | "waiting"
   | "review"
   | "done"
+  // A restart killed the Run before it settled. Distinct from `failed`
+  // (a validation rejection): nothing was wrong with the work, so it parks
+  // for a one-click retry rather than reading as a failure.
+  | "interrupted"
   | "failed"
   | "cancelled";
 
@@ -346,6 +350,9 @@ export function deriveMissionStatus(
   if (tasks.some((task) => task.status === "failed")) return "failed";
   if (tasks.some((task) => task.status === "running")) return "running";
   if (tasks.some((task) => task.status === "review" || task.status === "validating")) return "reviewing";
+  // An interrupted task parks the mission awaiting a retry — surfaced, but not
+  // a failure (Rust does not auto-resume it, so it's not "running" either).
+  if (tasks.some((task) => task.status === "interrupted")) return "waiting";
   if (tasks.every((task) => task.status === "done")) return "done";
   if (tasks.some((task) => task.status === "ready" || task.status === "assigned")) return "dispatching";
   if (tasks.some((task) => task.status === "waiting" || task.status === "blocked")) return "waiting";
@@ -449,7 +456,9 @@ function updateTaskAttempt(
     ? "running"
     : update.kind === "validated" && update.accepted
       ? "done"
-      : "failed";
+      : update.kind === "interrupted"
+        ? "interrupted"
+        : "failed";
   const mission = state.missions[task.missionId];
   let tasks: Record<string, MissionTask> = {
     ...state.tasks,

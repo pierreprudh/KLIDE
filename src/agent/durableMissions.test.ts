@@ -138,7 +138,7 @@ describe("durable Mission projection", () => {
     expect(readyMissionTaskIds(state, "mission-one")).toEqual(["inspect"]);
   });
 
-  it("projects a restart-interrupted Run as a failed retryable attempt", () => {
+  it("projects a restart-interrupted Run as an interrupted, retryable attempt (not a failure)", () => {
     const state = compileDurableMissionBundle(bundle([
       { schemaVersion: 1, missionId: "mission-one", seq: 0, ts: 1, event: { type: "plan_approved" } },
       { schemaVersion: 1, missionId: "mission-one", seq: 1, ts: 2, event: { type: "attempt_attached", taskId: "inspect", runId: "run-orphaned" } },
@@ -166,13 +166,19 @@ describe("durable Mission projection", () => {
       },
     ]));
 
-    expect(state.tasks.inspect.status).toBe("failed");
+    // Distinct from a validation rejection: the work wasn't judged bad, the
+    // process just died. It parks for a one-click retry, so the task and its
+    // attempt both read "interrupted" rather than "failed".
+    expect(state.tasks.inspect.status).toBe("interrupted");
     expect(state.tasks.inspect.attempts[0]).toMatchObject({
       runId: "run-orphaned",
       status: "interrupted",
       message: "Klide restarted before the Harness wrote a Run summary.",
     });
+    // Still retryable, and the interruption must not cascade the mission or its
+    // dependents into a failure state.
     expect(readyMissionTaskIds(state, "mission-one")).toEqual(["inspect"]);
     expect(state.tasks.implement.status).toBe("blocked");
+    expect(state.missions["mission-one"].status).not.toBe("failed");
   });
 });

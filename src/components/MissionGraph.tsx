@@ -34,6 +34,7 @@ function spineColor(status: string): string {
   if (status === "done") return "var(--accent)";
   if (status === "running") return "var(--accent)";
   if (status === "failed") return "var(--danger)";
+  if (status === "interrupted") return "var(--warning)"; // restart artifact — retry, not a failure
   if (status === "ready") return "var(--fg-strong)";
   return "var(--border-strong)"; // queued / blocked
 }
