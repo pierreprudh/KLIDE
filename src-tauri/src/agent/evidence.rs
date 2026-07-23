@@ -323,7 +323,8 @@ fn event_ts(event: &AgentEvent) -> i64 {
         | AgentEvent::SubagentRequested { ts, .. }
         | AgentEvent::SubagentResolved { ts, .. }
         | AgentEvent::AdvisorRequested { ts, .. }
-        | AgentEvent::AdvisorResolved { ts, .. } => *ts,
+        | AgentEvent::AdvisorResolved { ts, .. }
+        | AgentEvent::SteeringInjected { ts, .. } => *ts,
     }
 }
 

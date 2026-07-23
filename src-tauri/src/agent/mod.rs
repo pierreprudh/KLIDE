@@ -6,6 +6,7 @@ pub mod failure_budget;
 mod network_allowlist;
 mod permission;
 mod run_core;
+mod steering;
 pub mod todo;
 pub mod tools;
 pub mod transcripts;
@@ -1070,6 +1071,85 @@ where
     }))
 }
 
+/// Outcome of an auto-escalated advisor consult (see `steer_via_advisor`).
+enum AdvisorSteer {
+    /// The advisor answered; inject this guidance into the next turn.
+    Advice(String),
+    /// No advisor configured, or the consult failed — fall back to the plain
+    /// steering nudge so the run still gets a course-correction.
+    FallbackNudge,
+    /// The user cancelled while the consult was parked; the caller settles the
+    /// run and returns (only it can leave the loop).
+    Cancelled,
+}
+
+/// Consult a stronger advisor *without* a model-initiated tool call: the loop
+/// monitor detected a stuck failure loop and is escalating on the executor's
+/// behalf. Emits the same `AdvisorRequested`/`AdvisorResolved` pause the
+/// `consult_advisor` tool uses, so any run-owner (AI panel or headless mission)
+/// services it unchanged. A closed channel or an `ADVISOR_ERROR_PREFIX` reply
+/// (no advisor configured, provider down) degrades to `FallbackNudge`.
+async fn steer_via_advisor<E>(
+    sup: &dyn RunSupervisor,
+    id: &str,
+    request_id: String,
+    question: String,
+    cancel: &CancellationToken,
+    emit: &mut E,
+) -> Result<AdvisorSteer, String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    let advice = match pause_for_user(
+        sup,
+        id,
+        AgentRunStatus::WaitingForPermission,
+        AgentEvent::AdvisorRequested {
+            run_id: id.to_string(),
+            request_id: request_id.clone(),
+            question,
+            ts: now_ms(),
+        },
+        ADVISOR_ERROR_PREFIX,
+        cancel,
+        emit,
+        |handle, tx| {
+            *handle.pending_question.lock().unwrap() = Some(tx);
+        },
+    )
+    .await?
+    {
+        PauseOutcome::Cancelled => return Ok(AdvisorSteer::Cancelled),
+        PauseOutcome::Resolved(advice) => advice,
+    };
+
+    emit(AgentEvent::AdvisorResolved {
+        run_id: id.to_string(),
+        request_id,
+        advice: advice.clone(),
+        ts: now_ms(),
+    })?;
+
+    if advice.strip_prefix(ADVISOR_ERROR_PREFIX).is_some() {
+        return Ok(AdvisorSteer::FallbackNudge);
+    }
+    Ok(AdvisorSteer::Advice(advice))
+}
+
+/// The most recent tool result text in the provider message stream, truncated —
+/// the error the advisor most needs to see when a failure loop is escalated.
+fn last_tool_output(messages: &[serde_json::Value]) -> Option<String> {
+    messages.iter().rev().find_map(|m| {
+        if m.get("role").and_then(|r| r.as_str()) == Some("tool") {
+            m.get("content")
+                .and_then(|c| c.as_str())
+                .map(|s| s.chars().take(800).collect::<String>())
+        } else {
+            None
+        }
+    })
+}
+
 /// Command tool (`run_command` and dynamic command-capability tools): run a
 /// shell command, but only after the user approves it through the permission
 /// gate. Approvals/rejections are remembered per-run (and project-scoped ones
@@ -1850,6 +1930,11 @@ async fn run_agent_loop(
     let compact_threshold =
         compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
 
+    // Mid-run loop monitor: watches recent tool-call signatures and, when the
+    // model gets stuck repeating the same call, injects a one-time steering
+    // nudge into the next turn's context. See `steering.rs`.
+    let mut loop_monitor = steering::LoopMonitor::default();
+
     for turn in 0..max_turns {
         // Auto-compaction: trim verbose tool results from older turns once the
         // prompt approaches the context window. The recency window inside
@@ -1997,6 +2082,11 @@ async fn run_agent_loop(
             }
         };
 
+        // Collect each call's signature + whether it failed as it executes, so
+        // the loop monitor (below, once the turn settles) can see both plain
+        // repetition and repeated failures. Filled in the per-call loop.
+        let mut turn_observations: Vec<steering::CallObservation> = Vec::new();
+
         // Parallel read-only tools: when the user opts in (cap > 1) and a turn
         // requests several read-only calls, run them concurrently up front and
         // serve the results into the sequential loop below. The loop's
@@ -2038,6 +2128,10 @@ async fn run_agent_loop(
             let kind = match plan_tool_step(&request.mode, &call, kind) {
                 ToolStepPlan::Execute { kind } => kind,
                 ToolStepPlan::Blocked { result } => {
+                    turn_observations.push(steering::CallObservation {
+                        signature: steering::call_signature(&call),
+                        failed: !result.ok,
+                    });
                     emit(AgentEvent::ToolCallFinished {
                         run_id: id.clone(),
                         tool_call_id: call.id.clone(),
@@ -2086,6 +2180,10 @@ async fn run_agent_loop(
                     return Ok(());
                 }
             };
+            turn_observations.push(steering::CallObservation {
+                signature: steering::call_signature(&call),
+                failed: !tool_result.ok,
+            });
 
             emit(AgentEvent::ToolCallFinished {
                 run_id: id.clone(),
@@ -2096,6 +2194,99 @@ async fn run_agent_loop(
             messages.push(tool_provider_message(&call, &tool_result));
 
             apply_clean_context_if_requested(&call, &mut messages);
+        }
+
+        // The turn has settled: ask the loop monitor whether the run is stuck
+        // (repeating a call, repeating a *failing* call, or past the give-up
+        // cap). Any nudge is pushed only now, after this turn's tool results are
+        // in `messages` — an assistant `tool_calls` turn must be followed
+        // immediately by its `tool` replies on OpenAI-wire providers, so a system
+        // message can't slip in between. Cheap and debounced, so it won't spam a
+        // healthy run. The paired event records the intervention in the transcript.
+        let steer_outcome = loop_monitor.observe(turn_observations);
+
+        // Circuit breaker: the same call has failed past the run cap even after
+        // steering. End the run honestly rather than burn to the turn limit.
+        if let Some(steering::Outcome::GiveUp(reason)) = &steer_outcome {
+            emit(AgentEvent::SteeringInjected {
+                run_id: id.clone(),
+                reason: reason.clone(),
+                ts: now_ms(),
+            })?;
+            emit(AgentEvent::AssistantMessage {
+                run_id: id.clone(),
+                message_id: message_id("assistant"),
+                content: vec![AgentContentBlock::Text {
+                    text: format!(
+                        "I'm stuck: {reason}. Rather than repeat the same failing step, I've \
+                         stopped here so you can take a look — send another message with more \
+                         direction and I'll continue from this point."
+                    ),
+                }],
+                usage: None,
+                ts: now_ms(),
+            })?;
+            message_count += 1;
+            emit(AgentEvent::RunError {
+                run_id: id.clone(),
+                error: AgentError {
+                    code: "steering_gave_up".to_string(),
+                    message: reason.clone(),
+                    detail: None,
+                    retryable: true,
+                },
+                ts: now_ms(),
+            })?;
+            settle_run(sup, &runs_dir, &id, &summary, message_count, AgentRunStatus::Error)?;
+            completed = true;
+            break;
+        }
+
+        if let Some(steering::Outcome::Steer(hint)) = steer_outcome {
+            // A plain repetition loop gets a nudge; a repeated *failure* loop is
+            // escalated — auto-consult a stronger advisor and inject its guidance
+            // (falling back to the nudge if no advisor is available). The
+            // `SteeringInjected` marker is emitted *after* the outcome is known so
+            // its reason can name what actually happened.
+            if hint.escalate {
+                let error = last_tool_output(&messages)
+                    .unwrap_or_else(|| "(no tool output captured)".to_string());
+                let question = format!(
+                    "You are advising a coding agent that is stuck in a loop. {}. The most recent \
+                     tool result was:\n\n{}\n\nWhat is the underlying problem, and what concretely \
+                     different action should the agent take next? Give specific, actionable guidance.",
+                    hint.reason, error
+                );
+                let request_id = format!("adv_{id}_steer_{turn}");
+                let reason = match steer_via_advisor(sup, &id, request_id, question, &cancel, &mut emit)
+                    .await?
+                {
+                    AdvisorSteer::Cancelled => {
+                        finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
+                        return Ok(());
+                    }
+                    AdvisorSteer::Advice(advice) => {
+                        messages.push(steering::advisor_steering_message(&advice));
+                        format!("{} — consulted advisor: {}", hint.reason, steering::preview(&advice))
+                    }
+                    AdvisorSteer::FallbackNudge => {
+                        messages.push(steering::steering_system_message(&hint.nudge));
+                        format!("{} — no advisor available, nudged", hint.reason)
+                    }
+                };
+                emit(AgentEvent::SteeringInjected {
+                    run_id: id.clone(),
+                    reason,
+                    ts: now_ms(),
+                })?;
+            } else {
+                emit(AgentEvent::SteeringInjected {
+                    run_id: id.clone(),
+                    reason: hint.reason.clone(),
+                    ts: now_ms(),
+                })?;
+                messages.push(steering::steering_system_message(&hint.nudge));
+            }
         }
     }
 

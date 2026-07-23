@@ -417,6 +417,16 @@ pub enum AgentEvent {
         summary: String,
         ts: i64,
     },
+    /// The loop monitor detected the run repeating a tool call without progress
+    /// and injected a one-time steering nudge into the model's context. `reason`
+    /// is the short human-readable line the transcript shows (the long nudge the
+    /// model receives lives only in the provider messages, not here). See
+    /// `steering.rs`.
+    SteeringInjected {
+        run_id: String,
+        reason: String,
+        ts: i64,
+    },
     /// The model called `userAnswerQuestion` and is paused waiting for the
     /// user's typed reply. The frontend renders an inline Q&A card; the
     /// answer comes back through `agent_resolve_question`, which unblocks

@@ -95,7 +95,8 @@ pub fn append_event(
         | AgentEvent::SubagentResolved { ts, .. }
         | AgentEvent::AdvisorRequested { ts, .. }
         | AgentEvent::AdvisorResolved { ts, .. }
-        | AgentEvent::ContextCompacted { ts, .. } => *ts,
+        | AgentEvent::ContextCompacted { ts, .. }
+        | AgentEvent::SteeringInjected { ts, .. } => *ts,
     };
     let line = TranscriptLine {
         schema_version: 1,

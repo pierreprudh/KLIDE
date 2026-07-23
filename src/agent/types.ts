@@ -208,7 +208,8 @@ export type AgentEvent =
   | { type: "subagent_requested"; runId: string; requestId: string; subagent: string; task: string; ts: number }
   | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ts: number }
   | { type: "advisor_requested"; runId: string; requestId: string; question: string; ts: number }
-  | { type: "advisor_resolved"; runId: string; requestId: string; advice: string; ts: number };
+  | { type: "advisor_resolved"; runId: string; requestId: string; advice: string; ts: number }
+  | { type: "steering_injected"; runId: string; reason: string; ts: number };
 
 export type AgentMessageView = {
   id: string;

@@ -57,6 +57,12 @@ export type Msg =
         messages?: number;
         toolCalls?: number;
       };
+      /** Set when this system message is a loop-monitor steering marker, so the
+       *  chat renders it as a slim intervention line instead of a text blob.
+       *  `content` keeps a plain-text fallback (serialization, search). */
+      steering?: {
+        reason: string;
+      };
     }
   | { role: "tool"; content: string; toolName: string; toolCallId?: string; tool_call_id?: string };
 

@@ -17,6 +17,7 @@ import {
   appendDelta,
   finalizeAssistantMessage,
   finishToolCall,
+  insertSteering,
   locateAssistant,
   startToolCall,
   type Pricing,
@@ -150,6 +151,15 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
       }
       case "tool_call_finished": {
         opts.commit(finishToolCall(opts.read(), event.toolCallId, event.result.content));
+        return true;
+      }
+      case "steering_injected": {
+        // The loop monitor nudged the run. Splice a slim marker after this
+        // turn's tool cards and advance the cursor past it so the next
+        // assistant bubble lands below.
+        const { msgs: next, index } = insertSteering(opts.read(), nextAssistantIdx, event.reason);
+        nextAssistantIdx = index;
+        opts.commit(next);
         return true;
       }
       default:

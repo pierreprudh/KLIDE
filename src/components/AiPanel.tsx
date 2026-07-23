@@ -3175,6 +3175,16 @@ This user request requires workspace inspection. Before answering, you MUST call
             return <div key={i} className="ai-msg-in" style={{ margin: activeToolRunning ? "2px 0 3px 32px" : "1px 0 2px 32px", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>{renderMessageBody(m, activeToolRunning)}</div>;
           }
 
+          // Steering marker: a loop-monitor intervention, not an assistant
+          // utterance — render it indented to align with tool output.
+          if (m.role === "system" && m.steering) {
+            return (
+              <div key={i} className="ai-msg-in" style={{ margin: "8px 0 8px 32px" }}>
+                {renderMessageBody(m)}
+              </div>
+            );
+          }
+
           // Compaction marker: a system event, not an assistant utterance —
           // render it gutter-less and indented to align with tool output.
           if (m.role === "system" && m.compaction) {

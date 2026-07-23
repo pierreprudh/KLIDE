@@ -596,7 +596,36 @@ export function CompactionRow({
   );
 }
 
+// Course-correction glyph for a steering marker: an arrow that bends away,
+// echoing the "you were heading in circles — turn" idea.
+function SteeringGlyph() {
+  return (
+    <span aria-hidden style={{ display: "grid", placeItems: "center", color: "currentColor", flexShrink: 0 }}>
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 11a5 5 0 0 1 5-5h5" />
+        <path d="M10 3l3 3-3 3" />
+      </svg>
+    </span>
+  );
+}
+
+// Loop-monitor steering marker: a slim, left-aligned row in the same idiom as an
+// inline compaction, so it nests quietly in the run's flow. The `reason` is the
+// short line the harness recorded ("Loop detected — `read_file` called 3× …").
+export function SteeringRow({ reason }: { reason: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "5px 0", color: "var(--fg-subtle)" }}>
+      <SteeringGlyph />
+      <span style={{ ...COMPACT_MONO, color: "var(--fg-strong)", fontWeight: 500, flexShrink: 0 }}>Steered</span>
+      <span style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{reason}</span>
+    </div>
+  );
+}
+
 export function renderMessageBody(m: Msg, active = false): ReactElement {
+  if (m.role === "system" && m.steering) {
+    return <SteeringRow reason={m.steering.reason} />;
+  }
   if (m.role === "system" && m.compaction) {
     return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} messages={m.compaction.messages} toolCalls={m.compaction.toolCalls} />;
   }

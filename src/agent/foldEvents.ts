@@ -50,6 +50,10 @@ export type FoldedRow =
       thinking?: string;
       toolCalls: FoldedToolCall[];
       meta?: AssistantMeta;
+    }
+  | {
+      kind: "steering";
+      reason: string;
     };
 
 type AssistantRow = Extract<FoldedRow, { kind: "assistant" }>;
@@ -169,6 +173,11 @@ export function foldAgentEvents(events: AgentEvent[]): FoldedRow[] {
       });
       continue;
     }
+
+    if (event.type === "steering_injected") {
+      rows.push({ kind: "steering", reason: event.reason });
+      continue;
+    }
   }
 
   return rows;
@@ -238,6 +247,14 @@ export function foldedToMsgs(rows: FoldedRow[]): Msg[] {
       });
       continue;
     }
+    if (row.kind === "steering") {
+      msgs.push({
+        role: "system",
+        content: row.reason,
+        steering: { reason: row.reason },
+      });
+      continue;
+    }
     msgs.push({
       role: "assistant",
       content: row.text,
@@ -279,6 +296,9 @@ export function foldedToRunMessages(rows: FoldedRow[]): RunMessage[] {
       out.push({ role: "user", text: row.text });
       continue;
     }
+    // Mission Control's RunMessage has no system role; steering markers are an
+    // AI-panel transcript annotation, so they're dropped from the run board.
+    if (row.kind === "steering") continue;
     if (!row.text.trim() && row.toolCalls.length === 0) continue;
     out.push({
       role: "assistant",

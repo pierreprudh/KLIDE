@@ -51,13 +51,36 @@ export function locateAssistant(
   delegate: TranscriptDelegate
 ): { msgs: Msg[]; index: number } {
   let i = nextAssistantIdx;
-  while (msgs[i]?.role === "tool") i += 1;
+  // Walk past tool cards and steering markers — both are annotations attached
+  // to the current turn, not the next assistant bubble.
+  while (msgs[i]?.role === "tool" || isSteeringRow(msgs[i])) i += 1;
   if (msgs[i]?.role === "assistant") {
     return { msgs, index: i };
   }
   const next = [...msgs];
   next.splice(i, 0, { role: "assistant", content: "", ...delegate });
   return { msgs: next, index: i };
+}
+
+/** A loop-monitor steering marker: a system row carrying `steering`. */
+function isSteeringRow(msg: Msg | undefined): boolean {
+  return msg?.role === "system" && "steering" in msg && msg.steering !== undefined;
+}
+
+/**
+ * Splice a steering marker after the current turn's cursor and advance it past
+ * the new row, so the next assistant bubble lands after it. Called when the loop
+ * monitor injects a nudge — see `steering.rs` / the turn driver.
+ */
+export function insertSteering(
+  msgs: Msg[],
+  nextAssistantIdx: number,
+  reason: string
+): { msgs: Msg[]; index: number } {
+  const next = [...msgs];
+  const at = nextAssistantIdx + 1;
+  next.splice(at, 0, { role: "system", content: reason, steering: { reason } });
+  return { msgs: next, index: at };
 }
 
 /**
