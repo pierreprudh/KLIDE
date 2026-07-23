@@ -49,12 +49,13 @@ export function compactConversationMessages(messages: RunMessage[]): Conversatio
   for (const message of messages) {
     const text = message.text.trim();
     const messageTools = message.tools ?? [];
+    const hasImages = (message.images?.length ?? 0) > 0;
     if (message.role === "assistant" && text && isProcessNote(text)) {
       if (messageTools.length > 0) appendToolsToPreviousAssistant(messageTools);
       notes.push(text);
       continue;
     }
-    if (!text) {
+    if (!text && !hasImages) {
       if (message.role === "assistant" && appendToolsToPreviousAssistant(messageTools)) {
         continue;
       }

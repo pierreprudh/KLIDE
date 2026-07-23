@@ -39,6 +39,12 @@ export type ProviderId =
 export type AgentAttachment = {
   path: string;
   content: string;
+  /** For image attachments: MIME type (e.g. "image/png"). Text attachments omit it. */
+  mime?: string;
+  /** For image attachments: the full `data:<mime>;base64,…` URI. When set, this
+   *  attachment is an image — the harness sends it to vision-capable models and
+   *  the chat renders it, rather than folding it into the message text. */
+  dataUri?: string;
 };
 
 export type AgentContextPayload = {

@@ -5,6 +5,8 @@
 // stays crisp at any size. Markdown deliberately gets no mark: half a repo
 // is .md, so it never earned one.
 
+import { isImagePath } from "../workspaceFs";
+
 export function isAgentFile(path: string): boolean {
   const name = (path.split("/").pop() ?? path).toLowerCase();
   return /^(claude|claude\.local|agents?|kit)\.md$/.test(name);
@@ -25,6 +27,19 @@ export function AgentMark({ size = 12 }: { size?: number }) {
 export function FileTypeIcon({ name, size = 17 }: { name: string; size?: number }) {
   const lower = name.toLowerCase();
   const ext = lower.split(".").pop() ?? "";
+
+  // Images (png/jpg/svg/…) get the universal picture glyph — a framed photo
+  // with a sun + mountains — so they read as pictures in the tree, not text.
+  if (isImagePath(lower)) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="3.5" fill="#8B7CE8" />
+        <circle cx="8.5" cy="9" r="1.7" fill="#fff" />
+        <path d="M4.5 19 9 13l3 3 3.5-4.5L19.5 19Z" fill="#fff" />
+      </svg>
+    );
+  }
+
   const kind =
     lower === "package.json"
       ? "npm"

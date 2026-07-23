@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { type OnMount } from "@monaco-editor/react";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { readWorkspaceTextFile, writeWorkspaceTextFile } from "../workspaceFs";
+import { isImagePath, readWorkspaceTextFile, writeWorkspaceTextFile } from "../workspaceFs";
 
 // One open file in the editor. `diskCode` is the last content loaded from /
 // saved to disk — the baseline for deciding whether a watch event is a real
@@ -12,6 +12,10 @@ export type Tab = {
   dirty: boolean;
   externalChanged?: boolean;
   diskCode?: string;
+  /** Set for image files: a `data:<mime>;base64,…` URI rendered as a picture
+   *  instead of Monaco text. Image tabs are read-only and skip the text
+   *  external-change watcher. */
+  dataUri?: string;
 };
 
 function filename(path: string): string {
@@ -72,9 +76,15 @@ export function useEditorTabs(opts: {
       setActiveIdx(existing);
       return;
     }
+    // Images arrive here with a data URI as `content` (the Sidebar reads them
+    // as bytes, not text) — hold it on `dataUri` and render a picture instead
+    // of loading Monaco with base64 gibberish.
+    const isImage = isImagePath(p);
     setTabs([
       ...tabs,
-      { path: p, code: content, dirty: false, externalChanged: false, diskCode: content },
+      isImage
+        ? { path: p, code: "", dirty: false, externalChanged: false, dataUri: content }
+        : { path: p, code: content, dirty: false, externalChanged: false, diskCode: content },
     ]);
     setActiveIdx(tabs.length);
   }
@@ -190,7 +200,9 @@ export function useEditorTabs(opts: {
   }
 
   async function saveActive() {
-    if (!active || !workspaceRoot) return;
+    // Image tabs are read-only previews (empty `code`); never write them back
+    // — a stray ⌘S would otherwise blank the file on disk.
+    if (!active || !workspaceRoot || active.dataUri) return;
     try {
       if (active.externalChanged) {
         const ok = await confirm(
@@ -231,7 +243,9 @@ export function useEditorTabs(opts: {
   // diskCode baseline filters out our own writes and renames.
   useEffect(() => {
     if (!workspaceRoot) return;
-    const openPaths = Array.from(new Set(tabs.map((t) => t.path)));
+    // Image tabs hold a data URI, not text — skip them so the text watcher
+    // never reads their bytes as a string.
+    const openPaths = Array.from(new Set(tabs.filter((t) => !t.dataUri).map((t) => t.path)));
     if (openPaths.length === 0) return;
 
     let cancelled = false;

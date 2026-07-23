@@ -15,11 +15,11 @@ pub mod types;
 #[cfg(test)]
 use self::run_core::KEEP_RECENT_TOOL_RESULTS;
 use self::run_core::{
-    append_attachments, apply_clean_context_if_requested, assistant_provider_message,
+    apply_clean_context_if_requested, assistant_provider_message,
     compact_old_tool_results, compaction_system_message, compaction_threshold, decide_turn,
     estimate_prompt_tokens, parallel_read_calls, plan_tool_step, provider_messages,
-    refresh_todo_context, tool_provider_message, ProviderCaps, ToolStepPlan, TurnDecision,
-    TurnStep,
+    refresh_todo_context, tool_provider_message, user_provider_message, ProviderCaps,
+    ToolStepPlan, TurnDecision, TurnStep,
 };
 use self::tools::{
     apply_write, clear_run_snapshots, dynamic_tool_command, execute_read_only_tool,
@@ -102,6 +102,29 @@ impl Default for AgentSupervisorState {
             failure_budget: failure_budget::FailureBudget::default(),
         }
     }
+}
+
+/// Whether this process still owns a live loop for `run_id`. Mission restart
+/// reconciliation uses this before calling an attempt orphaned: re-selecting a
+/// workspace in the same app process must never interrupt a real active Run.
+pub(crate) fn run_is_active(app: &tauri::AppHandle, run_id: &str) -> bool {
+    let state = app.state::<AgentSupervisorState>();
+    state
+        .runs
+        .lock()
+        .ok()
+        .and_then(|runs| runs.get(run_id).map(|handle| handle.status))
+        .map(|status| {
+            matches!(
+                status,
+                AgentRunStatus::Queued
+                    | AgentRunStatus::Running
+                    | AgentRunStatus::WaitingForPermission
+                    | AgentRunStatus::WaitingForDiff
+                    | AgentRunStatus::Paused
+            )
+        })
+        .unwrap_or(false)
 }
 
 struct ProviderTurnRequest {
@@ -472,9 +495,7 @@ fn reconstruct_prior_messages(
             AgentEvent::UserMessage {
                 text, attachments, ..
             } => {
-                let mut content = text.clone();
-                append_attachments(&mut content, attachments);
-                out.push(serde_json::json!({ "role": "user", "content": content }));
+                out.push(user_provider_message(text, attachments));
                 // A new user turn invalidates any straggler tool
                 // results from the previous turn — the model shouldn't
                 // see them on the wrong side of the turn boundary.
@@ -555,9 +576,7 @@ fn reconstruct_structured_messages(prior_events: &[AgentEvent]) -> Vec<serde_jso
             AgentEvent::UserMessage {
                 text, attachments, ..
             } => {
-                let mut content = text.clone();
-                append_attachments(&mut content, attachments);
-                out.push(serde_json::json!({ "role": "user", "content": content }));
+                out.push(user_provider_message(text, attachments));
             }
             AgentEvent::AssistantMessage { content, .. } => {
                 let mut text = String::new();

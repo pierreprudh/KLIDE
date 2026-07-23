@@ -1,5 +1,6 @@
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { isImagePath, readWorkspaceFileDataUri } from "../workspaceFs";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, KeyboardEvent } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
@@ -543,8 +544,14 @@ export function Sidebar({
   }, [root, expanded]);
 
   async function pick(path: string) {
+    if (!root) return;
     try {
-      const content = await invoke<string>("read_text_file", { workspaceRoot: root, path });
+      // Images open as a rendered picture: read them as a data URI rather than
+      // text (which would corrupt binary bytes). `openFile` detects the image
+      // by extension and treats this content as the data URI.
+      const content = isImagePath(path)
+        ? await readWorkspaceFileDataUri(root, path)
+        : await invoke<string>("read_text_file", { workspaceRoot: root, path });
       onOpen(path, content);
     } catch (e) {
       console.error("Failed to open file:", e);

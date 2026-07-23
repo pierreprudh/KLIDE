@@ -26,6 +26,18 @@ pub enum AgentRunStatus {
 pub struct AgentAttachment {
     pub path: String,
     pub content: String,
+    /// For image attachments: the MIME type (e.g. "image/png"). Text
+    /// attachments leave this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    /// For image attachments: the full `data:<mime>;base64,…` URI. When set,
+    /// the attachment is an image and is NOT folded into the message text;
+    /// instead the assembly hangs it on the provider message's neutral
+    /// `images` array, which each adapter translates to its own wire shape
+    /// (Anthropic image block / OpenAI `image_url` / Ollama `images`). Text
+    /// attachments leave this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_uri: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

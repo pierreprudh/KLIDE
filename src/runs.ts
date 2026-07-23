@@ -158,6 +158,9 @@ export type RunMessage = {
   role: "user" | "assistant";
   text: string;
   tools?: RunToolCall[];
+  /** Images sent in this turn, as self-contained `data:<mime>;base64,…` URIs
+   *  recovered from the transcript (e.g. pasted screenshots). */
+  images?: string[];
 };
 
 // Shape returned by the Rust command (serde camelCase).

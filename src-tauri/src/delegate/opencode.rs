@@ -207,6 +207,7 @@ impl Delegate for OpenCode {
                     role: role.to_string(),
                     text,
                     tools,
+                    images: vec![],
                 });
             }
         }

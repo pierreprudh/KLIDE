@@ -615,6 +615,39 @@ fn read_text_file(workspace_root: String, path: String) -> Result<String, String
     std::fs::read_to_string(&path).map_err(|e| format!("Unable to read file: {e}"))
 }
 
+fn mime_for_path(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        "apng" => "image/apng",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Read a workspace file as a self-contained `data:<mime>;base64,…` URI, so the
+/// editor can render binary files (images) that the text reader would corrupt.
+/// MIME is guessed from the extension. Capped at 20 MB to keep one huge asset
+/// from bloating the IPC payload and webview memory.
+#[tauri::command]
+fn read_file_data_uri(workspace_root: String, path: String) -> Result<String, String> {
+    use base64::Engine;
+    let ws = workspace::Workspace::new(&workspace_root)?;
+    let abs = ws.resolve_abs_read(&path)?;
+    let meta = std::fs::metadata(&abs).map_err(|e| format!("Unable to read file: {e}"))?;
+    if meta.len() > 20_000_000 {
+        return Err("File is too large to preview (max 20 MB).".to_string());
+    }
+    let bytes = std::fs::read(&abs).map_err(|e| format!("Unable to read file: {e}"))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime_for_path(&path), b64))
+}
+
 #[tauri::command]
 fn path_exists(workspace_root: String, path: String) -> Result<bool, String> {
     let ws = workspace::Workspace::new(&workspace_root)?;
@@ -965,6 +998,7 @@ pub fn run() {
             delegate_pty_recent_sessions,
             list_dir,
             read_text_file,
+            read_file_data_uri,
             path_exists,
             write_text_file,
             create_entry,
@@ -987,6 +1021,7 @@ pub fn run() {
             app_user_info,
             models::ai_context_window,
             models::ai_model_supports_tools,
+            models::ai_model_supports_vision,
             models::ai_model_supports_reflection,
             models::ai_count_tokens,
             ai_list_tools,

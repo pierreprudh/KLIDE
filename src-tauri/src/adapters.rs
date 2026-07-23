@@ -158,6 +158,30 @@ fn retry_after_from_body(body: &str) -> Option<Duration> {
 
 // ── Ollama adapter ──
 
+// Ollama's native `/api/chat` takes images as a message-level `images` array of
+// RAW base64 (no `data:` prefix). Rewrite any data-URI images the harness
+// attached into that shape; messages without images pass through untouched.
+fn normalize_ollama_messages(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|m| {
+            let mut m = m.clone();
+            if let Some(imgs) = m.get("images").and_then(|v| v.as_array()) {
+                let stripped: Vec<serde_json::Value> = imgs
+                    .iter()
+                    .filter_map(|i| {
+                        let uri = i.as_str()?;
+                        let b64 = uri.split_once(";base64,").map(|(_, d)| d).unwrap_or(uri);
+                        Some(serde_json::Value::String(b64.to_string()))
+                    })
+                    .collect();
+                m["images"] = serde_json::Value::Array(stripped);
+            }
+            m
+        })
+        .collect()
+}
+
 struct OllamaAdapter {
     model: String,
     messages: Vec<serde_json::Value>,
@@ -189,7 +213,7 @@ impl StreamingProvider for OllamaAdapter {
     fn build_request(&self, client: &reqwest::Client) -> Result<reqwest::RequestBuilder, String> {
         let mut body = serde_json::json!({
             "model": self.model,
-            "messages": self.messages,
+            "messages": normalize_ollama_messages(&self.messages),
             "stream": true,
             // Ollama defaults num_ctx to 4096 regardless of what the model can
             // actually handle. Agent turns (system prompt + tool schemas + a
@@ -771,6 +795,38 @@ fn normalize_openai_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json
                     }
                 }
             }
+            // OpenAI-wire vision: a user turn's neutral `images` array (data
+            // URIs) becomes a content array of `image_url` parts alongside the
+            // text part. The `images` key is then dropped — OpenAI ignores it
+            // and some strict shims 400 on unknown fields.
+            if let Some(images) = message
+                .get("images")
+                .and_then(|v| v.as_array())
+                .filter(|a| !a.is_empty())
+                .cloned()
+            {
+                let text = message
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mut parts: Vec<serde_json::Value> = Vec::new();
+                if !text.is_empty() {
+                    parts.push(serde_json::json!({ "type": "text", "text": text }));
+                }
+                for img in images {
+                    if let Some(url) = img.as_str() {
+                        parts.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": { "url": url }
+                        }));
+                    }
+                }
+                message["content"] = serde_json::Value::Array(parts);
+            }
+            if let Some(obj) = message.as_object_mut() {
+                obj.remove("images");
+            }
             message
         })
         .collect()
@@ -793,6 +849,20 @@ fn anthropic_push(
         }
     }
     turns.push((role.to_string(), blocks));
+}
+
+// Turn a `data:<mime>;base64,…` URI into an Anthropic image block, or None if
+// it isn't a base64 data URI we can forward.
+fn anthropic_image_block(data_uri: Option<&str>) -> Option<serde_json::Value> {
+    let rest = data_uri?.strip_prefix("data:")?;
+    let (media_type, data) = rest.split_once(";base64,")?;
+    if data.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": media_type, "data": data }
+    }))
 }
 
 fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_json::Value>) {
@@ -845,14 +915,23 @@ fn anthropic_messages(messages: Vec<serde_json::Value>) -> (String, Vec<serde_js
                 anthropic_push(&mut turns, "assistant", blocks);
             }
             _ => {
+                let mut blocks = Vec::new();
                 let text = text_from_message(message);
                 if !text.trim().is_empty() {
-                    anthropic_push(
-                        &mut turns,
-                        "user",
-                        vec![serde_json::json!({ "type": "text", "text": text })],
-                    );
+                    blocks.push(serde_json::json!({ "type": "text", "text": text }));
                 }
+                // Vision: forward any neutral `images` (data URIs) as Anthropic
+                // image blocks. Image before text reads best for Claude, but a
+                // trailing image is also fine; keep text-then-image for a stable
+                // order alongside the tool_result blocks above.
+                if let Some(images) = message.get("images").and_then(|v| v.as_array()) {
+                    for img in images {
+                        if let Some(block) = anthropic_image_block(img.as_str()) {
+                            blocks.push(block);
+                        }
+                    }
+                }
+                anthropic_push(&mut turns, "user", blocks);
             }
         }
     }
@@ -1121,6 +1200,50 @@ mod tests {
     //! fixture strings recorded from real provider responses, so we don't
     //! need network access to lock the behaviour in.
     use super::*;
+
+    #[test]
+    fn anthropic_forwards_a_user_image_as_a_base64_block() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": "what's this?",
+            "images": ["data:image/png;base64,ABC123"],
+        })];
+        let (_system, turns) = anthropic_messages(messages);
+        let blocks = turns[0]["content"].as_array().unwrap();
+        // text first, then the image block.
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[1]["source"]["data"], "ABC123");
+    }
+
+    #[test]
+    fn openai_turns_images_into_image_url_parts_and_drops_the_field() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": "caption this",
+            "images": ["data:image/jpeg;base64,ZZ"],
+        })];
+        let out = normalize_openai_messages(messages);
+        let parts = out[0]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/jpeg;base64,ZZ");
+        // The neutral field is removed so strict shims don't 400 on it.
+        assert!(out[0].get("images").is_none());
+    }
+
+    #[test]
+    fn ollama_strips_the_data_uri_prefix_to_raw_base64() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": "look",
+            "images": ["data:image/png;base64,RAWDATA"],
+        })];
+        let out = normalize_ollama_messages(&messages);
+        assert_eq!(out[0]["images"][0], "RAWDATA");
+    }
 
     #[test]
     fn retry_after_from_body_parses_openai_hint() {

@@ -707,5 +707,31 @@ export function renderMessageBody(m: Msg, active = false): ReactElement {
     );
   }
 
-  return <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>;
+  const imageAttachments = m.role === "user" ? (m.attachments?.filter((a) => a.dataUri) ?? []) : [];
+  return (
+    <div>
+      {imageAttachments.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: m.content ? 8 : 0 }}>
+          {imageAttachments.map((a, i) => (
+            <img
+              key={i}
+              src={a.dataUri}
+              alt={a.path || "Pasted image"}
+              loading="lazy"
+              style={{
+                maxWidth: "100%",
+                maxHeight: 320,
+                width: "auto",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+                objectFit: "contain",
+                display: "block",
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {m.content && <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>}
+    </div>
+  );
 }

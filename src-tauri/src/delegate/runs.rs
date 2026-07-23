@@ -100,6 +100,13 @@ pub struct RunMessage {
     /// (matches the frontend's optional `tools?` on RunMessage).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<RunToolCall>,
+    /// Images sent in this turn, as self-contained `data:<mime>;base64,…` URIs
+    /// recovered from the raw transcript (e.g. pasted screenshots). Kept so the
+    /// conversation view can show the picture instead of a `[Image #N]` marker.
+    /// Omitted from the wire when empty (matches the frontend's optional
+    /// `images?`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 /// One tool call in a delegate run's conversation. The adapters know the tool's
@@ -372,6 +379,7 @@ mod tests {
                 role: "user".into(),
                 text: format!("m{i}"),
                 tools: vec![],
+                images: vec![],
             })
             .collect();
         msgs[99].text = "y".repeat(5000);

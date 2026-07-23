@@ -154,11 +154,12 @@ impl Delegate for ClaudeCode {
                 Some("assistant") => "assistant",
                 _ => continue,
             };
-            if let Some((text, tools)) = v.get("message").and_then(message_text) {
+            if let Some((text, tools, images)) = v.get("message").and_then(message_text) {
                 msgs.push(RunMessage {
                     role: role.to_string(),
                     text,
                     tools,
+                    images,
                 });
             }
         }
@@ -236,7 +237,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
                 if counts_as_main {
                     count += 1;
                     // Newest assistant turn wins — "what the run last did".
-                    if let Some((t, _)) = v.get("message").and_then(message_text) {
+                    if let Some((t, _, _)) = v.get("message").and_then(message_text) {
                         last_event = Some(clean_title(&t));
                     }
                 }
@@ -345,35 +346,63 @@ fn claude_project_cwd(path: &std::path::Path) -> Option<String> {
     None
 }
 
-// Walk a message's content into readable text plus structured tool calls: text
-// parts concatenate; tool_use parts become structured RunToolCall entries (no
-// longer folded into the text as "[tool: <name>]"). Thinking / tool_result
+// Turn a Claude Code image content block into a self-contained `data:` URI so
+// the conversation view can render the actual picture. Returns None if it isn't
+// a base64-inlined image (url sources are rare here and not self-contained). A
+// hard size cap keeps one pathological paste from bloating the payload.
+fn image_data_uri(part: &serde_json::Value) -> Option<String> {
+    let source = part.get("source")?;
+    if source.get("type").and_then(|t| t.as_str()) != Some("base64") {
+        return None;
+    }
+    let media_type = source
+        .get("media_type")
+        .and_then(|m| m.as_str())
+        .unwrap_or("image/png");
+    let data = source.get("data").and_then(|d| d.as_str())?;
+    // ~8 MB of base64 ≈ a 6 MB image; skip anything larger.
+    if data.is_empty() || data.len() > 8_000_000 {
+        return None;
+    }
+    Some(format!("data:{media_type};base64,{data}"))
+}
+
+// Walk a message's content into readable text, structured tool calls, and any
+// inline images (as data URIs): text parts concatenate; tool_use parts become
+// structured RunToolCall entries (no longer folded into the text as
+// "[tool: <name>]"); base64 image parts become `data:` URIs. The redundant
+// "[Image: source: <path>]" breadcrumb the CLI writes next to a paste is
+// dropped, since the picture now renders on its own. Thinking / tool_result
 // noise is dropped — it has no place in a résumé view. Returns None only when
-// there is neither text nor a tool call to show.
-fn message_text(message: &serde_json::Value) -> Option<(String, Vec<RunToolCall>)> {
+// there is nothing (text, tool call, or image) to show.
+fn message_text(message: &serde_json::Value) -> Option<(String, Vec<RunToolCall>, Vec<String>)> {
     let content = message.get("content")?;
     if let Some(s) = content.as_str() {
         let t = s.trim();
         return if t.is_empty() || t.starts_with('<') {
             None
         } else {
-            Some((t.to_string(), vec![]))
+            Some((t.to_string(), vec![], vec![]))
         };
     }
     if let Some(arr) = content.as_array() {
         let mut buf = String::new();
         let mut tools: Vec<RunToolCall> = Vec::new();
+        let mut images: Vec<String> = Vec::new();
         for part in arr {
             match part.get("type").and_then(|t| t.as_str()) {
                 Some("text") => {
                     if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
                         let t = t.trim();
-                        if !t.is_empty() {
-                            if !buf.is_empty() {
-                                buf.push('\n');
-                            }
-                            buf.push_str(t);
+                        // Drop the "[Image: source: …]" line the CLI writes
+                        // alongside a pasted image — the image itself renders.
+                        if t.is_empty() || t.starts_with("[Image: source:") {
+                            continue;
                         }
+                        if !buf.is_empty() {
+                            buf.push('\n');
+                        }
+                        buf.push_str(t);
                     }
                 }
                 Some("tool_use") => {
@@ -383,12 +412,17 @@ fn message_text(message: &serde_json::Value) -> Option<(String, Vec<RunToolCall>
                         summary: None,
                     });
                 }
+                Some("image") => {
+                    if let Some(uri) = image_data_uri(part) {
+                        images.push(uri);
+                    }
+                }
                 _ => {}
             }
         }
         let t = buf.trim().to_string();
-        if !t.is_empty() || !tools.is_empty() {
-            return Some((t, tools));
+        if !t.is_empty() || !tools.is_empty() || !images.is_empty() {
+            return Some((t, tools, images));
         }
     }
     None
@@ -611,5 +645,23 @@ mod tests {
         assert_eq!(msgs[1].text, "On it.");
         assert_eq!(msgs[1].tools.len(), 1);
         assert_eq!(msgs[1].tools[0].name, "read_file");
+    }
+
+    #[test]
+    fn read_run_recovers_images_and_drops_the_source_breadcrumb() {
+        let home = temp_home("images");
+        let p = home.join("session.jsonl");
+        let fixture = concat!(
+            r#"{"type":"user","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},{"type":"text","text":"[Image #1] make it blue"},{"type":"text","text":"[Image: source: /Users/x/.claude/image-cache/s/1.png]"}]}}"#,
+            "\n",
+        );
+        std::fs::write(&p, fixture).unwrap();
+        let msgs = ClaudeCode.read_run("", p.to_str().unwrap()).unwrap();
+        assert_eq!(msgs.len(), 1);
+        // The instruction survives; the "[Image: source: …]" breadcrumb is dropped.
+        assert_eq!(msgs[0].text, "[Image #1] make it blue");
+        // The base64 image becomes a self-contained data URI.
+        assert_eq!(msgs[0].images.len(), 1);
+        assert!(msgs[0].images[0].starts_with("data:image/png;base64,iVBORw0KGgo="));
     }
 }

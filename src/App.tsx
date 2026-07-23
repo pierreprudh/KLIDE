@@ -15,6 +15,7 @@ import { ActivityBar } from "./components/ActivityBar";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { EditorArea, type EditorEmptyAction } from "./components/EditorArea";
+import { ImageView } from "./components/ImageView";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { KbdFor } from "./components/Kbd";
 import { TerminalPanel } from "./components/TerminalPanel";
@@ -261,6 +262,24 @@ function App() {
   useEffect(() => {
     void reloadFilesystemSkills();
   }, [reloadFilesystemSkills]);
+
+  // With the OS-level file-drop handler disabled (tauri.conf `dragDropEnabled:
+  // false`), the webview handles drops itself — but a file dropped anywhere
+  // *without* a handler makes the webview navigate to it, replacing the whole
+  // app with the file full-screen. Swallow the default for file drags globally;
+  // real drop targets (the AI panel) still receive their own event and ingest
+  // the file first.
+  useEffect(() => {
+    const guard = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+    };
+    window.addEventListener("dragover", guard);
+    window.addEventListener("drop", guard);
+    return () => {
+      window.removeEventListener("dragover", guard);
+      window.removeEventListener("drop", guard);
+    };
+  }, []);
 
   const [customLayouts, setCustomLayouts] = useState<LayoutPreset[]>(() =>
     loadCustomPresets()
@@ -853,19 +872,23 @@ function App() {
               onClose={() => setSearchVisible(false)}
               onOpenFile={openFile}
             />
-            <EditorArea
-              code={active?.code ?? ""}
-              onChange={updateActiveCode}
-              language={language ?? "plaintext"}
-              hasFile={active !== null}
-              theme={theme}
-              fontSize={editorFontSize}
-              lineNumbers={editorLineNumbers}
-              wordWrap={editorWordWrap}
-              minimap={editorMinimap}
-              onEditorMount={(editor) => { editorRef.current = editor; }}
-              onEmptyAction={handleEditorEmptyAction}
-            />
+            {active?.dataUri ? (
+              <ImageView src={active.dataUri} name={active.path} />
+            ) : (
+              <EditorArea
+                code={active?.code ?? ""}
+                onChange={updateActiveCode}
+                language={language ?? "plaintext"}
+                hasFile={active !== null}
+                theme={theme}
+                fontSize={editorFontSize}
+                lineNumbers={editorLineNumbers}
+                wordWrap={editorWordWrap}
+                minimap={editorMinimap}
+                onEditorMount={(editor) => { editorRef.current = editor; }}
+                onEmptyAction={handleEditorEmptyAction}
+              />
+            )}
           </div>
         );
       case "files":
@@ -2586,19 +2609,23 @@ function App() {
                     onOpenFile={openFile}
                   />
                   <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                    <EditorArea
-                      code={active?.code ?? ""}
-                      onChange={updateActiveCode}
-                      language={language ?? "plaintext"}
-                      hasFile={active !== null}
-                      theme={theme}
-                      fontSize={editorFontSize}
-                      lineNumbers={editorLineNumbers}
-                      wordWrap={editorWordWrap}
-                      minimap={editorMinimap}
-                      onEditorMount={(editor) => { editorRef.current = editor; }}
-                      onEmptyAction={handleEditorEmptyAction}
-                    />
+                    {active?.dataUri ? (
+                      <ImageView src={active.dataUri} name={active.path} />
+                    ) : (
+                      <EditorArea
+                        code={active?.code ?? ""}
+                        onChange={updateActiveCode}
+                        language={language ?? "plaintext"}
+                        hasFile={active !== null}
+                        theme={theme}
+                        fontSize={editorFontSize}
+                        lineNumbers={editorLineNumbers}
+                        wordWrap={editorWordWrap}
+                        minimap={editorMinimap}
+                        onEditorMount={(editor) => { editorRef.current = editor; }}
+                        onEmptyAction={handleEditorEmptyAction}
+                      />
+                    )}
                   </div>
                   </div>
                 </div>

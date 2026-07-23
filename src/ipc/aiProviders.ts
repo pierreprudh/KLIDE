@@ -44,6 +44,10 @@ export function modelSupportsReflection(provider: string, model: string): Promis
   return invoke<boolean>("ai_model_supports_reflection", { provider, model });
 }
 
+export function modelSupportsVision(provider: string, model: string): Promise<boolean> {
+  return invoke<boolean>("ai_model_supports_vision", { provider, model });
+}
+
 export function readProviderContextWindow(provider: string, model: string): Promise<number> {
   return invoke<number>("ai_context_window", { provider, model });
 }
