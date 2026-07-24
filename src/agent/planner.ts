@@ -12,7 +12,12 @@ import type { ProviderId } from "./types";
 import type { RouteTaskInput } from "./routingPolicy";
 
 export type Phase = "Understand" | "Build" | "Verify";
-export type PlannedTask = RouteTaskInput & { phase: Phase; dependsOn?: string[]; description?: string };
+export type PlannedTask = RouteTaskInput & {
+  phase: Phase;
+  dependsOn?: string[];
+  description?: string;
+  acceptanceCriteria?: string[];
+};
 
 // ── Fallback (was the only planner) ──────────────────────────────────────────
 export function stubPlan(goal: string): PlannedTask[] {
@@ -49,6 +54,7 @@ const PLANNER_PROMPT = `You are the planning step of a coding orchestrator. Brea
 Each task is an object with these fields:
 - "title": string — a short imperative task (e.g. "Add a rate-limit middleware"). Max ~60 chars.
 - "description": string — one or two sentences on what the task actually involves and why. Concrete, not generic.
+- "acceptanceCriteria": string[] — 1–3 observable conditions that make the task accepted, not merely finished.
 - "phase": one of "Understand" | "Build" | "Verify".
 - "mode": "plan" for read-only/analysis tasks, "goal" for tasks that change code.
 - "risk": "low" | "medium" | "high".
@@ -72,6 +78,12 @@ function coerceTask(raw: unknown, index: number, count: number): PlannedTask {
   const id = `t${index + 1}`;
   const title = typeof o.title === "string" && o.title.trim() ? o.title.trim().slice(0, 80) : `Task ${index + 1}`;
   const description = typeof o.description === "string" && o.description.trim() ? o.description.trim().slice(0, 280) : undefined;
+  const acceptanceCriteria = Array.isArray(o.acceptanceCriteria)
+    ? o.acceptanceCriteria
+        .filter((criterion): criterion is string => typeof criterion === "string" && criterion.trim().length > 0)
+        .map((criterion) => criterion.trim().slice(0, 180))
+        .slice(0, 4)
+    : [];
   const phase: Phase = PHASES.includes(o.phase as Phase) ? (o.phase as Phase) : "Build";
   const mode: "plan" | "goal" = o.mode === "plan" ? "plan" : "goal";
   const risk = o.risk === "high" || o.risk === "medium" || o.risk === "low" ? (o.risk as RouteTaskInput["risk"]) : "low";
@@ -90,6 +102,9 @@ function coerceTask(raw: unknown, index: number, count: number): PlannedTask {
     taskId: id,
     title,
     ...(description ? { description } : {}),
+    acceptanceCriteria: acceptanceCriteria.length
+      ? acceptanceCriteria
+      : [description ?? `The task outcome satisfies: ${title}`],
     phase,
     mode,
     risk,

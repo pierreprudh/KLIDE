@@ -27,6 +27,15 @@ impl Delegate for ClaudeCode {
         format!(" --resume {}", shell_quote(session_id))
     }
 
+    fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        let task = self.mission_task(task)?;
+        let model_arg = self.mission_model_arg(model);
+        Ok(format!(
+            "claude -p{model_arg} --permission-mode acceptEdits --output-format text {}",
+            shell_quote(task)
+        ))
+    }
+
     /// Headless: `-p` reads the prompt from stdin and prints the answer.
     /// `acceptEdits` lets Goal-mode runs touch files without an interactive
     /// permission prompt nobody is there to answer.

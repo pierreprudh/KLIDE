@@ -30,6 +30,8 @@ type StartRunRequest = {
   requireDiffReview?: boolean;
   testAfterEditCommand?: string;
   parentId?: string;
+  missionId?: string;
+  missionTaskId?: string;
 };
 
 type StartRunResponse = {
@@ -79,6 +81,8 @@ export async function startAgentRun(
       requireDiffReview: input.requireDiffReview,
       testAfterEditCommand: input.testAfterEditCommand,
       parentId: input.parentId,
+      missionId: input.missionId,
+      missionTaskId: input.missionTaskId,
     } satisfies StartRunRequest,
     onEvent: onEventChannel,
   });

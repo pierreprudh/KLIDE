@@ -29,7 +29,8 @@
 #![cfg(unix)]
 
 use crate::pty_host::{
-    LiveSessionRow, PtyEventSink, RecentDelegateSession, SessionHost, SessionSnapshot, SpawnSpec,
+    DelegateMissionLink, LiveSessionRow, PtyEventSink, PtyExitOutcome, RecentDelegateSession,
+    SessionHost, SessionSnapshot, SpawnSpec,
 };
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -137,6 +138,7 @@ pub enum Request {
         task: Option<String>,
         model: Option<String>,
         resume_session_id: Option<String>,
+        mission_link: Option<DelegateMissionLink>,
         /// Whether the daemon should watch output for the CLI announcing its
         /// own session id (`delegate::lookup(provider)` — the daemon links
         /// the same crate, so the detector runs in-process here too).
@@ -187,6 +189,7 @@ pub enum Event {
     },
     Exit {
         session_id: String,
+        outcome: PtyExitOutcome,
     },
     ExternalId {
         session_id: String,
@@ -262,11 +265,12 @@ impl PtyEventSink for BroadcastSink {
         });
     }
 
-    fn exit(&self, session_id: &str) {
+    fn exit(&self, session_id: &str, outcome: &PtyExitOutcome) {
         self.state.touch();
         self.state.log(&format!("session exited: {session_id}"));
         self.state.broadcast(&Event::Exit {
             session_id: session_id.to_string(),
+            outcome: outcome.clone(),
         });
     }
 
@@ -507,6 +511,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
             task,
             model,
             resume_session_id,
+            mission_link,
             detect_session_id,
         } => {
             state.log(&format!("spawn {session_id} ({provider})"));
@@ -528,6 +533,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
                     task,
                     model,
                     resume_session_id,
+                    mission_link,
                     extract_session_id: extract,
                 },
                 Some(state.scroll_dir()),
@@ -861,6 +867,7 @@ mod tests {
             task: Some("e2e".into()),
             model: None,
             resume_session_id: None,
+            mission_link: None,
             detect_session_id: false,
         }) {
             Response::Ok => {}
@@ -887,8 +894,13 @@ mod tests {
                     last_seq = seq;
                     output.push_str(&data);
                 }
-                Event::Exit { session_id } => {
+                Event::Exit {
+                    session_id,
+                    outcome,
+                } => {
                     assert_eq!(session_id, "convo-e2e:custom");
+                    assert_eq!(outcome.exit_code, 0);
+                    assert!(!outcome.stop_requested);
                     break;
                 }
                 Event::ExternalId { .. } => {}

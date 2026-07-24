@@ -117,6 +117,13 @@ pub struct StartRunRequest {
     pub require_diff_review: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    /// Durable Mission linkage. A Mission Task is not this Run: each retry or
+    /// race member carries the same task id with a fresh run id. The Rust
+    /// harness records validation back to the Mission after it settles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_task_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

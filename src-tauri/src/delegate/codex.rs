@@ -34,6 +34,15 @@ impl Delegate for Codex {
         format!(" resume {}", shell_quote(session_id))
     }
 
+    fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        let task = self.mission_task(task)?;
+        let model_arg = self.mission_model_arg(model);
+        Ok(format!(
+            "codex exec{model_arg} -s workspace-write --skip-git-repo-check --color never {}",
+            shell_quote(task)
+        ))
+    }
+
     /// Headless: `exec … -` reads the prompt from stdin. `workspace-write`
     /// sandboxes edits to the workspace; the cwd rides in via `-C`.
     fn chat_args(&self, cwd: &str, model: &str) -> Result<Vec<String>, String> {

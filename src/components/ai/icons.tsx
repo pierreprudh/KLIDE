@@ -134,6 +134,26 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
     );
   }
   switch (id) {
+    case "mlx":
+      // MLX wordmark: bold "ML" in the foreground color + a muted-gray "X",
+      // matching Apple's mark. Rendered as a transparent SVG (no baked
+      // black/white tile) so it themes cleanly at any size.
+      return (
+        <svg {...base} fill="none">
+          <text
+            x="12"
+            y="16"
+            textAnchor="middle"
+            fontFamily="'Atkinson Hyperlegible', system-ui, sans-serif"
+            fontSize="9"
+            fontWeight="800"
+            letterSpacing="-0.4"
+          >
+            <tspan fill="currentColor">ML</tspan>
+            <tspan fill="#8a8a8a">X</tspan>
+          </text>
+        </svg>
+      );
     case "lmstudio":
       return (
         <svg {...line} strokeWidth="1.6">

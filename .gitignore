@@ -44,6 +44,9 @@ src-tauri/gen/
 # Project Memory notes are local/private by default. Repos that want shared
 # memory can explicitly unignore this path in their own git policy.
 .klide/memory/
+# Mission specs and append-only runtime events are local/private by default.
+# A repo can explicitly unignore or export authored mission Markdown later.
+.klide/missions/
 
 # --- Prompt A/B harness output ---
 scripts/prompt-ab/results.json

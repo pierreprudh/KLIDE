@@ -1,5 +1,6 @@
 export * from "./budgetLedger";
 export * from "./capacityPlanner";
+export * from "./durableMissions";
 export * from "./goalLoop";
 export * from "./missionHarness";
 export * from "./orchestrator";

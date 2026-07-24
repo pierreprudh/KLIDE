@@ -55,6 +55,12 @@ impl Delegate for OpenCode {
         format!(" -s {}", shell_quote(session_id))
     }
 
+    fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        let task = self.mission_task(task)?;
+        let model_arg = self.mission_model_arg(model);
+        Ok(format!("opencode run{model_arg} {}", shell_quote(task)))
+    }
+
     /// OpenCode only works as an interactive PTY delegate — there is no
     /// headless stdin mode worth driving. The error string is surfaced to
     /// the chat verbatim.

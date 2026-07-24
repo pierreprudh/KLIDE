@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Max bytes of TUI output we retain per delegate session for replay on
@@ -46,10 +46,33 @@ pub trait PtyEventSink: Send + Sync + 'static {
     fn chunk(&self, session_id: &str, data: &str, seq: u64);
     /// The CLI exited (finished, crashed, or was stopped) and the session was
     /// removed from the host.
-    fn exit(&self, session_id: &str);
+    fn exit(&self, session_id: &str, outcome: &PtyExitOutcome);
     /// The CLI announced its own session id in its output (only OpenCode
     /// does today) — already persisted to the session's meta for `--resume`.
     fn external_id(&self, session_id: &str, external_id: &str);
+}
+
+/// Durable process outcome for a Delegate PTY. A Mission uses this as evidence
+/// that a one-shot Delegate attempt settled, but never as acceptance by itself.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyExitOutcome {
+    pub exit_code: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<String>,
+    #[serde(default)]
+    pub stop_requested: bool,
+}
+
+/// Durable link from a Delegate PTY session back to the Mission attempt that
+/// owns it. The Mission event log remains authoritative; this metadata exists
+/// so an exit that happens while the GUI is closed can be reconciled later.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegateMissionLink {
+    pub workspace_root: String,
+    pub mission_id: String,
+    pub task_id: String,
 }
 
 /// The write-through disk half of a session's scrollback, so replay survives
@@ -149,11 +172,17 @@ pub struct ScrollbackMeta {
     /// restart resume the CLI session, not just repaint its history.
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_link: Option<DelegateMissionLink>,
     pub started_ms: i64,
     /// Stamped when the CLI exits cleanly. A session killed by the app
     /// quitting never gets one — readers fall back to the log's mtime.
     #[serde(default)]
     pub ended_ms: Option<i64>,
+    /// Written atomically with `ended_ms` when the child exits. `None` means
+    /// the hosting process disappeared before it could observe a real exit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_outcome: Option<PtyExitOutcome>,
 }
 
 /// Session ids contain `:` (and whatever a convo id holds) — flatten to a
@@ -179,7 +208,7 @@ fn scrollback_meta_path(dir: &Path, session_id: &str) -> PathBuf {
     dir.join(format!("{}.meta.json", scrollback_stem(session_id)))
 }
 
-fn read_scrollback_meta(dir: &Path, session_id: &str) -> Option<ScrollbackMeta> {
+pub fn read_scrollback_meta(dir: &Path, session_id: &str) -> Option<ScrollbackMeta> {
     let text = fs::read_to_string(scrollback_meta_path(dir, session_id)).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -202,17 +231,20 @@ fn upsert_scrollback_meta(dir: &Path, meta: ScrollbackMeta) {
             task: meta.task,
             model: meta.model,
             resume_session_id: meta.resume_session_id.or(prev.resume_session_id),
+            mission_link: meta.mission_link.or(prev.mission_link),
             started_ms: prev.started_ms.min(meta.started_ms),
             ended_ms: None,
+            exit_outcome: None,
         },
         None => meta,
     };
     write_scrollback_meta(dir, &merged);
 }
 
-fn stamp_scrollback_ended(dir: &Path, session_id: &str) {
+fn stamp_scrollback_ended(dir: &Path, session_id: &str, outcome: PtyExitOutcome) {
     if let Some(mut meta) = read_scrollback_meta(dir, session_id) {
         meta.ended_ms = Some(now_ms());
+        meta.exit_outcome = Some(outcome);
         write_scrollback_meta(dir, &meta);
     }
 }
@@ -324,6 +356,7 @@ pub struct SpawnSpec {
     pub task: Option<String>,
     pub model: Option<String>,
     pub resume_session_id: Option<String>,
+    pub mission_link: Option<DelegateMissionLink>,
     /// Provider-specific detector for the CLI announcing its own session id
     /// in its startup output (only OpenCode does today).
     pub extract_session_id: Option<Box<dyn Fn(&str) -> Option<String> + Send>>,
@@ -349,6 +382,9 @@ struct HostedSession {
     /// Last observed PTY activity (input or output), used by Mission Control
     /// to distinguish active streaming sessions from quiet live sessions.
     updated_ms: Arc<AtomicI64>,
+    /// Shared with the reader thread so an operator stop is distinguishable
+    /// from a one-shot Delegate completing or crashing on its own.
+    stop_requested: Arc<AtomicBool>,
 }
 
 /// A live session as the host sees it — no status field, because status is a
@@ -396,6 +432,8 @@ pub struct RecentDelegateSession {
     pub started_ms: i64,
     /// Clean-exit stamp, or the log's mtime for sessions the app quit killed.
     pub ended_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_outcome: Option<PtyExitOutcome>,
     pub buffered_bytes: u64,
 }
 
@@ -497,8 +535,10 @@ impl SessionHost {
                     task: spec.task.clone(),
                     model: spec.model.clone(),
                     resume_session_id: spec.resume_session_id.clone(),
+                    mission_link: spec.mission_link.clone(),
                     started_ms,
                     ended_ms: None,
+                    exit_outcome: None,
                 },
             );
         }
@@ -507,6 +547,7 @@ impl SessionHost {
             .and_then(|dir| open_scrollback_sink(dir, &spec.session_id));
         let scrollback: Arc<Mutex<Scrollback>> = Arc::new(Mutex::new(Scrollback::new(disk_sink)));
         let updated_ms = Arc::new(AtomicI64::new(started_ms));
+        let stop_requested = Arc::new(AtomicBool::new(false));
         self.sessions.lock().unwrap().insert(
             spec.session_id.clone(),
             HostedSession {
@@ -519,6 +560,7 @@ impl SessionHost {
                 model: spec.model.clone(),
                 started_ms,
                 updated_ms: updated_ms.clone(),
+                stop_requested: stop_requested.clone(),
             },
         );
 
@@ -561,7 +603,17 @@ impl SessionHost {
                 sink.chunk(&session_id, &chunk, chunk_seq);
                 std::thread::sleep(std::time::Duration::from_millis(15));
             }
-            let _ = child.wait();
+            let status = child.wait().ok();
+            let outcome = PtyExitOutcome {
+                exit_code: status
+                    .as_ref()
+                    .map(|status| status.exit_code())
+                    .unwrap_or(1),
+                signal: status
+                    .as_ref()
+                    .and_then(|status| status.signal().map(str::to_string)),
+                stop_requested: stop_requested.load(Ordering::Relaxed),
+            };
             // The CLI exited (finished, crashed, or was stopped). Drop our
             // handle, stamp the persisted meta so the recent-sessions list can
             // show a truthful "ended N ago" (sessions killed by the app
@@ -569,9 +621,9 @@ impl SessionHost {
             // let the sink tell the frontend / clients.
             sessions.lock().unwrap().remove(&session_id);
             if let Some(dir) = scroll_dir.as_deref() {
-                stamp_scrollback_ended(dir, &session_id);
+                stamp_scrollback_ended(dir, &session_id, outcome.clone());
             }
-            sink.exit(&session_id);
+            sink.exit(&session_id, &outcome);
         });
 
         Ok(())
@@ -616,6 +668,7 @@ impl SessionHost {
     /// process actually dies.
     pub fn stop(&self, session_id: &str) {
         if let Some(mut session) = self.sessions.lock().unwrap().remove(session_id) {
+            session.stop_requested.store(true, Ordering::Relaxed);
             let _ = session.writer.write_all(b"\x03exit\n");
         }
     }
@@ -736,6 +789,7 @@ pub fn scan_recent_sessions(dir: &Path, live_ids: &HashSet<String>) -> Vec<Recen
             resume_session_id: meta.resume_session_id,
             started_ms: meta.started_ms,
             ended_ms: meta.ended_ms.or(log_mtime_ms),
+            exit_outcome: meta.exit_outcome,
             buffered_bytes,
         });
     }
@@ -848,8 +902,10 @@ mod tests {
             task: Some("fix the tests".to_string()),
             model: None,
             resume_session_id: None,
+            mission_link: None,
             started_ms,
             ended_ms: None,
+            exit_outcome: None,
         }
     }
 
@@ -922,8 +978,25 @@ mod tests {
         // First spawn of the conversation.
         upsert_scrollback_meta(&dir, spawn_meta(sid, "claude-code", 1_000));
         update_scrollback_resume_id(&dir, sid, "cli-session-uuid");
-        stamp_scrollback_ended(&dir, sid);
-        assert!(meta_for(&dir, sid).ended_ms.is_some());
+        stamp_scrollback_ended(
+            &dir,
+            sid,
+            PtyExitOutcome {
+                exit_code: 0,
+                signal: None,
+                stop_requested: false,
+            },
+        );
+        let ended = meta_for(&dir, sid);
+        assert!(ended.ended_ms.is_some());
+        assert_eq!(
+            ended.exit_outcome,
+            Some(PtyExitOutcome {
+                exit_code: 0,
+                signal: None,
+                stop_requested: false,
+            })
+        );
 
         // Respawn (same conversation, later, no resume arg): the original
         // start and the detected resume id survive, the ended stamp clears.
@@ -932,6 +1005,10 @@ mod tests {
         assert_eq!(meta.started_ms, 1_000);
         assert_eq!(meta.resume_session_id.as_deref(), Some("cli-session-uuid"));
         assert!(meta.ended_ms.is_none(), "live again — no ended stamp");
+        assert!(
+            meta.exit_outcome.is_none(),
+            "a new live run has no exit yet"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
