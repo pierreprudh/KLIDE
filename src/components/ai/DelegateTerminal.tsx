@@ -55,6 +55,8 @@ export function DelegateTerminalSurface({
   resumeSessionId,
   model,
   task,
+  attachOnly = false,
+  readOnly = false,
 }: {
   sessionId: string;
   providerId: ProviderId;
@@ -72,6 +74,10 @@ export function DelegateTerminalSurface({
    *  for Klide handoff so a fresh delegate session opens with the original
    *  user message already sent. */
   task?: string | null;
+  /** Read persisted/live output without ensuring the session exists. Mission
+   * review uses this so opening a settled attempt can never respawn it. */
+  attachOnly?: boolean;
+  readOnly?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -85,10 +91,10 @@ export function DelegateTerminalSurface({
         foreground: cssVar("--terminal-fg"),
         cursor: cssVar("--terminal-cursor"),
       },
-      cursorBlink: true,
+      cursorBlink: !readOnly,
       scrollback: 5000,
       convertEol: true,
-      disableStdin: false,
+      disableStdin: readOnly,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -137,15 +143,17 @@ export function DelegateTerminalSurface({
       await unlisten;
       if (cancelled) return;
       try {
-        await invoke("delegate_pty_spawn", {
-          sessionId,
-          provider: providerId,
-          workspaceRoot,
-          parentRunId,
-          resumeSessionId: resumeSessionId ?? null,
-          model: model ?? null,
-          task: task ?? null,
-        });
+        if (!attachOnly) {
+          await invoke("delegate_pty_spawn", {
+            sessionId,
+            provider: providerId,
+            workspaceRoot,
+            parentRunId,
+            resumeSessionId: resumeSessionId ?? null,
+            model: model ?? null,
+            task: task ?? null,
+          });
+        }
         if (cancelled) return;
         const snap = await invoke<{ data: string; seq: number; live: boolean }>(
           "delegate_pty_snapshot",
@@ -169,16 +177,23 @@ export function DelegateTerminalSurface({
       } catch (err) {
         replaying = false;
         const msg = err instanceof Error ? err.message : String(err);
-        term.writeln(`\x1b[31mFailed to start ${provider}: ${msg}\x1b[0m`);
-        notify(`Couldn't start ${provider} — check it's installed and on your PATH.`, { tone: "error" });
+        term.writeln(`\x1b[31mFailed to ${attachOnly ? "load" : "start"} ${provider}: ${msg}\x1b[0m`);
+        notify(
+          attachOnly
+            ? `Couldn't load ${provider} terminal evidence.`
+            : `Couldn't start ${provider} — check it's installed and on your PATH.`,
+          { tone: "error" }
+        );
       }
     };
     void start();
 
-    term.onData((data) => {
-      if (replaying) return;
-      void invoke("delegate_pty_write", { sessionId, data });
-    });
+    if (!readOnly) {
+      term.onData((data) => {
+        if (replaying) return;
+        void invoke("delegate_pty_write", { sessionId, data });
+      });
+    }
 
     const resize = new ResizeObserver(syncSize);
     resize.observe(ref.current);
@@ -190,7 +205,7 @@ export function DelegateTerminalSurface({
       resize.disconnect();
       term.dispose();
     };
-  }, [providerId, sessionId, workspaceRoot, model]);
+  }, [attachOnly, model, parentRunId, provider, providerId, readOnly, resumeSessionId, sessionId, task, workspaceRoot]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "color-mix(in srgb, var(--terminal-bg) 94%, var(--bg))" }}>

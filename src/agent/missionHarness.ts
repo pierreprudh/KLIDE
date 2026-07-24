@@ -32,6 +32,7 @@ export type MissionTaskStatus =
 
 export type MissionTaskAttemptStatus =
   | "running"
+  | "review"
   | "dispatch-failed"
   | "interrupted"
   | "accepted"
@@ -62,6 +63,8 @@ export type MissionTaskAttempt = {
   attachedMs: number;
   settledMs: number | null;
   validation: MissionAttemptValidation | null;
+  exitCode?: number;
+  signal?: string;
   message?: string;
 };
 
@@ -115,6 +118,7 @@ export type MissionAction =
   | { type: "task_run_attached"; taskId: string; runId: string; ts: number }
   | { type: "task_attempt_dispatch_failed"; taskId: string; runId: string; message: string; ts: number }
   | { type: "task_attempt_interrupted"; taskId: string; runId: string; reason: string; ts: number }
+  | { type: "task_attempt_settled"; taskId: string; runId: string; exitCode: number; signal?: string; ts: number }
   | { type: "task_attempt_validated"; taskId: string; runId: string; accepted: boolean; validation: MissionAttemptValidation; ts: number }
   | { type: "task_status_changed"; taskId: string; status: MissionTaskStatus; ts: number }
   | { type: "mission_status_derived"; missionId: string; ts: number };
@@ -314,6 +318,14 @@ export function missionReducer(
     });
   }
 
+  if (action.type === "task_attempt_settled") {
+    return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
+      kind: "settled",
+      exitCode: action.exitCode,
+      signal: action.signal,
+    });
+  }
+
   if (action.type === "task_attempt_validated") {
     return updateTaskAttempt(state, action.taskId, action.runId, action.ts, {
       kind: "validated",
@@ -393,7 +405,7 @@ export function readyMissionTaskIds(state: MissionState, missionId: string): str
   return mission.taskIds.filter((taskId) => {
     const task = state.tasks[taskId];
     if (!task || task.acceptedRunId !== null) return false;
-    if (task.attempts.some((attempt) => attempt.status === "running")) return false;
+    if (task.attempts.some((attempt) => attempt.status === "running" || attempt.status === "review")) return false;
     return taskDependenciesAccepted(task, state.tasks);
   });
 }
@@ -418,6 +430,7 @@ type AttemptUpdate =
   | { kind: "attached" }
   | { kind: "dispatch-failed"; message: string }
   | { kind: "interrupted"; message: string }
+  | { kind: "settled"; exitCode: number; signal?: string }
   | { kind: "validated"; accepted: boolean; validation: MissionAttemptValidation };
 
 function updateTaskAttempt(
@@ -443,22 +456,32 @@ function updateTaskAttempt(
       ? { ...base, status: "dispatch-failed", settledMs: ts, message: update.message }
       : update.kind === "interrupted"
         ? { ...base, status: "interrupted", settledMs: ts, message: update.message }
-      : {
-          ...base,
-          status: update.accepted ? "accepted" : "rejected",
-          settledMs: ts,
-          validation: update.validation,
-        };
+        : update.kind === "settled"
+          ? {
+              ...base,
+              status: "review",
+              settledMs: ts,
+              exitCode: update.exitCode,
+              signal: update.signal,
+            }
+          : {
+              ...base,
+              status: update.accepted ? "accepted" : "rejected",
+              settledMs: ts,
+              validation: update.validation,
+            };
   const attempts = existing
     ? task.attempts.map((item) => item.runId === runId ? attempt : item)
     : [...task.attempts, attempt];
   const status: MissionTaskStatus = update.kind === "attached"
     ? "running"
-    : update.kind === "validated" && update.accepted
-      ? "done"
-      : update.kind === "interrupted"
-        ? "interrupted"
-        : "failed";
+    : update.kind === "settled"
+      ? "review"
+      : update.kind === "validated" && update.accepted
+        ? "done"
+        : update.kind === "interrupted"
+          ? "interrupted"
+          : "failed";
   const mission = state.missions[task.missionId];
   let tasks: Record<string, MissionTask> = {
     ...state.tasks,

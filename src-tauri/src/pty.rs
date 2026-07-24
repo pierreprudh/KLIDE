@@ -9,8 +9,12 @@
 
 use crate::delegate::{self, shell_quote};
 use crate::pty_client;
-use crate::pty_daemon::{Event as DaemonEvent, Request as DaemonRequest, Response as DaemonResponse};
-use crate::pty_host::{self, LiveSessionRow, PtyEventSink, SessionHost, SpawnSpec};
+use crate::pty_daemon::{
+    Event as DaemonEvent, Request as DaemonRequest, Response as DaemonResponse,
+};
+use crate::pty_host::{
+    self, DelegateMissionLink, LiveSessionRow, PtyEventSink, PtyExitOutcome, SessionHost, SpawnSpec,
+};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Write};
@@ -118,7 +122,10 @@ fn start_daemon_subscriber(app: tauri::AppHandle) {
                             data,
                             seq,
                         }) => sink.chunk(&session_id, &data, seq),
-                        Ok(DaemonEvent::Exit { session_id }) => sink.exit(&session_id),
+                        Ok(DaemonEvent::Exit {
+                            session_id,
+                            outcome,
+                        }) => sink.exit(&session_id, &outcome),
                         Ok(DaemonEvent::ExternalId {
                             session_id,
                             external_id,
@@ -222,6 +229,39 @@ impl DelegatePtyState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DelegateAttemptRecovery {
+    Live,
+    Settled(PtyExitOutcome),
+    Missing,
+}
+
+/// Durable recovery evidence for a Mission-linked Delegate attempt. A live
+/// session may be hosted in-process or by `ptyd`; a settled outcome comes from
+/// the write-through scrollback metadata. Anything else is ambiguous and must
+/// become an interrupted attempt rather than being replayed.
+pub(crate) fn delegate_attempt_recovery(
+    app: &tauri::AppHandle,
+    session_id: &str,
+) -> DelegateAttemptRecovery {
+    let local_live = app
+        .state::<DelegatePtyState>()
+        .host
+        .live_ids()
+        .contains(session_id);
+    let daemon_live = daemon_live_rows(app)
+        .iter()
+        .any(|row| row.session_id == session_id);
+    if local_live || daemon_live {
+        return DelegateAttemptRecovery::Live;
+    }
+    scrollback_dir(app)
+        .and_then(|dir| pty_host::read_scrollback_meta(&dir, session_id))
+        .and_then(|meta| meta.exit_outcome)
+        .map(DelegateAttemptRecovery::Settled)
+        .unwrap_or(DelegateAttemptRecovery::Missing)
+}
+
 fn scrollback_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
@@ -247,7 +287,7 @@ impl PtyEventSink for TauriSink {
         );
     }
 
-    fn exit(&self, session_id: &str) {
+    fn exit(&self, session_id: &str, outcome: &PtyExitOutcome) {
         // Forget its hook status and tell the frontend so boards can flip the
         // run from running → done.
         self.app
@@ -260,8 +300,18 @@ impl PtyEventSink for TauriSink {
             "delegate-pty:exit",
             DelegatePtyExit {
                 session_id: session_id.to_string(),
+                outcome: outcome.clone(),
             },
         );
+        if let Some(dir) = scrollback_dir(&self.app) {
+            if let Some(meta) = pty_host::read_scrollback_meta(&dir, session_id) {
+                if let Err(error) =
+                    crate::missions::record_linked_delegate_attempt_settlement(&self.app, &meta)
+                {
+                    eprintln!("mission could not record Delegate settlement: {error}");
+                }
+            }
+        }
     }
 
     fn external_id(&self, session_id: &str, external_id: &str) {
@@ -355,6 +405,9 @@ pub fn delegate_pty_spawn(
     model: Option<String>,
     resume_session_id: Option<String>,
     parent_run_id: Option<String>,
+    mission_id: Option<String>,
+    mission_task_id: Option<String>,
+    one_shot: Option<bool>,
 ) -> Result<(), String> {
     let cwd = workspace_root
         .filter(|path| !path.trim().is_empty())
@@ -398,13 +451,21 @@ pub fn delegate_pty_spawn(
     // behind the Delegate seam. Runtime custom CLIs use the same PTY plumbing
     // with a user-authored shell template.
     let adapter = delegate::lookup(&provider);
+    let one_shot = one_shot.unwrap_or(false);
     let command = if let Some(adapter) = adapter {
-        adapter.spawn_command(
-            task.as_deref(),
-            model.as_deref(),
-            resume_session_id.as_deref(),
-        )
+        if one_shot {
+            adapter.mission_command(task.as_deref(), model.as_deref())?
+        } else {
+            adapter.spawn_command(
+                task.as_deref(),
+                model.as_deref(),
+                resume_session_id.as_deref(),
+            )
+        }
     } else if let Some(custom) = crate::custom_cli::get(&provider) {
+        if one_shot {
+            return Err("Custom Delegate CLIs are not yet supported for durable Missions.".into());
+        }
         custom.spawn_command(
             task.as_deref(),
             model.as_deref(),
@@ -412,6 +473,24 @@ pub fn delegate_pty_spawn(
         )
     } else {
         return Err(format!("No delegate PTY command for provider: {provider}"));
+    };
+    let mission_link = match (mission_id, mission_task_id) {
+        (Some(mission_id), Some(task_id)) => {
+            let workspace_root = cwd.clone().ok_or_else(|| {
+                "A durable Delegate Mission attempt requires a workspace.".to_string()
+            })?;
+            Some(DelegateMissionLink {
+                workspace_root,
+                mission_id,
+                task_id,
+            })
+        }
+        (None, None) => None,
+        _ => {
+            return Err(
+                "Delegate Mission linkage requires both missionId and missionTaskId.".to_string(),
+            )
+        }
     };
     // Status hooks (see delegate/status.rs): refresh the CLI's env-guarded
     // lifecycle hooks and hand this session its private callback URL through
@@ -448,6 +527,7 @@ pub fn delegate_pty_spawn(
                         task: task.clone(),
                         model: model.clone(),
                         resume_session_id: resume_session_id.clone(),
+                        mission_link: mission_link.clone(),
                         detect_session_id: adapter.is_some(),
                     },
                 )? {
@@ -475,6 +555,7 @@ pub fn delegate_pty_spawn(
             task,
             model,
             resume_session_id,
+            mission_link,
             extract_session_id: adapter.map(|d| {
                 Box::new(move |output: &str| d.extract_session_id(output))
                     as Box<dyn Fn(&str) -> Option<String> + Send>
@@ -714,6 +795,7 @@ struct DelegatePtyChunk {
 #[serde(rename_all = "camelCase")]
 struct DelegatePtyExit {
     session_id: String,
+    outcome: PtyExitOutcome,
 }
 
 // ── Delegate session parent tracking ──────────────────────────────────────────

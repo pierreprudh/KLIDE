@@ -13,8 +13,10 @@
 
 use crate::agent::transcripts::{app_runs_dir, now_ms, read_summary, run_id, validate_run_id};
 use crate::agent::types::{
-    AgentContextSnapshot, AgentMode, AgentValidationSummary, StartRunRequest,
+    AgentContextSnapshot, AgentMode, AgentValidationCheckSummary, AgentValidationSummary,
+    StartRunRequest,
 };
+use crate::pty_host::{PtyExitOutcome, ScrollbackMeta};
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -212,6 +214,16 @@ pub struct MissionTaskApprovalInput {
     pub require_diff_review: bool,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewMissionAttemptInput {
+    pub task_id: String,
+    pub run_id: String,
+    pub accepted: bool,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
@@ -240,6 +252,13 @@ pub enum MissionEvent {
         task_id: String,
         run_id: String,
         reason: String,
+    },
+    AttemptSettled {
+        task_id: String,
+        run_id: String,
+        exit_code: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<String>,
     },
     AttemptValidationRecorded {
         task_id: String,
@@ -282,6 +301,7 @@ pub struct PreparedMissionAttempt {
 struct FoldedTaskRuntime {
     attempts: Vec<String>,
     active: HashSet<String>,
+    reviewing: HashSet<String>,
     accepted_run_id: Option<String>,
 }
 
@@ -626,6 +646,13 @@ fn fold_runtime(bundle: &DurableMissionBundle) -> FoldedMissionRuntime {
                     .active
                     .remove(run_id);
             }
+            MissionEvent::AttemptSettled {
+                task_id, run_id, ..
+            } => {
+                let task = runtime.tasks.entry(task_id.clone()).or_default();
+                task.active.remove(run_id);
+                task.reviewing.insert(run_id.clone());
+            }
             MissionEvent::AttemptValidationRecorded {
                 task_id,
                 run_id,
@@ -634,6 +661,7 @@ fn fold_runtime(bundle: &DurableMissionBundle) -> FoldedMissionRuntime {
             } => {
                 let task = runtime.tasks.entry(task_id.clone()).or_default();
                 task.active.remove(run_id);
+                task.reviewing.remove(run_id);
                 if *accepted {
                     task.accepted_run_id = Some(run_id.clone());
                 }
@@ -658,7 +686,10 @@ fn task_is_ready(
         .find(|task| task.id == task_id)
         .ok_or_else(|| format!("Unknown Mission task `{task_id}`."))?;
     let task_runtime = runtime.tasks.get(task_id).cloned().unwrap_or_default();
-    if task_runtime.accepted_run_id.is_some() || !task_runtime.active.is_empty() {
+    if task_runtime.accepted_run_id.is_some()
+        || !task_runtime.active.is_empty()
+        || !task_runtime.reviewing.is_empty()
+    {
         return Ok(false);
     }
     for dependency in &task.dependencies {
@@ -692,7 +723,11 @@ fn supervisor_decision(
     if !runtime.approved {
         return Ok(SupervisorDecision::Wait);
     }
-    if runtime.tasks.values().any(|task| !task.active.is_empty()) {
+    if runtime
+        .tasks
+        .values()
+        .any(|task| !task.active.is_empty() || !task.reviewing.is_empty())
+    {
         return Ok(SupervisorDecision::Wait);
     }
     for task in &bundle.tasks {
@@ -768,12 +803,6 @@ fn start_request_for(
             task.id
         )
     })?;
-    if dispatch.worker_kind == MissionWorkerKind::Delegate {
-        return Err(format!(
-            "Task `{}` routes to a Delegate CLI; durable Delegate dispatch lands in a later slice.",
-            task.id
-        ));
-    }
     if dispatch.provider.trim().is_empty() || dispatch.model.trim().is_empty() {
         return Err(format!(
             "Task `{}` has an incomplete provider/model execution snapshot.",
@@ -819,6 +848,54 @@ fn start_request_for(
         mission_id: Some(bundle.mission.id.clone()),
         mission_task_id: Some(task.id.clone()),
     })
+}
+
+enum MissionLaunch {
+    Harness(StartRunRequest),
+    Delegate {
+        provider: String,
+        model: String,
+        prompt: String,
+    },
+}
+
+fn launch_for(
+    workspace_root: &str,
+    bundle: &DurableMissionBundle,
+    task: &MissionTaskSpec,
+    attempt_run_id: &str,
+) -> Result<MissionLaunch, String> {
+    let dispatch = task.dispatch.as_ref().ok_or_else(|| {
+        format!(
+            "Task `{}` has no approved execution snapshot. Approve its provider and model first.",
+            task.id
+        )
+    })?;
+    match dispatch.worker_kind {
+        MissionWorkerKind::Harness => {
+            start_request_for(workspace_root, bundle, task, attempt_run_id)
+                .map(MissionLaunch::Harness)
+        }
+        MissionWorkerKind::Delegate => {
+            if dispatch.provider.trim().is_empty() || dispatch.model.trim().is_empty() {
+                return Err(format!(
+                    "Task `{}` has an incomplete Delegate provider/model snapshot.",
+                    task.id
+                ));
+            }
+            if crate::delegate::lookup(&dispatch.provider).is_none() {
+                return Err(format!(
+                    "Delegate `{}` does not support durable Mission dispatch.",
+                    dispatch.provider
+                ));
+            }
+            Ok(MissionLaunch::Delegate {
+                provider: dispatch.provider.clone(),
+                model: dispatch.model.clone(),
+                prompt: task_prompt(bundle, task),
+            })
+        }
+    }
 }
 
 fn validation_accepts(summary_status: &str, validation: &AgentValidationSummary) -> bool {
@@ -1264,7 +1341,7 @@ async fn dispatch_task(
     mission_id: &str,
     task_id: &str,
 ) -> Result<(), String> {
-    let (run_id, request) = {
+    let (run_id, launch) = {
         let state = app.state::<MissionStoreState>();
         let _guard = state
             .write_gate
@@ -1293,18 +1370,42 @@ async fn dispatch_task(
                 run_id: attempt_run_id.clone(),
             },
         )?;
-        let request = start_request_for(workspace_root, &bundle, &task, &attempt_run_id);
-        (attempt_run_id, request)
+        let launch = launch_for(workspace_root, &bundle, &task, &attempt_run_id);
+        (attempt_run_id, launch)
     };
 
-    let request = match request {
-        Ok(request) => request,
+    let launch = match launch {
+        Ok(launch) => launch,
         Err(error) => {
             record_dispatch_failure(app, workspace_root, mission_id, task_id, &run_id, &error)?;
             return Err(error);
         }
     };
-    if let Err(error) = crate::agent::start_background_run(app.clone(), request).await {
+    let result = match launch {
+        MissionLaunch::Harness(request) => crate::agent::start_background_run(app.clone(), request)
+            .await
+            .map(|_| ()),
+        MissionLaunch::Delegate {
+            provider,
+            model,
+            prompt,
+        } => crate::pty::delegate_pty_spawn(
+            app.clone(),
+            app.state::<crate::pty::DelegatePtyState>(),
+            app.state::<crate::delegate::status::DelegateStatusState>(),
+            run_id.clone(),
+            provider,
+            Some(workspace_root.to_string()),
+            Some(prompt),
+            Some(model),
+            None,
+            None,
+            Some(mission_id.to_string()),
+            Some(task_id.to_string()),
+            Some(true),
+        ),
+    };
+    if let Err(error) = result {
         record_dispatch_failure(app, workspace_root, mission_id, task_id, &run_id, &error)?;
         return Err(error);
     }
@@ -1550,6 +1651,215 @@ pub fn mission_fail_attempt_dispatch(
     load_bundle_from_dir(&dir)
 }
 
+/// Called from the Delegate PTY exit sink. Settlement is durable evidence that
+/// the one-shot CLI stopped; it deliberately moves the attempt to operator
+/// review rather than accepting it or driving the next Task.
+pub(crate) fn record_linked_delegate_attempt_settlement(
+    app: &tauri::AppHandle,
+    meta: &ScrollbackMeta,
+) -> Result<(), String> {
+    let Some(link) = meta.mission_link.as_ref() else {
+        return Ok(());
+    };
+    let outcome = meta
+        .exit_outcome
+        .as_ref()
+        .ok_or_else(|| "Delegate session ended without a durable exit outcome.".to_string())?;
+    let state = app.state::<MissionStoreState>();
+    let _guard = state
+        .write_gate
+        .lock()
+        .map_err(|_| "Mission store is unavailable.".to_string())?;
+    validate_run_id(&meta.session_id)?;
+    let dir = mission_dir(&link.workspace_root, &link.mission_id, true)?;
+    let bundle = load_bundle_from_dir(&dir)?;
+    let runtime = fold_runtime(&bundle);
+    let task = runtime
+        .tasks
+        .get(&link.task_id)
+        .ok_or_else(|| format!("Unknown Mission task `{}`.", link.task_id))?;
+    if !task
+        .attempts
+        .iter()
+        .any(|run_id| run_id == &meta.session_id)
+    {
+        return Err(format!(
+            "Delegate Run `{}` is not an attempt of task `{}`.",
+            meta.session_id, link.task_id
+        ));
+    }
+    let already_terminal = bundle.events.iter().any(|line| match &line.event {
+        MissionEvent::AttemptSettled {
+            task_id, run_id, ..
+        }
+        | MissionEvent::AttemptInterrupted {
+            task_id, run_id, ..
+        }
+        | MissionEvent::AttemptValidationRecorded {
+            task_id, run_id, ..
+        } => task_id == &link.task_id && run_id == &meta.session_id,
+        _ => false,
+    });
+    if already_terminal {
+        return Ok(());
+    }
+    if outcome.stop_requested {
+        append_event(
+            &dir,
+            &link.mission_id,
+            MissionEvent::AttemptInterrupted {
+                task_id: link.task_id.clone(),
+                run_id: meta.session_id.clone(),
+                reason: "The Delegate attempt was stopped before operator review.".to_string(),
+            },
+        )
+    } else {
+        append_event(
+            &dir,
+            &link.mission_id,
+            MissionEvent::AttemptSettled {
+                task_id: link.task_id.clone(),
+                run_id: meta.session_id.clone(),
+                exit_code: outcome.exit_code,
+                signal: outcome.signal.clone(),
+            },
+        )
+    }
+}
+
+fn delegate_review_validation(
+    outcome: &PtyExitOutcome,
+    accepted: bool,
+    note: Option<&str>,
+) -> AgentValidationSummary {
+    let exit_label = if outcome.exit_code == 0 && outcome.signal.is_none() {
+        "Delegate process exited successfully"
+    } else {
+        "Delegate process reported a non-success exit"
+    };
+    let mut warnings = Vec::new();
+    if outcome.exit_code != 0 || outcome.signal.is_some() {
+        warnings.push(format!(
+            "Delegate exit code {}{}.",
+            outcome.exit_code,
+            outcome
+                .signal
+                .as_deref()
+                .map(|signal| format!(" ({signal})"))
+                .unwrap_or_default()
+        ));
+    }
+    if let Some(note) = note.map(str::trim).filter(|note| !note.is_empty()) {
+        warnings.push(note.chars().take(500).collect());
+    }
+    AgentValidationSummary {
+        status: if accepted { "passed" } else { "failed" }.to_string(),
+        checks: vec![
+            AgentValidationCheckSummary {
+                id: "delegate-exit".to_string(),
+                label: exit_label.to_string(),
+                status: if outcome.exit_code == 0 && outcome.signal.is_none() {
+                    "passed"
+                } else {
+                    "failed"
+                }
+                .to_string(),
+                // Exit is evidence, not acceptance: an operator may accept
+                // useful work after a CLI returned non-zero.
+                required: false,
+                evidence: Some(format!("exit code {}", outcome.exit_code)),
+            },
+            AgentValidationCheckSummary {
+                id: "operator-review".to_string(),
+                label: "Operator reviewed Delegate output and workspace changes".to_string(),
+                status: if accepted { "passed" } else { "failed" }.to_string(),
+                required: true,
+                evidence: note
+                    .map(str::trim)
+                    .filter(|note| !note.is_empty())
+                    .map(|note| note.chars().take(500).collect()),
+            },
+        ],
+        files_changed: 0,
+        commands_run: 0,
+        commands_failed: u32::from(outcome.exit_code != 0 || outcome.signal.is_some()),
+        diff_reviews: 1,
+        permissions_approved: 0,
+        permissions_denied: 0,
+        warnings,
+    }
+}
+
+#[tauri::command]
+pub async fn mission_review_attempt(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, MissionStoreState>,
+    workspace_root: String,
+    mission_id: String,
+    input: ReviewMissionAttemptInput,
+) -> Result<DurableMissionBundle, String> {
+    {
+        let _guard = state
+            .write_gate
+            .lock()
+            .map_err(|_| "Mission store is unavailable.".to_string())?;
+        validate_run_id(&input.run_id)?;
+        let dir = mission_dir(&workspace_root, &mission_id, true)?;
+        let bundle = load_bundle_from_dir(&dir)?;
+        if bundle.events.iter().any(|line| {
+            matches!(
+                &line.event,
+                MissionEvent::AttemptValidationRecorded {
+                    task_id,
+                    run_id,
+                    ..
+                } if task_id == &input.task_id && run_id == &input.run_id
+            )
+        }) {
+            return Ok(bundle);
+        }
+        let outcome = bundle
+            .events
+            .iter()
+            .rev()
+            .find_map(|line| match &line.event {
+                MissionEvent::AttemptSettled {
+                    task_id,
+                    run_id,
+                    exit_code,
+                    signal,
+                } if task_id == &input.task_id && run_id == &input.run_id => Some(PtyExitOutcome {
+                    exit_code: *exit_code,
+                    signal: signal.clone(),
+                    stop_requested: false,
+                }),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Delegate Run `{}` has not settled for operator review.",
+                    input.run_id
+                )
+            })?;
+        append_event(
+            &dir,
+            &mission_id,
+            MissionEvent::AttemptValidationRecorded {
+                task_id: input.task_id,
+                run_id: input.run_id,
+                accepted: input.accepted,
+                validation: delegate_review_validation(
+                    &outcome,
+                    input.accepted,
+                    input.note.as_deref(),
+                ),
+            },
+        )?;
+    }
+    drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
+    load_bundle(&workspace_root, &mission_id)
+}
+
 #[tauri::command]
 pub fn mission_validate_attempt(
     app: tauri::AppHandle,
@@ -1661,6 +1971,13 @@ fn reconcile_orphaned_attempts_from_runs_dir(
     let runtime = fold_runtime(&bundle);
     let mut active = Vec::new();
     for task in &bundle.tasks {
+        if task
+            .dispatch
+            .as_ref()
+            .is_some_and(|dispatch| dispatch.worker_kind == MissionWorkerKind::Delegate)
+        {
+            continue;
+        }
         let mut run_ids = runtime
             .tasks
             .get(&task.id)
@@ -1711,6 +2028,81 @@ fn reconcile_orphaned_attempts_from_runs_dir(
                         task_id,
                         run_id,
                         reason,
+                    },
+                )?;
+                repaired += 1;
+            }
+        }
+    }
+    Ok(repaired)
+}
+
+fn reconcile_delegate_attempts(
+    app: &tauri::AppHandle,
+    workspace_root: &str,
+    mission_id: &str,
+) -> Result<usize, String> {
+    let dir = mission_dir(workspace_root, mission_id, true)?;
+    let bundle = load_bundle_from_dir(&dir)?;
+    let runtime = fold_runtime(&bundle);
+    let mut active = Vec::new();
+    for task in &bundle.tasks {
+        if !task
+            .dispatch
+            .as_ref()
+            .is_some_and(|dispatch| dispatch.worker_kind == MissionWorkerKind::Delegate)
+        {
+            continue;
+        }
+        let mut run_ids = runtime
+            .tasks
+            .get(&task.id)
+            .map(|task| task.active.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        run_ids.sort();
+        active.extend(run_ids.into_iter().map(|run_id| (task.id.clone(), run_id)));
+    }
+
+    let mut repaired = 0;
+    for (task_id, run_id) in active {
+        match crate::pty::delegate_attempt_recovery(app, &run_id) {
+            crate::pty::DelegateAttemptRecovery::Live => {}
+            crate::pty::DelegateAttemptRecovery::Settled(outcome) if outcome.stop_requested => {
+                append_event(
+                    &dir,
+                    mission_id,
+                    MissionEvent::AttemptInterrupted {
+                        task_id,
+                        run_id,
+                        reason: "The Delegate attempt was stopped before operator review."
+                            .to_string(),
+                    },
+                )?;
+                repaired += 1;
+            }
+            crate::pty::DelegateAttemptRecovery::Settled(outcome) => {
+                append_event(
+                    &dir,
+                    mission_id,
+                    MissionEvent::AttemptSettled {
+                        task_id,
+                        run_id,
+                        exit_code: outcome.exit_code,
+                        signal: outcome.signal,
+                    },
+                )?;
+                repaired += 1;
+            }
+            crate::pty::DelegateAttemptRecovery::Missing => {
+                append_event(
+                    &dir,
+                    mission_id,
+                    MissionEvent::AttemptInterrupted {
+                        task_id,
+                        run_id,
+                        reason:
+                            "Klide restarted before the Delegate host recorded a process outcome."
+                                .to_string(),
                     },
                 )?;
                 repaired += 1;
@@ -1778,6 +2170,7 @@ pub(crate) async fn reconcile_workspace(
                     &bundle.mission.id,
                     |run_id| crate::agent::run_is_active(&app, run_id),
                 )?;
+                reconcile_delegate_attempts(&app, &canonical_root, &bundle.mission.id)?;
                 let repaired = load_bundle(&canonical_root, &bundle.mission.id)?;
                 if mission_should_resume(&repaired) {
                     mission_ids.push(bundle.mission.id);
@@ -2199,6 +2592,72 @@ mod tests {
             supervisor_decision(&bundle, &fold_runtime(&bundle)).unwrap(),
             SupervisorDecision::Park(_)
         ));
+    }
+
+    #[test]
+    fn delegate_settlement_waits_for_operator_review_before_unlocking_dependencies() {
+        let root = temp_workspace("delegate-review-gate");
+        do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptAttached {
+                task_id: "inspect".to_string(),
+                run_id: "delegate-inspect".to_string(),
+            },
+        )
+        .unwrap();
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptSettled {
+                task_id: "inspect".to_string(),
+                run_id: "delegate-inspect".to_string(),
+                exit_code: 0,
+                signal: None,
+            },
+        )
+        .unwrap();
+
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        let runtime = fold_runtime(&bundle);
+        assert!(runtime.tasks["inspect"].active.is_empty());
+        assert!(runtime.tasks["inspect"]
+            .reviewing
+            .contains("delegate-inspect"));
+        assert!(!task_is_ready(&bundle, &runtime, "inspect").unwrap());
+        assert!(!task_is_ready(&bundle, &runtime, "implement").unwrap());
+        assert_eq!(
+            supervisor_decision(&bundle, &runtime).unwrap(),
+            SupervisorDecision::Wait
+        );
+
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptValidationRecorded {
+                task_id: "inspect".to_string(),
+                run_id: "delegate-inspect".to_string(),
+                accepted: true,
+                validation: delegate_review_validation(
+                    &PtyExitOutcome {
+                        exit_code: 0,
+                        signal: None,
+                        stop_requested: false,
+                    },
+                    true,
+                    None,
+                ),
+            },
+        )
+        .unwrap();
+        let accepted = load_bundle_from_dir(&dir).unwrap();
+        assert_eq!(
+            supervisor_decision(&accepted, &fold_runtime(&accepted)).unwrap(),
+            SupervisorDecision::Dispatch("implement".to_string())
+        );
     }
 
     #[test]

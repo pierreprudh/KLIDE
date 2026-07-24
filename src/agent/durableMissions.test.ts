@@ -138,6 +138,61 @@ describe("durable Mission projection", () => {
     expect(readyMissionTaskIds(state, "mission-one")).toEqual(["inspect"]);
   });
 
+  it("keeps a settled Delegate attempt in review until an operator accepts it", () => {
+    const reviewing = compileDurableMissionBundle(bundle([
+      { schemaVersion: 1, missionId: "mission-one", seq: 0, ts: 1, event: { type: "plan_approved" } },
+      { schemaVersion: 1, missionId: "mission-one", seq: 1, ts: 2, event: { type: "attempt_attached", taskId: "inspect", runId: "delegate-a" } },
+      {
+        schemaVersion: 1,
+        missionId: "mission-one",
+        seq: 2,
+        ts: 3,
+        event: {
+          type: "attempt_settled",
+          taskId: "inspect",
+          runId: "delegate-a",
+          exitCode: 0,
+        },
+      },
+    ]));
+
+    expect(reviewing.tasks.inspect.status).toBe("review");
+    expect(reviewing.tasks.inspect.attempts[0]).toMatchObject({
+      runId: "delegate-a",
+      status: "review",
+      exitCode: 0,
+    });
+    expect(reviewing.tasks.implement.status).toBe("blocked");
+    expect(readyMissionTaskIds(reviewing, "mission-one")).toEqual([]);
+
+    const accepted = compileDurableMissionBundle(bundle([
+      { schemaVersion: 1, missionId: "mission-one", seq: 0, ts: 1, event: { type: "plan_approved" } },
+      { schemaVersion: 1, missionId: "mission-one", seq: 1, ts: 2, event: { type: "attempt_attached", taskId: "inspect", runId: "delegate-a" } },
+      {
+        schemaVersion: 1,
+        missionId: "mission-one",
+        seq: 2,
+        ts: 3,
+        event: { type: "attempt_settled", taskId: "inspect", runId: "delegate-a", exitCode: 0 },
+      },
+      {
+        schemaVersion: 1,
+        missionId: "mission-one",
+        seq: 3,
+        ts: 4,
+        event: {
+          type: "attempt_validation_recorded",
+          taskId: "inspect",
+          runId: "delegate-a",
+          accepted: true,
+          validation: { ...validation, status: "passed" },
+        },
+      },
+    ]));
+    expect(accepted.tasks.inspect.status).toBe("done");
+    expect(readyMissionTaskIds(accepted, "mission-one")).toEqual(["implement"]);
+  });
+
   it("projects a restart-interrupted Run as an interrupted, retryable attempt (not a failure)", () => {
     const state = compileDurableMissionBundle(bundle([
       { schemaVersion: 1, missionId: "mission-one", seq: 0, ts: 1, event: { type: "plan_approved" } },

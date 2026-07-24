@@ -92,6 +92,37 @@ pub trait Delegate: Sync {
         }
     }
 
+    /// Trim + require a Mission task prompt, or a per-CLI error. Shared by the
+    /// `mission_command` impls so each adapter only spells its own flags.
+    fn mission_task<'a>(&self, task: Option<&'a str>) -> Result<&'a str, String> {
+        task.map(str::trim)
+            .filter(|task| !task.is_empty())
+            .ok_or_else(|| format!("{} Mission dispatch requires a task prompt.", self.binary()))
+    }
+
+    /// The model flag fragment (leading space) for a Mission command, honoring
+    /// the [`CLI_DEFAULT_MODEL`] sentinel exactly as `spawn_command` does.
+    fn mission_model_arg(&self, model: Option<&str>) -> String {
+        model
+            .map(str::trim)
+            .filter(|model| !model.is_empty() && !model.eq_ignore_ascii_case(CLI_DEFAULT_MODEL))
+            .map(|model| self.model_arg(model))
+            .unwrap_or_default()
+    }
+
+    /// Build a bounded one-shot command for a durable Mission Task. Unlike a
+    /// normal Delegate TUI this command must exit after one turn, giving the
+    /// Mission supervisor durable settlement evidence. Per-CLI flags stay
+    /// behind this seam; process exit still requires explicit operator review
+    /// before the Task is accepted.
+    fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        let _ = (task, model);
+        Err(format!(
+            "{} does not support one-shot Mission dispatch.",
+            self.binary()
+        ))
+    }
+
     /// Argument vector for a one-shot headless chat invocation — prompt on
     /// stdin, plain text on stdout (the AI panel's subscription chat path).
     /// `model` may be empty — then the adapter must omit its model flag so
@@ -314,6 +345,33 @@ mod tests {
     fn blank_values_are_treated_as_absent() {
         let cmd = ClaudeCode.spawn_command(Some("  "), Some(""), Some(" \t"));
         assert_eq!(cmd, "claude");
+    }
+
+    #[test]
+    fn mission_commands_are_one_shot_and_keep_cli_flags_behind_adapters() {
+        assert_eq!(
+            ClaudeCode
+                .mission_command(Some("fix the bug"), Some("claude-sonnet-4-6"))
+                .unwrap(),
+            "claude -p --model 'claude-sonnet-4-6' --permission-mode acceptEdits --output-format text 'fix the bug'"
+        );
+        assert_eq!(
+            Codex
+                .mission_command(Some("fix the bug"), Some("gpt-5.4"))
+                .unwrap(),
+            "codex exec -m 'gpt-5.4' -s workspace-write --skip-git-repo-check --color never 'fix the bug'"
+        );
+        assert_eq!(
+            OpenCode
+                .mission_command(Some("fix the bug"), Some("opencode/minimax-m3"))
+                .unwrap(),
+            "opencode run -m 'opencode/minimax-m3' 'fix the bug'"
+        );
+        assert_eq!(
+            Omp.mission_command(Some("fix the bug"), Some("default"))
+                .unwrap(),
+            "omp -p --auto-approve --mode text 'fix the bug'"
+        );
     }
 
     #[test]

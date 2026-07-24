@@ -12,6 +12,8 @@
 // projects progress and reattaches to operator permission/diff pauses.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type { GitStatus } from "../gitTypes";
 import { listProviderModels } from "../ipc/aiProviders";
 import {
   routeTask,
@@ -29,6 +31,7 @@ import {
   createDurableMission,
   dispatchDurableMissionTask,
   listDurableMissions,
+  reviewDurableMissionAttempt,
   saveDurableMissionTask,
   type DurableMissionBundle,
   type DurableMissionTaskDispatch,
@@ -41,6 +44,7 @@ import { MissionGraph, type MissionGraphMeta } from "./MissionGraph";
 import { planGoal, resolvePlannerModel, stubPlan, type PlannedTask } from "../agent/planner";
 import { PROVIDER_GROUPS, providerName, isDelegateProvider, DEFAULT_MODELS } from "../agent/providers";
 import { ProviderLogo, DotGridLoader } from "./ai/icons";
+import { DelegateTerminalSurface } from "./ai/DelegateTerminal";
 import { notify } from "../toast";
 import { isFavModel, toggleFavModel, subscribeFavModels } from "../favModels";
 import { Z } from "../zLayers";
@@ -117,7 +121,7 @@ function useOrchestratorModel(tasks: PlannedTask[], mode: ModeKey) {
 }
 
 // ── Real dispatch (slice-1 seam) ─────────────────────────────────────────────
-type CardStatus = "idle" | "running" | "done" | "error" | "interrupted";
+type CardStatus = "idle" | "running" | "review" | "done" | "error" | "interrupted";
 type LiveCard = { status: CardStatus; activity: string };
 
 function activityFromEvent(prev: LiveCard, ev: AgentEvent): LiveCard {
@@ -340,7 +344,7 @@ function SegmentedModes({ mode, setMode }: { mode: ModeKey; setMode: (m: ModeKey
 // "done" recedes to a quiet muted check so the live work stays the focus.
 function StatusBadge({ status }: { status: CardStatus }) {
   if (status === "done") return <span style={{ display: "inline-flex", color: "var(--fg-subtle)" }}><IconCheck size={11} /></span>;
-  const color = status === "error" ? "var(--danger)" : status === "interrupted" ? "var(--warning)" : status === "running" ? "var(--accent)" : "var(--fg-dim)";
+  const color = status === "error" ? "var(--danger)" : status === "interrupted" || status === "review" ? "var(--warning)" : status === "running" ? "var(--accent)" : "var(--fg-dim)";
   return (
     <span
       style={{
@@ -351,7 +355,7 @@ function StatusBadge({ status }: { status: CardStatus }) {
         lineHeight: 1,
       }}
     >
-      {status === "error" ? "error" : status === "interrupted" ? "interrupted" : status === "running" ? "working" : "idle"}
+      {status === "error" ? "error" : status === "interrupted" ? "interrupted" : status === "review" ? "review" : status === "running" ? "working" : "idle"}
     </span>
   );
 }
@@ -694,6 +698,154 @@ function PermissionPrompt({ request, onAllow, onDeny }: { request: PermissionReq
   );
 }
 
+type ChangedFile = { path: string; status: string; additions: number; deletions: number };
+
+// The working-tree changes a one-shot Delegate left behind. Process exit is
+// only settlement evidence — this is the actual work the operator accepts or
+// rejects, read straight from `git status` (full diffs still live in Git Review).
+function DelegateReviewChanges({ workspaceRoot }: { workspaceRoot: string | null }) {
+  const [files, setFiles] = useState<ChangedFile[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!workspaceRoot) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await invoke<GitStatus>("git_status", { workspaceRoot });
+        // Cap the per-file diff fan-out so a pathological changeset can't stall
+        // the review — the rest still show as touched, just without counts.
+        const rows = await Promise.all(
+          status.files.slice(0, 60).map(async (file) => {
+            try {
+              const diff = await invoke<{ additions: number; deletions: number }>("git_diff", {
+                workspaceRoot,
+                path: file.path,
+                staged: file.staged,
+              });
+              return { path: file.path, status: file.status, additions: diff.additions, deletions: diff.deletions };
+            } catch {
+              return { path: file.path, status: file.status, additions: 0, deletions: 0 };
+            }
+          })
+        );
+        if (!cancelled) setFiles(rows);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceRoot]);
+
+  return (
+    <div style={{ width: 248, flexShrink: 0, borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div style={{ ...eyebrow, padding: "12px 14px 8px" }}>
+        Changed files{files ? ` · ${files.length}` : ""}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 6px 10px" }}>
+        {error ? (
+          <div style={{ padding: "6px 8px", fontSize: 11, color: "var(--warning)", lineHeight: 1.4 }}>Couldn't read working tree — {error}</div>
+        ) : !files ? (
+          <div style={{ padding: "6px 8px", fontSize: 11, color: "var(--fg-subtle)" }}>Reading working tree…</div>
+        ) : files.length === 0 ? (
+          <div style={{ padding: "6px 8px", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.4 }}>No working-tree changes. The Delegate may have committed its work or made none.</div>
+        ) : (
+          files.map((file) => (
+            <div key={file.path} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "4px 8px", fontSize: 11, fontFamily: "var(--font-mono)", minWidth: 0 }}>
+              <span style={{ color: "var(--fg-subtle)", width: 12, flexShrink: 0 }}>{file.status.trim().charAt(0) || "M"}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left", color: "var(--fg)" }}>{file.path}</span>
+              {(file.additions > 0 || file.deletions > 0) && (
+                <span style={{ flexShrink: 0, color: "var(--fg-subtle)" }}>
+                  {file.additions > 0 && <span style={{ color: "var(--diff-add)" }}>+{file.additions}</span>}
+                  {file.additions > 0 && file.deletions > 0 && " "}
+                  {file.deletions > 0 && <span style={{ color: "var(--diff-remove)" }}>−{file.deletions}</span>}
+                </span>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+type DelegateReviewTarget = {
+  taskId: string;
+  taskTitle: string;
+  runId: string;
+  providerId: ProviderId;
+  provider: string;
+  model: string;
+  exitCode: number;
+  signal?: string;
+};
+
+function DelegateReviewModal({
+  target,
+  workspaceRoot,
+  busy,
+  onClose,
+  onDecision,
+}: {
+  target: DelegateReviewTarget;
+  workspaceRoot: string | null;
+  busy: boolean;
+  onClose: () => void;
+  onDecision: (accepted: boolean) => void;
+}) {
+  const exit = target.signal
+    ? `signal ${target.signal}`
+    : `exit ${target.exitCode}`;
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: Z.modal, display: "grid", placeItems: "center", padding: 24, background: "var(--modal-scrim, rgba(20,20,18,0.32))", backdropFilter: "blur(2px)" }}
+      onClick={() => { if (!busy) onClose(); }}
+    >
+      <div
+        className="klide-surface"
+        style={{ width: "min(820px, 94vw)", height: "min(640px, 88vh)", minHeight: 420, display: "flex", flexDirection: "column", overflow: "hidden" }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={{ padding: "16px 18px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", gap: 14 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ ...eyebrow, marginBottom: 5 }}>Delegate review</div>
+            <div style={{ fontSize: "var(--fs-md)", fontWeight: 600, color: "var(--fg-strong)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{target.taskTitle}</div>
+            <div style={{ marginTop: 4, fontSize: 11, color: target.exitCode === 0 && !target.signal ? "var(--fg-subtle)" : "var(--warning)", fontFamily: "var(--font-mono)" }}>
+              {target.provider} · {target.model} · {exit}
+            </div>
+          </div>
+          <button className="klide-button klide-button-ghost" onClick={onClose} disabled={busy} style={{ marginLeft: "auto" }}>Close</button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+          <DelegateReviewChanges workspaceRoot={workspaceRoot} />
+          <div style={{ flex: 1, minWidth: 0, display: "flex" }}>
+            <DelegateTerminalSurface
+              sessionId={target.runId}
+              providerId={target.providerId}
+              provider={target.provider}
+              workspaceRoot={workspaceRoot}
+              model={target.model}
+              attachOnly
+              readOnly
+            />
+          </div>
+        </div>
+        <div style={{ padding: 14, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.4 }}>
+            Process exit is evidence only. Check the changed files and output before accepting.
+          </span>
+          <button className="klide-button klide-button-ghost" onClick={() => onDecision(false)} disabled={busy} style={{ marginLeft: "auto" }}>
+            {busy ? "Recording…" : "Reject"}
+          </button>
+          <button className="klide-button klide-button-primary" onClick={() => onDecision(true)} disabled={busy}>
+            {busy ? "Recording…" : "Accept & continue"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Console ───────────────────────────────────────────────────────────────
 export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: string | null }) {
   const [goal, setGoal] = useState("add rate limiting to the API");
@@ -716,6 +868,8 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
   // Which card is expanded to show its full description + model + cost.
   const [expanded, setExpanded] = useState<string | null>(null);
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  const [delegateReview, setDelegateReview] = useState<DelegateReviewTarget | null>(null);
+  const [reviewingRunId, setReviewingRunId] = useState<string | null>(null);
   // Board = model-routing lanes; Graph = the dependency DAG. Both project the
   // same tasks — the graph is a view, not a second state model.
   const [viewMode, setViewMode] = useState<"board" | "graph">("board");
@@ -832,6 +986,8 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
     if (!durableState || !durableBundle) return;
     for (const taskId of durableBundle.mission.taskIds) {
       const task = durableState.tasks[taskId];
+      const spec = durableBundle.tasks.find((candidate) => candidate.id === taskId);
+      if (spec?.dispatch?.workerKind === "delegate") continue;
       for (const attempt of task?.attempts ?? []) {
         if (attempt.status === "running") real.observe(taskId, attempt.runId);
       }
@@ -980,6 +1136,35 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
     }
   }
 
+  async function reviewDelegateAttempt(accepted: boolean) {
+    if (!workspaceRoot || !durableBundle || !delegateReview || reviewingRunId) return;
+    setReviewingRunId(delegateReview.runId);
+    try {
+      const reviewed = await reviewDurableMissionAttempt(
+        workspaceRoot,
+        durableBundle.mission.id,
+        {
+          taskId: delegateReview.taskId,
+          runId: delegateReview.runId,
+          accepted,
+        }
+      );
+      setDurableBundle(reviewed);
+      setDelegateReview(null);
+      setMissionOn(accepted);
+      notify(
+        accepted
+          ? "Delegate attempt accepted — the Mission can continue"
+          : "Delegate attempt rejected — the Mission is parked for retry",
+        { tone: accepted ? "success" : "warn" }
+      );
+    } catch (error) {
+      notify(`Couldn't record Delegate review — ${error instanceof Error ? error.message : String(error)}`, { tone: "warn" });
+    } finally {
+      setReviewingRunId(null);
+    }
+  }
+
   async function plan() {
     if (!goal.trim() || planning) return;
     setPlanning(true);
@@ -1078,6 +1263,10 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
         /* Interrupted by a restart — an amber rail says "retry", not "failed". */
         .klide-orch-card[data-live="interrupted"] {
           box-shadow: inset 2px 0 0 var(--warning) !important;
+        }
+        .klide-orch-card[data-live="review"] {
+          box-shadow: inset 2px 0 0 var(--warning) !important;
+          border-color: color-mix(in srgb, var(--warning) 35%, var(--border)) !important;
         }
         /* Lanes + summary build in with the SAME spring rise as the cards, just
            sequenced earlier — so on create the structure assembles, then the
@@ -1241,20 +1430,23 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                       const dep = t.dependsOn?.[0];
                       const liveCard = real.live[t.taskId];
                       const durableTask = durableState?.tasks[t.taskId];
+                      const durableSpec = durableBundle?.tasks.find((task) => task.id === t.taskId);
                       const lastAttempt = durableTask?.attempts[durableTask.attempts.length - 1];
                       const projectedStatus: CardStatus = durableTask?.acceptedRunId
                         ? "done"
-                        : lastAttempt?.status === "running"
-                          ? "running"
-                          : lastAttempt?.status === "interrupted"
-                            ? "interrupted"
-                            : lastAttempt
-                              ? "error"
-                              : "idle";
-                      const status: CardStatus = projectedStatus === "done" || projectedStatus === "error" || projectedStatus === "interrupted"
+                        : lastAttempt?.status === "review"
+                          ? "review"
+                          : lastAttempt?.status === "running"
+                            ? "running"
+                            : lastAttempt?.status === "interrupted"
+                              ? "interrupted"
+                              : lastAttempt
+                                ? "error"
+                                : "idle";
+                      const status: CardStatus = projectedStatus === "done" || projectedStatus === "review" || projectedStatus === "error" || projectedStatus === "interrupted"
                         ? projectedStatus
                         : liveCard?.status ?? projectedStatus;
-                      const canRunReal = !!workspaceRoot && !!durableBundle && status !== "running" && !missionOn;
+                      const canRunReal = !!workspaceRoot && !!durableBundle && status !== "running" && status !== "review" && !missionOn;
                       const ov = overrides[t.taskId] ?? null;
                       const isOpen = expanded === t.taskId;
                       const effWorker = ov ? providerName(ov.provider) : WORKER_LABEL[r.assignment.workerKind];
@@ -1269,7 +1461,7 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                           // continuous full-width wave, brick by brick.
                           key={`${t.taskId}-${mode}-${planSeq}`}
                           className="klide-orch-card"
-                          data-live={status === "running" ? "running" : status === "error" ? "error" : status === "interrupted" ? "interrupted" : undefined}
+                          data-live={status === "running" ? "running" : status === "review" ? "review" : status === "error" ? "error" : status === "interrupted" ? "interrupted" : undefined}
                           onClick={() => setExpanded((e) => (e === t.taskId ? null : t.taskId))}
                           style={{
                             padding: 16,
@@ -1379,6 +1571,27 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                               <span style={{ fontSize: 11, color: ov ? "var(--accent)" : "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{effWorker}</span>
                             )}
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                              {status === "review" && lastAttempt && durableSpec?.dispatch && (
+                                <button
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setDelegateReview({
+                                      taskId: t.taskId,
+                                      taskTitle: t.title,
+                                      runId: lastAttempt.runId,
+                                      providerId: durableSpec.dispatch!.provider as ProviderId,
+                                      provider: providerName(durableSpec.dispatch!.provider as ProviderId),
+                                      model: durableSpec.dispatch!.model,
+                                      exitCode: lastAttempt.exitCode ?? 1,
+                                      signal: lastAttempt.signal,
+                                    });
+                                  }}
+                                  className="klide-button klide-button-primary"
+                                  style={{ minHeight: 24, padding: "3px 9px", fontSize: 10.5 }}
+                                >
+                                  Review
+                                </button>
+                              )}
                               {canRunReal && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); void runSingleTask(t.taskId); }}
@@ -1451,13 +1664,13 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             >
               <span className="klide-switch" data-checked={reviewEdits} aria-hidden style={{ flexShrink: 0 }}><span className="klide-switch-knob" /></span>
               <span style={{ minWidth: 0 }}>
-                <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "var(--fg-strong)" }}>Review each edit</span>
-                <span style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.4 }}>{reviewEdits ? "Approve every change before it applies." : "Auto-apply edits (still checkpointed)."}</span>
+                <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "var(--fg-strong)" }}>Review Harness edits</span>
+                <span style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.4 }}>{reviewEdits ? "Harness edits pause before applying. Delegates review after their turn." : "Harness edits auto-apply; Delegate acceptance still stays explicit."}</span>
               </span>
             </button>
             <div className="klide-surface" style={{ padding: 18, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
               <div style={{ ...eyebrow, marginBottom: 8 }}>How it works</div>
-              Approval freezes each task’s worker, provider, model, and review policy into Mission Markdown. The Rust supervisor dispatches one ready task and continues only after Harness validation accepts it. Rejected work parks for an explicit retry. Specialist/delegate tiers are recorded but not yet spawned.
+              Approval freezes each task’s worker, provider, model, and review policy into Mission Markdown. Harness Runs continue after validation. Delegate Runs execute one bounded turn, then wait for explicit operator acceptance. Rejected work parks for an explicit retry.
             </div>
           </div>
         </div>
@@ -1482,6 +1695,15 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
             request={real.head.request}
             onAllow={() => void real.decidePermission(true)}
             onDeny={() => void real.decidePermission(false)}
+          />
+        )}
+        {delegateReview && (
+          <DelegateReviewModal
+            target={delegateReview}
+            workspaceRoot={workspaceRoot}
+            busy={reviewingRunId === delegateReview.runId}
+            onClose={() => setDelegateReview(null)}
+            onDecision={(accepted) => void reviewDelegateAttempt(accepted)}
           />
         )}
       </div>

@@ -83,6 +83,7 @@ export type DurableMissionEvent =
   | { type: "attempt_attached"; taskId: string; runId: string }
   | { type: "attempt_dispatch_failed"; taskId: string; runId: string; message: string }
   | { type: "attempt_interrupted"; taskId: string; runId: string; reason: string }
+  | { type: "attempt_settled"; taskId: string; runId: string; exitCode: number; signal?: string }
   | {
       type: "attempt_validation_recorded";
       taskId: string;
@@ -177,6 +178,15 @@ export function compileDurableMissionBundle(bundle: DurableMissionBundle): Missi
         taskId: event.taskId,
         runId: event.runId,
         reason: event.reason,
+        ts: line.ts,
+      });
+    } else if (event.type === "attempt_settled") {
+      state = missionReducer(state, {
+        type: "task_attempt_settled",
+        taskId: event.taskId,
+        runId: event.runId,
+        exitCode: event.exitCode,
+        signal: event.signal,
         ts: line.ts,
       });
     } else if (event.type === "attempt_validation_recorded") {
@@ -279,6 +289,18 @@ export async function validateMissionAttempt(
     missionId,
     taskId,
     runId,
+  });
+}
+
+export async function reviewDurableMissionAttempt(
+  workspaceRoot: string,
+  missionId: string,
+  input: { taskId: string; runId: string; accepted: boolean; note?: string }
+): Promise<DurableMissionBundle> {
+  return invoke<DurableMissionBundle>("mission_review_attempt", {
+    workspaceRoot,
+    missionId,
+    input,
   });
 }
 

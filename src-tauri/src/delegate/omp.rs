@@ -32,6 +32,15 @@ impl Delegate for Omp {
         format!(" --resume {}", shell_quote(session_id))
     }
 
+    fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
+        let task = self.mission_task(task)?;
+        let model_arg = self.mission_model_arg(model);
+        Ok(format!(
+            "omp -p{model_arg} --auto-approve --mode text {}",
+            shell_quote(task)
+        ))
+    }
+
     /// Headless: `-p` processes the prompt and exits, printing plain text.
     /// `--auto-approve` lets Goal-mode runs touch files without an interactive
     /// permission prompt nobody is there to answer (mirrors Claude's

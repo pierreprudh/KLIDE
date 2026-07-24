@@ -1085,6 +1085,7 @@ pub fn run() {
             missions::mission_prepare_attempt,
             missions::mission_fail_attempt_dispatch,
             missions::mission_validate_attempt,
+            missions::mission_review_attempt,
             git::github::create_pr,
             git::git_log,
             git::git_graph,

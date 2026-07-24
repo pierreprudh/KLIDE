@@ -76,6 +76,11 @@ them.
   edits write the dependent task's Markdown back through `mission_save_task`,
   which now rejects cycles in Rust (`first_dependency_cycle`) as the durable
   authority. Edits are pre-approval only.
+- [x] Dispatch approved Delegate tasks through bounded one-shot CLI commands
+  behind the existing Delegate adapter seam. PTY/ptyd metadata persists the
+  Mission link and process outcome; exit moves the attempt to explicit
+  operator review rather than acceptance. Accept/reject records durable
+  validation, and restart recovery never replays an ambiguous Delegate.
 
 ## Stabilize v0.2
 
