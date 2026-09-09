@@ -86,9 +86,11 @@ export function DocumentAppMark({ path, size = 20, className }: { path: string; 
     style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }} />;
 }
 
-/** The one document that stands for the set: the first with a mark. A run
- *  that made twelve files is still one mark in the corner — the count says
- *  how many, the mark says what kind came first. */
-export function leadingDocumentMark(paths: string[]): string | undefined {
-  return paths.find((path) => documentApp(path) !== undefined);
+/** The documents that stand for the set: the first `limit` with a mark, in the
+ *  order the run made them. They draw as a stack — one disc, two overlapping,
+ *  three overlapping — and the caller says in words how many more there are.
+ *  Per document, not per kind: three decks are three discs, the way three
+ *  people are three faces. */
+export function stackedDocumentMarks(paths: string[], limit = 3): string[] {
+  return paths.filter((path) => documentApp(path) !== undefined).slice(0, limit);
 }

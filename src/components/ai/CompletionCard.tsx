@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { completionDocumentCount, hasCompletionReview, type RunCompletion } from "../../agent/completion";
-import { DocumentAppMark, leadingDocumentMark } from "../../documentAppLogo";
+import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { formatBytes } from "../settings/storage";
 import { ChevronIcon, CloseIcon, ReviewIcon } from "../../icons";
@@ -203,18 +203,24 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
   const spoken = [label, files, documentCount > 0 ? `${documentCount} document${documentCount === 1 ? "" : "s"}` : "", attention > 0 ? `${attention} item${attention === 1 ? "" : "s"} to review` : ""]
     .filter(Boolean).join(" · ");
 
-  // The run's mark is what it made. A run that produced documents shows the
-  // mark of the app that owns the first of them — PowerPoint, Excel, Word,
-  // the Markdown or HTML glyph — and the count says how many there are. One
-  // mark however many files: a corner holds one glyph, and twelve logos in a
-  // pill would be a shelf, not a mark. A run that only changed code keeps the
-  // review glass and its file count.
+  // The run's mark is what it made: the documents' app marks as a stack — one
+  // disc for one document, two overlapping for two, three for three or more,
+  // and past that the count says how many more. PowerPoint, Excel, Word as
+  // pictures; the Markdown and HTML glyphs drawn. A run that only changed code
+  // keeps the review glass and its file count.
   const documentPaths = (completion.artifacts ?? []).map((artifact) => artifact.path);
-  const leading = leadingDocumentMark(documentPaths);
-  const mark = leading
-    ? <DocumentAppMark path={leading} size={16} className="klide-result-app-mark" />
+  const stack = stackedDocumentMarks(documentPaths);
+  const mark = stack.length > 0
+    ? (
+      <span className="klide-result-app-stack" aria-hidden="true">
+        {stack.map((path, index) => <span key={`${path}#${index}`} className="klide-result-app-disc"><DocumentAppMark path={path} size={16} /></span>)}
+      </span>
+    )
     : <ReviewIcon size={15} />;
-  const markCount = leading ? documentCount : completion.files.length;
+  // Beyond the stack: the documents it could not show, or the changed files
+  // when there is no document at all.
+  const beyond = stack.length > 0 ? documentCount - stack.length : completion.files.length;
+  const count = beyond > 0 ? (stack.length > 0 ? `+${beyond}` : String(beyond)) : null;
 
   if (island && folded) {
     // Closed column: icons only. Same pill as the plan's reopen mark — icon
@@ -225,7 +231,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
           aria-label={`Open the side panel — ${spoken.toLowerCase()}`}
           title="Open the side panel">
           {mark}
-          {markCount > (leading ? 1 : 0) && <span className="klide-result-meta">{markCount}</span>}
+          {count && <span className="klide-result-meta">{count}</span>}
         </button>
       </div>
     );

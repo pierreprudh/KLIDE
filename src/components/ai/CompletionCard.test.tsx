@@ -204,9 +204,10 @@ describe("ResultEvidence", () => {
   });
 
   // "I have 2 times the same icons — wire in only one, the document created,
-  // using the logos": the mark is what the run made, and it is one mark
-  // however many files — the first document's app, and the count.
-  it("folds to one mark, the first document's app, and counts the rest", () => {
+  // using the logos", then the sketch: one disc, two overlapping, three
+  // overlapping. The mark is a stack of the documents' app marks, capped at
+  // three, and the count says how many more there are.
+  it("folds to a stack of the documents' marks, three at most, and counts the rest", () => {
     const html = renderToStaticMarkup(
       <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
         completion={{ ...completion, artifacts: [
@@ -216,28 +217,31 @@ describe("ResultEvidence", () => {
           { path: "report.md", bytes: 100, created: true },
         ] }} />,
     );
-    expect(html).toContain("klide-result-app-mark");
+    expect(html).toContain("klide-result-app-stack");
+    expect(html.split("klide-result-app-disc").length - 1).toBe(3);
+    // Per document, not per kind: two decks and a memo are three pictures.
+    expect(html.split("<img").length - 1).toBe(3);
     expect(html).toContain("powerpoint");
-    expect(html).not.toContain("word");
-    expect(html.split("<img").length - 1).toBe(1);
-    // No review glass beside the logo.
+    expect(html).toContain("word");
+    // The fourth is beyond the stack; no review glass anywhere.
     expect(html).not.toContain("<svg");
-    expect(html).toContain(">4<");
+    expect(html).toContain("+1");
     expect(html).toContain("4 documents");
   });
 
-  it("draws the Markdown and HTML marks in the text colour, one per pill", () => {
-    const one = (path: string) => renderToStaticMarkup(
+  it("is one disc for one document, two for two, with no count beside them", () => {
+    const stack = (paths: string[]) => renderToStaticMarkup(
       <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
-        completion={{ ...completion, artifacts: [{ path, bytes: 100, created: true }] }} />,
+        completion={{ ...completion, artifacts: paths.map((path) => ({ path, bytes: 100, created: true })) }} />,
     );
-    for (const path of ["report.md", "site/index.html"]) {
-      const html = one(path);
-      expect(html.split("<svg").length - 1).toBe(1);
-      expect(html).toContain('stroke="currentColor"');
-      // One document: the mark alone, no "1" beside it.
-      expect(html).not.toContain(">1<");
-    }
+    const one = stack(["report.md"]);
+    expect(one.split("klide-result-app-disc").length - 1).toBe(1);
+    expect(one).toContain('stroke="currentColor"');
+    expect(one).not.toContain("klide-result-meta");
+    const two = stack(["report.md", "site/index.html"]);
+    expect(two.split("klide-result-app-disc").length - 1).toBe(2);
+    expect(two.split("<svg").length - 1).toBe(2);
+    expect(two).not.toContain("klide-result-meta");
   });
 
   it("gives a Markdown document its mark in the evidence rows too", () => {
