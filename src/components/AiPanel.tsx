@@ -82,7 +82,7 @@ import { enabledSkillsPrompt, type Skill } from "../skills";
 
 import { KlideMark, ProviderLogo, AssistantPlaceholderLoader, DotGridLoader } from "./ai/icons";
 import { WorkingRow } from "./ai/WorkingRow";
-import { AttachIcon, CloseIcon, ReviewIcon } from "../icons";
+import { AttachIcon, CloseIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
 import { PendingInboxRow, renderMessageBody, extractThinking, CompactionRow, ThinkingBlock, ToolRunRow } from "./ai/ChatMessage";
@@ -4773,45 +4773,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPresenceChange={setPlanSlot}
           />
           )}
-          {column.marksUp && latestCompletion && (
-            <div style={{ display: "flex", justifyContent: "flex-end", flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={() => setSidePanelHidden(false)}
-                aria-label={`Open the side panel — result, ${latestCompletion.files.length} file${latestCompletion.files.length === 1 ? "" : "s"}`}
-                title="Open the side panel"
-                style={{
-                  pointerEvents: "auto",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 7,
-                  height: 30,
-                  padding: "0 10px 0 9px",
-                  borderRadius: 10,
-                  border: "1px solid var(--composer-border)",
-                  background: "var(--composer-glass)",
-                  backdropFilter: "var(--composer-blur)",
-                  WebkitBackdropFilter: "var(--composer-blur)",
-                  color: "var(--fg-subtle)",
-                  font: "inherit",
-                  fontSize: 11,
-                  cursor: "pointer",
-                  transition: "color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out)",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.borderColor = "var(--composer-border)"; }}
-              >
-                <ReviewIcon size={15} />
-                {latestCompletion.files.length > 0 && (
-                  <span style={{ fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" }}>{latestCompletion.files.length}</span>
-                )}
-              </button>
-            </div>
-          )}
           {/* The result lives in the corner whether the column is open or
               folded — "a document or review should stay in icons" — and its
-              own resting state is that icon, so there is no second pill here
-              to keep in step with it. */}
+              own resting state is that icon. The card draws that mark itself
+              when the column is folded; a second pill here drew the same
+              result twice. */}
           {latestCompletion && (
             <CompletionCard
               variant="island"

@@ -202,4 +202,35 @@ describe("ResultEvidence", () => {
   it("keeps permission warnings accessible", () => {
     expect(renderEvidence({ ...completion, warnings: ["Permission denied"] })).toContain("Permission denied");
   });
+
+  // "I have 2 times the same icons — wire in only one, the document created,
+  // using the logos": the mark is what the run made. A deck, a memo and a
+  // Markdown report show as PowerPoint, Word and the Markdown glyph, one per
+  // kind, and the review glass stays for a run that only changed code.
+  it("folds to the marks of the apps that own its documents, one per kind", () => {
+    const html = renderToStaticMarkup(
+      <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
+        completion={{ ...completion, artifacts: [
+          DECK,
+          { path: "decks/Q3 notes.pptx", bytes: 100, created: true },
+          { path: "memo.docx", bytes: 100, created: true },
+          { path: "report.md", bytes: 100, created: true },
+        ] }} />,
+    );
+    expect(html).toContain("klide-result-app-marks");
+    expect(html).toContain("powerpoint");
+    expect(html).toContain("word");
+    // Markdown is drawn, not a picture: one svg, and no review glass beside it.
+    expect(html.split("<svg").length - 1).toBe(1);
+    expect(html.split("<img").length - 1).toBe(2);
+    // The second deck is a kind already shown; the pill says so in words.
+    expect(html).toContain("+1");
+    expect(html).toContain("4 documents");
+  });
+
+  it("gives a Markdown document its mark in the evidence rows too", () => {
+    const html = renderEvidence({ ...completion, artifacts: [{ path: "report.md", bytes: 100, created: true }] });
+    expect(html).toContain("klide-result-app-logo");
+    expect(html).toContain("<svg");
+  });
 });

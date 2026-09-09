@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { completionDocumentCount, hasCompletionReview, type RunCompletion } from "../../agent/completion";
-import { documentAppLogo } from "../../documentAppLogo";
+import { DocumentAppMark, documentAppMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { formatBytes } from "../settings/storage";
 import { ChevronIcon, CloseIcon, ReviewIcon } from "../../icons";
@@ -81,7 +81,6 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             // The app that owns the file, as its own mark: a reader looking for
             // the deck finds it by the PowerPoint square faster than by
             // reading four filenames.
-            const appLogo = documentAppLogo(artifact.path);
             // Four columns on one baseline: the app's mark, the name over its
             // folder, the size, the arrow. The generic file row stacks and pins
             // its size to a fixed 11px from the top, which only lines up while
@@ -89,7 +88,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             // name, everything drifted.
             const label = (
               <>
-                {appLogo && <img className="klide-result-app-logo" src={appLogo} alt="" aria-hidden="true" />}
+                <DocumentAppMark path={artifact.path} size={20} className="klide-result-app-logo" />
                 <span className="klide-result-document-text">
                   <span className="klide-result-filename">{name}</span>
                   {directory && <span className="klide-result-directory">{directory}</span>}
@@ -204,16 +203,30 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
   const spoken = [label, files, documentCount > 0 ? `${documentCount} document${documentCount === 1 ? "" : "s"}` : "", attention > 0 ? `${attention} item${attention === 1 ? "" : "s"} to review` : ""]
     .filter(Boolean).join(" · ");
 
+  // The run's mark is what it made. A deck, a sheet, a memo show as the marks
+  // of the apps that own them — PowerPoint, Excel, Word, the Markdown glyph —
+  // one per kind, in the order they appear; a run that only changed code keeps
+  // the review glass. Read the documents by their marks, not by a count.
+  const documentPaths = (completion.artifacts ?? []).map((artifact) => artifact.path);
+  const appMarks = documentAppMarks(documentPaths);
+  const mark = appMarks.length > 0
+    ? <span className="klide-result-app-marks" aria-hidden="true">{appMarks.map((path) => <DocumentAppMark key={path} path={path} size={16} />)}</span>
+    : <ReviewIcon size={15} />;
+  // What the marks do not show: the documents past the three kinds, or the
+  // changed files when there is no document at all.
+  const unmarked = documentCount - appMarks.length;
+  const markCount = appMarks.length > 0 ? unmarked : completion.files.length;
+
   if (island && folded) {
     // Closed column: icons only. Same pill as the plan's reopen mark — icon
     // and count, nothing else — and the same job: bring the column back.
     return (
       <div className="klide-result-entry" data-variant="island" data-folded="1">
         <button type="button" className="klide-result-mark" onClick={onUnfold}
-          aria-label={`Open the side panel — ${title.toLowerCase()}${files ? `, ${files}` : ""}`}
+          aria-label={`Open the side panel — ${spoken.toLowerCase()}`}
           title="Open the side panel">
-          <ReviewIcon size={15} />
-          {completion.files.length > 0 && <span className="klide-result-meta">{completion.files.length}</span>}
+          {mark}
+          {markCount > 0 && <span className="klide-result-meta">{appMarks.length > 0 ? `+${markCount}` : markCount}</span>}
         </button>
       </div>
     );
@@ -246,7 +259,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
                 window with its words, however narrow the column gets — a
                 full-width row holding a centred icon was neither one thing
                 nor the other. Folded, it is a mark; there is no third state. */}
-            <ReviewIcon size={15} />
+            {mark}
             <span className="klide-result-island-title">{title}</span>
             {files && <span className="klide-result-meta">{files}</span>}
             {documentCount > 0 && <span className="klide-result-document-count">{documentCount} document{documentCount === 1 ? "" : "s"}</span>}

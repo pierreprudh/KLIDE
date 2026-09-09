@@ -25,6 +25,8 @@
 .klide-result-mark:hover { color: var(--fg-strong); border-color: var(--border-strong); }
 .klide-result-mark:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .klide-result-mark .klide-result-meta { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* The documents' app marks, one per kind, as the entry's single glyph. */
+.klide-result-app-marks { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
 .klide-result-island-title { font-size: 13px; }
 /* The count sits at the far end, the way the plan's does. */
 .klide-result-island-header .klide-result-meta { margin-left: auto; font-variant-numeric: tabular-nums; }
