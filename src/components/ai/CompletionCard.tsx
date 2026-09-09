@@ -70,10 +70,10 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
           <details className="klide-result-fold klide-result-changes"
             open={changesOpen} onToggle={(event) => setChangesOpen(event.currentTarget.open)}>
           <summary>
-            <span className="klide-result-fold-title">
-              <span className="klide-result-fold-count">{completion.files.length}</span>
-              <span>change{completion.files.length === 1 ? "" : "s"}</span>
-            </span>
+            {/* The word alone: the count is in the footer's button and in the
+                list a click away, and a number before "changes" made the row
+                read as a receipt. */}
+            <span className="klide-result-fold-title">Changes</span>
             <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={changesOpen} /></span>
           </summary>
           <div className="klide-result-files">{completion.files.map((path) => {

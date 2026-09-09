@@ -191,7 +191,8 @@ describe("ResultEvidence", () => {
     // — the same fold the commands use.
     expect(html).toContain("klide-result-changes");
     expect(html).toMatch(/<details class="klide-result-fold klide-result-changes"(?![^>]*\bopen\b)/);
-    expect(html).toContain("2</span><span>changes");
+    expect(html).toContain('klide-result-fold-title">Changes<');
+    expect(html).not.toContain("2</span><span>changes");
     expect(html).toContain("app.tsx");
     expect(html).toContain("Review changes");
     expect(html).not.toContain("Command results");
