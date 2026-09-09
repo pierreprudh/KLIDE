@@ -4639,7 +4639,10 @@ This user request requires workspace inspection. Before answering, you MUST call
             aria-label="Jump to latest message"
             style={{
               position: "absolute",
-              left: "50%",
+              // The conversation column is centred in the space left of the
+              // island (see `focusGutterLeft`), so the chevron centres on
+              // that column, not on the whole canvas.
+              left: `calc((100% - ${focusInset}px) / 2)`,
               bottom: todoDockHeight + 8,
               transform: "translateX(-50%)",
               zIndex: 7,
@@ -4651,7 +4654,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               color: streaming ? "var(--accent)" : "var(--fg-subtle)",
               cursor: "pointer",
               opacity: 0.7,
-              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), bottom var(--motion-med) var(--ease-out)",
+              transition: "opacity var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), bottom var(--motion-med) var(--ease-out), left 420ms cubic-bezier(0.32, 0.72, 0, 1)",
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.opacity = "1";
