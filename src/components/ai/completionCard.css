@@ -67,7 +67,7 @@
 @keyframes klide-result-panel-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {
   .klide-result-island-panel { animation: none; }
-  .klide-result-island-rule, .klide-result-island-chevron { transition: none; }
+  .klide-result-island-rule, .klide-result-island-chevron, .klide-result-fold-body, .klide-result-fold-inner { transition: none; }
 }
 /* No room for the words. The mark carries the meaning, the count stays because
    it is the one number a glance wants, and the label lives in the tooltip and
@@ -167,10 +167,17 @@
 /* The fold: one row that names the stack and how many are in it, and the
    app's chevron turning over on open. The changes and the commands share it,
    so the two stacks in a result open the same way. */
-.klide-result-fold > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 4px; cursor: pointer; list-style: none; font-size: 11px; color: var(--fg-subtle); }
-.klide-result-fold > summary::-webkit-details-marker { display: none; }
-.klide-result-fold > summary:hover { color: var(--fg-strong); }
-.klide-result-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.klide-result-fold-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; margin: 0 0 4px; padding: 0; border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 11px; color: var(--fg-subtle); text-align: left; }
+.klide-result-fold-summary:hover { color: var(--fg-strong); }
+.klide-result-fold-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* The one height transition CSS can do without knowing the height: a grid
+   whose single row goes from nothing to its content. The inner box clips
+   while the row is short; the chevron and the card's own height move at the
+   same pace, so an open is one motion rather than a jump. */
+.klide-result-fold-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 240ms var(--ease-soft); }
+.klide-result-fold[data-open="1"] .klide-result-fold-body { grid-template-rows: 1fr; }
+.klide-result-fold-inner { min-height: 0; overflow: hidden; opacity: 0; transform: translateY(-3px); transition: opacity 180ms var(--ease-out), transform 240ms var(--ease-soft); }
+.klide-result-fold[data-open="1"] .klide-result-fold-inner { opacity: 1; transform: none; }
 .klide-result-fold-title { display: inline-flex; align-items: baseline; gap: 0; font-weight: 400; }
 .klide-result-fold-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-right: 6px; color: var(--fg); }
 .klide-result-fold-chevron { display: grid; place-items: center; color: var(--fg-dim); }

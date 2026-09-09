@@ -115,7 +115,7 @@ describe("documents a command produced", () => {
     expect(html).toContain("Documents");
     // A fold like the others, open to start: the documents are what the run
     // made, and the reader can put them away.
-    expect(html).toMatch(/<details class="klide-result-fold klide-result-documents" open/);
+    expect(html).toMatch(/class="klide-result-fold klide-result-documents" data-open="1"/);
     expect(html).toContain("Q3 review.pptx");
     expect(html).toContain("41 KB");
     // No diff and no checkpoint behind a produced file: it must not arrive
@@ -171,7 +171,11 @@ describe("ResultEvidence", () => {
       commands: [{ id: "c1", label: "npm test", status: "passed" }, { id: "c2", label: "npm run build", status: "passed" }],
     }, () => {});
     expect(html).toContain('class="klide-result-fold klide-result-commands"');
-    expect(html).not.toContain('class="klide-result-fold klide-result-commands" open');
+    expect(html).not.toMatch(/klide-result-commands"[^>]*data-open/);
+    // The stack is a controlled fold, not a native details: the body clips
+    // and its height transitions, so opening is a motion and not a jump.
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("klide-result-fold-body");
     expect(html).not.toContain('data-failed');
     // The count leads on the left as part of the row's name; the disclosure is
     // the chevron, and nothing repeats the number on the right.
@@ -193,7 +197,7 @@ describe("ResultEvidence", () => {
     // Closed by default: one row saying how many, and the list behind a click
     // — the same fold the commands use.
     expect(html).toContain("klide-result-changes");
-    expect(html).toMatch(/<details class="klide-result-fold klide-result-changes"(?![^>]*\bopen\b)/);
+    expect(html).not.toMatch(/klide-result-changes"[^>]*data-open/);
     expect(html).toContain('klide-result-fold-title">Changes<');
     expect(html).not.toContain("2</span><span>changes");
     expect(html).toContain("app.tsx");
