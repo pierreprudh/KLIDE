@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { completionDocumentCount, hasCompletionReview, type RunCompletion } from "../../agent/completion";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
@@ -44,9 +44,43 @@ type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpe
  *  it is read: inside the island card on the canvas, or in the sheet the
  *  transcript's entry opens. Exported so its markup can be tested without a
  *  DOM to click in. */
+/** One stack in the result — Changes, Documents, the commands — behind a row
+ *  that names it and the app's chevron. Not a native `<details>`: that element
+ *  cannot animate its height, so every open snapped and the card jumped with
+ *  it. The body is a grid whose one row goes from 0fr to 1fr, which is the
+ *  one height transition CSS can do without knowing the height, and the card
+ *  above it grows and shrinks at the same pace. Closed, the content stays in
+ *  the tree but clipped and inert. */
+function Fold({ name, open, onToggle, title, failed, children }: {
+  name: string;
+  open: boolean;
+  onToggle: () => void;
+  title: ReactNode;
+  failed?: boolean;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <div className={`klide-result-fold klide-result-${name}`} data-open={open ? "1" : undefined} data-failed={failed ? "1" : undefined}>
+      <button type="button" className="klide-result-fold-summary" aria-expanded={open} aria-controls={id} onClick={onToggle}>
+        <span className="klide-result-fold-title">{title}</span>
+        {/* The chevron turns at the body's pace, so the two read as one thing moving. */}
+        <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={open} style={{ transition: "transform 440ms var(--ease-soft)" }} /></span>
+      </button>
+      <div className="klide-result-fold-body" id={id} inert={!open}>
+        <div className="klide-result-fold-inner">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone }: EvidenceProps) {
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  // The documents are what the run made, so they start open; the fold is
+  // there to put them away while reading the rest.
+  const [documentsOpen, setDocumentsOpen] = useState(true);
   const review = (path?: string) => { onDone(); onReview?.(path); };
   // A document opens in two steps: the first click previews it here in the
   // panel, the second opens it full width (the inspector, or the app that owns
@@ -61,20 +95,29 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
     <>
       <div className="klide-result-body">
         {completion.files.length > 0 && <section aria-label="Changed files">
-          <h3>Changes</h3>
+          {/* The changed files fold the way the commands do: closed, one row
+              that says how many — "2 changes" — and opens on a click. The
+              result's first screen is what the run made and said, and the
+              footer's "Review changes" already leads to the diff; the list is
+              for the reader who wants to pick one file out of it. */}
+          {/* The word alone: the count is in the footer's button and in the
+              list a click away, and a number before "changes" made the row
+              read as a receipt. */}
+          <Fold name="changes" open={changesOpen} onToggle={() => setChangesOpen((was) => !was)} title="Changes">
           <div className="klide-result-files">{completion.files.map((path) => {
             const name = path.split("/").pop() || path;
             const directory = path.slice(0, -name.length).replace(/\/$/, "");
             const label = <><span className="klide-result-filename">{name}</span>{directory && <span className="klide-result-directory">{directory}</span>}</>;
             return onReview ? <button key={path} type="button" title={`Review ${path}`} onClick={() => review(path)}>{label}<span aria-hidden="true">↗</span></button> : <div key={path}>{label}</div>;
           })}</div>
+          </Fold>
         </section>}
         {artifacts.length > 0 && <section aria-label="Documents produced">
           {/* Not "Changes": these came from a command, so there is no diff
               behind them and nothing to revert. The row opens the document —
               in the inspector when Klide can read it, in the app that owns it
               when it cannot. */}
-          <h3>Documents <span>{artifacts.length}</span></h3>
+          <Fold name="documents" open={documentsOpen} onToggle={() => setDocumentsOpen((was) => !was)} title="Documents">
           <div className="klide-result-files klide-result-artifacts">{artifacts.map((artifact) => {
             const name = artifact.path.split("/").pop() || artifact.path;
             const directory = artifact.path.slice(0, -name.length).replace(/\/$/, "");
@@ -107,6 +150,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               </div>
             );
           })}</div>
+          </Fold>
         </section>}
         {completion.commands.length > 0 && <section aria-label="Command results">
           {/* The commands are the run's receipts: evidence you check when
@@ -114,25 +158,18 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               arrive as one stack — a heading that opens — and stay quiet even
               when opened. A failure is the exception: nothing dims while a
               command has failed. */}
-          <details className="klide-result-commands" data-failed={failed > 0 ? "1" : undefined}
-            open={commandsOpen} onToggle={(event) => setCommandsOpen(event.currentTarget.open)}>
           {/* The count leads, on the left, as part of what the row is called —
               "3 commands" — rather than sitting on the right where it competed
               with the disclosure. The disclosure itself is the app's chevron,
               turning over on open instead of swapping a + for a −: one mark
               that moves, not two that replace each other. */}
-          <summary>
-            <span className="klide-result-commands-title">
-              <span className="klide-result-commands-count">{completion.commands.length}</span>
-              <span>command{completion.commands.length === 1 ? "" : "s"}</span>
-            </span>
-            <span className="klide-result-commands-chevron" aria-hidden="true"><ChevronIcon open={commandsOpen} /></span>
-          </summary>
+          <Fold name="commands" open={commandsOpen} onToggle={() => setCommandsOpen((was) => !was)} failed={failed > 0}
+            title={<><span className="klide-result-fold-count">{completion.commands.length}</span><span>command{completion.commands.length === 1 ? "" : "s"}</span></>}>
           {completion.commands.map((command) => <details key={command.id} className="klide-result-command">
             <summary><code>{command.label}</code><span className={`klide-result-status-${command.status}`}>{command.status === "unknown" ? "No result" : command.status === "passed" ? "Passed" : "Failed"}</span></summary>
             <pre>{command.output || "No output recorded."}</pre>
           </details>)}
-          </details>
+          </Fold>
         </section>}
         {completion.warnings.length > 0 && <section className="klide-result-notes" aria-label="Review notes"><h3>Worth a look</h3>{completion.warnings.map((warning) => <p key={warning}>{warning}</p>)}</section>}
       </div>

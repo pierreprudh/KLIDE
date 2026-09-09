@@ -49,14 +49,14 @@
 .klide-result-island-header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
 .klide-result-island-rule { height: 1px; background: var(--border); transform: scaleX(0); transform-origin: left; transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1); }
 .klide-result-island-rule[data-shown="1"] { transform: scaleX(1); }
-/* Open, the card claims the rest of the side rather than standing as a block
-   of its own height: the evidence scrolls inside it and the actions sit on its
-   floor, so "Request changes" is never the half-word under a hard edge. */
-/* Open, it takes the rest of the side — but never all of it: a question
-   arriving under it holds the run, so the result gives up space down to a
-   height that still reads as a panel, and the column scrolls past that. The
-   entry is what the column lays out, so the entry is what grows. */
-.klide-result-entry[data-variant="island"][data-open="1"] { display: flex; flex: 1 1 auto; min-height: min(200px, 100%); }
+/* Open, the card is the height of what it holds — three folded rows and the
+   footer is a short card, not a column of blank paper with a button at the
+   bottom. It only gives ground: when the evidence is taller than the side, it
+   shrinks to fit and the body scrolls inside, down to a height that still
+   reads as a panel; a question arriving under it takes the rest and the column
+   scrolls past that. The entry is what the column lays out, so the entry is
+   what shrinks. */
+.klide-result-entry[data-variant="island"][data-open="1"] { display: flex; flex: 0 1 auto; min-height: min(200px, 100%); }
 .klide-result-entry[data-variant="island"][data-open="1"] .klide-result-island { flex: 1; min-height: 0; }
 .klide-result-island-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: klide-result-panel-in 200ms ease-out; }
 /* A wheel that runs out of evidence carries on to the column, so the plan
@@ -67,7 +67,7 @@
 @keyframes klide-result-panel-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {
   .klide-result-island-panel { animation: none; }
-  .klide-result-island-rule, .klide-result-island-chevron { transition: none; }
+  .klide-result-island-rule, .klide-result-island-chevron, .klide-result-fold-body, .klide-result-fold-inner { transition: none; }
 }
 /* No room for the words. The mark carries the meaning, the count stays because
    it is the one number a glance wants, and the label lives in the tooltip and
@@ -164,14 +164,26 @@
    failed command cancels the dimming outright. */
 .klide-result-commands { opacity: 0.62; transition: opacity var(--motion-med) var(--ease-out); }
 .klide-result-commands[data-failed="1"] { opacity: 1; }
-.klide-result-commands > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 4px; cursor: pointer; list-style: none; font-size: 11px; color: var(--fg-subtle); }
-.klide-result-commands > summary::-webkit-details-marker { display: none; }
-.klide-result-commands > summary:hover { color: var(--fg-strong); }
-.klide-result-commands-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-right: 6px; color: var(--fg); }
-.klide-result-commands-title { gap: 0; }
-.klide-result-commands-chevron { display: grid; place-items: center; color: var(--fg-dim); }
-.klide-result-commands > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.klide-result-commands-title { display: inline-flex; align-items: baseline; font-weight: 400; }
+/* The fold: one row that names the stack and how many are in it, and the
+   app's chevron turning over on open. The changes and the commands share it,
+   so the two stacks in a result open the same way. */
+.klide-result-fold-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; margin: 0 0 4px; padding: 0; border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 11px; color: var(--fg-subtle); text-align: left; }
+.klide-result-fold-summary:hover { color: var(--fg-strong); }
+.klide-result-fold-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* The one height transition CSS can do without knowing the height: a grid
+   whose single row goes from nothing to its content. The inner box clips
+   while the row is short. The pace is a sheet's, not a control's — Apple's
+   curve at --ease-soft, long enough to be followed, fast at the start and
+   settling at the end; the content fades in a beat behind the row and the
+   card's own height moves with it, so an open is one motion. Closing is a
+   touch quicker, the way a sheet leaves faster than it arrives. */
+.klide-result-fold-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 360ms var(--ease-soft); }
+.klide-result-fold[data-open="1"] .klide-result-fold-body { grid-template-rows: 1fr; transition-duration: 440ms; }
+.klide-result-fold-inner { min-height: 0; overflow: hidden; opacity: 0; transform: translateY(-6px); transition: opacity 200ms var(--ease-out), transform 360ms var(--ease-soft); }
+.klide-result-fold[data-open="1"] .klide-result-fold-inner { opacity: 1; transform: none; transition: opacity 320ms var(--ease-out) 60ms, transform 440ms var(--ease-soft); }
+.klide-result-fold-title { display: inline-flex; align-items: baseline; gap: 0; font-weight: 400; }
+.klide-result-fold-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-right: 6px; color: var(--fg); }
+.klide-result-fold-chevron { display: grid; place-items: center; color: var(--fg-dim); }
 
 .klide-result-command { border-bottom: 1px solid var(--border); }
 .klide-result-command summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 0; cursor: pointer; list-style: none; }
