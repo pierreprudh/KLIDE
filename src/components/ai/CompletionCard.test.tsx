@@ -138,7 +138,7 @@ describe("documents a command produced", () => {
     expect(html).not.toContain("in the panel");
     // The evidence counts them in its own heading; the island header carries
     // the same count where the reader sees it before opening anything.
-    expect(html).toContain("klide-result-fold-title">Documents<");
+    expect(html).toContain('klide-result-fold-title">Documents<');
     expect(renderIsland({ ...completion, files: ["src/app.tsx"], artifacts: [DECK] })).toContain("1 document");
   });
 
