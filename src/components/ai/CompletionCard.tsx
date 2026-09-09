@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { completionDocumentCount, hasCompletionReview, type RunCompletion } from "../../agent/completion";
-import { DocumentAppMark, documentAppMarks } from "../../documentAppLogo";
+import { DocumentAppMark, leadingDocumentMark } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { formatBytes } from "../settings/storage";
 import { ChevronIcon, CloseIcon, ReviewIcon } from "../../icons";
@@ -203,19 +203,18 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
   const spoken = [label, files, documentCount > 0 ? `${documentCount} document${documentCount === 1 ? "" : "s"}` : "", attention > 0 ? `${attention} item${attention === 1 ? "" : "s"} to review` : ""]
     .filter(Boolean).join(" · ");
 
-  // The run's mark is what it made. A deck, a sheet, a memo show as the marks
-  // of the apps that own them — PowerPoint, Excel, Word, the Markdown glyph —
-  // one per kind, in the order they appear; a run that only changed code keeps
-  // the review glass. Read the documents by their marks, not by a count.
+  // The run's mark is what it made. A run that produced documents shows the
+  // mark of the app that owns the first of them — PowerPoint, Excel, Word,
+  // the Markdown or HTML glyph — and the count says how many there are. One
+  // mark however many files: a corner holds one glyph, and twelve logos in a
+  // pill would be a shelf, not a mark. A run that only changed code keeps the
+  // review glass and its file count.
   const documentPaths = (completion.artifacts ?? []).map((artifact) => artifact.path);
-  const appMarks = documentAppMarks(documentPaths);
-  const mark = appMarks.length > 0
-    ? <span className="klide-result-app-marks" aria-hidden="true">{appMarks.map((path) => <DocumentAppMark key={path} path={path} size={16} />)}</span>
+  const leading = leadingDocumentMark(documentPaths);
+  const mark = leading
+    ? <DocumentAppMark path={leading} size={16} className="klide-result-app-mark" />
     : <ReviewIcon size={15} />;
-  // What the marks do not show: the documents past the three kinds, or the
-  // changed files when there is no document at all.
-  const unmarked = documentCount - appMarks.length;
-  const markCount = appMarks.length > 0 ? unmarked : completion.files.length;
+  const markCount = leading ? documentCount : completion.files.length;
 
   if (island && folded) {
     // Closed column: icons only. Same pill as the plan's reopen mark — icon
@@ -226,7 +225,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
           aria-label={`Open the side panel — ${spoken.toLowerCase()}`}
           title="Open the side panel">
           {mark}
-          {markCount > 0 && <span className="klide-result-meta">{appMarks.length > 0 ? `+${markCount}` : markCount}</span>}
+          {markCount > (leading ? 1 : 0) && <span className="klide-result-meta">{markCount}</span>}
         </button>
       </div>
     );

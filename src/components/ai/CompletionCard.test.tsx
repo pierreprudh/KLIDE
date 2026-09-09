@@ -204,10 +204,9 @@ describe("ResultEvidence", () => {
   });
 
   // "I have 2 times the same icons — wire in only one, the document created,
-  // using the logos": the mark is what the run made. A deck, a memo and a
-  // Markdown report show as PowerPoint, Word and the Markdown glyph, one per
-  // kind, and the review glass stays for a run that only changed code.
-  it("folds to the marks of the apps that own its documents, one per kind", () => {
+  // using the logos": the mark is what the run made, and it is one mark
+  // however many files — the first document's app, and the count.
+  it("folds to one mark, the first document's app, and counts the rest", () => {
     const html = renderToStaticMarkup(
       <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
         completion={{ ...completion, artifacts: [
@@ -217,15 +216,28 @@ describe("ResultEvidence", () => {
           { path: "report.md", bytes: 100, created: true },
         ] }} />,
     );
-    expect(html).toContain("klide-result-app-marks");
+    expect(html).toContain("klide-result-app-mark");
     expect(html).toContain("powerpoint");
-    expect(html).toContain("word");
-    // Markdown is drawn, not a picture: one svg, and no review glass beside it.
-    expect(html.split("<svg").length - 1).toBe(1);
-    expect(html.split("<img").length - 1).toBe(2);
-    // The second deck is a kind already shown; the pill says so in words.
-    expect(html).toContain("+1");
+    expect(html).not.toContain("word");
+    expect(html.split("<img").length - 1).toBe(1);
+    // No review glass beside the logo.
+    expect(html).not.toContain("<svg");
+    expect(html).toContain(">4<");
     expect(html).toContain("4 documents");
+  });
+
+  it("draws the Markdown and HTML marks in the text colour, one per pill", () => {
+    const one = (path: string) => renderToStaticMarkup(
+      <CompletionCard variant="island" folded onUnfold={() => {}} onReview={() => {}} onRequestChanges={() => {}}
+        completion={{ ...completion, artifacts: [{ path, bytes: 100, created: true }] }} />,
+    );
+    for (const path of ["report.md", "site/index.html"]) {
+      const html = one(path);
+      expect(html.split("<svg").length - 1).toBe(1);
+      expect(html).toContain('stroke="currentColor"');
+      // One document: the mark alone, no "1" beside it.
+      expect(html).not.toContain(">1<");
+    }
   });
 
   it("gives a Markdown document its mark in the evidence rows too", () => {

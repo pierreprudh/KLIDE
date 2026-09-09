@@ -48,6 +48,11 @@ describe("where a produced document opens", () => {
   it("draws a picture itself when the document is one", () => {
     expect(artifactPreview("chart.png")).toBe("image");
   });
+  it("pictures a page a run wrote, though its source still reads in the inspector", () => {
+    expect(artifactPreview("site/index.html")).toBe("quicklook");
+    expect(artifactOpensIn("site/index.html")).toBe("inspector");
+    expect(artifactPreview("notes.md")).toBe("none");
+  });
   it("does not picture what the inspector will show as text", () => {
     expect(artifactPreview("notes.md")).toBe("none");
     expect(artifactPreview("data.csv")).toBe("none");

@@ -3,11 +3,11 @@ import excelLogo from "./assets/document-apps/excel.webp";
 import powerpointLogo from "./assets/document-apps/powerpoint.webp";
 import wordLogo from "./assets/document-apps/word.webp";
 
-/** The application a document belongs to, by extension. Markdown is in the
- *  table so the same lookup answers "does this kind of file have a mark", but
- *  its mark is drawn (`DocumentAppMark`), not a picture: it has to take the
- *  text colour to read on both themes. */
-type DocumentApp = "pdf" | "excel" | "powerpoint" | "word" | "markdown";
+/** The application a document belongs to, by extension. Markdown and HTML are
+ *  in the table so the same lookup answers "does this kind of file have a
+ *  mark", but their marks are drawn (`DocumentAppMark`), not pictures: they
+ *  have to take the text colour to read on both themes. */
+type DocumentApp = "pdf" | "excel" | "powerpoint" | "word" | "markdown" | "html";
 
 const APPS: Record<string, DocumentApp> = {
   pdf: "pdf",
@@ -16,9 +16,12 @@ const APPS: Record<string, DocumentApp> = {
   pps: "powerpoint", ppsx: "powerpoint",
   doc: "word", docx: "word", docm: "word",
   md: "markdown", markdown: "markdown", mdx: "markdown",
+  html: "html", htm: "html",
 };
 
-const APP_LOGOS: Record<Exclude<DocumentApp, "markdown">, string> = {
+const DRAWN = new Set<DocumentApp>(["markdown", "html"]);
+
+const APP_LOGOS: Record<Exclude<DocumentApp, "markdown" | "html">, string> = {
   pdf: pdfLogo,
   excel: excelLogo,
   powerpoint: powerpointLogo,
@@ -32,10 +35,11 @@ export function documentApp(path: string): DocumentApp | undefined {
 }
 
 /** The picture of the application that owns `path`, for an `<img>`. Markdown
- *  has none — Klide reads it itself, so there is no app to hand it to. */
+ *  and HTML have none — Klide reads them itself, so there is no app to hand
+ *  them to. */
 export function documentAppLogo(path: string): string | undefined {
   const app = documentApp(path);
-  return app && app !== "markdown" ? APP_LOGOS[app] : undefined;
+  return app && !DRAWN.has(app) ? APP_LOGOS[app as keyof typeof APP_LOGOS] : undefined;
 }
 
 /** The Markdown mark — the "M↓" in its rounded frame — in the text colour, so
@@ -52,32 +56,39 @@ function MarkdownMark({ size }: { size: number }) {
   );
 }
 
+/** The HTML mark — angle brackets in a page — in the text colour, for a page
+ *  a run wrote. Drawn for the same reason the Markdown one is. */
+function HtmlMark({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 4h7l5 5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20V5.5A1.5 1.5 0 0 1 6.5 4Z" />
+      <path d="M14 4v5h5" />
+      <path d="M10 12.5 8 14.5l2 2M14 12.5l2 2-2 2" />
+    </svg>
+  );
+}
+
 /** The mark of the application that owns `path`, at `size` px — a picture for
- *  the Office apps and PDF, a drawn glyph for Markdown — or nothing when the
- *  kind of file has none. */
+ *  the Office apps and PDF, a drawn glyph for Markdown and HTML — or nothing
+ *  when the kind of file has none. */
 export function DocumentAppMark({ path, size = 20, className }: { path: string; size?: number; className?: string }) {
   const app = documentApp(path);
   if (!app) return null;
-  if (app === "markdown") {
-    return <span className={className} style={{ display: "inline-grid", placeItems: "center", width: size, height: size, flexShrink: 0 }}><MarkdownMark size={size} /></span>;
+  if (DRAWN.has(app)) {
+    return (
+      <span className={className} style={{ display: "inline-grid", placeItems: "center", width: size, height: size, flexShrink: 0 }}>
+        {app === "markdown" ? <MarkdownMark size={size} /> : <HtmlMark size={size} />}
+      </span>
+    );
   }
-  return <img className={className} src={APP_LOGOS[app]} alt="" aria-hidden="true"
+  return <img className={className} src={APP_LOGOS[app as keyof typeof APP_LOGOS]} alt="" aria-hidden="true"
     style={{ width: size, height: size, objectFit: "contain", flexShrink: 0 }} />;
 }
 
-/** One mark per kind of document, in the order the documents appear, so a
- *  run that made a deck, two sheets and a memo shows PowerPoint, Excel, Word —
- *  and not the same square three times. Documents of a kind with no mark are
- *  left out; the caller says how many there were in words. */
-export function documentAppMarks(paths: string[], limit = 3): string[] {
-  const seen = new Set<DocumentApp>();
-  const marks: string[] = [];
-  for (const path of paths) {
-    const app = documentApp(path);
-    if (!app || seen.has(app)) continue;
-    seen.add(app);
-    marks.push(path);
-    if (marks.length === limit) break;
-  }
-  return marks;
+/** The one document that stands for the set: the first with a mark. A run
+ *  that made twelve files is still one mark in the corner — the count says
+ *  how many, the mark says what kind came first. */
+export function leadingDocumentMark(paths: string[]): string | undefined {
+  return paths.find((path) => documentApp(path) !== undefined);
 }

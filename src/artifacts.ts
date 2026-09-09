@@ -49,12 +49,19 @@ export type ArtifactPreview = "image" | "quicklook" | "none";
 
 const PICTURES = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp"]);
 
+/** Text the inspector reads that is nonetheless worth a picture: a page a run
+ *  wrote is judged by how it renders, not by its source, and Quick Look draws
+ *  it in ~150 ms. */
+const RENDERED_TEXT = new Set(["html", "htm"]);
+
 export function artifactPreview(path: string): ArtifactPreview {
-  if (artifactOpensIn(path) === "inspector") return "none";
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return "none";
-  return PICTURES.has(name.slice(dot + 1).toLowerCase()) ? "image" : "quicklook";
+  const extension = name.slice(dot + 1).toLowerCase();
+  if (RENDERED_TEXT.has(extension)) return "quicklook";
+  if (artifactOpensIn(path) === "inspector") return "none";
+  return PICTURES.has(extension) ? "image" : "quicklook";
 }
 
 /** A picture of a document, at roughly `size` px on its long edge.
