@@ -167,13 +167,13 @@ describe("ResultEvidence", () => {
       ...completion,
       commands: [{ id: "c1", label: "npm test", status: "passed" }, { id: "c2", label: "npm run build", status: "passed" }],
     }, () => {});
-    expect(html).toContain('class="klide-result-commands"');
-    expect(html).not.toContain('class="klide-result-commands" open');
+    expect(html).toContain('class="klide-result-fold klide-result-commands"');
+    expect(html).not.toContain('class="klide-result-fold klide-result-commands" open');
     expect(html).not.toContain('data-failed');
     // The count leads on the left as part of the row's name; the disclosure is
     // the chevron, and nothing repeats the number on the right.
-    expect(html).toContain('class="klide-result-commands-count">2</span>');
-    expect(html).toContain("klide-result-commands-chevron");
+    expect(html).toContain('class="klide-result-fold-count">2</span>');
+    expect(html).toContain("klide-result-fold-chevron");
     expect(html).toContain("commands</span>");
   });
 
@@ -185,9 +185,13 @@ describe("ResultEvidence", () => {
     expect(html).toContain('data-failed="1"');
   });
 
-  it("lists changed files with a way into each one", () => {
-    const html = renderEvidence({ ...completion, files: ["src/app.tsx"] });
-    expect(html).toContain("Changes");
+  it("lists changed files with a way into each one, folded until asked", () => {
+    const html = renderEvidence({ ...completion, files: ["src/app.tsx", "src/time.ts"] });
+    // Closed by default: one row saying how many, and the list behind a click
+    // — the same fold the commands use.
+    expect(html).toContain("klide-result-changes");
+    expect(html).toMatch(/<details class="klide-result-fold klide-result-changes"(?![^>]*\bopen\b)/);
+    expect(html).toContain("2</span><span>changes");
     expect(html).toContain("app.tsx");
     expect(html).toContain("Review changes");
     expect(html).not.toContain("Command results");

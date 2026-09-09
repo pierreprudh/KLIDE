@@ -47,6 +47,7 @@ type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpe
 export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone }: EvidenceProps) {
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
   const review = (path?: string) => { onDone(); onReview?.(path); };
   // A document opens in two steps: the first click previews it here in the
   // panel, the second opens it full width (the inspector, or the app that owns
@@ -61,13 +62,27 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
     <>
       <div className="klide-result-body">
         {completion.files.length > 0 && <section aria-label="Changed files">
-          <h3>Changes</h3>
+          {/* The changed files fold the way the commands do: closed, one row
+              that says how many — "2 changes" — and opens on a click. The
+              result's first screen is what the run made and said, and the
+              footer's "Review changes" already leads to the diff; the list is
+              for the reader who wants to pick one file out of it. */}
+          <details className="klide-result-fold klide-result-changes"
+            open={changesOpen} onToggle={(event) => setChangesOpen(event.currentTarget.open)}>
+          <summary>
+            <span className="klide-result-fold-title">
+              <span className="klide-result-fold-count">{completion.files.length}</span>
+              <span>change{completion.files.length === 1 ? "" : "s"}</span>
+            </span>
+            <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={changesOpen} /></span>
+          </summary>
           <div className="klide-result-files">{completion.files.map((path) => {
             const name = path.split("/").pop() || path;
             const directory = path.slice(0, -name.length).replace(/\/$/, "");
             const label = <><span className="klide-result-filename">{name}</span>{directory && <span className="klide-result-directory">{directory}</span>}</>;
             return onReview ? <button key={path} type="button" title={`Review ${path}`} onClick={() => review(path)}>{label}<span aria-hidden="true">↗</span></button> : <div key={path}>{label}</div>;
           })}</div>
+          </details>
         </section>}
         {artifacts.length > 0 && <section aria-label="Documents produced">
           {/* Not "Changes": these came from a command, so there is no diff
@@ -114,7 +129,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               arrive as one stack — a heading that opens — and stay quiet even
               when opened. A failure is the exception: nothing dims while a
               command has failed. */}
-          <details className="klide-result-commands" data-failed={failed > 0 ? "1" : undefined}
+          <details className="klide-result-fold klide-result-commands" data-failed={failed > 0 ? "1" : undefined}
             open={commandsOpen} onToggle={(event) => setCommandsOpen(event.currentTarget.open)}>
           {/* The count leads, on the left, as part of what the row is called —
               "3 commands" — rather than sitting on the right where it competed
@@ -122,11 +137,11 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               turning over on open instead of swapping a + for a −: one mark
               that moves, not two that replace each other. */}
           <summary>
-            <span className="klide-result-commands-title">
-              <span className="klide-result-commands-count">{completion.commands.length}</span>
+            <span className="klide-result-fold-title">
+              <span className="klide-result-fold-count">{completion.commands.length}</span>
               <span>command{completion.commands.length === 1 ? "" : "s"}</span>
             </span>
-            <span className="klide-result-commands-chevron" aria-hidden="true"><ChevronIcon open={commandsOpen} /></span>
+            <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={commandsOpen} /></span>
           </summary>
           {completion.commands.map((command) => <details key={command.id} className="klide-result-command">
             <summary><code>{command.label}</code><span className={`klide-result-status-${command.status}`}>{command.status === "unknown" ? "No result" : command.status === "passed" ? "Passed" : "Failed"}</span></summary>
