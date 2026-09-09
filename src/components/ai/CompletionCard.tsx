@@ -64,7 +64,8 @@ function Fold({ name, open, onToggle, title, failed, children }: {
     <div className={`klide-result-fold klide-result-${name}`} data-open={open ? "1" : undefined} data-failed={failed ? "1" : undefined}>
       <button type="button" className="klide-result-fold-summary" aria-expanded={open} aria-controls={id} onClick={onToggle}>
         <span className="klide-result-fold-title">{title}</span>
-        <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={open} /></span>
+        {/* The chevron turns at the body's pace, so the two read as one thing moving. */}
+        <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={open} style={{ transition: "transform 440ms var(--ease-soft)" }} /></span>
       </button>
       <div className="klide-result-fold-body" id={id} inert={!open}>
         <div className="klide-result-fold-inner">{children}</div>

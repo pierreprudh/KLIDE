@@ -172,12 +172,15 @@
 .klide-result-fold-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 /* The one height transition CSS can do without knowing the height: a grid
    whose single row goes from nothing to its content. The inner box clips
-   while the row is short; the chevron and the card's own height move at the
-   same pace, so an open is one motion rather than a jump. */
-.klide-result-fold-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 240ms var(--ease-soft); }
-.klide-result-fold[data-open="1"] .klide-result-fold-body { grid-template-rows: 1fr; }
-.klide-result-fold-inner { min-height: 0; overflow: hidden; opacity: 0; transform: translateY(-3px); transition: opacity 180ms var(--ease-out), transform 240ms var(--ease-soft); }
-.klide-result-fold[data-open="1"] .klide-result-fold-inner { opacity: 1; transform: none; }
+   while the row is short. The pace is a sheet's, not a control's — Apple's
+   curve at --ease-soft, long enough to be followed, fast at the start and
+   settling at the end; the content fades in a beat behind the row and the
+   card's own height moves with it, so an open is one motion. Closing is a
+   touch quicker, the way a sheet leaves faster than it arrives. */
+.klide-result-fold-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 360ms var(--ease-soft); }
+.klide-result-fold[data-open="1"] .klide-result-fold-body { grid-template-rows: 1fr; transition-duration: 440ms; }
+.klide-result-fold-inner { min-height: 0; overflow: hidden; opacity: 0; transform: translateY(-6px); transition: opacity 200ms var(--ease-out), transform 360ms var(--ease-soft); }
+.klide-result-fold[data-open="1"] .klide-result-fold-inner { opacity: 1; transform: none; transition: opacity 320ms var(--ease-out) 60ms, transform 440ms var(--ease-soft); }
 .klide-result-fold-title { display: inline-flex; align-items: baseline; gap: 0; font-weight: 400; }
 .klide-result-fold-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-right: 6px; color: var(--fg); }
 .klide-result-fold-chevron { display: grid; place-items: center; color: var(--fg-dim); }
