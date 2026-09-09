@@ -25,12 +25,13 @@
 .klide-result-mark:hover { color: var(--fg-strong); border-color: var(--border-strong); }
 .klide-result-mark:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .klide-result-mark .klide-result-meta { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-/* The documents' marks as a stack: each disc after the first sits over the
-   edge of the one before, and a ring in the surface colour keeps them apart
-   where they overlap — the way a row of faces is drawn. */
+/* The documents' marks as a stack: each mark after the first sits over the
+   edge of the one before, the way a row of faces is drawn. The marks are the
+   whole of it — no disc, no ring, no surface behind them: a white square
+   around each logo was a container, and the pill already is one. */
 .klide-result-app-stack { display: inline-flex; align-items: center; flex-shrink: 0; }
-.klide-result-app-disc { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: var(--bg-elevated); box-shadow: 0 0 0 1.5px var(--bg-elevated); }
-.klide-result-app-disc + .klide-result-app-disc { margin-left: -6px; }
+.klide-result-app-disc { display: inline-grid; place-items: center; width: 16px; height: 16px; }
+.klide-result-app-disc + .klide-result-app-disc { margin-left: -5px; }
 .klide-result-island-title { font-size: 13px; }
 /* The count sits at the far end, the way the plan's does. */
 .klide-result-island-header .klide-result-meta { margin-left: auto; font-variant-numeric: tabular-nums; }
