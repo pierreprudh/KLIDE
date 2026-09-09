@@ -48,6 +48,9 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  // The documents are what the run made, so they start open; the fold is
+  // there to put them away while reading the rest.
+  const [documentsOpen, setDocumentsOpen] = useState(true);
   const review = (path?: string) => { onDone(); onReview?.(path); };
   // A document opens in two steps: the first click previews it here in the
   // panel, the second opens it full width (the inspector, or the app that owns
@@ -89,7 +92,12 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               behind them and nothing to revert. The row opens the document —
               in the inspector when Klide can read it, in the app that owns it
               when it cannot. */}
-          <h3>Documents <span>{artifacts.length}</span></h3>
+          <details className="klide-result-fold klide-result-documents"
+            open={documentsOpen} onToggle={(event) => setDocumentsOpen(event.currentTarget.open)}>
+          <summary>
+            <span className="klide-result-fold-title">Documents</span>
+            <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={documentsOpen} /></span>
+          </summary>
           <div className="klide-result-files klide-result-artifacts">{artifacts.map((artifact) => {
             const name = artifact.path.split("/").pop() || artifact.path;
             const directory = artifact.path.slice(0, -name.length).replace(/\/$/, "");
@@ -122,6 +130,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               </div>
             );
           })}</div>
+          </details>
         </section>}
         {completion.commands.length > 0 && <section aria-label="Command results">
           {/* The commands are the run's receipts: evidence you check when

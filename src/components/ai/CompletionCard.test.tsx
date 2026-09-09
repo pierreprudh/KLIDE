@@ -113,6 +113,9 @@ describe("documents a command produced", () => {
   it("lists them with their size, apart from the changes", () => {
     const html = renderEvidence({ ...completion, artifacts: [DECK] }, () => {});
     expect(html).toContain("Documents");
+    // A fold like the others, open to start: the documents are what the run
+    // made, and the reader can put them away.
+    expect(html).toMatch(/<details class="klide-result-fold klide-result-documents" open/);
     expect(html).toContain("Q3 review.pptx");
     expect(html).toContain("41 KB");
     // No diff and no checkpoint behind a produced file: it must not arrive
@@ -135,7 +138,7 @@ describe("documents a command produced", () => {
     expect(html).not.toContain("in the panel");
     // The evidence counts them in its own heading; the island header carries
     // the same count where the reader sees it before opening anything.
-    expect(html).toContain("<h3>Documents <span>2</span></h3>");
+    expect(html).toContain("klide-result-fold-title">Documents<");
     expect(renderIsland({ ...completion, files: ["src/app.tsx"], artifacts: [DECK] })).toContain("1 document");
   });
 
