@@ -186,6 +186,13 @@ still open.
 
 ### Performance and hygiene
 
+- **The keyring backend is chosen per target.** `apple-native` was named as
+  an unconditional feature, so the crate could not build anywhere but macOS.
+  Cargo now selects `apple-native` on macOS, `windows-native` on Windows, and
+  `sync-secret-service` + `crypto-rust` on Linux through target-specific
+  dependency tables; the call sites are backend-neutral and did not change.
+  The second of the two Windows/Linux compile blockers; what remains is a
+  build on each OS.
 - **Git status is a store, not App state.** `gitStatus.ts` polls each
   workspace root once while anyone listens and only wakes subscribers when
   the branch or the changed-file list actually differs. App used to store a
