@@ -913,11 +913,20 @@ pub fn pty_spawn(
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 {
-                break;
+        let mut framer = crate::pty_frame::Utf8Framer::new();
+        loop {
+            let (chunk, eof) = match reader.read(&mut buf) {
+                Ok(0) | Err(_) => (framer.finish(), true),
+                Ok(n) => (framer.push(&buf[..n]), false),
+            };
+            if chunk.is_empty() {
+                // Either the child is gone, or this read ended inside a
+                // character and the whole of it is still pending.
+                if eof {
+                    break;
+                }
+                continue;
             }
-            let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
             let _ = app.emit(
                 "pty:data",
                 PtyChunk {

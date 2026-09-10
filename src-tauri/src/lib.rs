@@ -20,6 +20,7 @@ mod pricing;
 mod providers;
 mod pty;
 mod pty_client;
+mod pty_frame;
 mod pty_wire;
 pub mod pty_daemon;
 mod pty_host;
