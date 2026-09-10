@@ -25,11 +25,15 @@ them.
 - [ ] Dogfood the full Tauri race path: dispatch, permission pause, restart,
   evidence comparison, winner merge, and explicit worktree cleanup.
 - [ ] Publish the first signed/notarized macOS bundle.
-- [ ] Validate Windows and Linux after replacing the Apple-only keyring feature
-  selection with target-specific backends. (Half done 2026-08-04: the delegate
-  PTY layer no longer fails to compile off unix — wire types moved to ungated
-  `pty_wire.rs`, `pty_client` stubs "no daemon here" on non-unix. The keyring
-  feature selection is the remaining blocker.)
+- [ ] Validate Windows and Linux. Both known compile blockers are cleared: the
+  delegate PTY layer builds off unix (2026-08-04 — wire types in ungated
+  `pty_wire.rs`, `pty_client` stubs "no daemon here"), and the keyring backend
+  is chosen per target (2026-09-10 — `apple-native` on macOS, `windows-native`
+  on Windows, `sync-secret-service` + `crypto-rust` on Linux, via
+  `[target.'cfg(...)'.dependencies]`). What remains is a real build on each
+  OS: a Windows runner and a Linux runner with the Tauri dev packages plus
+  `libdbus-1-dev`, then a smoke test of key save/read and Quick Look's
+  "no preview here" answer.
 - [x] Make worktree-per-run isolation the default parallel-agent flow. Fresh
   Klide conversations and Mission Control task dispatches now create a branch
   before starting the Harness or delegate CLI; the worktree pin survives layout
