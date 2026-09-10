@@ -8,7 +8,7 @@
 // prop lists and hoping they stayed consistent. The policy now lives here,
 // and `App.renderAiPanel` is the one place that turns it into props.
 import type { ReactNode } from "react";
-import type { AgentAttachment, ProviderId } from "../../agent/types";
+import type { AgentAttachment, AgentMode, ProviderId } from "../../agent/types";
 import type { AiPanelInstance } from "../../hooks/usePanelLayout";
 import { isDelegateProvider } from "../../agent/providers";
 import { normalizeProjectPath } from "../../projectPaths";
@@ -203,6 +203,9 @@ export type AiPanelRenderOptions = {
    *  text rather than inside it, so the first turn carries what was dropped
    *  on the start stage. */
   initialAttachments?: AgentAttachment[] | null;
+  /** The mode a start-stage slash command pinned to that first turn; null
+   *  lets the panel's own mode setting decide. */
+  initialMode?: AgentMode | null;
   /** Honour a per-panel worktree cwd (free-floating surfaces only). */
   respectWorktree?: boolean;
   /** Show the close action (surfaces with more than one panel). */
