@@ -92,6 +92,14 @@ snapshot; the Harness, Delegate adapters, UI, embedded MCP, and future local
 socket are consumers of this one domain, never competing coordinators.
 _Avoid_: terminal orchestration, agent chat, external A2A provider, panel routing
 
+**Coordination bridge**:
+The app-process loopback door through which a Delegate CLI's embedded MCP
+server reaches Run coordination. It binds the calling Run's identity and
+Workspace from the PTY session Klide spawned — never from a request field —
+and forwards each operation to the journal's single writer gate, so a Delegate
+and a Harness Run share one authority and one change event.
+_Avoid_: MCP proxy, agent API, second journal writer, remote coordination endpoint
+
 **Coordination envelope**:
 A durable semantic payload addressed from an operator or authenticated Run to
 one stable Run id. It has an explicit kind, correlation/reply identity,

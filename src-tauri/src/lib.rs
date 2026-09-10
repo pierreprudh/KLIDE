@@ -4,6 +4,7 @@ mod blocking;
 mod cli;
 mod agent;
 mod coordination;
+mod coordination_bridge;
 mod custom_cli;
 mod custom_providers;
 mod delegate;
@@ -12,6 +13,7 @@ mod file_memo;
 mod gateway;
 mod git;
 mod local_servers;
+pub mod mcp_server;
 mod memory;
 mod missions;
 mod models;
@@ -802,6 +804,7 @@ pub fn run() {
         .manage(delegate::status::DelegateStatusState::default())
         .manage(agent::AgentSupervisorState::default())
         .manage(coordination::CoordinationStoreState::default())
+        .manage(coordination_bridge::CoordinationBridgeState::default())
         .manage(missions::MissionStoreState::default())
         .manage(local_servers::LocalServerState::default())
         .manage(models::ReflectionProbeCache::default())

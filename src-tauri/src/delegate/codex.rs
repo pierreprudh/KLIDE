@@ -2,7 +2,7 @@ use super::runs::{
     cap_messages, clean_title, mtime_ms, project_name, tool_file_path, transcript_status,
     TranscriptState,
 };
-use super::{shell_quote, AgentRun, Delegate, RunCandidate, RunMessage, RunParser};
+use super::{shell_quote, AgentRun, Delegate, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -29,6 +29,37 @@ impl Delegate for Codex {
 
     fn model_arg(&self, model: &str) -> String {
         format!(" -m {}", shell_quote(model))
+    }
+
+    /// Codex takes per-invocation config overrides as `-c key=value` with a
+    /// TOML value, so the server needs no file at all. `-c` is a global flag,
+    /// valid after `resume <id>` and `exec` alike.
+    fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
+        let toml_str = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+        let args = spec
+            .args
+            .iter()
+            .map(|a| toml_str(a))
+            .collect::<Vec<_>>()
+            .join(",");
+        let env = format!(
+            "{{{}={}}}",
+            crate::mcp_server::ENV_BRIDGE_URL,
+            toml_str(&spec.bridge_url)
+        );
+        let flags = [
+            format!("mcp_servers.klide.command={}", toml_str(&spec.command)),
+            format!("mcp_servers.klide.args=[{args}]"),
+            format!("mcp_servers.klide.env={env}"),
+        ]
+        .iter()
+        .map(|kv| format!(" -c {}", shell_quote(kv)))
+        .collect::<String>();
+        Some(McpWiring {
+            flags,
+            env: vec![],
+            files: vec![],
+        })
     }
 
     fn resume_arg(&self, session_id: &str) -> String {

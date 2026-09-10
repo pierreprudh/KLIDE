@@ -240,7 +240,10 @@ Klide/
     │   ├── pty_daemon.rs         Detached `klide ptyd` server over a unix socket
     │   ├── pty_client.rs         App-side socket transport to ptyd (stubbed off-unix)
     │   ├── pty_wire.rs           Portable ptyd wire vocabulary — Request/Response/Event
-    │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules
+    │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, MCP wiring
+    │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one writer gate, replayed snapshot
+    │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
+    │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
@@ -389,6 +392,40 @@ and durable background execution / local-to-cloud handoff.
 - Treat Project Memory as the continuity surface. The older Context Lens/project-graph path is parked unless it feeds memory or summarization directly.
 - Skills now load from four well-known locations (workspace `.agents/skills`, workspace `.klide/skills`, user `.agents/skills`, user `.claude/skills`), and the install + uninstall flow is wired through `install_skill` / `uninstall_skill` Rust commands. Provenance is grouped by `metadata.author` / GitHub repo owner into Workspace / Personal / Vercel / Matt Pocock / Anthropic / Other.
 - "Save as skill" sparkle in the AI panel header (`detectAndGenerateSkill` in `src/components/ai/summarize.ts`) auto-generates a `SKILL.md` to `<workspace>/.klide/skills/<slug>/` when the model detects a reusable pattern.
+
+### Agent coordination (one journal, two doors)
+
+Runs address each other through a Rust-owned journal,
+`.klide/coordination/events.jsonl` (`coordination.rs`): a Run registers with a
+stable id (the conversation id), moves through a small state machine, sends
+envelopes, and publishes one structured result. A snapshot is always a fold of
+the journal; nothing in React is the source of truth. Another agent's words
+never reach a conversation unreviewed — the receiving side's operator answers
+an inline card, and the accept/decline is itself a journal event.
+
+There are two doors onto that one journal, and no third:
+
+- **Harness Runs** call the native Tools `agent_list` / `agent_send` /
+  `agent_wait` / `agent_cancel` / `agent_read_result` (`agent/tools.rs`); the
+  actor is always `ctx.id`, and delivery happens at the turn boundary as a
+  `user` turn labelled as agent mail.
+- **Delegate CLIs** (Claude Code, Codex, OpenCode) get the same operations as
+  MCP tools from `klide mcp coordination` (`mcp_server.rs`) — the same binary
+  as the app, started by the CLI as a stdio child, wired per session by the
+  adapter (`Delegate::mcp_wiring`: `--mcp-config` file / `-c` overrides /
+  `OPENCODE_CONFIG`). The MCP child owns nothing: it relays each call over
+  loopback to `coordination_bridge.rs` in the app, which looks the PTY session
+  up in a map filled at spawn to learn which Run id and Workspace the call acts
+  as. No tool argument can name an actor or a journal path. The bridge is a
+  separate listener from the status hook server because an `agent_wait` blocks
+  for up to two minutes; each request gets its own thread.
+
+A Delegate registers as a `delegate` Run in `delegate_pty_spawn`, its status
+hooks move its state, and PTY exit settles it. Delivery to a Delegate is pull
+(`agent_wait`), because Klide owns no turn boundary inside a foreign CLI;
+waking an idle CLI when mail arrives (a Stop hook that blocks with the inbox as
+its reason) is the next slice. Do not add a direct journal writer outside the
+app process, and do not let an adapter trust a caller-supplied actor.
 
 ### Provider streaming (1 loop, 3 adapters)
 

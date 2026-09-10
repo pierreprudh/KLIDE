@@ -236,6 +236,13 @@ trait RunSupervisor: Send + Sync {
     /// when the lock is poisoned or the run handle is gone — both best-effort
     /// (the sets `f` touches are re-ask-avoidance conveniences).
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool;
+
+    /// Whether a coordinated Run is around right now, for `agent_list`. The
+    /// default knows only Harness Runs (a live handle); the app supervisor
+    /// also counts a Delegate whose PTY session is bound at the bridge.
+    fn is_live(&self, run_id: &str) -> bool {
+        self.with_handle(run_id, &mut |_| {})
+    }
     /// Authenticated native access to the Rust-owned coordination journal.
     /// Callers construct actors from the current Run id; renderer-provided
     /// actor objects never cross this seam.
@@ -418,6 +425,14 @@ impl RunSupervisor for TauriSupervisor {
                 reason: Some(run_status_wire(&status).replace('_', " ")),
             },
         );
+    }
+
+    fn is_live(&self, run_id: &str) -> bool {
+        self.with_handle(run_id, &mut |_| {})
+            || self
+                .app
+                .state::<crate::coordination_bridge::CoordinationBridgeState>()
+                .is_bound_run(run_id)
     }
 
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
@@ -1281,21 +1296,6 @@ fn coordination_workspace_for(request: &StartRunRequest) -> Option<&str> {
     }
 }
 
-/// The name peers see in `agent_list`: the same rule the AI panel uses for a
-/// thread title (first user message, whitespace collapsed, 80 chars). Raw run
-/// ids are unreadable for a model choosing whom to address.
-fn coordination_label(initial_text: &str) -> Option<String> {
-    let collapsed = initial_text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    Some(if collapsed.chars().count() > 80 {
-        format!("{}…", collapsed.chars().take(79).collect::<String>())
-    } else {
-        collapsed
-    })
-}
-
 fn register_coordination_run(
     supervisor: &dyn RunSupervisor,
     request: &StartRunRequest,
@@ -1317,7 +1317,7 @@ fn register_coordination_run(
                 // message of the thread — the same title the panel shows.
                 // Follow-up turns keep it; the transcript stays the source
                 // for anything richer.
-                label: coordination_label(&request.initial_text),
+                label: crate::coordination::label_from_text(&request.initial_text),
             },
             initial_state: Some(CoordinationRunState::Working),
         },
@@ -4946,7 +4946,7 @@ mod run_loop_tests {
                     mission_task_id: None,
                     // Registration is immutable and the loop registers with
                     // the thread title, so the pre-registration must match.
-                    label: coordination_label(&test_request(&root, &[]).initial_text),
+                    label: crate::coordination::label_from_text(&test_request(&root, &[]).initial_text),
                 },
                 initial_state: Some(CoordinationRunState::Working),
             },

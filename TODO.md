@@ -54,6 +54,14 @@ them.
   scope, semantic review, budget, memory, and human approval.
 - [ ] Add durable background execution and local-to-cloud handoff before
   unparking natural-language scheduling or proactive suggestions.
+- [x] Agent coordination between Harness Runs (PR #84, 2026-09-05) and
+  Delegate CLIs via the embedded MCP server `klide mcp coordination` +
+  app-side bridge (2026-09-10). Open follow-ups: wake an idle Delegate on
+  accepted mail (Claude Code Stop hook blocking with the inbox as reason);
+  re-bind Delegate sessions after an app restart (the bridge port changes, ptyd
+  sessions outlive it); dogfood Codex `-c` overrides after `resume` and
+  OpenCode's `OPENCODE_CONFIG` merge; hold #3 `From<AgentRunStatus>` in
+  coordination.rs.
 
 ### v0.6 Slice 1 — durable Mission tracer bullet (started 2026-07-22)
 

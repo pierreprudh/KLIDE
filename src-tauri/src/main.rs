@@ -2,6 +2,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // `klide mcp coordination` serves the embedded MCP server over stdio for a
+    // Delegate CLI Klide launched (mcp_server.rs). Same binary as the GUI and
+    // the ptyd daemon below. Every platform: an MCP child has no PTY.
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if args.first().map(String::as_str) == Some("mcp") {
+            match args.get(1).map(String::as_str) {
+                Some("coordination") => klide_lib::mcp_server::serve_main(),
+                _ => {
+                    eprintln!("usage: klide mcp coordination");
+                    std::process::exit(2);
+                }
+            }
+        }
+    }
     // `klide ptyd --data-dir <dir>` runs the headless delegate session host
     // instead of the GUI (docs/delegate-session-replay.md, Slice 3). Same
     // binary, so there is nothing extra to bundle, sign, or version-skew.

@@ -4,7 +4,7 @@ use super::runs::{
     TranscriptState,
 };
 use super::chat_stream::{message_blocks, result_text, StreamItem};
-use super::{shell_quote, ChatSpec, Delegate, RunCandidate, RunParser};
+use super::{shell_quote, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunParser};
 use std::collections::{HashMap, HashSet};
 
 /// Claude Code — Anthropic's CLI. Its TUI accepts the task as the first
@@ -47,6 +47,28 @@ impl Delegate for ClaudeCode {
 
     fn model_arg(&self, model: &str) -> String {
         format!(" --model {}", shell_quote(model))
+    }
+
+    /// `--mcp-config <file>` adds servers for this invocation only, on top of
+    /// whatever the user configured — no write to `~/.claude.json`, nothing
+    /// to clean up when the session ends.
+    fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
+        let path = format!("{}/{}.claude-mcp.json", spec.config_dir, spec.file_stem);
+        let content = serde_json::json!({
+            "mcpServers": {
+                "klide": {
+                    "type": "stdio",
+                    "command": spec.command,
+                    "args": spec.args,
+                    "env": spec.env_json(),
+                }
+            }
+        });
+        Some(McpWiring {
+            flags: format!(" --mcp-config {}", shell_quote(&path)),
+            env: vec![],
+            files: vec![(path, content.to_string())],
+        })
     }
 
     fn resume_arg(&self, session_id: &str) -> String {

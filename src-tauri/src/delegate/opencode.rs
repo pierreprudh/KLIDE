@@ -3,7 +3,7 @@ use super::runs::{
     TranscriptState,
 };
 use super::chat_stream::{result_text, StreamItem};
-use super::{shell_quote, AgentRun, ChatSpec, Delegate, RunCandidate, RunMessage, RunParser};
+use super::{shell_quote, AgentRun, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
 use std::collections::HashSet;
 
 /// OpenCode — the SST CLI. The quirkiest of the three:
@@ -53,6 +53,31 @@ impl Delegate for OpenCode {
 
     fn model_arg(&self, model: &str) -> String {
         format!(" -m {}", shell_quote(model))
+    }
+
+    /// OpenCode has no per-invocation MCP flag; `OPENCODE_CONFIG` names an
+    /// extra config file merged over the user's, so the server rides in a
+    /// per-session file and the env var, not in `~/.config/opencode`.
+    fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
+        let path = format!("{}/{}.opencode.json", spec.config_dir, spec.file_stem);
+        let mut command = vec![spec.command.clone()];
+        command.extend(spec.args.iter().cloned());
+        let content = serde_json::json!({
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": {
+                "klide": {
+                    "type": "local",
+                    "command": command,
+                    "environment": spec.env_json(),
+                    "enabled": true,
+                }
+            }
+        });
+        Some(McpWiring {
+            flags: String::new(),
+            env: vec![("OPENCODE_CONFIG".to_string(), path.clone())],
+            files: vec![(path, content.to_string())],
+        })
     }
 
     fn resume_arg(&self, session_id: &str) -> String {

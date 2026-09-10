@@ -61,6 +61,35 @@ pub struct ChatSpec<'a> {
     pub allowed_commands: &'a [String],
 }
 
+/// What a Delegate CLI needs to know to start Klide's embedded MCP server as
+/// its stdio child: the binary, its args, the bridge URL the child must carry
+/// (as the server's own `env`, because MCP clients hand a stdio child a
+/// filtered environment, not the CLI's), and where a config file may be
+/// written when the CLI reads its MCP servers from one.
+pub struct McpServerSpec {
+    pub command: String,
+    pub args: Vec<String>,
+    pub bridge_url: String,
+    pub config_dir: String,
+    /// Filesystem-safe stem for any config file this session writes.
+    pub file_stem: String,
+}
+
+impl McpServerSpec {
+    fn env_json(&self) -> serde_json::Value {
+        serde_json::json!({ crate::mcp_server::ENV_BRIDGE_URL: self.bridge_url })
+    }
+}
+
+/// How one CLI is told about the MCP server: a flag fragment appended to its
+/// command (leading space), extra PTY env, and files to write before spawn.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct McpWiring {
+    pub flags: String,
+    pub env: Vec<(String, String)>,
+    pub files: Vec<(String, String)>,
+}
+
 pub trait Delegate: Sync {
     /// Klide's provider id for this delegate, e.g. "claude-code". This is the
     /// `source` field on every Run the adapter parses.
@@ -147,6 +176,13 @@ pub trait Delegate: Sync {
             "{} does not support one-shot Mission dispatch.",
             self.binary()
         ))
+    }
+
+    /// Register Klide's MCP server for one session. `None` (the default) means
+    /// this CLI has no MCP client Klide knows how to configure per-session, and
+    /// it runs without coordination tools — exactly as before.
+    fn mcp_wiring(&self, _spec: &McpServerSpec) -> Option<McpWiring> {
+        None
     }
 
     /// Argument vector for a one-shot headless chat invocation — prompt on
