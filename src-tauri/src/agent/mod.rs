@@ -1336,6 +1336,13 @@ pub(crate) async fn start_background_run(
 fn coordination_workspace_for(request: &StartRunRequest) -> Option<&str> {
     match request.mode {
         AgentMode::Plan | AgentMode::Goal => request.workspace_root.as_deref(),
+        // A Delegate CLI runs its own tools whatever Mode the panel shows —
+        // a Focus conversation on Claude Code is "chat" to Klide and a full
+        // agent to itself — so it is addressable, and gets its MCP tools, in
+        // Chat too. Kit in Chat has no tools and stays off the plane.
+        AgentMode::Chat if crate::delegate::lookup(&request.provider).is_some() => {
+            request.workspace_root.as_deref()
+        }
         AgentMode::Chat => None,
     }
 }
@@ -1353,7 +1360,13 @@ fn register_coordination_run(
         CoordinationCommand::RegisterRun {
             registration: CoordinationRunRegistration {
                 run_id: run_id.to_string(),
-                worker_kind: CoordinationWorkerKind::Harness,
+                // The journal says who does the work: a Delegate conversation
+                // driven through the Harness is still a Delegate to its peers.
+                worker_kind: if crate::delegate::lookup(&request.provider).is_some() {
+                    CoordinationWorkerKind::Delegate
+                } else {
+                    CoordinationWorkerKind::Harness
+                },
                 parent_run_id: request.parent_id.clone(),
                 mission_id: request.mission_id.clone(),
                 mission_task_id: request.mission_task_id.clone(),
