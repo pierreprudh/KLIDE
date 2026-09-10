@@ -408,7 +408,9 @@ There are two doors onto that one journal, and no third:
 - **Harness Runs** call the native Tools `agent_list` / `agent_send` /
   `agent_wait` / `agent_cancel` / `agent_read_result` (`agent/tools.rs`); the
   actor is always `ctx.id`, and delivery happens at the turn boundary as a
-  `user` turn labelled as agent mail.
+  `user` turn labelled as agent mail. Every Mode is on the plane: Chat carries
+  the coordination tools and nothing else (no files, shell, or memory), so any
+  conversation with a Workspace can be addressed and can answer.
 - **Delegate CLIs** (Claude Code, Codex, OpenCode) get the same operations as
   MCP tools from `klide mcp coordination` (`mcp_server.rs`) — the same binary
   as the app, started by the CLI as a stdio child, wired per session by the

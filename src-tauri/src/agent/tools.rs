@@ -188,7 +188,11 @@ impl ToolKind {
 
 pub fn tool_allowed_in_mode(mode: &AgentMode, kind: ToolKind) -> bool {
     match mode {
-        AgentMode::Chat => false,
+        // Chat touches nothing in the Workspace — no files, no shell, no
+        // memory — but every conversation is on the coordination plane, so it
+        // may address its peers. Coordination tools never act on the project;
+        // they append to a journal the receiving operator reviews.
+        AgentMode::Chat => matches!(kind, ToolKind::Coordination),
         AgentMode::Plan => matches!(
             kind,
             ToolKind::ReadOnly
@@ -1035,9 +1039,6 @@ pub fn list_tools_for_workspace(
     workspace_root: Option<&str>,
 ) -> Vec<serde_json::Value> {
     let reg = registry();
-    if matches!(mode, AgentMode::Chat) {
-        return Vec::new();
-    }
     let mut tools: Vec<serde_json::Value> = reg
         .iter()
         .filter(|e| {
@@ -4047,16 +4048,26 @@ mod tests {
     }
 
     /// Advisor-recursion guard. A consult_advisor call runs its consultation as
-    /// a CHAT-mode child (AiPanel runAdvisorConsult). Chat mode must expose zero
-    /// tools — so the advisor can never itself call consult_advisor and escalate
-    /// forever. If this ever regresses (chat gains tools), that loop reopens.
+    /// a CHAT-mode child (AiPanel runAdvisorConsult). Chat mode must never
+    /// expose consult_advisor — or the advisor could escalate forever — nor any
+    /// tool that touches the Workspace. What Chat does carry is the
+    /// coordination set: every conversation can address its peers, whatever
+    /// its Mode, and those tools only append to the reviewed journal.
     #[test]
-    fn chat_mode_exposes_no_tools_so_an_advisor_cannot_recurse() {
-        assert!(
-            list_tools_for_workspace(&AgentMode::Chat, &[], None).is_empty(),
-            "Chat mode must expose no tools (advisor recursion guard)"
-        );
-        assert!(schemas_for_mode(&AgentMode::Chat, &[], None).is_none());
+    fn chat_mode_exposes_only_coordination_tools_so_an_advisor_cannot_recurse() {
+        let names: Vec<String> = list_tools_for_workspace(&AgentMode::Chat, &[], None)
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(!names.is_empty(), "Chat carries the coordination tools");
+        for name in &names {
+            assert_ne!(name, ADVISOR_TOOL, "advisor recursion guard");
+            assert!(
+                coordination_flavor(name).is_some(),
+                "Chat exposes nothing but coordination tools, got {name}"
+            );
+        }
+        assert!(schemas_for_mode(&AgentMode::Chat, &[], None).is_some());
     }
 
     #[test]

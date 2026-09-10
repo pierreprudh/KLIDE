@@ -1333,18 +1333,12 @@ pub(crate) async fn start_background_run(
 /// never sees `agent_*`, so registering it would only grow a shared file every
 /// reader has to fold. The Workspace is the journal's home, so a
 /// workspace-less Run has nowhere to register either.
+/// Every conversation with a Workspace is on the coordination plane, whatever
+/// its Mode and provider: a Chat thread can be asked something by a Goal run
+/// and answer it (Chat carries the coordination tools and nothing else), and a
+/// Delegate CLI is a full agent to itself however Klide labels the turn.
 fn coordination_workspace_for(request: &StartRunRequest) -> Option<&str> {
-    match request.mode {
-        AgentMode::Plan | AgentMode::Goal => request.workspace_root.as_deref(),
-        // A Delegate CLI runs its own tools whatever Mode the panel shows —
-        // a Focus conversation on Claude Code is "chat" to Klide and a full
-        // agent to itself — so it is addressable, and gets its MCP tools, in
-        // Chat too. Kit in Chat has no tools and stays off the plane.
-        AgentMode::Chat if crate::delegate::lookup(&request.provider).is_some() => {
-            request.workspace_root.as_deref()
-        }
-        AgentMode::Chat => None,
-    }
+    request.workspace_root.as_deref()
 }
 
 fn register_coordination_run(

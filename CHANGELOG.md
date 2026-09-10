@@ -30,7 +30,10 @@ still open.
   peer for the rest of the run, and approval wakes an idle conversation with a
   no-text turn. Replies to a question the receiver itself asked skip the card.
   Delivered mail travels as a `user` turn labelled as agent mail, never as
-  `system`. (PR #84, 2026-09-05.)
+  `system`. (PR #84, 2026-09-05.) Since 2026-09-10 every conversation with a
+  Workspace is on the plane whatever its Mode or model: Chat carries the
+  coordination tools and nothing else, so a Chat thread can be asked something
+  and answer it.
 - **Delegate CLIs are on the same plane.** Claude Code, Codex and OpenCode
   sessions Klide launches now carry Klide's embedded MCP server
   (`klide mcp coordination`, same binary as the app) and see the same five
