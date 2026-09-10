@@ -43,12 +43,12 @@ import ToastHost from "./components/ToastHost";
 import { notify } from "./toast";
 import { onDelegateExit } from "./ipc/delegatePty";
 import {
-  gitStatus as fetchGitStatus,
   gitWorktreeAdd,
   gitWorktreeMerge,
   gitWorktreeRemove,
   createPr,
 } from "./ipc/git";
+import { refreshGitStatus, useGitStatus } from "./gitStatus";
 import { eventsToConversation, runMessagesToMsgs } from "./components/ai/replayConversation";
 import {
   CONVERSATIONS_CHANGED_EVENT,
@@ -62,7 +62,6 @@ import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
 import { isDelegateId, type DelegateId } from "./delegates";
-import type { GitStatus } from "./gitTypes";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId } from "./theme";
 import { SETTINGS, getSetting, setSetting, useSetting } from "./settingsStore";
@@ -357,7 +356,9 @@ function App() {
     autoSave: autoSaveMode,
     confirmCloseDirty,
   });
-  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  // One poll per root lives in `gitStatus.ts`; this only re-renders when
+  // the branch or the changed-file list actually differs.
+  const gitStatus = useGitStatus(workspaceRoot);
   const [recentFolders, setRecentFolders] = useState<string[]>(() => {
     try {
       const parsed = JSON.parse(
@@ -2009,19 +2010,6 @@ function App() {
     setWorkspaceRoot(path);
   }
 
-  async function refreshGitStatus(root: string | null) {
-    if (!root) {
-      setGitStatus(null);
-      return;
-    }
-    try {
-      const next = await fetchGitStatus(root);
-      setGitStatus(next);
-    } catch {
-      setGitStatus(null);
-    }
-  }
-
   function eventsToTitle(events: AgentEvent[]): string {
     const first = events.find((e) => e.type === "user_message");
     if (first && first.type === "user_message") return first.text.slice(0, 120);
@@ -2604,26 +2592,6 @@ function App() {
     void invoke("set_active_workspace", { root: workspaceRoot }).catch(() => {
       /* command unavailable (non-Tauri preview) — ignore */
     });
-  }, [workspaceRoot]);
-
-  useEffect(() => {
-    if (!workspaceRoot) {
-      setGitStatus(null);
-      return;
-    }
-
-    let cancelled = false;
-    const refresh = () => {
-      if (!cancelled) refreshGitStatus(workspaceRoot);
-    };
-
-    refresh();
-    const interval = window.setInterval(refresh, 3_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
   }, [workspaceRoot]);
 
   // Interactive delegate PTY (Claude Code / Codex / OpenCode) edits files
