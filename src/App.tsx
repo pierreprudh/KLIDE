@@ -56,7 +56,7 @@ import {
   loadConversations,
   loadPanelSession,
 } from "./components/ai/storedConversations";
-import type { AgentAttachment, AgentEvent, ProviderId } from "./agent/types";
+import type { AgentAttachment, AgentEvent, AgentMode, ProviderId } from "./agent/types";
 import { defaultModelForProvider, providerName } from "./agent/providers";
 import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
@@ -212,6 +212,9 @@ function App() {
   // message. Cleared by the same consume callback, so a second task never
   // inherits the first one's attachments.
   const [focusInitialAttachments, setFocusInitialAttachments] = useState<AgentAttachment[]>([]);
+  // The mode a start-stage slash command pinned to its first turn (/init,
+  // /interview). Null for a typed task — the panel's own mode applies.
+  const [focusInitialMode, setFocusInitialMode] = useState<AgentMode | null>(null);
   // Focus split — a second conversation beside the first. Only the *identity*
   // of the second panel lives here; the panel itself is an ordinary member of
   // the AI fleet, so both halves are fully wired conversations rather than a
@@ -1474,9 +1477,11 @@ function App() {
         variant={opts?.variant}
         initialMessage={opts?.initialMessage ?? null}
         initialAttachments={opts?.initialAttachments ?? null}
+        initialMode={opts?.initialMode ?? null}
         onInitialMessageConsumed={() => {
           setFocusInitialMessage(null);
           setFocusInitialAttachments([]);
+          setFocusInitialMode(null);
         }}
         followUpMessage={followUpsByPanel[panelId] ?? null}
         onFollowUpConsumed={() => consumeFollowUp(panelId)}
@@ -1906,6 +1911,7 @@ function App() {
           initialMessage: opts?.aiVariant === "focus" ? focusInitialMessage : null,
           initialAttachments:
             opts?.aiVariant === "focus" ? focusInitialAttachments : null,
+          initialMode: opts?.aiVariant === "focus" ? focusInitialMode : null,
         });
       default:
         return (
@@ -3275,7 +3281,7 @@ function App() {
                     setFocusConvoError(null);
                     openFocusConversation(convo, "primary");
                   }}
-                  onSubmit={(text, attachments) => {
+                  onSubmit={(text, attachments, opts) => {
                     markFolderWorked(workspaceRoot);
                     // A normal Focus task runs in the open Workspace. Worktree
                     // isolation is opt-in through the dedicated action/fork
@@ -3283,6 +3289,7 @@ function App() {
                     setAiPanelCwd(aiPanels[0]?.id ?? "ai-main", undefined);
                     setFocusInitialMessage(text);
                     setFocusInitialAttachments(attachments);
+                    setFocusInitialMode(opts?.mode ?? null);
                     setFocusChatActive(true);
                   }}
                   /* Focus's canvas reaches the shared destinations through the
