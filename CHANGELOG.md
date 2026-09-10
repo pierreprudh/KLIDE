@@ -186,6 +186,11 @@ still open.
 
 ### Performance and hygiene
 
+- **Git status is a store, not App state.** `gitStatus.ts` polls each
+  workspace root once while anyone listens and only wakes subscribers when
+  the branch or the changed-file list actually differs. App used to store a
+  fresh object every three seconds, re-rendering itself and every surface
+  under it whether or not a file had changed.
 - Conversation persists are debounced (streaming was round-tripping the whole
   100-conversation index every ~50 ms), and the editor-tab disk poll stops
   re-registering App's listeners when nothing changed.

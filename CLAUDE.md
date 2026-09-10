@@ -101,6 +101,7 @@ Klide/
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
+│   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
 │   ├── gitGraph.ts              Lane layout for the commit graph (gitTypes.ts: wire types)
 │   ├── gitReview.ts             Pure Git Review policy — derivations + mutating-action outcomes
 │   ├── gridLayouts.ts           Freeform grid layouts (layouts.ts: fixed presets)
