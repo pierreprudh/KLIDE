@@ -1156,16 +1156,35 @@ pub(crate) fn wire_coordination(
             mission_task_id,
         },
     ) {
-        eprintln!("coordination could not register Delegate {session_id}: {error}");
+        wiring_failed(app, session_id, format!("could not register the Run: {error}"));
         return (None, None);
     }
     let Some(bridge_url) =
         bridge.bridge_url_for(session_id, store.inner().clone(), bridge_hooks(app))
     else {
+        wiring_failed(app, session_id, "the coordination bridge could not start".to_string());
         return (None, None);
     };
-    let wiring = mcp_wiring_for(app, adapter, session_id, &bridge_url);
+    let wiring = match mcp_wiring_for(app, adapter, session_id, &bridge_url) {
+        Ok(wiring) => wiring,
+        Err(reason) => {
+            wiring_failed(app, session_id, reason);
+            None
+        }
+    };
     (Some(bridge_url), wiring)
+}
+
+/// A Delegate that starts without its coordination tools is a silent
+/// failure the user would only discover by asking the CLI — so it is said
+/// once, on the toast bus (src/delegateStatusNotify.ts listens) and in the
+/// dev log, and the session still runs.
+fn wiring_failed(app: &tauri::AppHandle, session_id: &str, reason: String) {
+    eprintln!("coordination could not wire Delegate {session_id}: {reason}");
+    let _ = app.emit(
+        "coordination:wiring-failed",
+        serde_json::json!({ "sessionId": session_id, "reason": reason }),
+    );
 }
 
 /// Ask the adapter how its CLI learns about `klide mcp coordination`, then
@@ -1176,31 +1195,33 @@ fn mcp_wiring_for(
     adapter: &dyn delegate::Delegate,
     session_id: &str,
     bridge_url: &str,
-) -> Option<delegate::McpWiring> {
-    let exe = std::env::current_exe().ok()?;
-    let config_dir = app.path().app_data_dir().ok()?.join("delegate-mcp");
-    if let Err(error) = std::fs::create_dir_all(&config_dir) {
-        eprintln!("coordination could not create the MCP config dir: {error}");
-        return None;
-    }
+) -> Result<Option<delegate::McpWiring>, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("no path to the Klide binary: {e}"))?;
+    let config_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?
+        .join("delegate-mcp");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("could not create the MCP config dir: {e}"))?;
     let file_stem: String = session_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect();
-    let wiring = adapter.mcp_wiring(&delegate::McpServerSpec {
+    let Some(wiring) = adapter.mcp_wiring(&delegate::McpServerSpec {
         command: exe.to_string_lossy().to_string(),
         args: vec!["mcp".to_string(), "coordination".to_string()],
         bridge_url: bridge_url.to_string(),
         config_dir: config_dir.to_string_lossy().to_string(),
         file_stem,
-    })?;
+    }) else {
+        // This CLI has no MCP client Klide configures (omp): not a failure.
+        return Ok(None);
+    };
     for (path, content) in &wiring.files {
-        if let Err(error) = std::fs::write(path, content) {
-            eprintln!("coordination could not write {path}: {error}");
-            return None;
-        }
+        std::fs::write(path, content).map_err(|e| format!("could not write {path}: {e}"))?;
     }
-    Some(wiring)
+    Ok(Some(wiring))
 }
 
 /// A Delegate status hook (`working` / `blocked` / `waiting`) is also the
