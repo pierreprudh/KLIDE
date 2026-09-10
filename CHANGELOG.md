@@ -45,7 +45,9 @@ still open.
   it (`done` / `failed` / `cancelled`). Mail addressed to a Delegate shows the
   same review card in its panel; the CLI reads approved mail when it calls
   `agent_wait` — pull, not push, because Klide owns no turn boundary inside a
-  foreign CLI. Per-CLI wiring: Claude Code `--mcp-config <per-session file>`,
+  foreign CLI. Focus conversations on a Delegate get the same tools: the
+  Harness hands each headless turn the wiring, and the turn's process acts as
+  the conversation's Run. Per-CLI wiring: Claude Code `--mcp-config <per-session file>`,
   Codex `-c mcp_servers.klide.*` overrides, OpenCode `OPENCODE_CONFIG`; Oh My
   Pi and custom CLIs run unchanged.
 

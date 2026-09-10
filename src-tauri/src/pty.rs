@@ -1128,7 +1128,7 @@ pub(crate) fn delegate_run_id(session_id: &str, provider: &str) -> String {
 /// asks for). Returns `(None, None)` — and logs why — when any step fails, so
 /// the spawn itself never depends on coordination.
 #[allow(clippy::too_many_arguments)]
-fn wire_coordination(
+pub(crate) fn wire_coordination(
     app: &tauri::AppHandle,
     adapter: &dyn delegate::Delegate,
     session_id: &str,

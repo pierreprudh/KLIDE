@@ -74,7 +74,7 @@ impl Delegate for OpenCode {
             }
         });
         Some(McpWiring {
-            flags: String::new(),
+            args: vec![],
             env: vec![("OPENCODE_CONFIG".to_string(), path.clone())],
             files: vec![(path, content.to_string())],
         })
@@ -765,7 +765,7 @@ mod tests {
         let args = OpenCode
             .chat_stream_args(
                 "/tmp/ws",
-                &ChatSpec { model: "", resume: Some("ses_fef0"), allowed_commands: &[] },
+                &ChatSpec { model: "", resume: Some("ses_fef0"), mcp: None, allowed_commands: &[] },
             )
             .unwrap();
         // `-s <id>`, never `--continue`: the last session is the wrong one as
@@ -779,7 +779,7 @@ mod tests {
         let args = OpenCode
             .chat_stream_args(
                 "/tmp/ws",
-                &ChatSpec { model: "minimax/minimax-m3", resume: None, allowed_commands: &[] },
+                &ChatSpec { model: "minimax/minimax-m3", resume: None, mcp: None, allowed_commands: &[] },
             )
             .unwrap();
         assert_eq!(

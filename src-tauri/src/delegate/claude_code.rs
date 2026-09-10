@@ -65,7 +65,7 @@ impl Delegate for ClaudeCode {
             }
         });
         Some(McpWiring {
-            flags: format!(" --mcp-config {}", shell_quote(&path)),
+            args: vec!["--mcp-config".to_string(), path.clone()],
             env: vec![],
             files: vec![(path, content.to_string())],
         })
@@ -1040,7 +1040,7 @@ mod tests {
 
     /// One turn's terms, with only what a test cares about spelled out.
     fn spec<'a>(model: &'a str, resume: Option<&'a str>, allowed: &'a [String]) -> ChatSpec<'a> {
-        ChatSpec { model, resume, allowed_commands: allowed }
+        ChatSpec { model, resume, mcp: None, allowed_commands: allowed }
     }
 
     #[test]

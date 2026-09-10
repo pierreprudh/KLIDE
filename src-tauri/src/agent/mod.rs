@@ -181,6 +181,9 @@ struct ProviderTurnRequest {
     /// to a delegate CLI so a headless turn can run what the user already said
     /// yes to. Empty for every provider whose tools Klide dispatches itself.
     allowed_commands: Vec<String>,
+    /// Klide's MCP server for a Delegate conversation (see
+    /// [`RunSupervisor::delegate_mcp_wiring`]). `None` for every other provider.
+    mcp: Option<crate::delegate::McpWiring>,
     num_ctx: Option<usize>,
     num_predict: Option<usize>,
     reflection_level: Option<String>,
@@ -212,6 +215,7 @@ impl AgentProviderCaller for RealProviderCaller {
                     workspace_root: request.workspace_root,
                     run_id: request.run_id,
                     allowed_commands: request.allowed_commands,
+                    mcp: request.mcp,
                     num_ctx: request.num_ctx,
                     num_predict: request.num_predict,
                     reflection_level: request.reflection_level,
@@ -242,6 +246,21 @@ trait RunSupervisor: Send + Sync {
     /// also counts a Delegate whose PTY session is bound at the bridge.
     fn is_live(&self, run_id: &str) -> bool {
         self.with_handle(run_id, &mut |_| {})
+    }
+
+    /// Klide's MCP server for a headless Delegate turn of this Run — a Focus
+    /// conversation on Claude Code gets the same `agent_*` tools a PTY session
+    /// does. Binds the conversation at the coordination bridge and returns
+    /// the adapter's wiring; `None` when `provider` is not a Delegate, the Run
+    /// has no Workspace, or the bridge could not start. The default (tests)
+    /// wires nothing.
+    fn delegate_mcp_wiring(
+        &self,
+        _run_id: &str,
+        _provider: &str,
+        _workspace_root: Option<&str>,
+    ) -> Option<crate::delegate::McpWiring> {
+        None
     }
     /// Authenticated native access to the Rust-owned coordination journal.
     /// Callers construct actors from the current Run id; renderer-provided
@@ -433,6 +452,31 @@ impl RunSupervisor for TauriSupervisor {
                 .app
                 .state::<crate::coordination_bridge::CoordinationBridgeState>()
                 .is_bound_run(run_id)
+    }
+
+    fn delegate_mcp_wiring(
+        &self,
+        run_id: &str,
+        provider: &str,
+        workspace_root: Option<&str>,
+    ) -> Option<crate::delegate::McpWiring> {
+        let adapter = crate::delegate::lookup(provider)?;
+        let root = workspace_root?;
+        // The same session id a PTY spawn uses for this conversation
+        // (`{convoId}:{provider}`), so Focus and Workbench act as one Run.
+        let session_id = format!("{run_id}:{provider}");
+        crate::pty::wire_coordination(
+            &self.app,
+            adapter,
+            &session_id,
+            provider,
+            root,
+            None,
+            None,
+            None,
+            None,
+        )
+        .1
     }
 
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
@@ -2056,6 +2100,16 @@ async fn run_agent_loop(
             .await
             .unwrap_or_default()
         };
+        // A Delegate conversation gets Klide's MCP server for this turn, so a
+        // Focus thread on Claude Code can address its peers too. Only where
+        // the Run itself is registered (Plan/Goal with a Workspace); the
+        // Harness already owns the Run's state, and the bridge binding is
+        // idempotent per turn.
+        let mcp = sup.delegate_mcp_wiring(
+            &id,
+            &request.provider,
+            coordination_workspace_for(&request),
+        );
 
         // Race the provider stream against user cancellation so abort takes
         // effect mid-request, not only between turns.
@@ -2073,6 +2127,7 @@ async fn run_agent_loop(
                 workspace_root: request.workspace_root.clone(),
                 run_id: Some(id.clone()),
                 allowed_commands,
+                mcp,
                 num_ctx: request.num_ctx,
                 num_predict: reply_budget_override.or(request.num_predict),
                 reflection_level: request.reflection_level.clone(),
@@ -4156,6 +4211,7 @@ mod provider_caller_tests {
                 workspace_root: Some("/tmp".to_string()),
                 run_id: None,
                 allowed_commands: Vec::new(),
+                mcp: None,
                 num_ctx: Some(1024),
                 num_predict: Some(128),
                 reflection_level: Some("low".to_string()),

@@ -77,6 +77,7 @@ pub async fn run_subscription_chat(
     workspace_root: Option<String>,
     run_id: Option<String>,
     allowed_commands: Vec<String>,
+    mcp: Option<super::McpWiring>,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<AiChatResponse, String> {
     let cwd = workspace_root.unwrap_or_else(|| ".".to_string());
@@ -115,6 +116,7 @@ pub async fn run_subscription_chat(
     let spec = ChatSpec {
         model,
         resume: resume.as_deref(),
+        mcp: mcp.as_ref(),
         allowed_commands: &allowed_commands,
     };
     let content = match adapter.chat_stream_invocation(&cwd, &spec) {

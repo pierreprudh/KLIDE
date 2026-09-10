@@ -98,7 +98,17 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
         // Coordination tools ride on the adapter's own MCP flag, interactive
         // and one-shot alike: a Mission attempt can publish its result too.
         if let Some(mcp) = &req.mcp {
-            command.push_str(&mcp.flags);
+            for arg in &mcp.args {
+                command.push(' ');
+                // A bare flag stays readable; anything else is quoted.
+                let bare_flag = arg.starts_with('-')
+                    && arg.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                if bare_flag {
+                    command.push_str(arg);
+                } else {
+                    command.push_str(&delegate::shell_quote(arg));
+                }
+            }
         }
         command
     } else if let Some(custom) = req.custom_cli.as_ref() {
@@ -273,7 +283,7 @@ mod tests {
         let mut req = request("cli:aider");
         req.custom_cli = Some(custom_cli());
         req.mcp = Some(McpWiring {
-            flags: " --should-not-appear".to_string(),
+            args: vec!["--should-not-appear".to_string()],
             env: vec![],
             files: vec![],
         });

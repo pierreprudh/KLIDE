@@ -50,6 +50,12 @@ pub struct ChatSpec<'a> {
     /// A session this conversation already opened, to continue instead of
     /// replacing. See [`Delegate::resumes_sessions`].
     pub resume: Option<&'a str>,
+    /// Klide's MCP server for this conversation (`Delegate::mcp_wiring`),
+    /// when the caller registered it — a Focus turn carries the same
+    /// coordination tools a PTY session does. Applied by
+    /// [`Delegate::chat_stream_invocation`]; the prose-only fallback never
+    /// gets it, since no adapter with a prose-only mode has an MCP client.
+    pub mcp: Option<&'a McpWiring>,
     /// Commands this project has already approved in Klide
     /// (`agent::command_allowlist`), exact or wildcard.
     ///
@@ -81,11 +87,12 @@ impl McpServerSpec {
     }
 }
 
-/// How one CLI is told about the MCP server: a flag fragment appended to its
-/// command (leading space), extra PTY env, and files to write before spawn.
+/// How one CLI is told about the MCP server: arguments appended to its
+/// command (a PTY spawn shell-quotes them, a headless turn passes them as
+/// is), extra process env, and files to write before spawn.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct McpWiring {
-    pub flags: String,
+    pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub files: Vec<(String, String)>,
 }
@@ -257,6 +264,10 @@ pub trait Delegate: Sync {
         Some(crate::cli::resolve_command(self.binary()).map(|cli| {
             let mut command = tokio::process::Command::new(cli);
             command.current_dir(cwd).args(args);
+            if let Some(mcp) = spec.mcp {
+                command.args(&mcp.args);
+                command.envs(mcp.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+            }
             command
         }))
     }

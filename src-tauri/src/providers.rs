@@ -1085,6 +1085,10 @@ pub(crate) struct ProviderTurn {
     /// subscription-CLI path reads them: a delegate runs its own permission
     /// layer, and a headless turn has no terminal to answer it in.
     pub allowed_commands: Vec<String>,
+    /// Klide's MCP server for this conversation, when the Harness registered
+    /// the Delegate as a coordination Run. Only the subscription-CLI path
+    /// reads it; every other provider gets Klide's native Tools instead.
+    pub mcp: Option<crate::delegate::McpWiring>,
     pub num_ctx: Option<usize>,
     pub num_predict: Option<usize>,
     pub reflection_level: Option<String>,
@@ -1149,6 +1153,7 @@ pub(crate) async fn dispatch(
         workspace_root,
         run_id,
         allowed_commands,
+        mcp,
         num_ctx,
         num_predict,
         reflection_level,
@@ -1190,6 +1195,7 @@ pub(crate) async fn dispatch(
                 workspace_root,
                 run_id,
                 allowed_commands,
+                mcp,
                 on_chunk,
             )
             .await

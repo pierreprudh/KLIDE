@@ -47,16 +47,16 @@ impl Delegate for Codex {
             crate::mcp_server::ENV_BRIDGE_URL,
             toml_str(&spec.bridge_url)
         );
-        let flags = [
+        let args = [
             format!("mcp_servers.klide.command={}", toml_str(&spec.command)),
             format!("mcp_servers.klide.args=[{args}]"),
             format!("mcp_servers.klide.env={env}"),
         ]
-        .iter()
-        .map(|kv| format!(" -c {}", shell_quote(kv)))
-        .collect::<String>();
+        .into_iter()
+        .flat_map(|kv| ["-c".to_string(), kv])
+        .collect::<Vec<_>>();
         Some(McpWiring {
-            flags,
+            args,
             env: vec![],
             files: vec![],
         })

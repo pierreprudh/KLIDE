@@ -312,6 +312,7 @@ async fn ai_chat(
             // A one-shot has no project approvals to carry: it is the
             // summarizer, which asks the model for prose and runs no tools.
             allowed_commands: Vec::new(),
+            mcp: None,
             num_ctx,
             num_predict,
             reflection_level,

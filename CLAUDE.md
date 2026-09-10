@@ -421,7 +421,11 @@ There are two doors onto that one journal, and no third:
   for up to two minutes; each request gets its own thread.
 
 A Delegate registers as a `delegate` Run in `delegate_pty_spawn`, its status
-hooks move its state, and PTY exit settles it. Delivery to a Delegate is pull
+hooks move its state, and PTY exit settles it. A Focus conversation on a
+Delegate runs headless turns through the Harness instead of a PTY; the run
+loop asks `RunSupervisor::delegate_mcp_wiring` for the same wiring each turn
+(same `{convoId}:{provider}` session id, Harness owns the Run's state) and the
+adapter's `chat_stream_invocation` applies it, so both surfaces act as one Run. Delivery to a Delegate is pull
 (`agent_wait`), because Klide owns no turn boundary inside a foreign CLI;
 waking an idle CLI when mail arrives (a Stop hook that blocks with the inbox as
 its reason) is the next slice. Do not add a direct journal writer outside the
