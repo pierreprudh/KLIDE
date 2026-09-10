@@ -86,6 +86,12 @@ still open.
 
 ### Delegate runs and Mission Control
 
+- **Terminals no longer paint `�` across a read boundary.** A PTY read can end
+  in the middle of a multi-byte character — an accent, a box-drawing line, an
+  emoji in a spinner — and decoding each read alone replaced both halves.
+  `pty_frame.rs` holds the incomplete tail back for the next read, in both the
+  Delegate PTY and the shell terminal, and the scrollback ring trims to a
+  character boundary so a replay never opens on half a glyph.
 - **Historical delegate runs settle.** Lifecycle state is inferred from each
   CLI's own turn markers (Claude Code, Codex, OpenCode, omp) instead of
   transcript recency alone; Klide-hosted PTY hook and exit state join onto
