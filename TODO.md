@@ -56,12 +56,15 @@ them.
   unparking natural-language scheduling or proactive suggestions.
 - [x] Agent coordination between Harness Runs (PR #84, 2026-09-05) and
   Delegate CLIs via the embedded MCP server `klide mcp coordination` +
-  app-side bridge (2026-09-10). Open follow-ups: wake an idle Delegate on
-  accepted mail (Claude Code Stop hook blocking with the inbox as reason);
-  re-bind Delegate sessions after an app restart (the bridge port changes, ptyd
-  sessions outlive it); dogfood Codex `-c` overrides after `resume` and
-  OpenCode's `OPENCODE_CONFIG` merge; hold #3 `From<AgentRunStatus>` in
-  coordination.rs.
+  app-side bridge (PR #93, 2026-09-10). Every Run with a Workspace is on the
+  plane whatever its Mode. Proven end to end by an opt-in test that drives a
+  real `claude -p` turn into the journal (`a_real_claude_code_turn`,
+  2026-09-11). Open follow-ups: wake an idle Delegate on accepted mail (Claude
+  Code Stop hook blocking with the inbox as reason); re-bind Delegate sessions
+  after an app restart (the bridge port changes while ptyd sessions outlive
+  it — today those sessions silently lose their agent tools); dogfood Codex
+  `-c` overrides after `resume` and OpenCode's `OPENCODE_CONFIG` merge; hold #3
+  `From<AgentRunStatus>` in coordination.rs.
 
 ### v0.6 Slice 1 — durable Mission tracer bullet (started 2026-07-22)
 

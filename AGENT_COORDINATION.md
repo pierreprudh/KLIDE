@@ -229,10 +229,19 @@ tests in `mcp_server.rs` now stand in for that:
 cargo build && cargo test --lib -- --ignored the_real_mcp_child
 ```
 
-What neither covers is a CLI's own permission layer — Claude Code refusing an
-MCP tool nobody granted, which a headless turn cannot prompt for. That is
-pinned in `claude_code.rs` (`klide_mcp_server_is_pre_allowed_on_a_headless_turn`)
-and, end to end, only by a real `claude -p` run.
+A third test closes the loop through the real CLI. It writes the MCP config the
+way the spawn does, invokes `claude -p` with the real argument builder, and asks
+the model to send a peer a message — then asserts the **journal**, not the
+prose: an envelope from the bound Run id, queued for review. That is what pins
+the one thing the others cannot, a CLI's own permission layer accepting
+`mcp__klide` on a turn with nobody there to approve it. It needs the binary, the
+`claude` CLI, a subscription and the network, and it spends a few cents:
+
+```bash
+cargo build && cargo test --lib -- --ignored a_real_claude_code_turn
+```
+
+Verified green on 2026-09-11, ~50s for the turn.
 
 ## Foundation success criteria
 

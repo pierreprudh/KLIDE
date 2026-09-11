@@ -668,6 +668,125 @@ mod chain {
             .contains("not bound"));
     }
 
+    /// The whole feature, through the real CLI: Klide writes the MCP config,
+    /// Claude Code starts the server itself, its model calls `agent_send`, and
+    /// the envelope lands in the journal stamped with this conversation's Run
+    /// id. The assertion is the journal, never the prose — a model can claim
+    /// anything, and what matters is what was durably written.
+    ///
+    /// Proves the two things the in-process tests cannot: the CLI's own
+    /// permission layer accepts `mcp__klide` on a headless turn (nobody is
+    /// there to answer its prompt), and the argument construction in
+    /// `chat_stream_args` is the one that actually works.
+    ///
+    /// Needs the binary, the `claude` CLI, a subscription and the network, and
+    /// it spends a few cents per run — so it is opt-in:
+    ///
+    /// ```text
+    /// cargo build && cargo test --lib -- --ignored a_real_claude_code_turn
+    /// ```
+    #[test]
+    #[ignore = "spends money: runs a real `claude -p` turn against a live bridge"]
+    fn a_real_claude_code_turn_writes_to_the_journal() {
+        use crate::delegate::{ChatSpec, McpServerSpec};
+        use std::io::Write;
+
+        let c = chain("claude");
+        let exe = std::env::current_exe().unwrap();
+        let server_bin = exe.parent().unwrap().parent().unwrap().join("klide");
+        assert!(
+            server_bin.exists(),
+            "run `cargo build` first: {} is missing",
+            server_bin.display()
+        );
+        let Ok(claude) = crate::cli::resolve_command("claude") else {
+            panic!("this test needs the `claude` CLI on the login-shell PATH");
+        };
+
+        // Exactly what pty.rs does at spawn: ask the adapter how its CLI is
+        // told about the server, then write the files it asks for.
+        let adapter = crate::delegate::lookup("claude-code").unwrap();
+        let wiring = adapter
+            .mcp_wiring(&McpServerSpec {
+                command: server_bin.to_string_lossy().to_string(),
+                args: vec!["mcp".to_string(), "coordination".to_string()],
+                bridge_url: c.url.clone(),
+                config_dir: c.root.clone(),
+                file_stem: "convo-1-claude-code".to_string(),
+            })
+            .expect("Claude Code has MCP wiring");
+        for (path, content) in &wiring.files {
+            std::fs::write(path, content).unwrap();
+        }
+
+        // The real argument builder, including the --allowedTools grant.
+        let spec = ChatSpec {
+            model: "haiku",
+            resume: None,
+            mcp: Some(&wiring),
+            allowed_commands: &[],
+        };
+        let args = adapter.chat_stream_args(&c.root, &spec).unwrap();
+        let mut child = std::process::Command::new(&claude)
+            .current_dir(&c.root)
+            .args(&args)
+            .args(&wiring.args)
+            .envs(wiring.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                b"Call agent_list. Then call agent_send to send the other agent \
+                  the body 'ping from the test' with kind progress. Then reply DONE.",
+            )
+            .unwrap();
+
+        // A turn should take seconds; don't let a hung CLI hang the suite.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            match child.try_wait().unwrap() {
+                Some(_) => break,
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    panic!("the claude turn did not finish within 120s");
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(500)),
+            }
+        }
+        let out = child.wait_with_output().unwrap();
+
+        // The journal is the assertion. Prose is only there to explain a failure.
+        let snapshot = coordination::read_snapshot(&c.store, &c.root).unwrap();
+        let sent = snapshot.envelopes.iter().find(|e| {
+            e.envelope.body.contains("ping from the test") && e.envelope.to_run_id == "run_kit"
+        });
+        let Some(sent) = sent else {
+            panic!(
+                "no envelope reached the journal.\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        assert_eq!(
+            sent.envelope.from,
+            CoordinationActor::Run {
+                run_id: "convo-1".into()
+            },
+            "the CLI's message is stamped with the session Klide bound"
+        );
+        assert_eq!(
+            sent.delivery_state,
+            CoordinationDeliveryState::Queued,
+            "and it waits for the receiving operator"
+        );
+    }
+
     /// The one thing the in-process tests cannot prove: that the app binary,
     /// started the way an MCP client starts it, carries `KLIDE_COORD_URL`
     /// through a filtered child environment and serves MCP on its stdio.
