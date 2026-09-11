@@ -53,6 +53,7 @@ export function DelegateTerminalSurface({
   parentRunId,
   resumeSessionId,
   model,
+  effort,
   task,
   attachOnly = false,
   readOnly = false,
@@ -69,6 +70,10 @@ export function DelegateTerminalSurface({
   /** Selected model for delegates that accept a model flag, and for custom
    *  CLI templates using `{model}`. */
   model?: string | null;
+  /** The reasoning effort for CLIs that take one (Codex reads it as a
+   *  `-c model_reasoning_effort=` override). Only ever a level the CLI
+   *  published for this model — the picker is fed from its own manifest. */
+  effort?: string | null;
   /** Pass through to `delegate_pty_spawn` as the CLI's first prompt — used
    *  for Klide handoff so a fresh delegate session opens with the original
    *  user message already sent. */
@@ -114,6 +119,7 @@ export function DelegateTerminalSurface({
             parentRunId,
             resumeSessionId: resumeSessionId ?? null,
             model: model ?? null,
+            effort: effort ?? null,
             task: task ?? null,
           },
       onReady: syncSize,

@@ -7,8 +7,9 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
-  modelSupportsReflection as queryModelSupportsReflection,
+  modelReflectionLevels as queryModelReflectionLevels,
 } from "../ipc/aiProviders";
+import { sortReflectionLevels } from "../reflectionLevels";
 import { THEMES } from "../theme";
 import { ProviderLogo } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
@@ -417,7 +418,11 @@ export function SettingsPanel({
   const [customCliAgents, setCustomCliAgents] = useState<CustomCli[]>([]);
   const [ollamaAccount, setOllamaAccount] = useState<OllamaAccountStatus | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
-  const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
+  // The efforts this provider+model accepts, weakest first (empty = no dial).
+  // A Codex model publishes its own set, so the rows are built from it rather
+  // than from a fixed list that would offer levels the CLI rejects.
+  const [reflectionLevels, setReflectionLevels] = useState<string[]>([]);
+  const modelSupportsReflection = reflectionLevels.length > 0;
 
   const subscriptionProviderEntries = useMemo(
     () => [
@@ -440,10 +445,10 @@ export function SettingsPanel({
     let cancelled = false;
     async function checkReflectionSupport() {
       try {
-        const supports = await queryModelSupportsReflection(settingsProvider, aiModel);
-        if (!cancelled) setModelSupportsReflection(supports);
+        const levels = await queryModelReflectionLevels(settingsProvider, aiModel);
+        if (!cancelled) setReflectionLevels(sortReflectionLevels(levels));
       } catch {
-        if (!cancelled) setModelSupportsReflection(false);
+        if (!cancelled) setReflectionLevels([]);
       }
     }
     void checkReflectionSupport();
@@ -1366,14 +1371,10 @@ export function SettingsPanel({
                         label="Reflection"
                         disabled={!modelSupportsReflection}
                         value={modelSupportsReflection ? harnessSettings?.reflectionLevels?.[aiModel] : undefined}
-	                        options={[
-	                          { label: "Auto", value: undefined },
-	                          { label: "minimal", value: "minimal" },
-	                          { label: "low", value: "low" },
-	                          { label: "medium", value: "medium" },
-	                          { label: "high", value: "high" },
-	                          { label: "xhigh", value: "xhigh" },
-	                        ]}
+                        options={[
+                          { label: "Auto", value: undefined },
+                          ...reflectionLevels.map((level) => ({ label: level, value: level })),
+                        ]}
                         onChange={(v) => {
                           if (!modelSupportsReflection) return;
                           const next = { ...(harnessSettings?.reflectionLevels ?? {}) };

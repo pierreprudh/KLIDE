@@ -43,12 +43,12 @@ import ToastHost from "./components/ToastHost";
 import { notify } from "./toast";
 import { onDelegateExit } from "./ipc/delegatePty";
 import {
-  gitStatus as fetchGitStatus,
   gitWorktreeAdd,
   gitWorktreeMerge,
   gitWorktreeRemove,
   createPr,
 } from "./ipc/git";
+import { refreshGitStatus, useGitStatus } from "./gitStatus";
 import { eventsToConversation, runMessagesToMsgs } from "./components/ai/replayConversation";
 import {
   CONVERSATIONS_CHANGED_EVENT,
@@ -56,13 +56,12 @@ import {
   loadConversations,
   loadPanelSession,
 } from "./components/ai/storedConversations";
-import type { AgentAttachment, AgentEvent, ProviderId } from "./agent/types";
+import type { AgentAttachment, AgentEvent, AgentMode, ProviderId } from "./agent/types";
 import { defaultModelForProvider, providerName } from "./agent/providers";
 import type { Conversation } from "./components/ai/types";
 import { summarizeAndHandoff } from "./components/ai/summarize";
 import { fetchRunMessages, type Run, type RunMessage as MissionRunMessage } from "./runs";
 import { isDelegateId, type DelegateId } from "./delegates";
-import type { GitStatus } from "./gitTypes";
 import { ProfileModal } from "./components/ProfileModal";
 import { getNextThemeId } from "./theme";
 import { SETTINGS, getSetting, setSetting, useSetting } from "./settingsStore";
@@ -213,6 +212,9 @@ function App() {
   // message. Cleared by the same consume callback, so a second task never
   // inherits the first one's attachments.
   const [focusInitialAttachments, setFocusInitialAttachments] = useState<AgentAttachment[]>([]);
+  // The mode a start-stage slash command pinned to its first turn (/init,
+  // /interview). Null for a typed task — the panel's own mode applies.
+  const [focusInitialMode, setFocusInitialMode] = useState<AgentMode | null>(null);
   // Focus split — a second conversation beside the first. Only the *identity*
   // of the second panel lives here; the panel itself is an ordinary member of
   // the AI fleet, so both halves are fully wired conversations rather than a
@@ -357,7 +359,9 @@ function App() {
     autoSave: autoSaveMode,
     confirmCloseDirty,
   });
-  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  // One poll per root lives in `gitStatus.ts`; this only re-renders when
+  // the branch or the changed-file list actually differs.
+  const gitStatus = useGitStatus(workspaceRoot);
   const [recentFolders, setRecentFolders] = useState<string[]>(() => {
     try {
       const parsed = JSON.parse(
@@ -1473,9 +1477,11 @@ function App() {
         variant={opts?.variant}
         initialMessage={opts?.initialMessage ?? null}
         initialAttachments={opts?.initialAttachments ?? null}
+        initialMode={opts?.initialMode ?? null}
         onInitialMessageConsumed={() => {
           setFocusInitialMessage(null);
           setFocusInitialAttachments([]);
+          setFocusInitialMode(null);
         }}
         followUpMessage={followUpsByPanel[panelId] ?? null}
         onFollowUpConsumed={() => consumeFollowUp(panelId)}
@@ -1905,6 +1911,7 @@ function App() {
           initialMessage: opts?.aiVariant === "focus" ? focusInitialMessage : null,
           initialAttachments:
             opts?.aiVariant === "focus" ? focusInitialAttachments : null,
+          initialMode: opts?.aiVariant === "focus" ? focusInitialMode : null,
         });
       default:
         return (
@@ -2007,19 +2014,6 @@ function App() {
     if (typeof parent !== "string") return;
     const path = await invoke<string>("project_clone", { url, parentDir: parent });
     setWorkspaceRoot(path);
-  }
-
-  async function refreshGitStatus(root: string | null) {
-    if (!root) {
-      setGitStatus(null);
-      return;
-    }
-    try {
-      const next = await fetchGitStatus(root);
-      setGitStatus(next);
-    } catch {
-      setGitStatus(null);
-    }
   }
 
   function eventsToTitle(events: AgentEvent[]): string {
@@ -2604,26 +2598,6 @@ function App() {
     void invoke("set_active_workspace", { root: workspaceRoot }).catch(() => {
       /* command unavailable (non-Tauri preview) — ignore */
     });
-  }, [workspaceRoot]);
-
-  useEffect(() => {
-    if (!workspaceRoot) {
-      setGitStatus(null);
-      return;
-    }
-
-    let cancelled = false;
-    const refresh = () => {
-      if (!cancelled) refreshGitStatus(workspaceRoot);
-    };
-
-    refresh();
-    const interval = window.setInterval(refresh, 3_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
   }, [workspaceRoot]);
 
   // Interactive delegate PTY (Claude Code / Codex / OpenCode) edits files
@@ -3307,7 +3281,7 @@ function App() {
                     setFocusConvoError(null);
                     openFocusConversation(convo, "primary");
                   }}
-                  onSubmit={(text, attachments) => {
+                  onSubmit={(text, attachments, opts) => {
                     markFolderWorked(workspaceRoot);
                     // A normal Focus task runs in the open Workspace. Worktree
                     // isolation is opt-in through the dedicated action/fork
@@ -3315,6 +3289,7 @@ function App() {
                     setAiPanelCwd(aiPanels[0]?.id ?? "ai-main", undefined);
                     setFocusInitialMessage(text);
                     setFocusInitialAttachments(attachments);
+                    setFocusInitialMode(opts?.mode ?? null);
                     setFocusChatActive(true);
                   }}
                   /* Focus's canvas reaches the shared destinations through the

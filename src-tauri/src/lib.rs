@@ -22,6 +22,7 @@ mod pricing;
 mod providers;
 mod pty;
 mod pty_client;
+mod pty_frame;
 mod pty_wire;
 pub mod pty_daemon;
 mod pty_host;
@@ -934,6 +935,7 @@ pub fn run() {
             models::ai_model_supports_tools,
             models::ai_model_supports_vision,
             models::ai_model_supports_reflection,
+            models::ai_model_reflection_levels,
             models::ai_count_tokens,
             ai_list_tools,
             search_in_files,

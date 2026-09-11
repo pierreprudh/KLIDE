@@ -140,6 +140,15 @@ pub trait Delegate: Sync {
     /// `session_id` arrives trimmed and non-empty.
     fn resume_arg(&self, session_id: &str) -> String;
 
+    /// The fragment selecting a reasoning effort, with a leading space, for a
+    /// CLI that has such a switch. The default is `None`: most CLIs don't take
+    /// one from Klide, and inventing a flag would just make the launch fail.
+    /// `level` arrives trimmed, non-empty, and — because the picker is fed by
+    /// `models::codex_reasoning_levels` — already one the CLI published.
+    fn effort_arg(&self, _level: &str) -> Option<String> {
+        None
+    }
+
     /// Try to pull the CLI's own session id out of early PTY output, so
     /// Mission Control can link the run back to its parent. Most CLIs don't
     /// announce one — the default finds nothing.
@@ -158,19 +167,27 @@ pub trait Delegate: Sync {
         task: Option<&str>,
         model: Option<&str>,
         resume_session_id: Option<&str>,
+        effort: Option<&str>,
     ) -> String {
         let task = task.map(str::trim).filter(|t| !t.is_empty());
         let model = model
             .map(str::trim)
             .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case(CLI_DEFAULT_MODEL));
         let resume = resume_session_id.map(str::trim).filter(|s| !s.is_empty());
+        let effort = effort.map(str::trim).filter(|e| !e.is_empty());
 
         let prefix = self.spawn_prefix(task.is_some(), resume.is_some());
         let resume_arg = resume.map(|id| self.resume_arg(id)).unwrap_or_default();
         let model_arg = model.map(|m| self.model_arg(m)).unwrap_or_default();
+        let effort_arg = effort
+            .and_then(|level| self.effort_arg(level))
+            .unwrap_or_default();
         match task {
-            Some(t) => format!("{prefix}{resume_arg}{model_arg} {}", shell_quote(t)),
-            None => format!("{prefix}{resume_arg}{model_arg}"),
+            Some(t) => format!(
+                "{prefix}{resume_arg}{model_arg}{effort_arg} {}",
+                shell_quote(t)
+            ),
+            None => format!("{prefix}{resume_arg}{model_arg}{effort_arg}"),
         }
     }
 
@@ -498,25 +515,46 @@ mod tests {
 
     #[test]
     fn claude_dispatch_with_task_and_model() {
-        let cmd = ClaudeCode.spawn_command(Some("fix the bug"), Some("claude-sonnet-4-6"), None);
+        let cmd = ClaudeCode.spawn_command(Some("fix the bug"), Some("claude-sonnet-4-6"), None, None);
         assert_eq!(cmd, "claude --model 'claude-sonnet-4-6' 'fix the bug'");
     }
 
     #[test]
     fn claude_resume() {
-        let cmd = ClaudeCode.spawn_command(None, None, Some("abc-123"));
+        let cmd = ClaudeCode.spawn_command(None, None, Some("abc-123"), None);
         assert_eq!(cmd, "claude --resume 'abc-123'");
     }
 
     #[test]
     fn codex_dispatch_with_model() {
-        let cmd = Codex.spawn_command(Some("write tests"), Some("gpt-5.4"), None);
+        let cmd = Codex.spawn_command(Some("write tests"), Some("gpt-5.4"), None, None);
         assert_eq!(cmd, "codex -m 'gpt-5.4' 'write tests'");
     }
 
     #[test]
+    fn only_codex_takes_a_reasoning_effort() {
+        // Codex has no effort flag: `-c key=value` overrides one config key
+        // for this launch, which is how the picker's choice reaches the CLI
+        // without rewriting the user's ~/.codex/config.toml.
+        let cmd = Codex.spawn_command(Some("write tests"), Some("gpt-6-astra"), None, Some("high"));
+        assert_eq!(
+            cmd,
+            "codex -m 'gpt-6-astra' -c model_reasoning_effort='high' 'write tests'"
+        );
+        // Every other CLI takes no such switch, so a level that reaches them
+        // (a stale per-model setting, say) must not invent a flag.
+        for cmd in [
+            ClaudeCode.spawn_command(Some("t"), None, None, Some("high")),
+            OpenCode.spawn_command(Some("t"), None, None, Some("high")),
+            Omp.spawn_command(Some("t"), None, None, Some("high")),
+        ] {
+            assert!(!cmd.contains("high"), "{cmd}");
+        }
+    }
+
+    #[test]
     fn codex_resume_is_a_subcommand() {
-        let cmd = Codex.spawn_command(None, None, Some("sess-9"));
+        let cmd = Codex.spawn_command(None, None, Some("sess-9"), None);
         assert_eq!(cmd, "codex resume 'sess-9'");
     }
 
@@ -524,7 +562,7 @@ mod tests {
     fn opencode_task_gets_run_subcommand() {
         // Bare `opencode '<task>'` treats the arg as a project path and dies;
         // only `run` accepts a message.
-        let cmd = OpenCode.spawn_command(Some("add a feature"), Some("minimax-m3"), None);
+        let cmd = OpenCode.spawn_command(Some("add a feature"), Some("minimax-m3"), None, None);
         assert_eq!(cmd, "opencode run -m 'minimax-m3' 'add a feature'");
     }
 
@@ -532,20 +570,20 @@ mod tests {
     fn opencode_resume_skips_run_even_with_task() {
         // In resume mode the TUI must come up interactive — `run` would make
         // it one-shot. The task still lands as the first prompt.
-        let cmd = OpenCode.spawn_command(Some("continue"), None, Some("oss-42"));
+        let cmd = OpenCode.spawn_command(Some("continue"), None, Some("oss-42"), None);
         assert_eq!(cmd, "opencode -s 'oss-42' 'continue'");
     }
 
     #[test]
     fn opencode_without_task_stays_bare_tui() {
         // `opencode run` with no message errors out — no task means no `run`.
-        let cmd = OpenCode.spawn_command(None, None, None);
+        let cmd = OpenCode.spawn_command(None, None, None, None);
         assert_eq!(cmd, "opencode");
     }
 
     #[test]
     fn blank_values_are_treated_as_absent() {
-        let cmd = ClaudeCode.spawn_command(Some("  "), Some(""), Some(" \t"));
+        let cmd = ClaudeCode.spawn_command(Some("  "), Some(""), Some(" \t"), None);
         assert_eq!(cmd, "claude");
     }
 
@@ -580,15 +618,15 @@ mod tests {
     fn default_model_sentinel_omits_the_model_flag() {
         // "default" means "the CLI's own configured default" — forcing a
         // --model here would override what the user set up in the CLI.
-        let cmd = ClaudeCode.spawn_command(Some("fix the bug"), Some("default"), None);
+        let cmd = ClaudeCode.spawn_command(Some("fix the bug"), Some("default"), None, None);
         assert_eq!(cmd, "claude 'fix the bug'");
-        let cmd = Codex.spawn_command(None, Some("Default"), None);
+        let cmd = Codex.spawn_command(None, Some("Default"), None, None);
         assert_eq!(cmd, "codex");
     }
 
     #[test]
     fn task_with_single_quote_is_escaped() {
-        let cmd = Codex.spawn_command(Some("don't break"), None, None);
+        let cmd = Codex.spawn_command(Some("don't break"), None, None, None);
         assert_eq!(cmd, "codex 'don'\\''t break'");
     }
 

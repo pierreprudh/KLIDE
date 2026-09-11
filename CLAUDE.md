@@ -101,6 +101,7 @@ Klide/
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
+│   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
 │   ├── gitGraph.ts              Lane layout for the commit graph (gitTypes.ts: wire types)
 │   ├── gitReview.ts             Pure Git Review policy — derivations + mutating-action outcomes
 │   ├── gridLayouts.ts           Freeform grid layouts (layouts.ts: fixed presets)
@@ -240,7 +241,8 @@ Klide/
     │   ├── pty_daemon.rs         Detached `klide ptyd` server over a unix socket
     │   ├── pty_client.rs         App-side socket transport to ptyd (stubbed off-unix)
     │   ├── pty_wire.rs           Portable ptyd wire vocabulary — Request/Response/Event
-    │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, MCP wiring
+    │   ├── pty_frame.rs          UTF-8 framing for PTY reads — a character split across reads stays whole
+    │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, effort + MCP wiring
     │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one writer gate, replayed snapshot
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge

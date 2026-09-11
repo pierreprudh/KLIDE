@@ -2,21 +2,9 @@
 
 Notable changes per milestone. Dates are completion dates.
 
-## Unreleased — on the v0.6 line (since 2026-08-23)
+## Unreleased — on the v0.6 line (since 2026-09-11)
 
-Hardening after the 0.6.1 cut. The v0.6 orchestration milestone itself is
-still open.
-
-### Project Memory
-
-- **Project Memory is now a native Harness capability.** Durable entries use a
-  versioned schema with kinds, review state, tags, source references, and
-  supersession. Plan and Goal runs can call `memory_search` and `memory_read`;
-  deterministic offline ranking returns match reasons and provenance, normal
-  recall excludes stale/superseded knowledge, and the Transcript stamps both
-  Tools with `read_project_memory` instead of pretending they read Workspace
-  files. Markdown remains the local source of truth; no external provider or
-  network service is involved.
+Work after the 0.6.2 cut.
 
 ### Agent coordination
 
@@ -57,7 +45,45 @@ still open.
   Codex `-c mcp_servers.klide.*` overrides, OpenCode `OPENCODE_CONFIG`; Oh My
   Pi and custom CLIs run unchanged.
 
+## v0.6.2 — Memory, Routing, Recovery (2026-09-11)
+
+Hardening after the 0.6.1 cut. Project Memory becomes a Harness capability
+rather than a panel, the Harness starts choosing its own model and its own
+reasoning level, and a run that loses its view — a reload, a panel switch, an
+app restart, a CLI that never announced itself — now heals from what was
+written down instead of reading as stuck. The v0.6 orchestration milestone
+itself is still open: Missions as outcomes, budgets, capacity, capability
+routing and validation contracts are unchanged. The macOS bundle is still
+ad-hoc signed and not Apple-notarized.
+
+### Project Memory
+
+- **Project Memory is now a native Harness capability.** Durable entries use a
+  versioned schema with kinds, review state, tags, source references, and
+  supersession. Plan and Goal runs can call `memory_search` and `memory_read`;
+  deterministic offline ranking returns match reasons and provenance, normal
+  recall excludes stale/superseded knowledge, and the Transcript stamps both
+  Tools with `read_project_memory` instead of pretending they read Workspace
+  files. Markdown remains the local source of truth; no external provider or
+  network service is involved.
+
 ### Harness
+
+- **A model's reasoning levels come from the CLI, not from a list Klide keeps.**
+  Every picker offered the same five levels — minimal, low, medium, high, xhigh
+  — to every model. For a Codex run that was wrong twice over: `gpt-6-astra`
+  publishes low, medium, high, xhigh, max and ultra, and no `minimal` at all,
+  so Klide showed a level the CLI rejects and hid two it has. Worse, the level
+  a Codex run was given went nowhere — it was saved into harness settings,
+  which only the Klide-wire adapters read. The set is now a backend fact per
+  provider and model, read from the Codex CLI's own model manifest for a Codex
+  run and from the provider registry for a wire run, and a CLI with no such
+  switch shows no dial at all. The choice reaches Codex as a `-c
+  model_reasoning_effort=` override for that launch, leaving the user's
+  `config.toml` alone. A level saved against another model reads as Auto
+  instead of being sent, and the legacy `max`→`xhigh` rewrite now runs only
+  where `max` was merely an old name for it: a Codex `max` sits one step above
+  `xhigh`, and folding it would have quietly run the task weaker than asked.
 
 - **Auto picks the model.** A new `Auto` Provider at the top of every picker
   leaves the choice to the Harness. At run start Rust rules out what cannot do
@@ -125,6 +151,12 @@ still open.
 
 ### Delegate runs and Mission Control
 
+- **Terminals no longer paint `�` across a read boundary.** A PTY read can end
+  in the middle of a multi-byte character — an accent, a box-drawing line, an
+  emoji in a spinner — and decoding each read alone replaced both halves.
+  `pty_frame.rs` holds the incomplete tail back for the next read, in both the
+  Delegate PTY and the shell terminal, and the scrollback ring trims to a
+  character boundary so a replay never opens on half a glyph.
 - **Historical delegate runs settle.** Lifecycle state is inferred from each
   CLI's own turn markers (Claude Code, Codex, OpenCode, omp) instead of
   transcript recency alone; Klide-hosted PTY hook and exit state join onto
@@ -219,6 +251,18 @@ still open.
 
 ### Performance and hygiene
 
+- **The keyring backend is chosen per target.** `apple-native` was named as
+  an unconditional feature, so the crate could not build anywhere but macOS.
+  Cargo now selects `apple-native` on macOS, `windows-native` on Windows, and
+  `sync-secret-service` + `crypto-rust` on Linux through target-specific
+  dependency tables; the call sites are backend-neutral and did not change.
+  The second of the two Windows/Linux compile blockers; what remains is a
+  build on each OS.
+- **Git status is a store, not App state.** `gitStatus.ts` polls each
+  workspace root once while anyone listens and only wakes subscribers when
+  the branch or the changed-file list actually differs. App used to store a
+  fresh object every three seconds, re-rendering itself and every surface
+  under it whether or not a file had changed.
 - Conversation persists are debounced (streaming was round-tripping the whole
   100-conversation index every ~50 ms), and the editor-tab disk poll stops
   re-registering App's listeners when nothing changed.

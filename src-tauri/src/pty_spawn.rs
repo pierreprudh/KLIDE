@@ -30,6 +30,9 @@ pub struct SpawnRequest {
     pub cwd: Option<String>,
     pub task: Option<String>,
     pub model: Option<String>,
+    /// The reasoning effort the user picked, when the CLI publishes a set of
+    /// them (Codex does). Ignored by every adapter without an `effort_arg`.
+    pub effort: Option<String>,
     pub resume_session_id: Option<String>,
     /// Mission linkage — valid only as a pair (see [`spawn_spec_for`]).
     pub mission_id: Option<String>,
@@ -89,6 +92,7 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
                 req.task.as_deref(),
                 req.model.as_deref(),
                 req.resume_session_id.as_deref(),
+                req.effort.as_deref(),
             )
         };
         // Coordination tools ride on the adapter's own MCP flag, interactive
@@ -183,6 +187,7 @@ mod tests {
             cwd: None,
             task: None,
             model: None,
+            effort: None,
             resume_session_id: None,
             mission_id: None,
             mission_task_id: None,
@@ -322,6 +327,59 @@ mod tests {
                 "{provider}: adapters watch for the CLI's own session id"
             );
         }
+    }
+
+    #[test]
+    fn a_reasoning_effort_reaches_only_the_cli_that_takes_one() {
+        // The picker is fed by the CLI's own manifest, so the level arriving
+        // here is one Codex published. It rides as a `-c` override, which
+        // changes this launch without touching ~/.codex/config.toml.
+        let expect = [
+            (
+                "codex",
+                "codex -m 'gpt-6-astra' -c model_reasoning_effort='max' 'fix the bug'",
+            ),
+            ("claude-code", "claude --model 'gpt-6-astra' 'fix the bug'"),
+            ("opencode", "opencode run -m 'gpt-6-astra' 'fix the bug'"),
+            ("omp", "omp --model 'gpt-6-astra' 'fix the bug'"),
+        ];
+        for (provider, command) in expect {
+            let mut req = request(provider);
+            req.task = Some("fix the bug".to_string());
+            req.model = Some("gpt-6-astra".to_string());
+            req.effort = Some("max".to_string());
+            assert_eq!(spawn_spec_for(req).unwrap().command, command, "{provider}");
+        }
+    }
+
+    #[test]
+    fn a_blank_effort_leaves_the_cli_on_its_own_default() {
+        // "Auto" in the picker is the absence of a level, and a whitespace
+        // value from a stale setting has to read the same way — never as an
+        // empty `-c model_reasoning_effort=`, which Codex would reject.
+        for effort in [None, Some(String::new()), Some("  ".to_string())] {
+            let mut req = request("codex");
+            req.task = Some("fix the bug".to_string());
+            req.effort = effort.clone();
+            assert_eq!(
+                spawn_spec_for(req).unwrap().command,
+                "codex 'fix the bug'",
+                "{effort:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mission_one_shot_carries_no_effort() {
+        // Approval freezes worker kind, provider and model into the task
+        // Markdown; an effort is not part of that frozen spec, so a Mission
+        // attempt runs at the CLI's own configured level.
+        let mut req = request("codex");
+        req.task = Some("fix the bug".to_string());
+        req.effort = Some("max".to_string());
+        req.one_shot = true;
+        let command = spawn_spec_for(req).unwrap().command;
+        assert!(!command.contains("model_reasoning_effort"), "{command}");
     }
 
     #[test]

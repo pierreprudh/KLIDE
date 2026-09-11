@@ -69,6 +69,17 @@ impl Delegate for Codex {
         format!(" resume {}", shell_quote(session_id))
     }
 
+    /// Codex has no effort flag — it reads `model_reasoning_effort` from
+    /// `~/.codex/config.toml`, and `-c key=value` overrides one config key for
+    /// this launch only. Klide passes the level the user picked that way, so
+    /// the choice reaches the CLI without editing the user's config file.
+    fn effort_arg(&self, level: &str) -> Option<String> {
+        Some(format!(
+            " -c model_reasoning_effort={}",
+            shell_quote(level)
+        ))
+    }
+
     fn mission_command(&self, task: Option<&str>, model: Option<&str>) -> Result<String, String> {
         let task = self.mission_task(task)?;
         let model_arg = self.mission_model_arg(model);

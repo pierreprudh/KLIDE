@@ -115,6 +115,9 @@ impl Scrollback {
         let overflow = self.buf.len().saturating_sub(SCROLLBACK_CAP);
         if overflow > 0 {
             self.buf.drain(..overflow);
+            // The cap may have cut a character in half; a replay must not
+            // open on the orphaned tail of one.
+            crate::pty_frame::skip_partial_char_prefix(&mut self.buf);
         }
         self.seq += 1;
         self.persist(bytes);
@@ -633,12 +636,24 @@ impl SessionHost {
             // traffic at ~60 events/s per session; nothing is ever left stuck.
             let mut buf = [0u8; 65536];
             let mut matched_external_id = false;
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 {
-                    break;
+            // A read can end in the middle of a multi-byte character; the
+            // framer carries that tail into the next read instead of
+            // painting `�` twice.
+            let mut framer = crate::pty_frame::Utf8Framer::new();
+            loop {
+                let (chunk, eof) = match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => (framer.finish(), true),
+                    Ok(n) => (framer.push(&buf[..n]), false),
+                };
+                if chunk.is_empty() {
+                    // Either the child is gone, or this read ended inside a
+                    // character and the whole of it is still pending.
+                    if eof {
+                        break;
+                    }
+                    continue;
                 }
                 updated_ms.store(now_ms(), Ordering::Relaxed);
-                let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
                 // Try to detect the CLI's own session ID from startup output
                 // (only OpenCode announces one today).
                 if !matched_external_id {

@@ -697,14 +697,65 @@ fn is_claude_model_id(model: &str) -> bool {
         .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
-pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::Path::new(&home).join(".codex/models_cache.json");
-    let text = std::fs::read_to_string(path).ok()?;
+/// The Codex CLI's own model manifest (`~/.codex/models_cache.json`), which it
+/// refreshes from OpenAI and then obeys. Klide reads that file rather than
+/// keeping a second table of OpenAI model facts — a private copy would be
+/// wrong the day a model ships or an effort is renamed.
+/// The read against an explicit home, the way every Delegate adapter
+/// takes its `home` — so the manifest parsing is exercised by a test with a
+/// fixture rather than by whatever sits in the developer's `~/.codex`.
+fn codex_manifest_models_in(home: &std::path::Path) -> Option<Vec<serde_json::Value>> {
+    let text = std::fs::read_to_string(home.join(".codex/models_cache.json")).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let mut models: Vec<String> = value
-        .get("models")?
+    Some(value.get("models")?.as_array()?.clone())
+}
+
+fn codex_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+/// One manifest row, by the slug the CLI takes on `-m`.
+fn codex_manifest_entry_in(
+    home: &std::path::Path,
+    model: &str,
+) -> Option<serde_json::Value> {
+    codex_manifest_models_in(home)?
+        .into_iter()
+        .find(|entry| entry.get("slug").and_then(|slug| slug.as_str()) == Some(model))
+}
+
+/// The reasoning efforts one Codex model accepts, weakest first, straight from
+/// the manifest. The sets differ per model — `gpt-6-astra` takes low…ultra and
+/// no `minimal`, `gpt-5.5` stops at `xhigh` — so Klide offers exactly the set
+/// the CLI published for the chosen model, or no dial at all.
+pub(crate) fn codex_reasoning_levels(model: &str) -> Option<Vec<String>> {
+    codex_reasoning_levels_in(&codex_home()?, model)
+}
+
+fn codex_reasoning_levels_in(home: &std::path::Path, model: &str) -> Option<Vec<String>> {
+    reasoning_levels_of(&codex_manifest_entry_in(home, model)?)
+}
+
+/// The `supported_reasoning_levels` of one manifest row. Split out from the
+/// file read so the shape this depends on is pinned by a test instead of by
+/// whatever happens to sit in the developer's `~/.codex`.
+fn reasoning_levels_of(entry: &serde_json::Value) -> Option<Vec<String>> {
+    let levels: Vec<String> = entry
+        .get("supported_reasoning_levels")?
         .as_array()?
+        .iter()
+        .filter_map(|level| level.get("effort").and_then(|effort| effort.as_str()))
+        .map(str::to_string)
+        .collect();
+    (!levels.is_empty()).then_some(levels)
+}
+
+pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
+    codex_cached_models_in(&codex_home()?)
+}
+
+fn codex_cached_models_in(home: &std::path::Path) -> Option<Vec<String>> {
+    let mut models: Vec<String> = codex_manifest_models_in(home)?
         .iter()
         .filter(|model| model.get("visibility").and_then(|v| v.as_str()) != Some("hide"))
         .filter_map(|model| model.get("slug").and_then(|slug| slug.as_str()))
@@ -720,20 +771,13 @@ pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
 }
 
 fn codex_context_window(model: &str) -> Option<usize> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::Path::new(&home).join(".codex/models_cache.json");
-    let text = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value
-        .get("models")?
-        .as_array()?
-        .iter()
-        .find(|entry| entry.get("slug").and_then(|slug| slug.as_str()) == Some(model))
-        .and_then(|entry| {
-            entry
-                .get("context_window")
-                .and_then(|window| window.as_u64())
-        })
+    codex_context_window_in(&codex_home()?, model)
+}
+
+fn codex_context_window_in(home: &std::path::Path, model: &str) -> Option<usize> {
+    codex_manifest_entry_in(home, model)?
+        .get("context_window")
+        .and_then(|window| window.as_u64())
         .map(|window| window as usize)
 }
 
@@ -1025,13 +1069,56 @@ async fn ollama_advertises_vision(model: &str) -> Result<bool, String> {
         .unwrap_or(false))
 }
 
+/// The levels a Klide-wire run offers when the model reasons at all. Klide owns
+/// this vocabulary for its own adapters — it maps each one to OpenAI's
+/// `reasoning_effort` and to an Anthropic thinking budget (see `adapters.rs`).
+/// A Delegate CLI does not use it: the CLI publishes its own set.
+const WIRE_REFLECTION_LEVELS: [&str; 5] = ["minimal", "low", "medium", "high", "xhigh"];
+
+/// Which reasoning efforts this provider+model actually accepts, weakest
+/// first. Empty means "no dial here", and every surface reads it that way — a
+/// picker that offers a level the model ignores is worse than no picker.
+#[tauri::command]
+pub(crate) async fn ai_model_reflection_levels(
+    state: tauri::State<'_, ReflectionProbeCache>,
+    provider: String,
+    model: String,
+) -> Result<Vec<String>, String> {
+    resolve_reflection_levels(&state, &provider, &model).await
+}
+
 #[tauri::command]
 pub(crate) async fn ai_model_supports_reflection(
     state: tauri::State<'_, ReflectionProbeCache>,
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    resolve_reflection_support(&state, &provider, &model).await
+    Ok(!resolve_reflection_levels(&state, &provider, &model)
+        .await?
+        .is_empty())
+}
+
+async fn resolve_reflection_levels(
+    state: &ReflectionProbeCache,
+    provider: &str,
+    model: &str,
+) -> Result<Vec<String>, String> {
+    // A Delegate CLI reasons on its own terms, so the levels are the CLI's,
+    // not Klide's. Codex publishes a per-model set in its manifest; the other
+    // CLIs take no effort switch from Klide, so they get no dial.
+    if crate::delegate::lookup(provider).is_some() {
+        if provider == "codex" {
+            return Ok(codex_reasoning_levels(model).unwrap_or_default());
+        }
+        return Ok(Vec::new());
+    }
+    if resolve_reflection_support(state, provider, model).await? {
+        return Ok(WIRE_REFLECTION_LEVELS
+            .iter()
+            .map(|level| level.to_string())
+            .collect());
+    }
+    Ok(Vec::new())
 }
 
 async fn resolve_reflection_support(
@@ -1471,6 +1558,146 @@ mod tests {
         .await
         .unwrap();
         assert!(!supports);
+    }
+
+    /// A throwaway HOME holding a `~/.codex/models_cache.json`, so the
+    /// manifest reads are exercised against a fixture rather than against
+    /// whatever the developer's Codex last cached.
+    fn codex_home_fixture(name: &str, manifest: &str) -> std::path::PathBuf {
+        let home = std::env::temp_dir().join(format!("klide-models-test-{name}"));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/models_cache.json"), manifest).unwrap();
+        home
+    }
+
+    /// Trimmed to the fields Klide reads, in the shape the CLI writes: a
+    /// listed model, a hidden one, and one the manifest gives no efforts.
+    const CODEX_MANIFEST: &str = r#"{
+      "fetched_at": "2026-09-10T21:34:08Z",
+      "client_version": "0.154.0",
+      "models": [
+        {
+          "slug": "gpt-6-astra",
+          "visibility": "list",
+          "context_window": 272000,
+          "default_reasoning_level": "low",
+          "supported_reasoning_levels": [
+            { "effort": "low" }, { "effort": "medium" }, { "effort": "high" },
+            { "effort": "xhigh" }, { "effort": "max" }, { "effort": "ultra" }
+          ]
+        },
+        {
+          "slug": "gpt-reserve",
+          "visibility": "hide",
+          "context_window": 200000,
+          "supported_reasoning_levels": [{ "effort": "low" }]
+        },
+        { "slug": "gpt-plain", "visibility": "list", "context_window": 128000 }
+      ]
+    }"#;
+
+    #[test]
+    fn codex_manifest_reads_levels_models_and_windows_from_one_file() {
+        let home = codex_home_fixture("manifest", CODEX_MANIFEST);
+
+        assert_eq!(
+            codex_reasoning_levels_in(&home, "gpt-6-astra").unwrap(),
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        // A row the manifest gives no efforts has no dial — not an empty one.
+        assert!(codex_reasoning_levels_in(&home, "gpt-plain").is_none());
+        // A model that isn't in the manifest at all is unknown, not empty.
+        assert!(codex_reasoning_levels_in(&home, "gpt-9-imaginary").is_none());
+
+        // The picker lists what the CLI would show: hidden rows stay hidden.
+        assert_eq!(
+            codex_cached_models_in(&home).unwrap(),
+            vec!["gpt-6-astra", "gpt-plain"]
+        );
+
+        // The window comes from the same row, so one file answers all three.
+        assert_eq!(codex_context_window_in(&home, "gpt-6-astra"), Some(272_000));
+        assert_eq!(codex_context_window_in(&home, "gpt-9-imaginary"), None);
+    }
+
+    #[test]
+    fn a_missing_or_corrupt_manifest_is_silence_not_a_panic() {
+        // Codex may never have run on this machine, and the cache is written
+        // by another process — a half-written file must not take Klide down.
+        let empty = std::env::temp_dir().join("klide-models-test-absent");
+        let _ = std::fs::remove_dir_all(&empty);
+        assert!(codex_reasoning_levels_in(&empty, "gpt-6-astra").is_none());
+        assert!(codex_cached_models_in(&empty).is_none());
+
+        let torn = codex_home_fixture("torn", r#"{"models": [{"slug": "gpt-6-as"#);
+        assert!(codex_reasoning_levels_in(&torn, "gpt-6-astra").is_none());
+        assert!(codex_cached_models_in(&torn).is_none());
+
+        // Well-formed JSON of the wrong shape reads the same way.
+        let wrong = codex_home_fixture("wrong-shape", r#"{"models": "soon"}"#);
+        assert!(codex_cached_models_in(&wrong).is_none());
+    }
+
+    #[test]
+    fn codex_reasoning_levels_come_from_the_cli_manifest() {
+        // The shape of ~/.codex/models_cache.json, trimmed to what Klide reads.
+        let entry = serde_json::json!({
+            "slug": "gpt-6-astra",
+            "default_reasoning_level": "low",
+            "supported_reasoning_levels": [
+                { "effort": "low", "description": "Fast responses" },
+                { "effort": "medium", "description": "Balances speed and depth" },
+                { "effort": "high", "description": "Greater depth" },
+                { "effort": "xhigh", "description": "Extra depth" },
+                { "effort": "max", "description": "Maximum depth" },
+                { "effort": "ultra", "description": "Maximum depth, delegating" },
+            ]
+        });
+        // Note what is NOT here: `minimal`. Klide's own five-level list would
+        // have offered it and hidden `max`/`ultra`, so the set is read, never
+        // assumed.
+        assert_eq!(
+            reasoning_levels_of(&entry).unwrap(),
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        // A model row without the field means "no dial", not an empty dial.
+        assert!(reasoning_levels_of(&serde_json::json!({ "slug": "x" })).is_none());
+        assert!(
+            reasoning_levels_of(&serde_json::json!({ "supported_reasoning_levels": [] })).is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn delegate_clis_without_an_effort_switch_get_no_dial() {
+        // Only Codex publishes a set. Offering the others a level would write
+        // a setting nothing reads — and their spawn commands drop it anyway
+        // (see `only_codex_takes_a_reasoning_effort` in delegate/mod.rs).
+        let cache = ReflectionProbeCache::default();
+        for provider in ["claude-code", "opencode", "omp"] {
+            assert!(
+                resolve_reflection_levels(&cache, provider, "any-model")
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{provider}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wire_reasoning_model_offers_klides_own_levels() {
+        let levels = resolve_reflection_levels(&ReflectionProbeCache::default(), "openai", "gpt-5")
+            .await
+            .unwrap();
+        assert_eq!(levels, WIRE_REFLECTION_LEVELS.to_vec());
+        // ...and a model that doesn't reason offers none at all.
+        assert!(
+            resolve_reflection_levels(&ReflectionProbeCache::default(), "openai", "gpt-4.1-mini")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

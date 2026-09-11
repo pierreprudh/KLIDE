@@ -22,10 +22,18 @@ import {
 import { createPortal } from "react-dom";
 import {
   listProviderModels,
+  modelReflectionLevels as queryModelReflectionLevels,
   modelSupportsTools as queryModelSupportsTools,
   modelSupportsVision as queryModelSupportsVision,
+  readLocalProviderStatus,
   readProviderKeyStatus,
+  startLocalProvider,
 } from "../ipc/aiProviders";
+import {
+  reflectionBarLevel,
+  reflectionCaption,
+  sortReflectionLevels,
+} from "../reflectionLevels";
 import { Z } from "../zLayers";
 import {
   AttachIcon,
@@ -47,12 +55,25 @@ import type { Conversation } from "./ai/types";
 import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../agent/types";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
+import { SlashMenu } from "./ai/SlashMenu";
+import {
+  EXPLAIN_PREFIX,
+  SLASH_DESC,
+  SLASH_PROMPTS,
+  currentModeText,
+  filterSlashCommands,
+  slashKeyAction,
+  slashQueryOf,
+  stepSlashIndex,
+  type SlashCommand,
+} from "./ai/slashCommands";
 import { notify } from "../toast";
 import { GOAL_POLICIES, MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf } from "./ai/autonomyLadder";
 import {
   PROVIDER_GROUPS,
   defaultModelForProvider,
   isDelegateProvider,
+  isManagedLocalProvider,
   normalizeAgentMode,
   providerGroupsWithCustom,
   providerName,
@@ -81,7 +102,7 @@ type Props = {
   onNewChat: () => void;
   /** Resume a saved conversation in the same live Focus chat surface. */
   onOpenConversation: (convo: Conversation) => void;
-  onSubmit: (text: string, attachments: Attachment[]) => void;
+  onSubmit: FocusSubmit;
   /** The apology the canvas shows in place of a conversation local history no
    *  longer holds. The host owns it because the sidebar that navigates there
    *  is the host's. */
@@ -914,24 +935,24 @@ const KEYED_PROVIDERS = PROVIDER_GROUPS.flatMap((group) => group.items).filter(
   (item) => item.available && providerNeedsApiKey(item.id),
 );
 
-const EFFORT_LEVELS: { label: string; value: string | undefined; level: number; caption: string }[] = [
-  { label: "Auto", value: undefined, level: 0, caption: "Provider default" },
-  { label: "minimal", value: "minimal", level: 1, caption: "Smallest reasoning effort" },
-  { label: "low", value: "low", level: 2, caption: "Lower reasoning effort" },
-  { label: "medium", value: "medium", level: 3, caption: "Default reasoning effort" },
-  { label: "high", value: "high", level: 4, caption: "Higher reasoning effort" },
-  { label: "xhigh", value: "xhigh", level: 5, caption: "Highest reasoning effort" },
-];
-
-const EFFORT_OPTIONS: MenuOption[] = EFFORT_LEVELS.map((e) => ({
-  label: e.label,
-  value: e.value,
-  caption: e.caption,
-  icon: <EffortBars level={e.level} />,
-}));
-
-function effortLevelOf(effort: string | undefined): number {
-  return EFFORT_LEVELS.find((e) => e.value === effort)?.level ?? 0;
+/** The effort menu for one model's own set of levels. The set is a backend
+ *  fact (see `src/reflectionLevels.ts`) — Codex publishes a different one per
+ *  model — so the rows are built per pair, never from a fixed table. */
+function effortOptionsFor(levels: readonly string[]): MenuOption[] {
+  return [
+    {
+      label: "Auto",
+      value: undefined,
+      caption: "The model's own default",
+      icon: <EffortBars level={0} />,
+    },
+    ...levels.map((level) => ({
+      label: level,
+      value: level,
+      caption: reflectionCaption(level),
+      icon: <EffortBars level={reflectionBarLevel(level, levels)} />,
+    })),
+  ];
 }
 
 const CONTEXT_OPTIONS: MenuOption[] = [
@@ -1047,6 +1068,7 @@ function FocusAddMenu({
   autoApproveCommands,
   onRequireDiffReviewChange,
   onAutoApproveCommandsChange,
+  openFilesRequest = 0,
 }: {
   workspaceRoot: string | null;
   mode: AgentMode;
@@ -1065,6 +1087,9 @@ function FocusAddMenu({
   autoApproveCommands: boolean;
   onRequireDiffReviewChange: (v: boolean) => void;
   onAutoApproveCommandsChange: (v: boolean) => void;
+  /** Bumped by the composer when a command wants the file list open — `/explain`
+   *  has nothing to explain until a file is picked. Zero means never asked. */
+  openFilesRequest?: number;
 }) {
   const [view, setView] = useState<"actions" | "files">("actions");
   // The OS file picker, for a photo or document that isn't in the workspace.
@@ -1132,6 +1157,15 @@ function FocusAddMenu({
     setView("actions");
     openMenu();
   }
+
+  useEffect(() => {
+    if (openFilesRequest === 0) return;
+    openMenu();
+    void showFiles();
+    // showFiles is a plain function of this render; the request counter is
+    // the one signal this effect answers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFilesRequest]);
 
   // Through the shared ladder. A delegate CLI does its own editing, so Goal
   // mode stays open to it even though Klide never probed its tool support —
@@ -1330,6 +1364,15 @@ function FocusAddMenu({
   );
 }
 
+/** A first turn leaving the start stage. `mode` is set only when a slash
+ *  command pinned one (/init → goal, /interview → plan); a typed task rides in
+ *  whatever mode the composer's + menu shows. */
+export type FocusSubmit = (
+  text: string,
+  attachments: Attachment[],
+  opts?: { mode?: AgentMode },
+) => void;
+
 /** Everything the start-stage composer needs beyond its own draft. Keeping the
  *  dispatch controls bundled leaves FocusHome's boundary readable. */
 export type FocusComposerControls = {
@@ -1364,7 +1407,7 @@ function FocusComposer({
   controls: FocusComposerControls;
   branch?: string | null;
   onPingGit?: () => void;
-  onSubmit: (text: string, attachments: Attachment[]) => void;
+  onSubmit: FocusSubmit;
   placeholder?: string;
   autoFocus?: boolean;
 }) {
@@ -1395,7 +1438,21 @@ function FocusComposer({
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
   );
   const [supportsTools, setSupportsTools] = useState(true);
+  // The reasoning efforts this provider+model accepts. Empty means the pair
+  // has no such dial (a Klide-wire model that doesn't reason, claude-code /
+  // opencode / omp), and the control stays off the composer entirely rather
+  // than offering a knob nothing reads.
+  const [effortLevels, setEffortLevels] = useState<string[]>([]);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
+  const [slash, setSlash] = useState<{ query: string } | null>(null);
+  const [slashIdx, setSlashIdx] = useState(0);
+  // A mode one command pinned to the next send (/explain reads → plan). Cleared
+  // when the turn leaves or the draft is emptied, so it never outlives its
+  // command.
+  const [nextSendMode, setNextSendMode] = useState<AgentMode | null>(null);
+  // Counter the + menu watches to open straight onto the file list.
+  const [openFilesRequest, setOpenFilesRequest] = useState(0);
   // The model list for the chosen provider — the same discovery command the
   // AI panel and Settings use. Falls back to the provider's default so the
   // menu is never empty while a server is down.
@@ -1470,6 +1527,27 @@ function FocusComposer({
     };
   }, [provider, model]);
 
+  useEffect(() => {
+    let cancelled = false;
+    queryModelReflectionLevels(provider, model)
+      .then((levels) => {
+        if (cancelled) return;
+        const sorted = sortReflectionLevels(levels);
+        setEffortLevels(sorted);
+        // A level saved for another model can be one this one never offers
+        // (`minimal` on a Codex model, say). Drop it rather than send a level
+        // the CLI rejects.
+        if (effort && !sorted.includes(effort)) onEffortChange(undefined);
+      })
+      .catch(() => {
+        if (!cancelled) setEffortLevels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, model]);
+
   // Vision is a per-model fact, so switching models can strand a staged photo.
   // Drop the photos when that happens (documents are text — they still travel)
   // rather than sending an image somewhere it can't be seen.
@@ -1501,9 +1579,24 @@ function FocusComposer({
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
     if (!text && attachments.length === 0) return;
+    const mode = nextSendMode ?? undefined;
     setDraft("");
     setAttachments([]);
-    onSubmit(text, attachments);
+    setSlash(null);
+    setNextSendMode(null);
+    onSubmit(text, attachments, mode ? { mode } : undefined);
+  }
+
+  function changeDraft(value: string) {
+    setDraft(value);
+    if (value.length === 0) setNextSendMode(null);
+    const query = slashQueryOf(value);
+    if (query !== null) {
+      setSlash({ query });
+      setSlashIdx(0);
+    } else if (slash !== null) {
+      setSlash(null);
+    }
   }
 
   async function addFiles(files: File[]) {
@@ -1520,6 +1613,78 @@ function FocusComposer({
   function selectAgentMode(next: AgentMode) {
     setAgentMode(next);
     localStorage.setItem("klide.agentMode", next);
+  }
+
+  // The start-stage `/` menu. Same vocabulary as the AI panel's, minus the
+  // commands that need a conversation to act on (/clear, /compact, /handoff):
+  // nothing exists yet to clear, compact, or hand off. A command that sends
+  // leaves through `onSubmit` like a typed task, so the handoff into the
+  // panel is the one path a first turn takes.
+  const providerDelegatesWork = isDelegateProvider(provider);
+  const goalOrPlan = (): AgentMode => (supportsTools || providerDelegatesWork ? "goal" : "plan");
+  const clearDraft = () => { setDraft(""); setSlash(null); };
+  const SLASH_COMMANDS: SlashCommand[] = [
+    { name: "chat", desc: SLASH_DESC.chat, run: () => { selectAgentMode("chat"); clearDraft(); } },
+    { name: "plan", desc: SLASH_DESC.plan, run: () => { selectAgentMode("plan"); clearDraft(); } },
+    { name: "goal", desc: SLASH_DESC.goal, run: () => { selectAgentMode(goalOrPlan()); clearDraft(); } },
+    { name: "mode", desc: SLASH_DESC.mode, run: () => {
+      clearDraft();
+      notify(currentModeText({
+        effectiveMode: effectiveModeFor({ mode: agentMode, modelSupportsTools: supportsTools, providerDelegatesWork }),
+        requireDiffReview,
+        autoApproveCommands,
+      }));
+    } },
+    { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => {
+      clearDraft(); selectAgentMode(goalOrPlan()); onRequireDiffReviewChange(false); onAutoApproveCommandsChange(false);
+    } },
+    { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => {
+      clearDraft(); selectAgentMode(goalOrPlan()); onRequireDiffReviewChange(true); onAutoApproveCommandsChange(false);
+    } },
+    { name: "start", desc: SLASH_DESC.start, run: async () => {
+      clearDraft();
+      if (!isManagedLocalProvider(provider)) {
+        notify(`${providerName(provider)} runs in the cloud — there's no local server to start.`);
+        return;
+      }
+      // No conversation surface to animate into yet, so the toast bus carries
+      // the three beats the AI panel's DotGridLoader row would.
+      try {
+        if (await readLocalProviderStatus(provider)) {
+          notify(`${providerName(provider)} is already running.`);
+          return;
+        }
+      } catch {
+        // Fall through and try to start it.
+      }
+      notify(`Starting ${providerName(provider)}…`);
+      try {
+        const started = await startLocalProvider({ provider, model });
+        notify(started ? `${providerName(provider)} is ready.` : `${providerName(provider)} did not start.`, { tone: started ? "success" : "error" });
+      } catch (e) {
+        notify(String(e), { tone: "error" });
+      }
+    } },
+    { name: "explain", desc: SLASH_DESC.explain, run: () => {
+      setSlash(null);
+      setDraft(EXPLAIN_PREFIX);
+      setNextSendMode("plan");
+      setOpenFilesRequest((n) => n + 1);
+    } },
+    { name: "init", desc: SLASH_DESC.init, run: () => {
+      clearDraft();
+      onSubmit(SLASH_PROMPTS.init.text, [], { mode: SLASH_PROMPTS.init.mode });
+    } },
+    { name: "interview", desc: SLASH_DESC.interview, run: () => {
+      clearDraft();
+      onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
+    } },
+  ];
+  const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
+  function acceptSlash(idx: number) {
+    const cmd = slashMatches[idx];
+    setSlash(null);
+    if (cmd) void cmd.run();
   }
 
   function addFile(path: string) {
@@ -1556,6 +1721,12 @@ function FocusComposer({
         </div>
       )}
 
+      {/* The card clips (`overflow: hidden` for its glass), so the `/` menu
+          anchors to this wrapper and floats above the card instead. */}
+      <div style={{ position: "relative" }}>
+      {slash !== null && (
+        <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} />
+      )}
       <div
         className="klide-focus-composer"
         data-focused={focused || undefined}
@@ -1594,9 +1765,9 @@ function FocusComposer({
           aria-label={placeholder}
           autoComplete="off"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => changeDraft(e.target.value)}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => { setFocused(false); setSlash(null); }}
           onPaste={(e) => {
             const files = Array.from(e.clipboardData?.files ?? []);
             if (files.length && canAttachFiles) {
@@ -1605,6 +1776,17 @@ function FocusComposer({
             }
           }}
           onKeyDown={(e) => {
+            if (slash !== null && slashMatches.length > 0) {
+              const action = slashKeyAction(e.key);
+              if (action) {
+                e.preventDefault();
+                if (action === "next") setSlashIdx((i) => stepSlashIndex(i, 1, slashMatches.length));
+                else if (action === "prev") setSlashIdx((i) => stepSlashIndex(i, -1, slashMatches.length));
+                else if (action === "accept") acceptSlash(slashIdx);
+                else setSlash(null);
+                return;
+              }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               submit();
@@ -1630,6 +1812,7 @@ function FocusComposer({
               autoApproveCommands={autoApproveCommands}
               onRequireDiffReviewChange={onRequireDiffReviewChange}
               onAutoApproveCommandsChange={onAutoApproveCommandsChange}
+              openFilesRequest={openFilesRequest}
             />
             <InlineMenu
               label="Provider"
@@ -1654,20 +1837,22 @@ function FocusComposer({
               bareHover
               onChange={onModelChange}
             />
-            <InlineMenu
-              label="Reasoning effort"
-              display={effort ?? "auto"}
-              leading={<EffortBars level={effortLevelOf(effort)} size={13} />}
-              header={{
-                icon: <EffortBars level={effortLevelOf(effort)} />,
-                title: "Reasoning effort",
-                caption: "Applied per model, saved in harness settings",
-              }}
-              width={216}
-              options={EFFORT_OPTIONS}
-              selected={effort}
-              onSelect={(v) => onEffortChange(v === undefined ? undefined : String(v))}
-            />
+            {effortLevels.length > 0 && (
+              <InlineMenu
+                label="Reasoning effort"
+                display={effort ?? "auto"}
+                leading={<EffortBars level={reflectionBarLevel(effort, effortLevels)} size={13} />}
+                header={{
+                  icon: <EffortBars level={reflectionBarLevel(effort, effortLevels)} />,
+                  title: "Reasoning effort",
+                  caption: "The levels this model accepts",
+                }}
+                width={216}
+                options={effortOptionsFor(effortLevels)}
+                selected={effort}
+                onSelect={(v) => onEffortChange(v === undefined ? undefined : String(v))}
+              />
+            )}
             <InlineMenu
               label="Context window"
               display={contextLabel(contextWindow)}
@@ -1700,6 +1885,7 @@ function FocusComposer({
           </div>
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -1720,7 +1906,7 @@ function FocusHome({
   onPingGit: () => void;
   recent: Conversation[];
   onOpenConversation: (convo: Conversation) => void;
-  onSubmit: (text: string, attachments: Attachment[]) => void;
+  onSubmit: FocusSubmit;
   controls: FocusComposerControls;
 }) {
   return (

@@ -15,7 +15,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
-  modelSupportsReflection as queryModelSupportsReflection,
+  modelReflectionLevels as queryModelReflectionLevels,
   modelSupportsTools as queryModelSupportsTools,
   modelSupportsVision as queryModelSupportsVision,
   readLocalProviderStatus,
@@ -23,6 +23,13 @@ import {
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
+import {
+  reflectionBarLevel,
+  reflectionCaption,
+  reflectionLevelWithin,
+  sortReflectionLevels,
+  storedReflectionLevel,
+} from "../reflectionLevels";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
@@ -109,6 +116,8 @@ import { conversationMark } from "../modelIdentity";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
+import { SlashMenu } from "./ai/SlashMenu";
+import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
@@ -396,6 +405,10 @@ type Props = {
    *  stage. They ride the same handoff so the opening turn carries what was
    *  dropped there — the panel doesn't re-read them from anywhere. */
   initialAttachments?: Attachment[] | null;
+  /** The mode that first turn runs in, when the start stage's command chose
+   *  one (`/init` edits → goal, `/interview` reads → plan). Null means the
+   *  panel's own mode setting, as for any typed task. */
+  initialMode?: AgentMode | null;
   onInitialMessageConsumed?: () => void;
   /** A message to send into the CURRENT conversation as a follow-up turn —
    *  the race "ask both" composer fans one text out to every racer's panel
@@ -506,23 +519,6 @@ function ReflectionBars({ level, size = "compact" }: { level: number; size?: "co
   );
 }
 
-function normalizeReflectionLevel(level: string | undefined | null): string | undefined {
-  switch (level) {
-    case "off":
-    case "minimal":
-      return "minimal";
-    case "low":
-    case "medium":
-    case "high":
-      return level;
-    case "max":
-    case "xhigh":
-      return "xhigh";
-    default:
-      return undefined;
-  }
-}
-
 /** `klide.model.<provider>` when it holds a value this Provider can actually
  *  use — the guards in `storedModelForProvider` reject another Provider's id
  *  that leaked in, and a rejected value is no evidence of a pick. */
@@ -604,6 +600,10 @@ function storedModelForProvider(id: ProviderId): string {
 
 type ModelInspection = {
   supportsTools: boolean;
+  /** The efforts this pair accepts, weakest first — Rust reads the Codex CLI's
+   *  own manifest for a Codex run, so the sets differ per model. Empty means
+   *  no dial, which is what `supportsReflection` now says. */
+  reflectionLevels: string[];
   supportsReflection: boolean;
   supportsVision: boolean;
   contextLimit: number;
@@ -622,14 +622,19 @@ async function inspectModelForRun(
 ): Promise<ModelInspection> {
   const [tools, reflection, vision, context] = await Promise.allSettled([
     queryModelSupportsTools(provider, model),
-    allowActivationProbe ? queryModelSupportsReflection(provider, model) : Promise.resolve(false),
+    allowActivationProbe
+      ? queryModelReflectionLevels(provider, model)
+      : Promise.resolve<string[]>([]),
     queryModelSupportsVision(provider, model),
     readProviderContextWindow(provider, model),
   ]);
+  const reflectionLevels =
+    reflection.status === "fulfilled" ? sortReflectionLevels(reflection.value) : [];
   return {
     supportsTools:
       tools.status === "fulfilled" ? tools.value : !isManagedLocalProvider(provider),
-    supportsReflection: reflection.status === "fulfilled" ? reflection.value : false,
+    reflectionLevels,
+    supportsReflection: reflectionLevels.length > 0,
     supportsVision: vision.status === "fulfilled" ? vision.value : false,
     contextLimit:
       context.status === "fulfilled" && Number.isFinite(context.value) && context.value > 0
@@ -682,6 +687,7 @@ export function AiPanel({
   onInitialConsumed,
   initialMessage,
   initialAttachments,
+  initialMode,
   onInitialMessageConsumed,
   followUpMessage,
   onFollowUpConsumed,
@@ -1010,6 +1016,10 @@ export function AiPanel({
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
   const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
+  // The exact levels this pair accepts. The picker offers these and nothing
+  // else: a Codex model publishes its own set (no `minimal`, sometimes a `max`
+  // and an `ultra`), and a level outside it is one the CLI rejects.
+  const [modelReflectionLevels, setModelReflectionLevels] = useState<string[]>([]);
   const [modelSupportsVision, setModelSupportsVision] = useState(false);
   // A saved transcript is view-only until the user sends again. In particular,
   // don't let Ollama's reflection probe or historical token-count pass load a
@@ -1393,25 +1403,20 @@ export function AiPanel({
   // bar's standing note are the state, and a transient line above the
   // composer proved to be chrome nobody needed.
   function currentModeText(): string {
-    if (effectiveMode === "chat") return "chat mode · no tools";
-    if (effectiveMode === "plan") return "plan mode · read-only";
-    if (requireDiffReview) return "reviewing every edit";
-    return autoApproveCommands
-      ? "full auto · commands run without asking"
-      : "auto-accept edits on";
+    return modeText({ effectiveMode, requireDiffReview, autoApproveCommands });
   }
   // /auto-mode and /review-mode imply Goal mode (edits only happen there).
   const goalOrPlan = () => (modelSupportsTools || providerDelegatesWork ? "goal" : "plan") as AgentMode;
 
-  const SLASH_COMMANDS: { name: string; desc: string; run: () => void | Promise<void> }[] = [
-    { name: "chat", desc: "Switch to Chat mode (no tools)", run: () => { selectMode("chat"); setInput(""); } },
-    { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)", run: () => { selectMode("plan"); setInput(""); } },
-    { name: "goal", desc: "Switch to Goal mode (can propose edits)", run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
-    { name: "mode", desc: "Show the current mode", run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
-    { name: "auto-mode", desc: "Auto-accept edits — apply without a prompt", run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
-    { name: "review-mode", desc: "Review every edit before it applies (default)", run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
-    { name: "clear", desc: "Start a new conversation", run: () => newConversation() },
-    { name: "compact", desc: "Summarize older turns to free up context", run: () => {
+  const SLASH_COMMANDS: SlashCommand[] = [
+    { name: "chat", desc: SLASH_DESC.chat, run: () => { selectMode("chat"); setInput(""); } },
+    { name: "plan", desc: SLASH_DESC.plan, run: () => { selectMode("plan"); setInput(""); } },
+    { name: "goal", desc: SLASH_DESC.goal, run: () => { selectMode(modelSupportsTools || providerDelegatesWork ? "goal" : "plan"); setInput(""); } },
+    { name: "mode", desc: SLASH_DESC.mode, run: () => { setInput(""); setSlash(null); notify(currentModeText()); } },
+    { name: "auto-mode", desc: SLASH_DESC.autoMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(false); onAutoApproveCommandsChange?.(false); } },
+    { name: "review-mode", desc: SLASH_DESC.reviewMode, run: () => { setInput(""); setSlash(null); selectMode(goalOrPlan()); onRequireDiffReviewChange?.(true); onAutoApproveCommandsChange?.(false); } },
+    { name: "clear", desc: SLASH_DESC.clear, run: () => newConversation() },
+    { name: "compact", desc: SLASH_DESC.compact, run: () => {
       setInput(""); setSlash(null);
       if (!canCompact) {
         const why = providerDelegatesWork
@@ -1426,8 +1431,8 @@ export function AiPanel({
       }
       void compactConversation();
     } },
-    { name: "handoff", desc: "Save this task state into Project Memory", run: () => saveHandoffToProjectMemory() },
-    { name: "start", desc: "Start the local server (Ollama / MLX) for this provider", run: async () => {
+    { name: "handoff", desc: SLASH_DESC.handoff, run: () => saveHandoffToProjectMemory() },
+    { name: "start", desc: SLASH_DESC.start, run: async () => {
       setInput(""); setSlash(null);
       if (!isLocalProvider) {
         const note: Msg = { role: "system", content: `${providerName(provider)} runs in the cloud — there's no local server to start.` };
@@ -1442,29 +1447,23 @@ export function AiPanel({
       // mode-flash is needed here (that's reserved for /auto-mode etc.).
       await ensureLocalServerReady();
     } },
-    { name: "explain", desc: "Explain a file — pick one next (read-only)", run: () => {
-      setInput("Explain what this file does and how it works: @");
+    { name: "explain", desc: SLASH_DESC.explain, run: () => {
+      setInput(`${EXPLAIN_PREFIX}@`);
       setNextSendMode("plan");
       setMention({ query: "", atStart: false }); setMentionIdx(0);
       void ensureFileList();
       requestAnimationFrame(() => taRef.current?.focus());
     }},
-    { name: "init", desc: "Analyze the repo and create a CLAUDE.md", run: () => void send({ mode: "goal", text: "Explore this project (read key files like package.json, README, and the main source folders) and create a concise CLAUDE.md at the workspace root documenting what the project is, its stack, how to run it, and the repo layout. Use create_file so I can review the diff." }) },
-    { name: "interview", desc: "Interview me about this codebase — Q&A, one question at a time", run: () => {
-      // /interview starts a structured code interview. Plan mode (read-only)
-      // keeps the agent from accidentally editing while it reads. The prompt
-      // is self-contained so the skill works even if the user hasn't
-      // installed the SKILL.md yet — installing it just gives the model
-      // extra system-prompt context.
+    { name: "init", desc: SLASH_DESC.init, run: () => void send({ ...SLASH_PROMPTS.init }) },
+    { name: "interview", desc: SLASH_DESC.interview, run: () => {
+      // /interview starts a structured code interview in Plan mode (read-only)
+      // so the agent can't edit while it reads. The mode rides on the prompt,
+      // not on the picker — see SLASH_PROMPTS.
       if (!modelSupportsTools && !providerDelegatesWork) selectMode("plan");
-      void send({
-        mode: "plan",
-        text:
-          "Run the codebase interview. Read README.md (and the top-level package manifest / entry point if there's no README) to ground yourself, then identify 5-10 high-signal things you don't understand about the project — ambiguous naming, surprising structure, missing docs, design tensions, historical choices. For each one, call the `userAnswerQuestion` tool with a single short question (one sentence, focused on what only I can answer). Wait for each answer, use it as-is, and move to the next. After all questions, write a structured doc to docs/codebase-decisions.md with one section per Q&A (Question / Answer / Why it matters). End the run when the doc is written.",
-      });
+      void send({ ...SLASH_PROMPTS.interview });
     } },
   ];
-  const slashMatches = slash !== null ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slash.query.toLowerCase())) : [];
+  const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
 
   function acceptSlash(idx: number) { const cmd = slashMatches[idx]; setSlash(null); if (cmd) cmd.run(); }
 
@@ -1543,8 +1542,8 @@ export function AiPanel({
 
   function handleComposerChange(value: string, caret: number) {
     setInput(value);
-    const slashMatch = value.match(/^\/(\w*)$/);
-    if (slashMatch) { setSlash({ query: slashMatch[1] }); setSlashIdx(0); setMention(null); return; }
+    const slashQuery = slashQueryOf(value);
+    if (slashQuery !== null) { setSlash({ query: slashQuery }); setSlashIdx(0); setMention(null); return; }
     else if (slash !== null) setSlash(null);
     const before = value.slice(0, caret);
     const m = before.match(/(?:^|\s)@([^\s@]*)$/);
@@ -1685,20 +1684,26 @@ export function AiPanel({
   const [panelReflectionLevel, setPanelReflectionLevel] = useState<string | undefined>(undefined);
   useEffect(() => {
     try {
-      const stored = normalizeReflectionLevel(localStorage.getItem(reflectionStorageKey));
-      setPanelReflectionLevel(stored ?? normalizeReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
+      const stored = storedReflectionLevel(localStorage.getItem(reflectionStorageKey));
+      setPanelReflectionLevel(stored ?? storedReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
     } catch {
-      setPanelReflectionLevel(normalizeReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
+      setPanelReflectionLevel(storedReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
     }
   }, [reflectionStorageKey, harnessSettings?.reflectionLevels?.[model], model]);
-  const reflectionLevel = modelSupportsReflection ? panelReflectionLevel : undefined;
+  // A level saved against another model can be one this pair never offers
+  // (`minimal` on a Codex model). Treat it as Auto rather than send a level
+  // the provider rejects.
+  const reflectionLevel = modelSupportsReflection
+    ? reflectionLevelWithin(panelReflectionLevel, modelReflectionLevels)
+    : undefined;
   const reflectionOptions: ReflectionOption[] = [
-    { value: undefined, label: "Auto", level: 0, desc: "Provider default" },
-    { value: "minimal", label: "minimal", level: 1, desc: "Smallest reasoning effort" },
-    { value: "low", label: "low", level: 2, desc: "Lower reasoning effort" },
-    { value: "medium", label: "medium", level: 3, desc: "Default reasoning effort" },
-    { value: "high", label: "high", level: 4, desc: "Higher reasoning effort" },
-    { value: "xhigh", label: "xhigh", level: 5, desc: "Highest reasoning effort" },
+    { value: undefined, label: "Auto", level: 0, desc: "The model's own default" },
+    ...modelReflectionLevels.map((level) => ({
+      value: level,
+      label: level,
+      level: reflectionBarLevel(level, modelReflectionLevels),
+      desc: reflectionCaption(level),
+    })),
   ];
   const activeReflection = reflectionOptions.find((o) => o.value === reflectionLevel) ?? reflectionOptions[0];
   function selectReflectionLevel(level: string | undefined) {
@@ -2356,6 +2361,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   const [pendingHeroSend, setPendingHeroSend] = useState<{
     text: string;
     attachments: Attachment[];
+    mode?: AgentMode;
   } | null>(null);
   const consumedInitialMessageRef = useRef<string | null>(null);
   // Read at consumption time rather than through the effect's deps: the
@@ -2374,14 +2380,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     consumedInitialMessageRef.current = receipt;
     onInitialMessageConsumed?.();
     if (msgsRef.current.length > 0) newConversation();
-    setPendingHeroSend({ text, attachments: staged });
+    setPendingHeroSend({ text, attachments: staged, mode: initialMode ?? undefined });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMessage, initialAttachments]);
   useEffect(() => {
     if (pendingHeroSend === null) return;
     const turn = pendingHeroSend;
     setPendingHeroSend(null);
-    void send({ text: turn.text, attachments: turn.attachments });
+    void send({ text: turn.text, attachments: turn.attachments, mode: turn.mode });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingHeroSend]);
 
@@ -2837,6 +2843,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   function applyModelInspection(inspection: ModelInspection) {
     setModelSupportsTools(inspection.supportsTools);
     setModelSupportsReflection(inspection.supportsReflection);
+    setModelReflectionLevels(inspection.reflectionLevels);
     setModelSupportsVision(inspection.supportsVision);
     setContextLimit(inspection.contextLimit);
     // Losing vision (a model switch) invalidates staged photos only. The
@@ -2850,6 +2857,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (!modelActivationDeferred || !isLocalProvider) {
       return {
         supportsTools: modelSupportsTools,
+        reflectionLevels: modelReflectionLevels,
         supportsReflection: modelSupportsReflection,
         supportsVision: modelSupportsVision,
         contextLimit,
@@ -4123,6 +4131,10 @@ This user request requires workspace inspection. Before answering, you MUST call
             // heal the prop. The store is written on every in-session pick,
             // so it is exactly "the model last used with THIS provider".
             model={storedModelForProvider(provider)}
+            // The effort follows that same stored model: it is only meaningful
+            // paired with the model it was picked for, and only when the CLI
+            // published it (`reflectionLevel` is already filtered to the set).
+            effort={storedModelForProvider(provider) === model ? reflectionLevel ?? null : null}
             task={initialTask ?? null}
           />
         ) : (
@@ -4879,18 +4891,8 @@ This user request requires workspace inspection. Before answering, you MUST call
         {/* The run's changed-files outcome lives in the final answer's
             MessageActions row (revert slot) — no standalone strip here. */}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
-          {slash !== null && slashMatches.length > 0 && (
-            <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 240, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
-              {slashMatches.map((cmd, idx) => (
-                <div key={cmd.name} role="option" aria-selected={idx === slashIdx}
-                  onMouseDown={(e) => { e.preventDefault(); acceptSlash(idx); }}
-                  onMouseEnter={() => setSlashIdx(idx)}
-                  style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-sm)", cursor: "pointer", background: idx === slashIdx ? "var(--bg-hover)" : "transparent" }}>
-                  <span style={{ color: "var(--fg-strong)", fontSize: 12, fontWeight: 500 }}>/{cmd.name}</span>
-                  <span style={{ color: "var(--fg-dim)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cmd.desc}</span>
-                </div>
-              ))}
-            </div>
+          {slash !== null && (
+            <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} />
           )}
           {mention !== null && mentionTotal > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 220, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>
@@ -4948,10 +4950,15 @@ This user request requires workspace inspection. Before answering, you MUST call
             onChange={(e) => handleComposerChange(e.target.value, e.target.selectionStart)}
             onKeyDown={(e) => {
               if (slash !== null && slashMatches.length > 0) {
-                if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
-                if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
-                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptSlash(slashIdx); return; }
-                if (e.key === "Escape") { e.preventDefault(); setSlash(null); return; }
+                const action = slashKeyAction(e.key);
+                if (action) {
+                  e.preventDefault();
+                  if (action === "next") setSlashIdx((i) => stepSlashIndex(i, 1, slashMatches.length));
+                  else if (action === "prev") setSlashIdx((i) => stepSlashIndex(i, -1, slashMatches.length));
+                  else if (action === "accept") acceptSlash(slashIdx);
+                  else setSlash(null);
+                  return;
+                }
               }
               if (mention !== null && mentionTotal > 0) {
                 if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }

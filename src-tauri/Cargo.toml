@@ -1,6 +1,6 @@
 [package]
 name = "klide"
-version = "0.6.1"
+version = "0.6.2"
 description = "A local-first agent IDE"
 authors = ["Pierre Prudh"]
 edition = "2021"
@@ -34,10 +34,11 @@ tauri-plugin-dialog = "2.7.1"
 portable-pty = "0.9.0"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = "0.7"
-# Secrets live in the OS keychain, never a plaintext store. `apple-native`
-# selects the macOS Keychain backend; add windows-native / sync-secret-service
-# when those platforms are targeted.
-keyring = { version = "3", features = ["apple-native"] }
+# Secrets live in the OS keychain, never a plaintext store. The backend is
+# chosen per target below (`[target.'cfg(...)'.dependencies]`): keyring
+# itself is platform-neutral, and a feature named here would be demanded on
+# every target — `apple-native` alone is what kept the crate from building
+# anywhere but macOS.
 # Read OpenCode's session DB directly. OpenCode stores its history in SQLite
 # (opencode.db) and doesn't expose a JSON list API; shelling out to
 # `opencode session list` only returns a text table with no timestamps. The
@@ -52,3 +53,20 @@ syn = { version = "2", features = ["full"] }
 # lifecycle hooks curl a tiny POST at Klide instead of Klide scraping TUI
 # output. Small sync server — one thread, no framework.
 tiny_http = "0.12"
+
+# One keyring backend per platform. The call sites in `providers.rs` and
+# `accounts.rs` only use `Entry::new` / get / set / delete, which every backend
+# provides, so nothing else in the crate changes with the target.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# Windows Credential Manager.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+# The freedesktop Secret Service over D-Bus (GNOME Keyring, KWallet). Blocking
+# client, so no second async runtime rides along; `crypto-rust` keeps the
+# session encryption off OpenSSL. Needs `libdbus-1-dev` at build time, which
+# a Tauri Linux build environment already pulls in beside webkit2gtk.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
