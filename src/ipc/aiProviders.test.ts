@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
   listProviderModels,
+  modelReflectionLevels,
   modelSupportsReflection,
   readProviderKeyStatus,
   startLocalProvider,
@@ -37,6 +38,23 @@ describe("AI Provider IPC Adapter", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "ai_model_supports_reflection", {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+    });
+  });
+
+  it("asks Rust which efforts a pair accepts, rather than assuming a set", async () => {
+    invokeMock.mockResolvedValue(["low", "medium", "high", "xhigh", "max", "ultra"]);
+
+    await expect(modelReflectionLevels("codex", "gpt-6-astra")).resolves.toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith("ai_model_reflection_levels", {
+      provider: "codex",
+      model: "gpt-6-astra",
     });
   });
 

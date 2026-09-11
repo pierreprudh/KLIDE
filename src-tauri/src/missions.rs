@@ -1472,6 +1472,10 @@ async fn dispatch_task(
             Some(workspace_root.to_string()),
             Some(prompt),
             Some(model),
+            // Approval freezes worker kind, provider and model into the task
+            // Markdown; a reasoning effort is not part of that frozen spec, so
+            // a Mission attempt runs at the CLI's own configured level.
+            None,
             None,
             None,
             Some(mission_id.to_string()),

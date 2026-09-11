@@ -385,9 +385,9 @@ mod tests {
 
     #[test]
     fn dispatch_and_resume_command_strings() {
-        let dispatch = Omp.spawn_command(Some("fix the bug"), Some("opus"), None);
+        let dispatch = Omp.spawn_command(Some("fix the bug"), Some("opus"), None, None);
         assert_eq!(dispatch, "omp --model 'opus' 'fix the bug'");
-        let resume = Omp.spawn_command(None, None, Some("019ecb77"));
+        let resume = Omp.spawn_command(None, None, Some("019ecb77"), None);
         assert_eq!(resume, "omp --resume '019ecb77'");
     }
 

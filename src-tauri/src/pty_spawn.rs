@@ -30,6 +30,9 @@ pub struct SpawnRequest {
     pub cwd: Option<String>,
     pub task: Option<String>,
     pub model: Option<String>,
+    /// The reasoning effort the user picked, when the CLI publishes a set of
+    /// them (Codex does). Ignored by every adapter without an `effort_arg`.
+    pub effort: Option<String>,
     pub resume_session_id: Option<String>,
     /// Mission linkage — valid only as a pair (see [`spawn_spec_for`]).
     pub mission_id: Option<String>,
@@ -85,6 +88,7 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
                 req.task.as_deref(),
                 req.model.as_deref(),
                 req.resume_session_id.as_deref(),
+                req.effort.as_deref(),
             )
         }
     } else if let Some(custom) = req.custom_cli.as_ref() {
@@ -157,6 +161,7 @@ mod tests {
             cwd: None,
             task: None,
             model: None,
+            effort: None,
             resume_session_id: None,
             mission_id: None,
             mission_task_id: None,

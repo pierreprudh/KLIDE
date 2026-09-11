@@ -22,12 +22,18 @@ import {
 import { createPortal } from "react-dom";
 import {
   listProviderModels,
+  modelReflectionLevels as queryModelReflectionLevels,
   modelSupportsTools as queryModelSupportsTools,
   modelSupportsVision as queryModelSupportsVision,
   readLocalProviderStatus,
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
+import {
+  reflectionBarLevel,
+  reflectionCaption,
+  sortReflectionLevels,
+} from "../reflectionLevels";
 import { Z } from "../zLayers";
 import {
   AttachIcon,
@@ -929,24 +935,24 @@ const KEYED_PROVIDERS = PROVIDER_GROUPS.flatMap((group) => group.items).filter(
   (item) => item.available && providerNeedsApiKey(item.id),
 );
 
-const EFFORT_LEVELS: { label: string; value: string | undefined; level: number; caption: string }[] = [
-  { label: "Auto", value: undefined, level: 0, caption: "Provider default" },
-  { label: "minimal", value: "minimal", level: 1, caption: "Smallest reasoning effort" },
-  { label: "low", value: "low", level: 2, caption: "Lower reasoning effort" },
-  { label: "medium", value: "medium", level: 3, caption: "Default reasoning effort" },
-  { label: "high", value: "high", level: 4, caption: "Higher reasoning effort" },
-  { label: "xhigh", value: "xhigh", level: 5, caption: "Highest reasoning effort" },
-];
-
-const EFFORT_OPTIONS: MenuOption[] = EFFORT_LEVELS.map((e) => ({
-  label: e.label,
-  value: e.value,
-  caption: e.caption,
-  icon: <EffortBars level={e.level} />,
-}));
-
-function effortLevelOf(effort: string | undefined): number {
-  return EFFORT_LEVELS.find((e) => e.value === effort)?.level ?? 0;
+/** The effort menu for one model's own set of levels. The set is a backend
+ *  fact (see `src/reflectionLevels.ts`) — Codex publishes a different one per
+ *  model — so the rows are built per pair, never from a fixed table. */
+function effortOptionsFor(levels: readonly string[]): MenuOption[] {
+  return [
+    {
+      label: "Auto",
+      value: undefined,
+      caption: "The model's own default",
+      icon: <EffortBars level={0} />,
+    },
+    ...levels.map((level) => ({
+      label: level,
+      value: level,
+      caption: reflectionCaption(level),
+      icon: <EffortBars level={reflectionBarLevel(level, levels)} />,
+    })),
+  ];
 }
 
 const CONTEXT_OPTIONS: MenuOption[] = [
@@ -1432,6 +1438,11 @@ function FocusComposer({
     () => normalizeAgentMode(localStorage.getItem("klide.agentMode"))
   );
   const [supportsTools, setSupportsTools] = useState(true);
+  // The reasoning efforts this provider+model accepts. Empty means the pair
+  // has no such dial (a Klide-wire model that doesn't reason, claude-code /
+  // opencode / omp), and the control stays off the composer entirely rather
+  // than offering a knob nothing reads.
+  const [effortLevels, setEffortLevels] = useState<string[]>([]);
   const taRef = useRef<HTMLTextAreaElement>(null);
   // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
   const [slash, setSlash] = useState<{ query: string } | null>(null);
@@ -1514,6 +1525,27 @@ function FocusComposer({
     return () => {
       cancelled = true;
     };
+  }, [provider, model]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queryModelReflectionLevels(provider, model)
+      .then((levels) => {
+        if (cancelled) return;
+        const sorted = sortReflectionLevels(levels);
+        setEffortLevels(sorted);
+        // A level saved for another model can be one this one never offers
+        // (`minimal` on a Codex model, say). Drop it rather than send a level
+        // the CLI rejects.
+        if (effort && !sorted.includes(effort)) onEffortChange(undefined);
+      })
+      .catch(() => {
+        if (!cancelled) setEffortLevels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider, model]);
 
   // Vision is a per-model fact, so switching models can strand a staged photo.
@@ -1805,20 +1837,22 @@ function FocusComposer({
               bareHover
               onChange={onModelChange}
             />
-            <InlineMenu
-              label="Reasoning effort"
-              display={effort ?? "auto"}
-              leading={<EffortBars level={effortLevelOf(effort)} size={13} />}
-              header={{
-                icon: <EffortBars level={effortLevelOf(effort)} />,
-                title: "Reasoning effort",
-                caption: "Applied per model, saved in harness settings",
-              }}
-              width={216}
-              options={EFFORT_OPTIONS}
-              selected={effort}
-              onSelect={(v) => onEffortChange(v === undefined ? undefined : String(v))}
-            />
+            {effortLevels.length > 0 && (
+              <InlineMenu
+                label="Reasoning effort"
+                display={effort ?? "auto"}
+                leading={<EffortBars level={reflectionBarLevel(effort, effortLevels)} size={13} />}
+                header={{
+                  icon: <EffortBars level={reflectionBarLevel(effort, effortLevels)} />,
+                  title: "Reasoning effort",
+                  caption: "The levels this model accepts",
+                }}
+                width={216}
+                options={effortOptionsFor(effortLevels)}
+                selected={effort}
+                onSelect={(v) => onEffortChange(v === undefined ? undefined : String(v))}
+              />
+            )}
             <InlineMenu
               label="Context window"
               display={contextLabel(contextWindow)}
