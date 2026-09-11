@@ -26,7 +26,9 @@ import {
 import {
   reflectionBarLevel,
   reflectionCaption,
+  reflectionLevelWithin,
   sortReflectionLevels,
+  storedReflectionLevel,
 } from "../reflectionLevels";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { Kbd } from "./Kbd";
@@ -515,31 +517,6 @@ function ReflectionBars({ level, size = "compact" }: { level: number; size?: "co
       })}
     </span>
   );
-}
-
-/** A stored level, read back verbatim — reconciling it with a model's set is
- *  `reflectionLevelWithin`'s job, and it needs the raw name to do it. */
-function storedReflectionLevel(level: string | undefined | null): string | undefined {
-  return level?.trim() || undefined;
-}
-
-/**
- * A stored level as *this model's* set sees it.
- *
- * `off` and `max` were older Klide names for `minimal` and `xhigh`, so they
- * are still translated — but only when the model doesn't publish that name
- * itself. A Codex model has a real `max`, one step above `xhigh`, and folding
- * it into `xhigh` would quietly downgrade the run. Anything the set doesn't
- * contain reads as Auto rather than as a level the provider will reject.
- */
-function reflectionLevelWithin(
-  level: string | undefined,
-  available: readonly string[],
-): string | undefined {
-  if (!level) return undefined;
-  if (available.includes(level)) return level;
-  const legacy = level === "off" ? "minimal" : level === "max" ? "xhigh" : undefined;
-  return legacy && available.includes(legacy) ? legacy : undefined;
 }
 
 /** `klide.model.<provider>` when it holds a value this Provider can actually
