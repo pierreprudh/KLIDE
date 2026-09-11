@@ -712,6 +712,18 @@ impl PtyEventSink for TauriSink {
     }
 
     fn exit(&self, session_id: &str, outcome: &PtyExitOutcome) {
+        // Settle the coordination Run (done / failed / cancelled) and drop the
+        // session's bridge identity — a dead PTY acts as nobody.
+        if let Err(error) = crate::coordination_bridge::settle_delegate(
+            self.app.state::<crate::coordination::CoordinationStoreState>().inner(),
+            &bridge_hooks(&self.app),
+            self.app.state::<crate::coordination_bridge::CoordinationBridgeState>().inner(),
+            session_id,
+            outcome.exit_code,
+            outcome.stop_requested,
+        ) {
+            eprintln!("coordination could not settle Delegate {session_id}: {error}");
+        }
         // Forget its hook status and tell the frontend so boards can flip the
         // run from running → done.
         self.app
@@ -1034,6 +1046,25 @@ pub fn delegate_pty_spawn(
     }
     let hook_url = status_state.hook_url_for(&app, &session_id);
 
+    // Coordination (coordination_bridge.rs): register the Delegate as a Run
+    // its peers can address, bind this session to that identity, and hand the
+    // CLI Klide's MCP server. Warn-only, like the status hooks — a Delegate
+    // that cannot be wired still runs, it just has no `agent_*` tools.
+    let mcp = match (adapter, cwd.as_deref()) {
+        (Some(adapter), Some(root)) => wire_coordination(
+            &app,
+            adapter,
+            &session_id,
+            &provider,
+            root,
+            task.as_deref(),
+            parent_run_id.as_deref(),
+            mission_id.as_deref(),
+            mission_task_id.as_deref(),
+        ),
+        _ => None,
+    };
+
     // Everything decidable without an AppHandle — the adapter-vs-custom-CLI
     // command, the one-shot Mission branch, and the Mission-link validation —
     // is `spawn_spec_for`'s job (and tested there, not here).
@@ -1054,6 +1085,7 @@ pub fn delegate_pty_spawn(
         } else {
             None
         },
+        mcp,
     })?;
 
     let hosts = spawn_order(
@@ -1065,6 +1097,196 @@ pub fn delegate_pty_spawn(
         Box::new(DaemonHost { app: &app }) as _,
     );
     first_host_that_spawns(&hosts, &spec)
+}
+
+/// The app-side closures the coordination bridge needs: announce a journal
+/// change the way every other writer does, and answer "is this Run around?"
+/// for both kinds of worker — a Harness Run holds a live handle, a Delegate
+/// holds a bound bridge session.
+fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHooks {
+    let emit_app = app.clone();
+    let live_app = app.clone();
+    let recover_app = app.clone();
+    crate::coordination_bridge::BridgeHooks {
+        on_change: Box::new(move |root, outcome| {
+            crate::coordination::emit_coordination_changed(&emit_app, root, outcome);
+        }),
+        is_live: Box::new(move |run_id| {
+            let harness = live_app
+                .state::<crate::agent::AgentSupervisorState>()
+                .runs
+                .lock()
+                .map(|runs| runs.contains_key(run_id))
+                .unwrap_or(false);
+            harness
+                || live_app
+                    .state::<crate::coordination_bridge::CoordinationBridgeState>()
+                    .is_bound_run(run_id)
+        }),
+        resolve_session: Box::new(move |session_id| {
+            recover_bridge_session(&recover_app, session_id)
+        }),
+    }
+}
+
+/// Where this app publishes the bridge's live port and token, for MCP children
+/// to read. Beside the delegate scrollback, which is the other state a session
+/// needs after the app that started it is gone.
+fn endpoint_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("coordination-endpoint.json"))
+}
+
+/// Rebuild one session binding this process never made. The ptyd daemon hosts
+/// Delegate PTYs, so after an app restart the CLI is still running and still
+/// calling while the session map is empty; its spawn record on disk is enough
+/// to say who it is. A session that recorded an exit is not recovered — a dead
+/// PTY acts as nobody, and only a live child can be calling.
+fn recover_bridge_session(
+    app: &tauri::AppHandle,
+    session_id: &str,
+) -> Option<crate::coordination_bridge::BridgeSession> {
+    let dir = scrollback_dir(app)?;
+    let meta = pty_host::read_scrollback_meta(&dir, session_id)?;
+    if meta.ended_ms.is_some() {
+        return None;
+    }
+    Some(crate::coordination_bridge::BridgeSession {
+        run_id: convo_id_for(session_id, &meta.provider),
+        workspace_root: meta.cwd?,
+        terminal: meta.mission_link.is_some(),
+    })
+}
+
+/// A Delegate's coordination Run id is its conversation id — the same id the
+/// AI panel, the stored-conversation index, and the peer link UI already use
+/// for a thread (`delegateSessionId` in src/ipc/delegatePty.ts is the other
+/// half of this rule).
+pub(crate) fn delegate_run_id(session_id: &str, provider: &str) -> String {
+    convo_id_for(session_id, provider)
+}
+
+/// Register the Delegate as a coordination Run, bind its session at the
+/// bridge, and compute the adapter's MCP wiring (writing any config file it
+/// asks for). Returns `(None, None)` — and logs why — when any step fails, so
+/// the spawn itself never depends on coordination.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wire_coordination(
+    app: &tauri::AppHandle,
+    adapter: &dyn delegate::Delegate,
+    session_id: &str,
+    provider: &str,
+    workspace_root: &str,
+    task: Option<&str>,
+    parent_run_id: Option<&str>,
+    mission_id: Option<&str>,
+    mission_task_id: Option<&str>,
+) -> Option<delegate::McpWiring> {
+    let store = app.state::<crate::coordination::CoordinationStoreState>();
+    let bridge = app.state::<crate::coordination_bridge::CoordinationBridgeState>();
+    let run_id = delegate_run_id(session_id, provider);
+    if let Err(error) = crate::coordination_bridge::register_delegate(
+        store.inner(),
+        &bridge_hooks(app),
+        bridge.inner(),
+        crate::coordination_bridge::DelegateRegistration {
+            session_id,
+            run_id: &run_id,
+            workspace_root,
+            task,
+            parent_run_id,
+            mission_id,
+            mission_task_id,
+        },
+    ) {
+        wiring_failed(app, session_id, format!("could not register the Run: {error}"));
+        return None;
+    }
+    let Some(endpoint) = endpoint_path(app) else {
+        wiring_failed(app, session_id, "no app data directory".to_string());
+        return None;
+    };
+    if let Err(error) = bridge.ensure_server(&endpoint, store.inner().clone(), bridge_hooks(app)) {
+        wiring_failed(app, session_id, format!("the bridge could not start: {error}"));
+        return None;
+    }
+    match mcp_wiring_for(app, adapter, session_id, &endpoint) {
+        Ok(wiring) => wiring,
+        Err(reason) => {
+            wiring_failed(app, session_id, reason);
+            None
+        }
+    }
+}
+
+/// A Delegate that starts without its coordination tools is a silent
+/// failure the user would only discover by asking the CLI — so it is said
+/// once, on the toast bus (src/delegateStatusNotify.ts listens) and in the
+/// dev log, and the session still runs.
+fn wiring_failed(app: &tauri::AppHandle, session_id: &str, reason: String) {
+    eprintln!("coordination could not wire Delegate {session_id}: {reason}");
+    let _ = app.emit(
+        "coordination:wiring-failed",
+        serde_json::json!({ "sessionId": session_id, "reason": reason }),
+    );
+}
+
+/// Ask the adapter how its CLI learns about `klide mcp coordination`, then
+/// write the files it needs under the app data dir. The server command is
+/// this very executable — the `klide ptyd` pattern, nothing to bundle.
+fn mcp_wiring_for(
+    app: &tauri::AppHandle,
+    adapter: &dyn delegate::Delegate,
+    session_id: &str,
+    endpoint: &std::path::Path,
+) -> Result<Option<delegate::McpWiring>, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("no path to the Klide binary: {e}"))?;
+    let config_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?
+        .join("delegate-mcp");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("could not create the MCP config dir: {e}"))?;
+    let file_stem: String = session_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let Some(wiring) = adapter.mcp_wiring(&delegate::McpServerSpec {
+        command: exe.to_string_lossy().to_string(),
+        args: vec!["mcp".to_string(), "coordination".to_string()],
+        endpoint_path: endpoint.to_string_lossy().to_string(),
+        session_id: session_id.to_string(),
+        config_dir: config_dir.to_string_lossy().to_string(),
+        file_stem,
+    }) else {
+        // This CLI has no MCP client Klide configures (omp): not a failure.
+        return Ok(None);
+    };
+    for (path, content) in &wiring.files {
+        std::fs::write(path, content).map_err(|e| format!("could not write {path}: {e}"))?;
+    }
+    Ok(Some(wiring))
+}
+
+/// A Delegate status hook (`working` / `blocked` / `waiting`) is also the
+/// Run's coordination state; called from the status server's change callback.
+pub(crate) fn note_delegate_coordination_status(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    status: &str,
+) {
+    if let Err(error) = crate::coordination_bridge::note_delegate_status(
+        app.state::<crate::coordination::CoordinationStoreState>().inner(),
+        &bridge_hooks(app),
+        app.state::<crate::coordination_bridge::CoordinationBridgeState>().inner(),
+        session_id,
+        status,
+    ) {
+        eprintln!("coordination could not note Delegate status for {session_id}: {error}");
+    }
 }
 
 #[tauri::command]

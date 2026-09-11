@@ -4,7 +4,7 @@ use super::runs::{
     TranscriptState,
 };
 use super::chat_stream::{message_blocks, result_text, StreamItem};
-use super::{shell_quote, ChatSpec, Delegate, RunCandidate, RunParser};
+use super::{shell_quote, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunParser};
 use std::collections::{HashMap, HashSet};
 
 /// Claude Code — Anthropic's CLI. Its TUI accepts the task as the first
@@ -18,8 +18,13 @@ pub struct ClaudeCode;
 /// `Bash(gh *)`, an exact `npm test` becomes `Bash(npm test)` — because the two
 /// wildcard vocabularies already agree on `*`. An empty list adds no flag at
 /// all rather than an empty one, which the CLI would read as "allow nothing".
-fn allowed_tools_args(commands: &[String]) -> Vec<String> {
-    let specs: Vec<String> = commands
+///
+/// `klide_mcp` adds Klide's own MCP server (`mcp__klide`, every tool on it):
+/// a headless turn has nobody to answer Claude Code's permission prompt, and
+/// the coordination bridge already reviews what those tools do — the
+/// receiving side's operator approves each message, not the sender's CLI.
+fn allowed_tools_args(commands: &[String], klide_mcp: bool) -> Vec<String> {
+    let mut specs: Vec<String> = commands
         .iter()
         .map(|c| c.trim())
         .filter(|c| !c.is_empty())
@@ -28,6 +33,9 @@ fn allowed_tools_args(commands: &[String]) -> Vec<String> {
         .filter(|c| !c.contains(')'))
         .map(|c| format!("Bash({c})"))
         .collect();
+    if klide_mcp {
+        specs.push("mcp__klide".to_string());
+    }
     if specs.is_empty() {
         return Vec::new();
     }
@@ -47,6 +55,28 @@ impl Delegate for ClaudeCode {
 
     fn model_arg(&self, model: &str) -> String {
         format!(" --model {}", shell_quote(model))
+    }
+
+    /// `--mcp-config <file>` adds servers for this invocation only, on top of
+    /// whatever the user configured — no write to `~/.claude.json`, nothing
+    /// to clean up when the session ends.
+    fn mcp_wiring(&self, spec: &McpServerSpec) -> Option<McpWiring> {
+        let path = format!("{}/{}.claude-mcp.json", spec.config_dir, spec.file_stem);
+        let content = serde_json::json!({
+            "mcpServers": {
+                "klide": {
+                    "type": "stdio",
+                    "command": spec.command,
+                    "args": spec.args,
+                    "env": spec.env_json(),
+                }
+            }
+        });
+        Some(McpWiring {
+            args: vec!["--mcp-config".to_string(), path.clone()],
+            env: vec![],
+            files: vec![(path, content.to_string())],
+        })
     }
 
     fn resume_arg(&self, session_id: &str) -> String {
@@ -111,7 +141,7 @@ impl Delegate for ClaudeCode {
         // the delegate could not run anything real. `--allowedTools` carries
         // over the approvals the project already granted in Klide, which is
         // narrower than the alternative of dropping the permission mode.
-        args.extend(allowed_tools_args(spec.allowed_commands));
+        args.extend(allowed_tools_args(spec.allowed_commands, spec.mcp.is_some()));
         Some(args)
     }
 
@@ -1018,7 +1048,27 @@ mod tests {
 
     /// One turn's terms, with only what a test cares about spelled out.
     fn spec<'a>(model: &'a str, resume: Option<&'a str>, allowed: &'a [String]) -> ChatSpec<'a> {
-        ChatSpec { model, resume, allowed_commands: allowed }
+        ChatSpec { model, resume, mcp: None, allowed_commands: allowed }
+    }
+
+    #[test]
+    fn klide_mcp_server_is_pre_allowed_on_a_headless_turn() {
+        // A `-p` turn has nobody to answer Claude Code's permission prompt, so
+        // without this the model calls agent_list and gets "not granted yet".
+        let wiring = McpWiring::default();
+        let with_mcp = ChatSpec { model: "", resume: None, mcp: Some(&wiring), allowed_commands: &[] };
+        let args = ClaudeCode.chat_stream_args("/tmp/ws", &with_mcp).unwrap();
+        let at = args.iter().position(|a| a == "--allowedTools").expect("flag");
+        assert_eq!(args[at + 1], "mcp__klide");
+        // Alongside approved commands, never instead of them.
+        let allowed = vec!["npm test".to_string()];
+        let both = ChatSpec { model: "", resume: None, mcp: Some(&wiring), allowed_commands: &allowed };
+        let args = ClaudeCode.chat_stream_args("/tmp/ws", &both).unwrap();
+        let at = args.iter().position(|a| a == "--allowedTools").expect("flag");
+        assert_eq!(&args[at + 1..at + 3], ["Bash(npm test)", "mcp__klide"]);
+        // No server wired, no MCP grant.
+        let args = ClaudeCode.chat_stream_args("/tmp/ws", &spec("", None, &[])).unwrap();
+        assert!(!args.contains(&"mcp__klide".to_string()));
     }
 
     #[test]

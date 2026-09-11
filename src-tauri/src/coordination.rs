@@ -415,6 +415,22 @@ pub struct CoordinationCommandOutcome {
     pub snapshot: CoordinationSnapshot,
 }
 
+/// The name peers see in `agent_list`: the same rule the AI panel uses for a
+/// thread title (first user message, whitespace collapsed, 80 chars). Raw run
+/// ids are unreadable for a model choosing whom to address. Shared by Harness
+/// registration (agent/mod.rs) and Delegate registration (coordination_bridge.rs).
+pub(crate) fn label_from_text(text: &str) -> Option<String> {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(if collapsed.chars().count() > 80 {
+        format!("{}…", collapsed.chars().take(79).collect::<String>())
+    } else {
+        collapsed
+    })
+}
+
 fn validate_component(id: &str, label: &str) -> Result<(), String> {
     if id.trim().is_empty() || id.len() > 180 || id.contains('\\') {
         return Err(format!("Invalid {label} id."));

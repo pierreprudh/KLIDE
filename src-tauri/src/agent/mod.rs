@@ -181,6 +181,9 @@ struct ProviderTurnRequest {
     /// to a delegate CLI so a headless turn can run what the user already said
     /// yes to. Empty for every provider whose tools Klide dispatches itself.
     allowed_commands: Vec<String>,
+    /// Klide's MCP server for a Delegate conversation (see
+    /// [`RunSupervisor::delegate_mcp_wiring`]). `None` for every other provider.
+    mcp: Option<crate::delegate::McpWiring>,
     num_ctx: Option<usize>,
     num_predict: Option<usize>,
     reflection_level: Option<String>,
@@ -212,6 +215,7 @@ impl AgentProviderCaller for RealProviderCaller {
                     workspace_root: request.workspace_root,
                     run_id: request.run_id,
                     allowed_commands: request.allowed_commands,
+                    mcp: request.mcp,
                     num_ctx: request.num_ctx,
                     num_predict: request.num_predict,
                     reflection_level: request.reflection_level,
@@ -236,6 +240,28 @@ trait RunSupervisor: Send + Sync {
     /// when the lock is poisoned or the run handle is gone — both best-effort
     /// (the sets `f` touches are re-ask-avoidance conveniences).
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool;
+
+    /// Whether a coordinated Run is around right now, for `agent_list`. The
+    /// default knows only Harness Runs (a live handle); the app supervisor
+    /// also counts a Delegate whose PTY session is bound at the bridge.
+    fn is_live(&self, run_id: &str) -> bool {
+        self.with_handle(run_id, &mut |_| {})
+    }
+
+    /// Klide's MCP server for a headless Delegate turn of this Run — a Focus
+    /// conversation on Claude Code gets the same `agent_*` tools a PTY session
+    /// does. Binds the conversation at the coordination bridge and returns
+    /// the adapter's wiring; `None` when `provider` is not a Delegate, the Run
+    /// has no Workspace, or the bridge could not start. The default (tests)
+    /// wires nothing.
+    fn delegate_mcp_wiring(
+        &self,
+        _run_id: &str,
+        _provider: &str,
+        _workspace_root: Option<&str>,
+    ) -> Option<crate::delegate::McpWiring> {
+        None
+    }
     /// Authenticated native access to the Rust-owned coordination journal.
     /// Callers construct actors from the current Run id; renderer-provided
     /// actor objects never cross this seam.
@@ -418,6 +444,38 @@ impl RunSupervisor for TauriSupervisor {
                 reason: Some(run_status_wire(&status).replace('_', " ")),
             },
         );
+    }
+
+    fn is_live(&self, run_id: &str) -> bool {
+        self.with_handle(run_id, &mut |_| {})
+            || self
+                .app
+                .state::<crate::coordination_bridge::CoordinationBridgeState>()
+                .is_bound_run(run_id)
+    }
+
+    fn delegate_mcp_wiring(
+        &self,
+        run_id: &str,
+        provider: &str,
+        workspace_root: Option<&str>,
+    ) -> Option<crate::delegate::McpWiring> {
+        let adapter = crate::delegate::lookup(provider)?;
+        let root = workspace_root?;
+        // The same session id a PTY spawn uses for this conversation
+        // (`{convoId}:{provider}`), so Focus and Workbench act as one Run.
+        let session_id = format!("{run_id}:{provider}");
+        crate::pty::wire_coordination(
+            &self.app,
+            adapter,
+            &session_id,
+            provider,
+            root,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
@@ -1274,26 +1332,12 @@ pub(crate) async fn start_background_run(
 /// never sees `agent_*`, so registering it would only grow a shared file every
 /// reader has to fold. The Workspace is the journal's home, so a
 /// workspace-less Run has nowhere to register either.
+/// Every conversation with a Workspace is on the coordination plane, whatever
+/// its Mode and provider: a Chat thread can be asked something by a Goal run
+/// and answer it (Chat carries the coordination tools and nothing else), and a
+/// Delegate CLI is a full agent to itself however Klide labels the turn.
 fn coordination_workspace_for(request: &StartRunRequest) -> Option<&str> {
-    match request.mode {
-        AgentMode::Plan | AgentMode::Goal => request.workspace_root.as_deref(),
-        AgentMode::Chat => None,
-    }
-}
-
-/// The name peers see in `agent_list`: the same rule the AI panel uses for a
-/// thread title (first user message, whitespace collapsed, 80 chars). Raw run
-/// ids are unreadable for a model choosing whom to address.
-fn coordination_label(initial_text: &str) -> Option<String> {
-    let collapsed = initial_text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    Some(if collapsed.chars().count() > 80 {
-        format!("{}…", collapsed.chars().take(79).collect::<String>())
-    } else {
-        collapsed
-    })
+    request.workspace_root.as_deref()
 }
 
 fn register_coordination_run(
@@ -1309,7 +1353,13 @@ fn register_coordination_run(
         CoordinationCommand::RegisterRun {
             registration: CoordinationRunRegistration {
                 run_id: run_id.to_string(),
-                worker_kind: CoordinationWorkerKind::Harness,
+                // The journal says who does the work: a Delegate conversation
+                // driven through the Harness is still a Delegate to its peers.
+                worker_kind: if crate::delegate::lookup(&request.provider).is_some() {
+                    CoordinationWorkerKind::Delegate
+                } else {
+                    CoordinationWorkerKind::Harness
+                },
                 parent_run_id: request.parent_id.clone(),
                 mission_id: request.mission_id.clone(),
                 mission_task_id: request.mission_task_id.clone(),
@@ -1317,7 +1367,7 @@ fn register_coordination_run(
                 // message of the thread — the same title the panel shows.
                 // Follow-up turns keep it; the transcript stays the source
                 // for anything richer.
-                label: coordination_label(&request.initial_text),
+                label: crate::coordination::label_from_text(&request.initial_text),
             },
             initial_state: Some(CoordinationRunState::Working),
         },
@@ -2056,6 +2106,16 @@ async fn run_agent_loop(
             .await
             .unwrap_or_default()
         };
+        // A Delegate conversation gets Klide's MCP server for this turn, so a
+        // Focus thread on Claude Code can address its peers too. Only where
+        // the Run itself is registered (Plan/Goal with a Workspace); the
+        // Harness already owns the Run's state, and the bridge binding is
+        // idempotent per turn.
+        let mcp = sup.delegate_mcp_wiring(
+            &id,
+            &request.provider,
+            coordination_workspace_for(&request),
+        );
 
         // Race the provider stream against user cancellation so abort takes
         // effect mid-request, not only between turns.
@@ -2073,6 +2133,7 @@ async fn run_agent_loop(
                 workspace_root: request.workspace_root.clone(),
                 run_id: Some(id.clone()),
                 allowed_commands,
+                mcp,
                 num_ctx: request.num_ctx,
                 num_predict: reply_budget_override.or(request.num_predict),
                 reflection_level: request.reflection_level.clone(),
@@ -4156,6 +4217,7 @@ mod provider_caller_tests {
                 workspace_root: Some("/tmp".to_string()),
                 run_id: None,
                 allowed_commands: Vec::new(),
+                mcp: None,
                 num_ctx: Some(1024),
                 num_predict: Some(128),
                 reflection_level: Some("low".to_string()),
@@ -4946,7 +5008,7 @@ mod run_loop_tests {
                     mission_task_id: None,
                     // Registration is immutable and the loop registers with
                     // the thread title, so the pre-registration must match.
-                    label: coordination_label(&test_request(&root, &[]).initial_text),
+                    label: crate::coordination::label_from_text(&test_request(&root, &[]).initial_text),
                 },
                 initial_state: Some(CoordinationRunState::Working),
             },

@@ -385,12 +385,13 @@ where
                     // peer is around. The live handle can: a message to a live
                     // peer lands at its next turn; one to an idle peer waits
                     // until its user speaks again.
-                    let live = ctx.sup.with_handle(run_id, &mut |_| {});
+                    let live = ctx.sup.is_live(run_id);
                     serde_json::json!({
                         "runId": run_id,
                         "relation": crate::coordination::relation_label(&snapshot, ctx.id, run_id),
                         "state": run.state,
                         "live": live,
+                        "workerKind": run.registration.worker_kind,
                         "label": run.registration.label,
                         "missionId": run.registration.mission_id,
                         "cancelRequested": run.cancel_request.is_some(),

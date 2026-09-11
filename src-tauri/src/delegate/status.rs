@@ -107,6 +107,11 @@ impl DelegateStatusState {
                     "delegate-status:changed",
                     serde_json::json!({ "sessionId": signal.session_id, "status": signal.status }),
                 );
+                crate::pty::note_delegate_coordination_status(
+                    &app,
+                    &signal.session_id,
+                    &signal.status,
+                );
             };
             match start_hook_server(self.statuses.clone(), Box::new(on_change)) {
                 Ok(s) => *server = Some(s),
@@ -129,7 +134,7 @@ impl DelegateStatusState {
 /// posture Orca ships; the worst a spoofed post could do is flip a label.
 /// OS randomness, not a hash of time/pid — those inputs are guessable by
 /// any local process, which is exactly who the token guards against.
-fn fresh_token() -> Result<String, String> {
+pub(crate) fn fresh_token() -> Result<String, String> {
     use base64::Engine;
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| format!("OS RNG unavailable: {e}"))?;

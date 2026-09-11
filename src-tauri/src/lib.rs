@@ -4,6 +4,7 @@ mod blocking;
 mod cli;
 mod agent;
 mod coordination;
+mod coordination_bridge;
 mod custom_cli;
 mod custom_providers;
 mod delegate;
@@ -12,6 +13,7 @@ mod file_memo;
 mod gateway;
 mod git;
 mod local_servers;
+pub mod mcp_server;
 mod memory;
 mod missions;
 mod models;
@@ -311,6 +313,7 @@ async fn ai_chat(
             // A one-shot has no project approvals to carry: it is the
             // summarizer, which asks the model for prose and runs no tools.
             allowed_commands: Vec::new(),
+            mcp: None,
             num_ctx,
             num_predict,
             reflection_level,
@@ -803,6 +806,7 @@ pub fn run() {
         .manage(delegate::status::DelegateStatusState::default())
         .manage(agent::AgentSupervisorState::default())
         .manage(coordination::CoordinationStoreState::default())
+        .manage(coordination_bridge::CoordinationBridgeState::default())
         .manage(missions::MissionStoreState::default())
         .manage(local_servers::LocalServerState::default())
         .manage(models::ReflectionProbeCache::default())

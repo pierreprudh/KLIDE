@@ -57,8 +57,21 @@ export function watchDelegateStatus(): () => void {
     else unlisten = u;
   });
 
+  // A Delegate that started without its coordination tools (pty.rs
+  // `wiring_failed`): rare, and otherwise invisible until the CLI says it has
+  // no agent_* tool. Always toasts — once per spawn, by construction.
+  let unlistenWiring: (() => void) | undefined;
+  void listen<{ sessionId: string; reason: string }>("coordination:wiring-failed", (e) => {
+    const { sessionId, reason } = e.payload;
+    notify(`${providerLabel(sessionId)} started without agent tools: ${reason}`, { tone: "warn" });
+  }).then((u) => {
+    if (disposed) u();
+    else unlistenWiring = u;
+  });
+
   return () => {
     disposed = true;
     unlisten?.();
+    unlistenWiring?.();
   };
 }

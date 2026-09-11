@@ -2,6 +2,49 @@
 
 Notable changes per milestone. Dates are completion dates.
 
+## Unreleased — on the v0.6 line (since 2026-09-11)
+
+Work after the 0.6.2 cut.
+
+### Agent coordination
+
+- **Runs talk to each other.** A Rust-owned coordination journal
+  (`.klide/coordination/events.jsonl`) gives every Plan/Goal Run a stable id,
+  a state, and an inbox. Native Tools `agent_list` / `agent_send` /
+  `agent_wait` / `agent_cancel` / `agent_read_result` let one conversation
+  address another in the same Workspace; peers see thread titles, not raw ids.
+  Another agent's words never reach a conversation unreviewed: the receiving
+  side's operator gets the same inline card as a shell command, can welcome a
+  peer for the rest of the run, and approval wakes an idle conversation with a
+  no-text turn. Replies to a question the receiver itself asked skip the card.
+  Delivered mail travels as a `user` turn labelled as agent mail, never as
+  `system`. (PR #84, 2026-09-05.) Since 2026-09-10 every conversation with a
+  Workspace is on the plane whatever its Mode or model: Chat carries the
+  coordination tools and nothing else, so a Chat thread can be asked something
+  and answer it.
+- **Delegate CLIs are on the same plane.** Claude Code, Codex and OpenCode
+  sessions Klide launches now carry Klide's embedded MCP server
+  (`klide mcp coordination`, same binary as the app) and see the same five
+  operations as MCP tools — `agent_list`, `agent_send`, `agent_wait`,
+  `agent_read_result`, plus `agent_publish_result` since a CLI has to say when
+  it is done. The MCP child owns nothing: every call is relayed over loopback
+  to a bridge in the app that binds the caller's Run id and Workspace from the
+  PTY session it was spawned with, so no tool argument can speak as another
+  agent or reach another journal. A Delegate registers as a `delegate` Run at
+  spawn (its conversation id, the same id the panel uses), its status hooks
+  move its state (`working` / `blocked` / `waiting`), and process exit settles
+  it (`done` / `failed` / `cancelled`). Mail addressed to a Delegate shows the
+  same review card in its panel; the CLI reads approved mail when it calls
+  `agent_wait` — pull, not push, because Klide owns no turn boundary inside a
+  foreign CLI. Focus conversations on a Delegate get the same tools: the
+  Harness hands each headless turn the wiring, and the turn's process acts as
+  the conversation's Run. A Klide restart no longer costs a running CLI its
+  agent tools: the MCP server is told where to find the bridge rather than a
+  port, and the bridge rebuilds a session it never bound from that session's
+  spawn record. Per-CLI wiring: Claude Code `--mcp-config <per-session file>`,
+  Codex `-c mcp_servers.klide.*` overrides, OpenCode `OPENCODE_CONFIG`; Oh My
+  Pi and custom CLIs run unchanged.
+
 ## v0.6.2 — Memory, Routing, Recovery (2026-09-11)
 
 Hardening after the 0.6.1 cut. Project Memory becomes a Harness capability

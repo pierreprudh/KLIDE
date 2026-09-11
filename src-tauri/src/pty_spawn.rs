@@ -14,7 +14,7 @@
 //! the store lookup, so a test never touches `~/.klide`).
 
 use crate::custom_cli::CustomCli;
-use crate::delegate;
+use crate::delegate::{self, McpWiring};
 use crate::pty_host::{DelegateMissionLink, SpawnSpec};
 
 /// The raw inputs of one Delegate PTY spawn, exactly as the Tauri command
@@ -46,6 +46,10 @@ pub struct SpawnRequest {
     /// The custom CLI for `provider`, looked up by the caller. Only consulted
     /// when no built-in Delegate adapter matches.
     pub custom_cli: Option<CustomCli>,
+    /// The adapter's MCP registration for this session, already computed by
+    /// the caller (it needs the app's data dir and exe path). Its files are
+    /// the caller's to write; its flags and env land in the spec here.
+    pub mcp: Option<McpWiring>,
 }
 
 /// The one cwd rule for a Delegate spawn: an empty root means "no cwd", and a
@@ -81,7 +85,7 @@ pub fn validated_cwd(workspace_root: Option<String>) -> Result<Option<String>, S
 pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     let adapter = delegate::lookup(&req.provider);
     let command = if let Some(adapter) = adapter {
-        if req.one_shot {
+        let mut command = if req.one_shot {
             adapter.mission_command(req.task.as_deref(), req.model.as_deref())?
         } else {
             adapter.spawn_command(
@@ -90,7 +94,23 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
                 req.resume_session_id.as_deref(),
                 req.effort.as_deref(),
             )
+        };
+        // Coordination tools ride on the adapter's own MCP flag, interactive
+        // and one-shot alike: a Mission attempt can publish its result too.
+        if let Some(mcp) = &req.mcp {
+            for arg in &mcp.args {
+                command.push(' ');
+                // A bare flag stays readable; anything else is quoted.
+                let bare_flag = arg.starts_with('-')
+                    && arg.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                if bare_flag {
+                    command.push_str(arg);
+                } else {
+                    command.push_str(&delegate::shell_quote(arg));
+                }
+            }
         }
+        command
     } else if let Some(custom) = req.custom_cli.as_ref() {
         if req.one_shot {
             return Err("Custom Delegate CLIs are not yet supported for durable Missions.".into());
@@ -130,6 +150,12 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     if let Some(url) = req.hook_url {
         env.push(("KLIDE_HOOK_URL".to_string(), url));
     }
+    // Only what the CLI itself needs to find its config. The MCP server's own
+    // environment rides inside that config, because an MCP client hands a
+    // stdio child a filtered environment rather than the CLI's.
+    if let Some(mcp) = req.mcp {
+        env.extend(mcp.env);
+    }
 
     Ok(SpawnSpec {
         session_id: req.session_id,
@@ -168,7 +194,105 @@ mod tests {
             one_shot: false,
             hook_url: None,
             custom_cli: None,
+            mcp: None,
         }
+    }
+
+    fn spec() -> delegate::McpServerSpec {
+        delegate::McpServerSpec {
+            command: "/Applications/Klide.app/Contents/MacOS/klide".to_string(),
+            args: vec!["mcp".to_string(), "coordination".to_string()],
+            endpoint_path: "/data/klide/coordination-endpoint.json".to_string(),
+            session_id: "convo-1:x".to_string(),
+            config_dir: "/tmp/klide-mcp".to_string(),
+            file_stem: "convo-1-x".to_string(),
+        }
+    }
+
+    // ── Coordination wiring ───────────────────────────────────────────────
+
+    #[test]
+    fn claude_gets_a_config_file_flag_and_the_server_env_inside_it() {
+        let mut req = request("claude-code");
+        req.task = Some("fix the bug".to_string());
+        req.mcp = delegate::lookup("claude-code").unwrap().mcp_wiring(&spec());
+        let files = req.mcp.as_ref().unwrap().files.clone();
+        let spec = spawn_spec_for(req).unwrap();
+        assert_eq!(
+            spec.command,
+            "claude 'fix the bug' --mcp-config '/tmp/klide-mcp/convo-1-x.claude-mcp.json'"
+        );
+        assert!(
+            spec.env.is_empty(),
+            "the server's env belongs in its own config block, not the PTY: {:?}",
+            spec.env
+        );
+        let (path, content) = &files[0];
+        assert_eq!(path, "/tmp/klide-mcp/convo-1-x.claude-mcp.json");
+        let json: serde_json::Value = serde_json::from_str(content).unwrap();
+        let server = &json["mcpServers"]["klide"];
+        assert_eq!(server["command"], "/Applications/Klide.app/Contents/MacOS/klide");
+        assert_eq!(server["args"], serde_json::json!(["mcp", "coordination"]));
+        // A path and a session id, never a port: a Delegate outlives the app.
+        assert_eq!(
+            server["env"]["KLIDE_COORD_ENDPOINT"],
+            "/data/klide/coordination-endpoint.json"
+        );
+        assert_eq!(server["env"]["KLIDE_COORD_SESSION"], "convo-1:x");
+    }
+
+    #[test]
+    fn codex_gets_inline_toml_overrides_after_the_prompt() {
+        let mut req = request("codex");
+        req.resume_session_id = Some("sess-9".to_string());
+        req.mcp = delegate::lookup("codex").unwrap().mcp_wiring(&spec());
+        let spec = spawn_spec_for(req).unwrap();
+        assert_eq!(
+            spec.command,
+            "codex resume 'sess-9' -c 'mcp_servers.klide.command=\"/Applications/Klide.app/Contents/MacOS/klide\"' -c 'mcp_servers.klide.args=[\"mcp\",\"coordination\"]' -c 'mcp_servers.klide.env={KLIDE_COORD_ENDPOINT=\"/data/klide/coordination-endpoint.json\",KLIDE_COORD_SESSION=\"convo-1:x\"}'"
+        );
+        assert!(spec.env.is_empty());
+    }
+
+    #[test]
+    fn opencode_gets_an_extra_config_file_through_its_env_var() {
+        let mut req = request("opencode");
+        req.task = Some("fix the bug".to_string());
+        req.mcp = delegate::lookup("opencode").unwrap().mcp_wiring(&spec());
+        let files = req.mcp.as_ref().unwrap().files.clone();
+        let spec = spawn_spec_for(req).unwrap();
+        assert_eq!(spec.command, "opencode run 'fix the bug'", "no flag: OpenCode has none");
+        assert_eq!(
+            spec.env,
+            vec![(
+                "OPENCODE_CONFIG".to_string(),
+                "/tmp/klide-mcp/convo-1-x.opencode.json".to_string()
+            )]
+        );
+        let json: serde_json::Value = serde_json::from_str(&files[0].1).unwrap();
+        assert_eq!(
+            json["mcp"]["klide"]["command"],
+            serde_json::json!(["/Applications/Klide.app/Contents/MacOS/klide", "mcp", "coordination"])
+        );
+        assert_eq!(json["mcp"]["klide"]["type"], "local");
+    }
+
+    #[test]
+    fn omp_and_custom_clis_have_no_mcp_wiring() {
+        assert!(delegate::lookup("omp").unwrap().mcp_wiring(&spec()).is_none());
+        let mut req = request("cli:aider");
+        req.custom_cli = Some(custom_cli());
+        req.mcp = Some(McpWiring {
+            args: vec!["--should-not-appear".to_string()],
+            env: vec![],
+            files: vec![],
+        });
+        let spec = spawn_spec_for(req).unwrap();
+        assert!(
+            !spec.command.contains("--should-not-appear"),
+            "a user template is never rewritten: {}",
+            spec.command
+        );
     }
 
     fn custom_cli() -> CustomCli {

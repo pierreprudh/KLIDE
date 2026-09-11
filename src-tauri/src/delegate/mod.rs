@@ -50,6 +50,12 @@ pub struct ChatSpec<'a> {
     /// A session this conversation already opened, to continue instead of
     /// replacing. See [`Delegate::resumes_sessions`].
     pub resume: Option<&'a str>,
+    /// Klide's MCP server for this conversation (`Delegate::mcp_wiring`),
+    /// when the caller registered it — a Focus turn carries the same
+    /// coordination tools a PTY session does. Applied by
+    /// [`Delegate::chat_stream_invocation`]; the prose-only fallback never
+    /// gets it, since no adapter with a prose-only mode has an MCP client.
+    pub mcp: Option<&'a McpWiring>,
     /// Commands this project has already approved in Klide
     /// (`agent::command_allowlist`), exact or wildcard.
     ///
@@ -59,6 +65,56 @@ pub struct ChatSpec<'a> {
     /// approvals the user already granted is what makes the turn able to work
     /// without widening the posture to "allow everything".
     pub allowed_commands: &'a [String],
+}
+
+/// What a Delegate CLI needs to know to start Klide's embedded MCP server as
+/// its stdio child: the binary, its args, the bridge URL the child must carry
+/// (as the server's own `env`, because MCP clients hand a stdio child a
+/// filtered environment, not the CLI's), and where a config file may be
+/// written when the CLI reads its MCP servers from one.
+pub struct McpServerSpec {
+    pub command: String,
+    pub args: Vec<String>,
+    /// Where the app publishes the bridge's live port and token. A path, never
+    /// a URL: a Delegate outlives the app, and a baked-in port would be dead
+    /// after the next restart.
+    pub endpoint_path: String,
+    /// The PTY session id this server speaks for.
+    pub session_id: String,
+    pub config_dir: String,
+    /// Filesystem-safe stem for any config file this session writes.
+    pub file_stem: String,
+}
+
+impl McpServerSpec {
+    /// The environment the MCP server itself needs. It goes in the server's own
+    /// `env` block because MCP clients hand a stdio child a filtered
+    /// environment rather than the CLI's.
+    fn env_pairs(&self) -> [(&'static str, &str); 2] {
+        [
+            (crate::mcp_server::ENV_ENDPOINT, self.endpoint_path.as_str()),
+            (crate::mcp_server::ENV_SESSION, self.session_id.as_str()),
+        ]
+    }
+
+    fn env_json(&self) -> serde_json::Value {
+        serde_json::Value::Object(
+            self.env_pairs()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
+                .collect(),
+        )
+    }
+}
+
+/// How one CLI is told about the MCP server: arguments appended to its
+/// command (a PTY spawn shell-quotes them, a headless turn passes them as
+/// is), extra process env, and files to write before spawn.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct McpWiring {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub files: Vec<(String, String)>,
 }
 
 pub trait Delegate: Sync {
@@ -166,6 +222,13 @@ pub trait Delegate: Sync {
         ))
     }
 
+    /// Register Klide's MCP server for one session. `None` (the default) means
+    /// this CLI has no MCP client Klide knows how to configure per-session, and
+    /// it runs without coordination tools — exactly as before.
+    fn mcp_wiring(&self, _spec: &McpServerSpec) -> Option<McpWiring> {
+        None
+    }
+
     /// Argument vector for a one-shot headless chat invocation — prompt on
     /// stdin, plain text on stdout (the AI panel's subscription chat path).
     /// `model` may be empty — then the adapter must omit its model flag so
@@ -238,6 +301,10 @@ pub trait Delegate: Sync {
         Some(crate::cli::resolve_command(self.binary()).map(|cli| {
             let mut command = tokio::process::Command::new(cli);
             command.current_dir(cwd).args(args);
+            if let Some(mcp) = spec.mcp {
+                command.args(&mcp.args);
+                command.envs(mcp.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+            }
             command
         }))
     }

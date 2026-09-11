@@ -4819,12 +4819,14 @@ This user request requires workspace inspection. Before answering, you MUST call
         </div>
       )}
 
-      {!delegateSession && (
+      {(!delegateSession || pendingInbox.some((e) => e.deliveryState === "queued")) && (
       <div style={{ padding: variant === "focus" ? `0 ${focusGutterRight} 16px ${focusGutterLeft}` : "0 10px 10px", transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)" }}>
         {/* Another agent's words wait here for the user before this
             conversation may read them — the same card as a shell command,
             answered into the journal. While the run itself is paused on one
-            of them, that card comes from the harness instead. */}
+            of them, that card comes from the harness instead. A Delegate
+            session shows the same card: its CLI reads approved mail through
+            Klide's MCP server (agent_wait), so approval needs no wake turn. */}
         {workspaceRoot && pendingInbox
           .filter((e) => e.deliveryState === "queued" && e.envelope.id !== pendingPermission?.envelopeId)
           .map(({ envelope: e }) => (
@@ -4833,11 +4835,13 @@ This user request requires workspace inspection. Before answering, you MUST call
               kind="message"
               peer={peerName(e.from.type === "run" ? e.from.runId : "operator", peerIndex)}
               command={e.body}
-              detail={`${e.kind} · read by this conversation at its next turn once approved`}
+              detail={delegateSession
+                ? `${e.kind} · read by this agent when it next calls agent_wait once approved`
+                : `${e.kind} · read by this conversation at its next turn once approved`}
               onReject={() => { void reviewEnvelope(workspaceRoot, currentId, e.id, false).catch((err) => notify(`Couldn't decline the message: ${errMessage(err)}`, { tone: "error" })); }}
               onApproveOnce={() => {
                 void reviewEnvelope(workspaceRoot, currentId, e.id, true)
-                  .then(() => wakeForInbox())
+                  .then(() => { if (!delegateSession) return wakeForInbox(); })
                   .catch((err) => notify(`Couldn't approve the message: ${errMessage(err)}`, { tone: "error" }));
               }}
             />
