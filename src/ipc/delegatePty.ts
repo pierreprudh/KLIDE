@@ -101,6 +101,9 @@ export type DelegateSpawnArgs = {
   parentRunId?: string | null;
   resumeSessionId?: string | null;
   model?: string | null;
+  /** The reasoning effort the user picked, for a CLI that publishes a set of
+   *  them (Codex). Rust drops it for the CLIs that take no such switch. */
+  effort?: string | null;
   task?: string | null;
   oneShot?: boolean;
 };
@@ -125,6 +128,7 @@ export function spawnDelegatePty(sessionId: string, args: DelegateSpawnArgs): Pr
     parentRunId: args.parentRunId ?? null,
     resumeSessionId: args.resumeSessionId ?? null,
     model: args.model ?? null,
+    effort: args.effort ?? null,
     task: args.task ?? null,
     ...(args.oneShot === undefined ? {} : { oneShot: args.oneShot }),
   });

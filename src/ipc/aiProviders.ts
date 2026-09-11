@@ -44,6 +44,13 @@ export function modelSupportsReflection(provider: string, model: string): Promis
   return invoke<boolean>("ai_model_supports_reflection", { provider, model });
 }
 
+/** The reasoning efforts this pair actually accepts, weakest first. Empty
+ *  means no dial — Rust reads the Codex CLI's model manifest for a Codex run,
+ *  so the picker offers that model's set rather than a guess. */
+export function modelReflectionLevels(provider: string, model: string): Promise<string[]> {
+  return invoke<string[]>("ai_model_reflection_levels", { provider, model });
+}
+
 export function modelSupportsVision(provider: string, model: string): Promise<boolean> {
   return invoke<boolean>("ai_model_supports_vision", { provider, model });
 }

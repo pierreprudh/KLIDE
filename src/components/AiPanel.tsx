@@ -15,7 +15,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
-  modelSupportsReflection as queryModelSupportsReflection,
+  modelReflectionLevels as queryModelReflectionLevels,
   modelSupportsTools as queryModelSupportsTools,
   modelSupportsVision as queryModelSupportsVision,
   readLocalProviderStatus,
@@ -23,6 +23,11 @@ import {
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
+import {
+  reflectionBarLevel,
+  reflectionCaption,
+  sortReflectionLevels,
+} from "../reflectionLevels";
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
@@ -512,21 +517,29 @@ function ReflectionBars({ level, size = "compact" }: { level: number; size?: "co
   );
 }
 
-function normalizeReflectionLevel(level: string | undefined | null): string | undefined {
-  switch (level) {
-    case "off":
-    case "minimal":
-      return "minimal";
-    case "low":
-    case "medium":
-    case "high":
-      return level;
-    case "max":
-    case "xhigh":
-      return "xhigh";
-    default:
-      return undefined;
-  }
+/** A stored level, read back verbatim — reconciling it with a model's set is
+ *  `reflectionLevelWithin`'s job, and it needs the raw name to do it. */
+function storedReflectionLevel(level: string | undefined | null): string | undefined {
+  return level?.trim() || undefined;
+}
+
+/**
+ * A stored level as *this model's* set sees it.
+ *
+ * `off` and `max` were older Klide names for `minimal` and `xhigh`, so they
+ * are still translated — but only when the model doesn't publish that name
+ * itself. A Codex model has a real `max`, one step above `xhigh`, and folding
+ * it into `xhigh` would quietly downgrade the run. Anything the set doesn't
+ * contain reads as Auto rather than as a level the provider will reject.
+ */
+function reflectionLevelWithin(
+  level: string | undefined,
+  available: readonly string[],
+): string | undefined {
+  if (!level) return undefined;
+  if (available.includes(level)) return level;
+  const legacy = level === "off" ? "minimal" : level === "max" ? "xhigh" : undefined;
+  return legacy && available.includes(legacy) ? legacy : undefined;
 }
 
 /** `klide.model.<provider>` when it holds a value this Provider can actually
@@ -610,6 +623,10 @@ function storedModelForProvider(id: ProviderId): string {
 
 type ModelInspection = {
   supportsTools: boolean;
+  /** The efforts this pair accepts, weakest first — Rust reads the Codex CLI's
+   *  own manifest for a Codex run, so the sets differ per model. Empty means
+   *  no dial, which is what `supportsReflection` now says. */
+  reflectionLevels: string[];
   supportsReflection: boolean;
   supportsVision: boolean;
   contextLimit: number;
@@ -628,14 +645,19 @@ async function inspectModelForRun(
 ): Promise<ModelInspection> {
   const [tools, reflection, vision, context] = await Promise.allSettled([
     queryModelSupportsTools(provider, model),
-    allowActivationProbe ? queryModelSupportsReflection(provider, model) : Promise.resolve(false),
+    allowActivationProbe
+      ? queryModelReflectionLevels(provider, model)
+      : Promise.resolve<string[]>([]),
     queryModelSupportsVision(provider, model),
     readProviderContextWindow(provider, model),
   ]);
+  const reflectionLevels =
+    reflection.status === "fulfilled" ? sortReflectionLevels(reflection.value) : [];
   return {
     supportsTools:
       tools.status === "fulfilled" ? tools.value : !isManagedLocalProvider(provider),
-    supportsReflection: reflection.status === "fulfilled" ? reflection.value : false,
+    reflectionLevels,
+    supportsReflection: reflectionLevels.length > 0,
     supportsVision: vision.status === "fulfilled" ? vision.value : false,
     contextLimit:
       context.status === "fulfilled" && Number.isFinite(context.value) && context.value > 0
@@ -1017,6 +1039,10 @@ export function AiPanel({
   const agentModeRef = useRef(agentMode);
   const [modelSupportsTools, setModelSupportsTools] = useState(true);
   const [modelSupportsReflection, setModelSupportsReflection] = useState(false);
+  // The exact levels this pair accepts. The picker offers these and nothing
+  // else: a Codex model publishes its own set (no `minimal`, sometimes a `max`
+  // and an `ultra`), and a level outside it is one the CLI rejects.
+  const [modelReflectionLevels, setModelReflectionLevels] = useState<string[]>([]);
   const [modelSupportsVision, setModelSupportsVision] = useState(false);
   // A saved transcript is view-only until the user sends again. In particular,
   // don't let Ollama's reflection probe or historical token-count pass load a
@@ -1681,20 +1707,26 @@ export function AiPanel({
   const [panelReflectionLevel, setPanelReflectionLevel] = useState<string | undefined>(undefined);
   useEffect(() => {
     try {
-      const stored = normalizeReflectionLevel(localStorage.getItem(reflectionStorageKey));
-      setPanelReflectionLevel(stored ?? normalizeReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
+      const stored = storedReflectionLevel(localStorage.getItem(reflectionStorageKey));
+      setPanelReflectionLevel(stored ?? storedReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
     } catch {
-      setPanelReflectionLevel(normalizeReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
+      setPanelReflectionLevel(storedReflectionLevel(harnessSettings?.reflectionLevels?.[model]));
     }
   }, [reflectionStorageKey, harnessSettings?.reflectionLevels?.[model], model]);
-  const reflectionLevel = modelSupportsReflection ? panelReflectionLevel : undefined;
+  // A level saved against another model can be one this pair never offers
+  // (`minimal` on a Codex model). Treat it as Auto rather than send a level
+  // the provider rejects.
+  const reflectionLevel = modelSupportsReflection
+    ? reflectionLevelWithin(panelReflectionLevel, modelReflectionLevels)
+    : undefined;
   const reflectionOptions: ReflectionOption[] = [
-    { value: undefined, label: "Auto", level: 0, desc: "Provider default" },
-    { value: "minimal", label: "minimal", level: 1, desc: "Smallest reasoning effort" },
-    { value: "low", label: "low", level: 2, desc: "Lower reasoning effort" },
-    { value: "medium", label: "medium", level: 3, desc: "Default reasoning effort" },
-    { value: "high", label: "high", level: 4, desc: "Higher reasoning effort" },
-    { value: "xhigh", label: "xhigh", level: 5, desc: "Highest reasoning effort" },
+    { value: undefined, label: "Auto", level: 0, desc: "The model's own default" },
+    ...modelReflectionLevels.map((level) => ({
+      value: level,
+      label: level,
+      level: reflectionBarLevel(level, modelReflectionLevels),
+      desc: reflectionCaption(level),
+    })),
   ];
   const activeReflection = reflectionOptions.find((o) => o.value === reflectionLevel) ?? reflectionOptions[0];
   function selectReflectionLevel(level: string | undefined) {
@@ -2834,6 +2866,7 @@ This user request requires workspace inspection. Before answering, you MUST call
   function applyModelInspection(inspection: ModelInspection) {
     setModelSupportsTools(inspection.supportsTools);
     setModelSupportsReflection(inspection.supportsReflection);
+    setModelReflectionLevels(inspection.reflectionLevels);
     setModelSupportsVision(inspection.supportsVision);
     setContextLimit(inspection.contextLimit);
     // Losing vision (a model switch) invalidates staged photos only. The
@@ -2847,6 +2880,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (!modelActivationDeferred || !isLocalProvider) {
       return {
         supportsTools: modelSupportsTools,
+        reflectionLevels: modelReflectionLevels,
         supportsReflection: modelSupportsReflection,
         supportsVision: modelSupportsVision,
         contextLimit,
@@ -4120,6 +4154,10 @@ This user request requires workspace inspection. Before answering, you MUST call
             // heal the prop. The store is written on every in-session pick,
             // so it is exactly "the model last used with THIS provider".
             model={storedModelForProvider(provider)}
+            // The effort follows that same stored model: it is only meaningful
+            // paired with the model it was picked for, and only when the CLI
+            // published it (`reflectionLevel` is already filtered to the set).
+            effort={storedModelForProvider(provider) === model ? reflectionLevel ?? null : null}
             task={initialTask ?? null}
           />
         ) : (
