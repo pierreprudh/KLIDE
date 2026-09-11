@@ -84,9 +84,11 @@ never pass through an arbitrary remote `actor` field.
   way two Claude Code sessions on one machine are. A Run in another Workspace
   is never visible.
 - `agent_list` labels each visible Run `self`, `parent`, `child`,
-  `mission_peer`, or `peer`, and says whether it is live. A message to an idle
-  peer waits in its inbox until that conversation's next turn; it never wakes
-  the conversation on its own.
+  `mission_peer`, or `peer`, says whether it is live, and names its worker
+  kind (`harness` or `delegate`). A message to an idle Harness peer waits in
+  its inbox; the receiving operator's approval wakes that conversation with a
+  no-text turn. A Delegate is never woken: it reads approved mail when it
+  calls `agent_wait`.
 - A Run may request cancellation only for itself or a direct child.
 - Registration requires an existing parent, preventing cycles and ambiguous
   lineage.
@@ -95,9 +97,12 @@ never pass through an arbitrary remote `actor` field.
 These rules hold given an honest supervisor. The native Harness binds the
 actor to the running Run's own id, so no Tool argument can impersonate another
 Run. The generic `coordination_apply_command` IPC takes the actor from its
-payload and is trusted local supervisor input only; a future MCP or socket
-adapter must bind the caller's authenticated Run identity in Rust before
-constructing a command, never pass a caller-asserted actor through.
+payload and is trusted local supervisor input only. The embedded MCP adapter
+(`mcp_server.rs`) binds identity the same way: it relays each call over
+loopback to the coordination bridge (`coordination_bridge.rs`) in the app
+process, which looks the PTY session up in a map filled at spawn to learn the
+Run id and Workspace the call acts as. Its request vocabulary has no actor
+field and no journal path to pass through.
 
 ## Delivery semantics
 
@@ -106,20 +111,28 @@ constructing a command, never pass a caller-asserted actor through.
 An envelope progresses monotonically:
 
 ```text
-queued → delivered → acknowledged
+queued → accepted → delivered → acknowledged
+              ↘ declined
 ```
+
+`queued → accepted` is the receiving side's review: another agent's words never
+reach a conversation unreviewed. The operator answers an inline card (or has
+welcomed that peer for the rest of the run); a reply to a question the receiver
+itself asked, a message from the operator, and self-talk are accepted at once.
 
 Transport is at-least-once. `idempotencyKey` makes retries safe, while the
 journal gives each accepted intent exactly one projection. The recipient Run
 id is immutable, so a replacement process, panel, or Delegate session cannot
 accidentally satisfy another Run's delivery.
 
-The native Harness projects queued (and delivered-but-unacknowledged) envelopes
-only between provider turns, never during streaming or Tool execution. A
-successful provider request acknowledges that projection; a failed request
-retries it at the next safe boundary. Delegate adapters must likewise wait for
-an idle/blocked boundary and record semantic delivery separately from the PTY
-bytes used to perform it.
+The native Harness projects accepted (and delivered-but-unacknowledged)
+envelopes only between provider turns, never during streaming or Tool
+execution. A successful provider request acknowledges that projection; a
+failed request retries it at the next safe boundary. A Delegate has no turn
+boundary Klide owns, so delivery is pull: `agent_wait` over MCP returns
+accepted mail and marks it delivered and acknowledged in the same call, since
+handing the text back over the wire is the read. PTY bytes are never used for
+delivery.
 
 ## Snapshot and event cursors
 
@@ -177,13 +190,25 @@ owned by the Memory Engine.
 - attach accepted predecessor results to dependent Task prompts;
 - validate and admit artifacts before merge.
 
-### PR 4 — Embedded MCP and Delegate adapters
+### PR 4 — Embedded MCP and Delegate adapters (shipped 2026-09-10, PR #93)
 
-- expose identity-bound list/send/wait/result Tools over embedded MCP;
-- map Delegate idle/blocked status into normalized state;
-- add a local socket/CLI over the same Rust core when needed;
-- use PTY input only as an adapter implementation detail;
-- add protocol conformance, reconnect, and duplicate-delivery tests.
+- expose identity-bound list/send/wait/result Tools over embedded MCP —
+  `klide mcp coordination`, the app binary as a stdio child of the CLI, plus
+  `agent_publish_result` because a CLI has to say when it is done;
+- relay over loopback HTTP to the in-app bridge rather than a socket: the
+  journal has one writer gate and one change event, both in the app process;
+- map Delegate idle/blocked/waiting status hooks and PTY exit into normalized
+  state (an interactive thread rests in `waiting`, a Mission attempt is
+  terminal);
+- wire per CLI behind `Delegate::mcp_wiring` — Claude Code `--mcp-config`
+  file, Codex `-c mcp_servers.klide.*`, OpenCode `OPENCODE_CONFIG`; headless
+  Focus turns carry the same wiring and pre-allow `mcp__klide`;
+- PTY input is never a delivery channel; delivery is pull via `agent_wait`.
+
+Still open from this PR: waking an idle Delegate on accepted mail (a Stop hook
+that blocks with the inbox as its reason); re-binding Delegate sessions after
+an app restart (the bridge port changes while ptyd sessions live on);
+reconnect and duplicate-delivery tests against a real CLI.
 
 ## Foundation success criteria
 
@@ -199,5 +224,8 @@ owned by the Memory Engine.
   dropped by readers and trimmed by the next writer, exactly as the run
   Transcript handles it.
 - A journal that cannot be read never stops a Run: that turn is delivered
-  without an inbox and the reason is logged. Only Plan and Goal Runs register;
-  Chat never sees the coordination Tools and never touches the journal.
+  without an inbox and the reason is logged. Every Run with a Workspace
+  registers, whatever its Mode, provider, or model. Chat carries the
+  coordination Tools and nothing else — no file, shell, or memory Tool — so a
+  Chat thread can be addressed and can answer while still touching nothing in
+  the project.
