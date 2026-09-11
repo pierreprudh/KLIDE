@@ -43,10 +43,6 @@ pub struct SpawnRequest {
     /// The custom CLI for `provider`, looked up by the caller. Only consulted
     /// when no built-in Delegate adapter matches.
     pub custom_cli: Option<CustomCli>,
-    /// This session's private coordination-bridge URL, when the Delegate was
-    /// registered as a coordination Run. Becomes `KLIDE_COORD_URL` in the PTY
-    /// env (a user-authored wrapper can post to it too).
-    pub bridge_url: Option<String>,
     /// The adapter's MCP registration for this session, already computed by
     /// the caller (it needs the app's data dir and exe path). Its files are
     /// the caller's to write; its flags and env land in the spec here.
@@ -150,9 +146,9 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
     if let Some(url) = req.hook_url {
         env.push(("KLIDE_HOOK_URL".to_string(), url));
     }
-    if let Some(url) = req.bridge_url {
-        env.push((crate::mcp_server::ENV_BRIDGE_URL.to_string(), url));
-    }
+    // Only what the CLI itself needs to find its config. The MCP server's own
+    // environment rides inside that config, because an MCP client hands a
+    // stdio child a filtered environment rather than the CLI's.
     if let Some(mcp) = req.mcp {
         env.extend(mcp.env);
     }
@@ -193,7 +189,6 @@ mod tests {
             one_shot: false,
             hook_url: None,
             custom_cli: None,
-            bridge_url: None,
             mcp: None,
         }
     }
@@ -202,7 +197,8 @@ mod tests {
         delegate::McpServerSpec {
             command: "/Applications/Klide.app/Contents/MacOS/klide".to_string(),
             args: vec!["mcp".to_string(), "coordination".to_string()],
-            bridge_url: "http://127.0.0.1:4242/coord/tok/convo-1:x".to_string(),
+            endpoint_path: "/data/klide/coordination-endpoint.json".to_string(),
+            session_id: "convo-1:x".to_string(),
             config_dir: "/tmp/klide-mcp".to_string(),
             file_stem: "convo-1-x".to_string(),
         }
@@ -211,10 +207,9 @@ mod tests {
     // ── Coordination wiring ───────────────────────────────────────────────
 
     #[test]
-    fn claude_gets_a_config_file_flag_and_the_bridge_url_in_env() {
+    fn claude_gets_a_config_file_flag_and_the_server_env_inside_it() {
         let mut req = request("claude-code");
         req.task = Some("fix the bug".to_string());
-        req.bridge_url = Some(spec().bridge_url);
         req.mcp = delegate::lookup("claude-code").unwrap().mcp_wiring(&spec());
         let files = req.mcp.as_ref().unwrap().files.clone();
         let spec = spawn_spec_for(req).unwrap();
@@ -222,12 +217,10 @@ mod tests {
             spec.command,
             "claude 'fix the bug' --mcp-config '/tmp/klide-mcp/convo-1-x.claude-mcp.json'"
         );
-        assert_eq!(
-            spec.env,
-            vec![(
-                "KLIDE_COORD_URL".to_string(),
-                "http://127.0.0.1:4242/coord/tok/convo-1:x".to_string()
-            )]
+        assert!(
+            spec.env.is_empty(),
+            "the server's env belongs in its own config block, not the PTY: {:?}",
+            spec.env
         );
         let (path, content) = &files[0];
         assert_eq!(path, "/tmp/klide-mcp/convo-1-x.claude-mcp.json");
@@ -235,10 +228,12 @@ mod tests {
         let server = &json["mcpServers"]["klide"];
         assert_eq!(server["command"], "/Applications/Klide.app/Contents/MacOS/klide");
         assert_eq!(server["args"], serde_json::json!(["mcp", "coordination"]));
+        // A path and a session id, never a port: a Delegate outlives the app.
         assert_eq!(
-            server["env"]["KLIDE_COORD_URL"],
-            "http://127.0.0.1:4242/coord/tok/convo-1:x"
+            server["env"]["KLIDE_COORD_ENDPOINT"],
+            "/data/klide/coordination-endpoint.json"
         );
+        assert_eq!(server["env"]["KLIDE_COORD_SESSION"], "convo-1:x");
     }
 
     #[test]
@@ -249,7 +244,7 @@ mod tests {
         let spec = spawn_spec_for(req).unwrap();
         assert_eq!(
             spec.command,
-            "codex resume 'sess-9' -c 'mcp_servers.klide.command=\"/Applications/Klide.app/Contents/MacOS/klide\"' -c 'mcp_servers.klide.args=[\"mcp\",\"coordination\"]' -c 'mcp_servers.klide.env={KLIDE_COORD_URL=\"http://127.0.0.1:4242/coord/tok/convo-1:x\"}'"
+            "codex resume 'sess-9' -c 'mcp_servers.klide.command=\"/Applications/Klide.app/Contents/MacOS/klide\"' -c 'mcp_servers.klide.args=[\"mcp\",\"coordination\"]' -c 'mcp_servers.klide.env={KLIDE_COORD_ENDPOINT=\"/data/klide/coordination-endpoint.json\",KLIDE_COORD_SESSION=\"convo-1:x\"}'"
         );
         assert!(spec.env.is_empty());
     }

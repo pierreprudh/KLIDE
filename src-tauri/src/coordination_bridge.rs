@@ -10,13 +10,21 @@
 //! both of which live in the app process — an MCP child appending to the
 //! file directly would race the app and leave every panel blind to the write.
 //!
-//! Identity is bound here, never trusted from the caller. A Delegate PTY is
-//! spawned with `KLIDE_COORD_URL=http://127.0.0.1:<port>/coord/<token>/<session_id>`
-//! in its env; the child inherits it, posts to it, and the bridge looks the
-//! session up in a map the app filled at spawn time to learn which Run id and
-//! Workspace the call acts as. No request field can name another actor or
-//! another journal — the same posture the status hook server takes, and the
-//! rule `coordination_apply_command` documents for every adapter.
+//! Identity is bound here, never trusted from the caller. An MCP child is
+//! started knowing two stable things: the path of this app's endpoint file and
+//! its own session id. It resolves the live port and token from that file on
+//! every call and posts to `/coord/<token>/<session_id>`; the bridge looks the
+//! session up to learn which Run id and Workspace the call acts as. No request
+//! field can name another actor or another journal — the same posture the
+//! status hook server takes, and the rule `coordination_apply_command`
+//! documents for every adapter.
+//!
+//! Nothing durable may hold a port. A Delegate PTY is hosted by the ptyd
+//! daemon and outlives the app process, so a restart gives the bridge a new
+//! ephemeral port and an empty session map while the CLI is still running and
+//! still calling. The endpoint file answers the first half (the child always
+//! reads where the bridge is now) and [`BridgeHooks::resolve_session`] the
+//! second (an unknown session is rebuilt from what its spawn wrote to disk).
 //!
 //! Delivery is pull, not push: a Delegate reads its inbox through `agent_wait`
 //! at a moment of its own choosing, because Klide owns no turn boundary inside
@@ -127,11 +135,17 @@ impl BridgeResponse {
 }
 
 /// What the pure executor needs from the app: a way to announce a journal
-/// change (the Tauri event), and a way to say whether a Run is around right
-/// now. Both are closures so the executor and its tests stay Tauri-free.
+/// change (the Tauri event), a way to say whether a Run is around right now,
+/// and a way to recover a session binding this process never made. All
+/// closures, so the executor and its tests stay Tauri-free.
 pub struct BridgeHooks {
     pub on_change: Box<dyn Fn(&str, &CoordinationCommandOutcome) + Send + Sync>,
     pub is_live: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    /// Called when a request names a session this process has not bound —
+    /// after an app restart, that is every surviving Delegate. The app rebuilds
+    /// the identity from the session's own spawn record on disk. `None` when
+    /// nothing on disk says that session is still running.
+    pub resolve_session: Box<dyn Fn(&str) -> Option<BridgeSession> + Send + Sync>,
 }
 
 #[cfg(test)]
@@ -140,6 +154,7 @@ impl BridgeHooks {
         Self {
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
+            resolve_session: Box::new(|_| None),
         }
     }
 }
@@ -543,32 +558,66 @@ impl CoordinationBridgeState {
             .any(|s| s.run_id == run_id)
     }
 
-    /// This session's private bridge URL, starting the loopback listener on
-    /// first use. `None` when the listener can't start — the Delegate then
-    /// runs without coordination tools, exactly as before this module.
-    pub fn bridge_url_for(
+    /// Start the loopback listener if it is not already up, and publish where
+    /// it is listening to `endpoint_path`. Idempotent: the listener starts once
+    /// per process, the file is rewritten each time so a reader never has to
+    /// care which spawn wrote it.
+    pub fn ensure_server(
         &self,
-        session_id: &str,
+        endpoint_path: &std::path::Path,
         store: CoordinationStoreState,
         hooks: BridgeHooks,
-    ) -> Option<String> {
+    ) -> Result<(), String> {
         let mut server = self.server.lock().unwrap();
         if server.is_none() {
-            match start_bridge_server(self.sessions.clone(), store, Arc::new(hooks)) {
-                Ok(s) => *server = Some(s),
-                Err(e) => {
-                    eprintln!("coordination bridge failed to start: {e}");
-                    return None;
-                }
-            }
+            *server = Some(start_bridge_server(
+                self.sessions.clone(),
+                store,
+                Arc::new(hooks),
+            )?);
         }
         let s = server.as_ref().unwrap();
-        Some(bridge_url(s.port, &s.token, session_id))
+        write_endpoint(
+            endpoint_path,
+            &BridgeEndpoint {
+                port: s.port,
+                token: s.token.clone(),
+            },
+        )
     }
 }
 
-pub fn bridge_url(port: u16, token: &str, session_id: &str) -> String {
-    format!("http://127.0.0.1:{port}/coord/{token}/{session_id}")
+/// Where this app's bridge is listening right now. Written atomically every
+/// time the listener starts, read by every MCP child on every call — so a
+/// restart's new port and token are picked up with nothing to migrate.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct BridgeEndpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+pub fn write_endpoint(path: &std::path::Path, endpoint: &BridgeEndpoint) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Unable to create the bridge endpoint directory: {e}"))?;
+    }
+    let encoded = serde_json::to_vec(endpoint)
+        .map_err(|e| format!("Unable to encode the bridge endpoint: {e}"))?;
+    // Private: the token is what keeps other local processes off the port.
+    crate::durable::write_atomic_private(path, &encoded)
+}
+
+pub fn read_endpoint(path: &std::path::Path) -> Result<BridgeEndpoint, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("Klide is not running, or has not started coordination yet: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("Unreadable bridge endpoint: {e}"))
+}
+
+pub fn bridge_url(endpoint: &BridgeEndpoint, session_id: &str) -> String {
+    format!(
+        "http://127.0.0.1:{}/coord/{}/{session_id}",
+        endpoint.port, endpoint.token
+    )
 }
 
 /// Bind 127.0.0.1 on an ephemeral port. Unlike the status hook server, each
@@ -652,11 +701,29 @@ pub fn handle_bridge_request(
     }
     // The session id is `{convoId}:{provider}` and may itself hold separators.
     let session_id = segments[2..].join("/");
-    let Some(session) = sessions.lock().unwrap().get(&session_id).cloned() else {
-        return respond(
-            404,
-            BridgeResponse::err("This Delegate session is not bound to a coordination Run."),
-        );
+    // Bound in this process, or rebuilt from disk for a session that outlived
+    // the app. The guard is dropped before the hook runs — it takes the same
+    // lock to remember what it found.
+    let bound = sessions.lock().unwrap().get(&session_id).cloned();
+    let session = match bound {
+        Some(session) => session,
+        None => match (hooks.resolve_session)(&session_id) {
+            Some(recovered) => {
+                sessions
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.clone(), recovered.clone());
+                recovered
+            }
+            None => {
+                return respond(
+                    404,
+                    BridgeResponse::err(
+                        "This Delegate session is not bound to a coordination Run.",
+                    ),
+                )
+            }
+        },
     };
     let request: BridgeRequest = match serde_json::from_str(body) {
         Ok(request) => request,
@@ -886,6 +953,7 @@ mod tests {
         let hooks = BridgeHooks {
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|id| id == "run_kit"),
+            resolve_session: Box::new(|_| None),
         };
         let response = execute(&store, &hooks, &session, BridgeRequest::List);
         assert!(response.ok, "{response:?}");
@@ -907,6 +975,7 @@ mod tests {
         let hooks = BridgeHooks {
             on_change: Box::new(move |_, _| *counter.lock().unwrap() += 1),
             is_live: Box::new(|_| false),
+            resolve_session: Box::new(|_| None),
         };
 
         // Delegate → Harness peer: queued, awaiting the peer's review.
@@ -1163,6 +1232,86 @@ mod tests {
     }
 
     #[test]
+    fn a_session_this_process_never_bound_is_recovered_once_and_then_remembered() {
+        // What every surviving Delegate looks like after an app restart: the
+        // CLI is still running and still calling, and this process's session
+        // map has never heard of it.
+        let (dir, root) = sandbox("recover");
+        let store = CoordinationStoreState::default();
+        harness_peer(&store, &root, "run_kit");
+        let hooks_root = root.clone();
+        let asked = Arc::new(Mutex::new(0usize));
+        let counted = asked.clone();
+        let hooks = BridgeHooks {
+            on_change: Box::new(|_, _| {}),
+            is_live: Box::new(|_| false),
+            resolve_session: Box::new(move |session_id| {
+                *counted.lock().unwrap() += 1;
+                (session_id == "convo-1:claude-code").then(|| BridgeSession {
+                    run_id: "convo-1".to_string(),
+                    workspace_root: hooks_root.clone(),
+                    terminal: false,
+                })
+            }),
+        };
+        // The Run itself is durable, so it is still in the journal; only the
+        // in-memory binding was lost.
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: "convo-1".to_string(),
+                    worker_kind: CoordinationWorkerKind::Delegate,
+                    parent_run_id: None,
+                    mission_id: None,
+                    mission_task_id: None,
+                    label: None,
+                },
+                initial_state: Some(CoordinationRunState::Working),
+            },
+        )
+        .unwrap();
+
+        let sessions: SessionMap = Default::default();
+        let list = r#"{"op":"list"}"#;
+        for _ in 0..2 {
+            let (code, body) = handle_bridge_request(
+                "POST",
+                "/coord/tok/convo-1:claude-code",
+                list,
+                "tok",
+                &sessions,
+                &store,
+                &hooks,
+            );
+            assert_eq!(code, 200, "{body}");
+        }
+        assert_eq!(
+            *asked.lock().unwrap(),
+            1,
+            "recovered once, then served from the map"
+        );
+        assert_eq!(
+            sessions.lock().unwrap().get("convo-1:claude-code").unwrap().run_id,
+            "convo-1"
+        );
+
+        // A session nothing on disk vouches for stays unknown.
+        let (code, body) = handle_bridge_request(
+            "POST",
+            "/coord/tok/stranger:codex",
+            list,
+            "tok",
+            &sessions,
+            &store,
+            &hooks,
+        );
+        assert_eq!(code, 404, "{body}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_real_socket_round_trip() {
         let (dir, root) = sandbox("socket");
         let (store, bridge, _session) = bound(&root);
@@ -1172,7 +1321,13 @@ mod tests {
             Arc::new(BridgeHooks::silent()),
         )
         .unwrap();
-        let url = bridge_url(server.port, &server.token, "convo-1:claude-code");
+        let url = bridge_url(
+            &BridgeEndpoint {
+                port: server.port,
+                token: server.token.clone(),
+            },
+            "convo-1:claude-code",
+        );
         let client = reqwest::blocking::Client::new();
         let response: BridgeResponse = client
             .post(&url)

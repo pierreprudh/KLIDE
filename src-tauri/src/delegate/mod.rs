@@ -75,15 +75,35 @@ pub struct ChatSpec<'a> {
 pub struct McpServerSpec {
     pub command: String,
     pub args: Vec<String>,
-    pub bridge_url: String,
+    /// Where the app publishes the bridge's live port and token. A path, never
+    /// a URL: a Delegate outlives the app, and a baked-in port would be dead
+    /// after the next restart.
+    pub endpoint_path: String,
+    /// The PTY session id this server speaks for.
+    pub session_id: String,
     pub config_dir: String,
     /// Filesystem-safe stem for any config file this session writes.
     pub file_stem: String,
 }
 
 impl McpServerSpec {
+    /// The environment the MCP server itself needs. It goes in the server's own
+    /// `env` block because MCP clients hand a stdio child a filtered
+    /// environment rather than the CLI's.
+    fn env_pairs(&self) -> [(&'static str, &str); 2] {
+        [
+            (crate::mcp_server::ENV_ENDPOINT, self.endpoint_path.as_str()),
+            (crate::mcp_server::ENV_SESSION, self.session_id.as_str()),
+        ]
+    }
+
     fn env_json(&self) -> serde_json::Value {
-        serde_json::json!({ crate::mcp_server::ENV_BRIDGE_URL: self.bridge_url })
+        serde_json::Value::Object(
+            self.env_pairs()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
+                .collect(),
+        )
     }
 }
 

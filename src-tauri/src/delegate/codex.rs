@@ -43,9 +43,12 @@ impl Delegate for Codex {
             .collect::<Vec<_>>()
             .join(",");
         let env = format!(
-            "{{{}={}}}",
-            crate::mcp_server::ENV_BRIDGE_URL,
-            toml_str(&spec.bridge_url)
+            "{{{}}}",
+            spec.env_pairs()
+                .iter()
+                .map(|(k, v)| format!("{k}={}", toml_str(v)))
+                .collect::<Vec<_>>()
+                .join(",")
         );
         let args = [
             format!("mcp_servers.klide.command={}", toml_str(&spec.command)),

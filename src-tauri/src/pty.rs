@@ -1040,7 +1040,7 @@ pub fn delegate_pty_spawn(
     // its peers can address, bind this session to that identity, and hand the
     // CLI Klide's MCP server. Warn-only, like the status hooks — a Delegate
     // that cannot be wired still runs, it just has no `agent_*` tools.
-    let (bridge_url, mcp) = match (adapter, cwd.as_deref()) {
+    let mcp = match (adapter, cwd.as_deref()) {
         (Some(adapter), Some(root)) => wire_coordination(
             &app,
             adapter,
@@ -1052,7 +1052,7 @@ pub fn delegate_pty_spawn(
             mission_id.as_deref(),
             mission_task_id.as_deref(),
         ),
-        _ => (None, None),
+        _ => None,
     };
 
     // Everything decidable without an AppHandle — the adapter-vs-custom-CLI
@@ -1074,7 +1074,6 @@ pub fn delegate_pty_spawn(
         } else {
             None
         },
-        bridge_url,
         mcp,
     })?;
 
@@ -1096,6 +1095,7 @@ pub fn delegate_pty_spawn(
 fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHooks {
     let emit_app = app.clone();
     let live_app = app.clone();
+    let recover_app = app.clone();
     crate::coordination_bridge::BridgeHooks {
         on_change: Box::new(move |root, outcome| {
             crate::coordination::emit_coordination_changed(&emit_app, root, outcome);
@@ -1112,7 +1112,41 @@ fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHoo
                     .state::<crate::coordination_bridge::CoordinationBridgeState>()
                     .is_bound_run(run_id)
         }),
+        resolve_session: Box::new(move |session_id| {
+            recover_bridge_session(&recover_app, session_id)
+        }),
     }
+}
+
+/// Where this app publishes the bridge's live port and token, for MCP children
+/// to read. Beside the delegate scrollback, which is the other state a session
+/// needs after the app that started it is gone.
+fn endpoint_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("coordination-endpoint.json"))
+}
+
+/// Rebuild one session binding this process never made. The ptyd daemon hosts
+/// Delegate PTYs, so after an app restart the CLI is still running and still
+/// calling while the session map is empty; its spawn record on disk is enough
+/// to say who it is. A session that recorded an exit is not recovered — a dead
+/// PTY acts as nobody, and only a live child can be calling.
+fn recover_bridge_session(
+    app: &tauri::AppHandle,
+    session_id: &str,
+) -> Option<crate::coordination_bridge::BridgeSession> {
+    let dir = scrollback_dir(app)?;
+    let meta = pty_host::read_scrollback_meta(&dir, session_id)?;
+    if meta.ended_ms.is_some() {
+        return None;
+    }
+    Some(crate::coordination_bridge::BridgeSession {
+        run_id: convo_id_for(session_id, &meta.provider),
+        workspace_root: meta.cwd?,
+        terminal: meta.mission_link.is_some(),
+    })
 }
 
 /// A Delegate's coordination Run id is its conversation id — the same id the
@@ -1138,7 +1172,7 @@ pub(crate) fn wire_coordination(
     parent_run_id: Option<&str>,
     mission_id: Option<&str>,
     mission_task_id: Option<&str>,
-) -> (Option<String>, Option<delegate::McpWiring>) {
+) -> Option<delegate::McpWiring> {
     let store = app.state::<crate::coordination::CoordinationStoreState>();
     let bridge = app.state::<crate::coordination_bridge::CoordinationBridgeState>();
     let run_id = delegate_run_id(session_id, provider);
@@ -1157,22 +1191,23 @@ pub(crate) fn wire_coordination(
         },
     ) {
         wiring_failed(app, session_id, format!("could not register the Run: {error}"));
-        return (None, None);
+        return None;
     }
-    let Some(bridge_url) =
-        bridge.bridge_url_for(session_id, store.inner().clone(), bridge_hooks(app))
-    else {
-        wiring_failed(app, session_id, "the coordination bridge could not start".to_string());
-        return (None, None);
+    let Some(endpoint) = endpoint_path(app) else {
+        wiring_failed(app, session_id, "no app data directory".to_string());
+        return None;
     };
-    let wiring = match mcp_wiring_for(app, adapter, session_id, &bridge_url) {
+    if let Err(error) = bridge.ensure_server(&endpoint, store.inner().clone(), bridge_hooks(app)) {
+        wiring_failed(app, session_id, format!("the bridge could not start: {error}"));
+        return None;
+    }
+    match mcp_wiring_for(app, adapter, session_id, &endpoint) {
         Ok(wiring) => wiring,
         Err(reason) => {
             wiring_failed(app, session_id, reason);
             None
         }
-    };
-    (Some(bridge_url), wiring)
+    }
 }
 
 /// A Delegate that starts without its coordination tools is a silent
@@ -1194,7 +1229,7 @@ fn mcp_wiring_for(
     app: &tauri::AppHandle,
     adapter: &dyn delegate::Delegate,
     session_id: &str,
-    bridge_url: &str,
+    endpoint: &std::path::Path,
 ) -> Result<Option<delegate::McpWiring>, String> {
     let exe = std::env::current_exe().map_err(|e| format!("no path to the Klide binary: {e}"))?;
     let config_dir = app
@@ -1211,7 +1246,8 @@ fn mcp_wiring_for(
     let Some(wiring) = adapter.mcp_wiring(&delegate::McpServerSpec {
         command: exe.to_string_lossy().to_string(),
         args: vec!["mcp".to_string(), "coordination".to_string()],
-        bridge_url: bridge_url.to_string(),
+        endpoint_path: endpoint.to_string_lossy().to_string(),
+        session_id: session_id.to_string(),
         config_dir: config_dir.to_string_lossy().to_string(),
         file_stem,
     }) else {

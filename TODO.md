@@ -59,11 +59,13 @@ them.
   app-side bridge (PR #93, 2026-09-10). Every Run with a Workspace is on the
   plane whatever its Mode. Proven end to end by an opt-in test that drives a
   real `claude -p` turn into the journal (`a_real_claude_code_turn`,
-  2026-09-11). Open follow-ups: wake an idle Delegate on accepted mail (Claude
-  Code Stop hook blocking with the inbox as reason); re-bind Delegate sessions
-  after an app restart (the bridge port changes while ptyd sessions outlive
-  it — today those sessions silently lose their agent tools); dogfood Codex
-  `-c` overrides after `resume` and OpenCode's `OPENCODE_CONFIG` merge; hold #3
+  2026-09-11). Surviving an app restart is
+  done (2026-09-11): the MCP server resolves the bridge from
+  `coordination-endpoint.json` per call instead of holding a port, and the
+  bridge rebuilds an unbound session from its scrollback record. Open
+  follow-ups: wake an idle Delegate on accepted mail (Claude Code Stop hook
+  blocking with the inbox as reason); dogfood Codex `-c` overrides after
+  `resume` and OpenCode's `OPENCODE_CONFIG` merge; hold #3
   `From<AgentRunStatus>` in coordination.rs.
 
 ### v0.6 Slice 1 — durable Mission tracer bullet (started 2026-07-22)

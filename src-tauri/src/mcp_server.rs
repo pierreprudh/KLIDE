@@ -8,21 +8,30 @@
 //! peers holds for a Kit Run and a Claude Code session alike.
 //!
 //! This process owns nothing. Every tool call becomes one POST to the
-//! coordination bridge in the app (coordination_bridge.rs) at the URL it
-//! inherited as `KLIDE_COORD_URL`; the bridge binds the actor from that URL's
-//! session and does the work. No journal path, no Run id, no token ever
-//! appears in a tool argument, which is what keeps an MCP client unable to
-//! speak as anyone but itself.
+//! coordination bridge in the app (coordination_bridge.rs); the bridge binds
+//! the actor from the session the URL names and does the work. No journal
+//! path, no Run id, no token ever appears in a tool argument, which is what
+//! keeps an MCP client unable to speak as anyone but itself.
+//!
+//! It is told two stable things and no port: where this app publishes its
+//! endpoint file, and its own session id. The live port and token are read
+//! from that file on every call, so an app restart — which a Delegate PTY
+//! outlives — is invisible here.
 //!
 //! The protocol surface is the small stable core: `initialize`, `ping`,
 //! `tools/list`, `tools/call`, and ignoring notifications. Hand-rolled on
 //! purpose — a dependency for four methods would be the heavier choice.
 
-use crate::coordination_bridge::{BridgeRequest, BridgeResponse};
+use crate::coordination_bridge::{bridge_url, read_endpoint, BridgeRequest, BridgeResponse};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 
-pub const ENV_BRIDGE_URL: &str = "KLIDE_COORD_URL";
+/// Where the app publishes the bridge's live port and token.
+pub const ENV_ENDPOINT: &str = "KLIDE_COORD_ENDPOINT";
+/// Which Delegate session this child speaks as. Identity is still bound in the
+/// app from its own session map; this only says which line the call came in on.
+pub const ENV_SESSION: &str = "KLIDE_COORD_SESSION";
 /// The newest revision this server implements; an older client's requested
 /// version is echoed back when we recognise it, as the spec asks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -34,12 +43,13 @@ pub trait Bridge {
 }
 
 pub struct HttpBridge {
-    url: String,
+    endpoint_path: PathBuf,
+    session_id: String,
     client: reqwest::blocking::Client,
 }
 
 impl HttpBridge {
-    pub fn new(url: String) -> Result<Self, String> {
+    pub fn new(endpoint_path: PathBuf, session_id: String) -> Result<Self, String> {
         let client = reqwest::blocking::Client::builder()
             // A wait may legitimately block for two minutes; leave headroom.
             .timeout(std::time::Duration::from_secs(
@@ -47,15 +57,22 @@ impl HttpBridge {
             ))
             .build()
             .map_err(|e| format!("bridge client: {e}"))?;
-        Ok(Self { url, client })
+        Ok(Self {
+            endpoint_path,
+            session_id,
+            client,
+        })
     }
 }
 
 impl Bridge for HttpBridge {
     fn call(&self, request: &BridgeRequest) -> Result<BridgeResponse, String> {
+        // Resolved per call and never cached: Klide may have restarted since
+        // the last one and be listening on a different port with a new token.
+        let endpoint = read_endpoint(&self.endpoint_path)?;
         let response = self
             .client
-            .post(&self.url)
+            .post(bridge_url(&endpoint, &self.session_id))
             .json(request)
             .send()
             .map_err(|e| format!("Klide is not reachable: {e}"))?;
@@ -273,16 +290,18 @@ pub fn handle_message(message: &Value, bridge: &dyn Bridge) -> Option<Value> {
 /// Serve stdio until the client closes stdin. Called from `main.rs` for
 /// `klide mcp coordination`; never returns to the GUI.
 pub fn serve_main() -> ! {
-    let url = match std::env::var(ENV_BRIDGE_URL) {
-        Ok(url) if !url.trim().is_empty() => url,
+    let required = |name: &str| match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => value,
         _ => {
             eprintln!(
-                "klide mcp coordination: {ENV_BRIDGE_URL} is not set. This server is meant to be started by a Delegate CLI that Klide launched."
+                "klide mcp coordination: {name} is not set. This server is meant to be started by a Delegate CLI that Klide launched."
             );
             std::process::exit(2);
         }
     };
-    let bridge = match HttpBridge::new(url) {
+    let endpoint_path = PathBuf::from(required(ENV_ENDPOINT));
+    let session_id = required(ENV_SESSION);
+    let bridge = match HttpBridge::new(endpoint_path, session_id) {
         Ok(bridge) => bridge,
         Err(error) => {
             eprintln!("klide mcp coordination: {error}");
@@ -483,7 +502,8 @@ mod chain {
         CoordinationStoreState, CoordinationWorkerKind,
     };
     use crate::coordination_bridge::{
-        register_delegate, BridgeHooks, CoordinationBridgeState, DelegateRegistration,
+        register_delegate, BridgeHooks, BridgeSession, CoordinationBridgeState,
+        DelegateRegistration,
     };
 
     struct Chain {
@@ -491,8 +511,9 @@ mod chain {
         root: String,
         store: CoordinationStoreState,
         bridge: CoordinationBridgeState,
-        /// The URL a Delegate CLI's MCP child inherits as `KLIDE_COORD_URL`.
-        url: String,
+        /// The file an MCP child reads to find the bridge. A path, never a
+        /// port: this app's listener is ephemeral and the child outlives it.
+        endpoint: std::path::PathBuf,
     }
 
     impl Drop for Chain {
@@ -544,23 +565,28 @@ mod chain {
             },
         )
         .unwrap();
-        let url = bridge
-            .bridge_url_for("convo-1:claude-code", store.clone(), BridgeHooks::silent())
+        let endpoint = dir.join("coordination-endpoint.json");
+        bridge
+            .ensure_server(&endpoint, store.clone(), BridgeHooks::silent())
             .expect("the loopback bridge starts");
         Chain {
             dir,
             root,
             store,
             bridge,
-            url,
+            endpoint,
         }
+    }
+
+    fn child_of(c: &Chain, session_id: &str) -> HttpBridge {
+        HttpBridge::new(c.endpoint.clone(), session_id.to_string()).unwrap()
     }
 
     #[test]
     fn an_mcp_tool_call_reaches_the_journal_as_the_bound_run() {
         let c = chain("mcp");
         assert!(c.bridge.is_bound_run("convo-1"));
-        let bridge = HttpBridge::new(c.url.clone()).unwrap();
+        let bridge = child_of(&c, "convo-1:claude-code");
 
         // What a CLI asks before it will call anything.
         let listed =
@@ -652,10 +678,9 @@ mod chain {
     #[test]
     fn a_session_the_app_never_bound_gets_no_identity() {
         let c = chain("unbound");
-        // Same live bridge, same token, a session id nobody registered — the
-        // shape a second CLI on the machine would have if it found the URL.
-        let stranger = c.url.replace("convo-1:claude-code", "stranger:codex");
-        let bridge = HttpBridge::new(stranger).unwrap();
+        // Same live bridge, same token, a session id nobody registered and
+        // nothing on disk vouches for.
+        let bridge = child_of(&c, "stranger:codex");
         let reply = handle_message(
             &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"agent_list","arguments":{}}}),
             &bridge,
@@ -685,6 +710,12 @@ mod chain {
     /// ```text
     /// cargo build && cargo test --lib -- --ignored a_real_claude_code_turn
     /// ```
+    ///
+    /// It drives a real model, so it is not deterministic: the prompt asks for
+    /// one named tool call and nothing else, because a two-step instruction
+    /// went unfinished once and looked exactly like a broken bridge. On a
+    /// failure read the printed turn first — if the call was never made, the
+    /// model drifted; if it was made and refused, the wiring is at fault.
     #[test]
     #[ignore = "spends money: runs a real `claude -p` turn against a live bridge"]
     fn a_real_claude_code_turn_writes_to_the_journal() {
@@ -710,7 +741,8 @@ mod chain {
             .mcp_wiring(&McpServerSpec {
                 command: server_bin.to_string_lossy().to_string(),
                 args: vec!["mcp".to_string(), "coordination".to_string()],
-                bridge_url: c.url.clone(),
+                endpoint_path: c.endpoint.to_string_lossy().to_string(),
+                session_id: "convo-1:claude-code".to_string(),
                 config_dir: c.root.clone(),
                 file_stem: "convo-1-claude-code".to_string(),
             })
@@ -721,7 +753,7 @@ mod chain {
 
         // The real argument builder, including the --allowedTools grant.
         let spec = ChatSpec {
-            model: "haiku",
+            model: "sonnet",
             resume: None,
             mcp: Some(&wiring),
             allowed_commands: &[],
@@ -742,8 +774,9 @@ mod chain {
             .take()
             .unwrap()
             .write_all(
-                b"Call agent_list. Then call agent_send to send the other agent \
-                  the body 'ping from the test' with kind progress. Then reply DONE.",
+                b"Use the mcp__klide__agent_send tool exactly once, with toRunId \
+                  \"run_kit\", body \"ping from the test\", and kind \"progress\". \
+                  Call no other tool and ask nothing first. Then reply DONE.",
             )
             .unwrap();
 
@@ -787,6 +820,81 @@ mod chain {
         );
     }
 
+    #[test]
+    fn a_restarted_app_is_found_again_and_rebinds_the_running_session() {
+        // The bug this shape exists to kill: the ptyd daemon hosts Delegate
+        // PTYs, so a Klide restart leaves the CLI running while the bridge
+        // moves to a new port with an empty session map. Nothing durable may
+        // hold a port, and no binding may be assumed.
+        let first = chain("restart-first");
+        let restarted_workspace = chain("restart-second");
+        // One child, one endpoint path, for both app lifetimes.
+        let child = child_of(&first, "convo-1:claude-code");
+
+        let before = handle_message(
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"agent_list","arguments":{}}}),
+            &child,
+        )
+        .unwrap();
+        assert_eq!(before["result"]["isError"], false, "{before}");
+
+        // Klide restarts: a fresh listener on a fresh port, a session map that
+        // has never heard of this CLI, and the same endpoint file rewritten.
+        let restarted = CoordinationBridgeState::default();
+        let recovered_root = restarted_workspace.root.clone();
+        restarted
+            .ensure_server(
+                &first.endpoint,
+                restarted_workspace.store.clone(),
+                BridgeHooks {
+                    on_change: Box::new(|_, _| {}),
+                    is_live: Box::new(|_| false),
+                    // What pty.rs reads back from the session's spawn record.
+                    resolve_session: Box::new(move |session_id| {
+                        (session_id == "convo-1:claude-code").then(|| BridgeSession {
+                            run_id: "convo-1".to_string(),
+                            workspace_root: recovered_root.clone(),
+                            terminal: false,
+                        })
+                    }),
+                },
+            )
+            .unwrap();
+
+        // The same child, having learned nothing, reaches the new listener and
+        // is recognised again.
+        let after = handle_message(
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_send","arguments":{
+                "toRunId":"run_kit","body":"still here after the restart","kind":"progress"}}}),
+            &child,
+        )
+        .unwrap();
+        assert_eq!(after["result"]["isError"], false, "{after}");
+
+        // It reached the restarted app's journal, and only that one.
+        let moved_to = coordination::read_snapshot(
+            &restarted_workspace.store,
+            &restarted_workspace.root,
+        )
+        .unwrap();
+        let sent = moved_to
+            .envelopes
+            .iter()
+            .find(|e| e.envelope.body == "still here after the restart")
+            .expect("the message landed in the restarted app's journal");
+        assert_eq!(
+            sent.envelope.from,
+            CoordinationActor::Run {
+                run_id: "convo-1".into()
+            }
+        );
+        let left_behind = coordination::read_snapshot(&first.store, &first.root).unwrap();
+        assert!(
+            left_behind.envelopes.is_empty(),
+            "nothing went to the listener that is gone"
+        );
+    }
+
     /// The one thing the in-process tests cannot prove: that the app binary,
     /// started the way an MCP client starts it, carries `KLIDE_COORD_URL`
     /// through a filtered child environment and serves MCP on its stdio.
@@ -810,7 +918,8 @@ mod chain {
         );
         let mut child = std::process::Command::new(&bin)
             .args(["mcp", "coordination"])
-            .env(ENV_BRIDGE_URL, &c.url)
+            .env(ENV_ENDPOINT, &c.endpoint)
+            .env(ENV_SESSION, "convo-1:claude-code")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()

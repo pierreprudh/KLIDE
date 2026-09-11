@@ -50,7 +50,10 @@ still open.
   `agent_wait` — pull, not push, because Klide owns no turn boundary inside a
   foreign CLI. Focus conversations on a Delegate get the same tools: the
   Harness hands each headless turn the wiring, and the turn's process acts as
-  the conversation's Run. Per-CLI wiring: Claude Code `--mcp-config <per-session file>`,
+  the conversation's Run. A Klide restart no longer costs a running CLI its
+  agent tools: the MCP server is told where to find the bridge rather than a
+  port, and the bridge rebuilds a session it never bound from that session's
+  spawn record. Per-CLI wiring: Claude Code `--mcp-config <per-session file>`,
   Codex `-c mcp_servers.klide.*` overrides, OpenCode `OPENCODE_CONFIG`; Oh My
   Pi and custom CLIs run unchanged.
 

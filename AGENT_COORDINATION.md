@@ -104,6 +104,16 @@ process, which looks the PTY session up in a map filled at spawn to learn the
 Run id and Workspace the call acts as. Its request vocabulary has no actor
 field and no journal path to pass through.
 
+Neither the port nor the binding may be treated as durable. A Delegate PTY is
+hosted by the ptyd daemon and outlives the app, so a restart moves the bridge
+to a new ephemeral port with a new token and an empty session map while the CLI
+keeps calling. Two rules close that: the child is told the path of
+`coordination-endpoint.json` and its own session id rather than a URL, and
+resolves the live port and token from that file on every call; and a request
+naming an unbound session is rebuilt from that session's own spawn record on
+disk, once, then remembered. A session whose record shows an exit is never
+recovered — a dead PTY acts as nobody.
+
 ## Delivery semantics
 
 ![Klide coordination lifecycle](public/agent-coordination-lifecycle.svg)

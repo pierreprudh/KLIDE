@@ -422,6 +422,14 @@ There are two doors onto that one journal, and no third:
   separate listener from the status hook server because an `agent_wait` blocks
   for up to two minutes; each request gets its own thread.
 
+Nothing durable holds a port. A Delegate PTY is hosted by the ptyd daemon and
+outlives the app, so the child is told a *path* and a session id, never a URL:
+it reads the live port and token from `coordination-endpoint.json` in the app
+data dir on every call, and the bridge rebuilds a session it never bound from
+that session's scrollback metadata (`BridgeHooks::resolve_session`). A restart
+therefore keeps a running CLI's agent tools working, and a session that
+recorded an exit is never recovered.
+
 A Delegate registers as a `delegate` Run in `delegate_pty_spawn`, its status
 hooks move its state, and PTY exit settles it. A Focus conversation on a
 Delegate runs headless turns through the Harness instead of a PTY; the run

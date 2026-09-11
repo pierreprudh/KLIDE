@@ -476,7 +476,6 @@ impl RunSupervisor for TauriSupervisor {
             None,
             None,
         )
-        .1
     }
 
     fn with_handle(&self, run_id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
