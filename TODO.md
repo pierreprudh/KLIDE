@@ -22,6 +22,15 @@ them.
 
 ## v0.5.1 — Release hardening and publishing
 
+- [ ] Give Claude Code its reasoning-effort dial. PR #97 landed per-model
+  effort levels read from each CLI and concluded that only Codex takes one —
+  that is wrong. `claude --effort <level>` accepts `low, medium, high, xhigh,
+  max` (confirmed 2026-09-11 against claude 2.0.x: an invalid value prints the
+  valid set), and Claude Code transcripts already record `effort` and
+  `perTurnEffort` per message. The fix is one `effort_arg` impl in
+  `delegate/claude_code.rs` plus a level set in `resolve_reflection_levels`;
+  the seam and its tests are already there. Note the vocabulary is the CLI's,
+  not a model's — unlike Codex, whose set comes from its manifest per model.
 - [ ] Dogfood the full Tauri race path: dispatch, permission pause, restart,
   evidence comparison, winner merge, and explicit worktree cleanup.
 - [ ] Publish the first signed/notarized macOS bundle.

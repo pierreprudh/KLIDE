@@ -2,10 +2,16 @@
 
 Notable changes per milestone. Dates are completion dates.
 
-## Unreleased — on the v0.6 line (since 2026-08-23)
+## v0.6.2 — Memory, Routing, Recovery (2026-09-11)
 
-Hardening after the 0.6.1 cut. The v0.6 orchestration milestone itself is
-still open.
+Hardening after the 0.6.1 cut. Project Memory becomes a Harness capability
+rather than a panel, the Harness starts choosing its own model and its own
+reasoning level, and a run that loses its view — a reload, a panel switch, an
+app restart, a CLI that never announced itself — now heals from what was
+written down instead of reading as stuck. The v0.6 orchestration milestone
+itself is still open: Missions as outcomes, budgets, capacity, capability
+routing and validation contracts are unchanged. The macOS bundle is still
+ad-hoc signed and not Apple-notarized.
 
 ### Project Memory
 
@@ -19,6 +25,22 @@ still open.
   network service is involved.
 
 ### Harness
+
+- **A model's reasoning levels come from the CLI, not from a list Klide keeps.**
+  Every picker offered the same five levels — minimal, low, medium, high, xhigh
+  — to every model. For a Codex run that was wrong twice over: `gpt-6-astra`
+  publishes low, medium, high, xhigh, max and ultra, and no `minimal` at all,
+  so Klide showed a level the CLI rejects and hid two it has. Worse, the level
+  a Codex run was given went nowhere — it was saved into harness settings,
+  which only the Klide-wire adapters read. The set is now a backend fact per
+  provider and model, read from the Codex CLI's own model manifest for a Codex
+  run and from the provider registry for a wire run, and a CLI with no such
+  switch shows no dial at all. The choice reaches Codex as a `-c
+  model_reasoning_effort=` override for that launch, leaving the user's
+  `config.toml` alone. A level saved against another model reads as Auto
+  instead of being sent, and the legacy `max`→`xhigh` rewrite now runs only
+  where `max` was merely an old name for it: a Codex `max` sits one step above
+  `xhigh`, and folding it would have quietly run the task weaker than asked.
 
 - **Auto picks the model.** A new `Auto` Provider at the top of every picker
   leaves the choice to the Harness. At run start Rust rules out what cannot do
