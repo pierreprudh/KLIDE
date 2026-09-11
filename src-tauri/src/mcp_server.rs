@@ -468,3 +468,260 @@ mod tests {
             .contains("not bound"));
     }
 }
+
+/// The Delegate coordination chain with nothing mocked: a real MCP message, the
+/// real loopback bridge, the real journal on disk. Everything the GUI adds on
+/// top of this is one spawn and one config file, so a break below this line is
+/// a break in the app — which is the point. The first dogfood of this feature
+/// found two bugs these tests would have caught before anyone opened Klide.
+#[cfg(test)]
+mod chain {
+    use super::*;
+    use crate::coordination::{
+        self, CoordinationActor, CoordinationCommand, CoordinationDeliveryState,
+        CoordinationEnvelopeKind, CoordinationRunRegistration, CoordinationRunState,
+        CoordinationStoreState, CoordinationWorkerKind,
+    };
+    use crate::coordination_bridge::{
+        register_delegate, BridgeHooks, CoordinationBridgeState, DelegateRegistration,
+    };
+
+    struct Chain {
+        dir: std::path::PathBuf,
+        root: String,
+        store: CoordinationStoreState,
+        bridge: CoordinationBridgeState,
+        /// The URL a Delegate CLI's MCP child inherits as `KLIDE_COORD_URL`.
+        url: String,
+    }
+
+    impl Drop for Chain {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// One Workspace, one Harness peer already working, one Delegate session
+    /// bound at a live bridge: the state the app is in the moment a CLI starts.
+    fn chain(label: &str) -> Chain {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-chain-{label}-{}-{}",
+            std::process::id(),
+            crate::agent::transcripts::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let store = CoordinationStoreState::default();
+        let bridge = CoordinationBridgeState::default();
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: "run_kit".into(),
+                    worker_kind: CoordinationWorkerKind::Harness,
+                    parent_run_id: None,
+                    mission_id: None,
+                    mission_task_id: None,
+                    label: Some("Fix the parser".into()),
+                },
+                initial_state: Some(CoordinationRunState::Working),
+            },
+        )
+        .unwrap();
+        register_delegate(
+            &store,
+            &BridgeHooks::silent(),
+            &bridge,
+            DelegateRegistration {
+                session_id: "convo-1:claude-code",
+                run_id: "convo-1",
+                workspace_root: &root,
+                task: Some("wire the bridge"),
+                parent_run_id: None,
+                mission_id: None,
+                mission_task_id: None,
+            },
+        )
+        .unwrap();
+        let url = bridge
+            .bridge_url_for("convo-1:claude-code", store.clone(), BridgeHooks::silent())
+            .expect("the loopback bridge starts");
+        Chain {
+            dir,
+            root,
+            store,
+            bridge,
+            url,
+        }
+    }
+
+    #[test]
+    fn an_mcp_tool_call_reaches_the_journal_as_the_bound_run() {
+        let c = chain("mcp");
+        assert!(c.bridge.is_bound_run("convo-1"));
+        let bridge = HttpBridge::new(c.url.clone()).unwrap();
+
+        // What a CLI asks before it will call anything.
+        let listed =
+            handle_message(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &bridge).unwrap();
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 5);
+
+        // agent_list sees the Harness peer under its thread title, and itself.
+        let reply = handle_message(
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_list","arguments":{}}}),
+            &bridge,
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        let runs = reply["result"]["structuredContent"]["runs"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let row = |id: &str| runs.iter().find(|r| r["runId"] == id).cloned().unwrap();
+        assert_eq!(row("convo-1")["relation"], "self");
+        assert_eq!(row("convo-1")["workerKind"], "delegate");
+        assert_eq!(row("run_kit")["relation"], "peer");
+        assert_eq!(row("run_kit")["label"], "Fix the parser");
+
+        // agent_send writes an envelope from the bound session. The arguments
+        // carry a `from` the tool schema does not have, to pin that a caller
+        // cannot speak as anyone else.
+        let sent = handle_message(
+            &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"agent_send","arguments":{
+                "from": "run_kit",
+                "toRunId":"run_kit","body":"Is the merge yours?","kind":"question"}}}),
+            &bridge,
+        )
+        .unwrap();
+        assert_eq!(sent["result"]["isError"], false, "{sent}");
+        let envelope_id = sent["result"]["structuredContent"]["envelopeId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let snapshot = coordination::read_snapshot(&c.store, &c.root).unwrap();
+        let entry = snapshot
+            .envelopes
+            .iter()
+            .find(|e| e.envelope.id == envelope_id)
+            .unwrap();
+        assert_eq!(
+            entry.envelope.from,
+            CoordinationActor::Run {
+                run_id: "convo-1".into()
+            },
+            "identity comes from the session, never the arguments"
+        );
+        assert_eq!(entry.envelope.to_run_id, "run_kit");
+        assert_eq!(
+            entry.delivery_state,
+            CoordinationDeliveryState::Queued,
+            "the receiving side reviews another agent's words first"
+        );
+
+        // The peer answers the question it was asked: invited, so no review
+        // card, and agent_wait hands the words to the CLI.
+        coordination::apply_coordination_command(
+            &c.store,
+            &c.root,
+            CoordinationCommand::SendEnvelope {
+                from: CoordinationActor::Run {
+                    run_id: "run_kit".into(),
+                },
+                to_run_id: "convo-1".into(),
+                kind: CoordinationEnvelopeKind::Answer,
+                body: "No, read-only git here.".into(),
+                reply_to: Some(envelope_id.clone()),
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            },
+        )
+        .unwrap();
+        let waited = handle_message(
+            &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"agent_wait","arguments":{
+                "replyTo": envelope_id, "timeoutSeconds": 2}}}),
+            &bridge,
+        )
+        .unwrap();
+        assert_eq!(waited["result"]["isError"], false, "{waited}");
+        let text = waited["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("No, read-only git here."), "{text}");
+    }
+
+    #[test]
+    fn a_session_the_app_never_bound_gets_no_identity() {
+        let c = chain("unbound");
+        // Same live bridge, same token, a session id nobody registered — the
+        // shape a second CLI on the machine would have if it found the URL.
+        let stranger = c.url.replace("convo-1:claude-code", "stranger:codex");
+        let bridge = HttpBridge::new(stranger).unwrap();
+        let reply = handle_message(
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"agent_list","arguments":{}}}),
+            &bridge,
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+        assert!(reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not bound"));
+    }
+
+    /// The one thing the in-process tests cannot prove: that the app binary,
+    /// started the way an MCP client starts it, carries `KLIDE_COORD_URL`
+    /// through a filtered child environment and serves MCP on its stdio.
+    /// Needs the binary, so it is opt-in:
+    ///
+    /// ```text
+    /// cargo build && cargo test --lib -- --ignored the_real_mcp_child
+    /// ```
+    #[test]
+    #[ignore = "spawns the app binary: run `cargo build` first"]
+    fn the_real_mcp_child_process_serves_the_bridge() {
+        use std::io::{BufRead, Write};
+        let c = chain("child");
+        // The test binary lives in target/<profile>/deps, the app beside it.
+        let exe = std::env::current_exe().unwrap();
+        let bin = exe.parent().unwrap().parent().unwrap().join("klide");
+        assert!(
+            bin.exists(),
+            "run `cargo build` first: {} is missing",
+            bin.display()
+        );
+        let mut child = std::process::Command::new(&bin)
+            .args(["mcp", "coordination"])
+            .env(ENV_BRIDGE_URL, &c.url)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ask = |line: &str| {
+            stdin.write_all(line.as_bytes()).unwrap();
+            stdin.write_all(b"\n").unwrap();
+            stdin.flush().unwrap();
+            let mut reply = String::new();
+            stdout.read_line(&mut reply).unwrap();
+            serde_json::from_str::<Value>(&reply).unwrap()
+        };
+        let init = ask(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        );
+        assert_eq!(init["result"]["serverInfo"]["name"], "klide");
+        // A notification gets no reply, so the next read must not hang on it.
+        let called = ask(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_list","arguments":{}}}"#,
+        );
+        assert_eq!(called["result"]["isError"], false, "{called}");
+        let runs = called["result"]["structuredContent"]["runs"]
+            .as_array()
+            .unwrap();
+        assert!(
+            runs.iter().any(|r| r["runId"] == "run_kit"),
+            "the child reached the real journal: {called}"
+        );
+        let _ = child.kill();
+    }
+}

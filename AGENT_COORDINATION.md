@@ -210,6 +210,30 @@ that blocks with the inbox as its reason); re-binding Delegate sessions after
 an app restart (the bridge port changes while ptyd sessions live on);
 reconnect and duplicate-delivery tests against a real CLI.
 
+## Testing the chain without the GUI
+
+The first dogfood of the MCP adapter cost an afternoon of restarts because the
+only way to see whether a Delegate had its tools was to ask the model. Two
+tests in `mcp_server.rs` now stand in for that:
+
+- `mod chain` runs a real MCP message through the real loopback bridge into a
+  real journal on disk, and asserts the envelope it writes is stamped with the
+  bound session's Run id even when the tool arguments claim another. It runs in
+  the normal suite.
+- `the_real_mcp_child_process_serves_the_bridge` spawns the app binary the way
+  an MCP client does and speaks JSON-RPC to its stdio, which is the only way to
+  prove `KLIDE_COORD_URL` survives a filtered child environment. It needs the
+  binary, so it is opt-in:
+
+```bash
+cargo build && cargo test --lib -- --ignored the_real_mcp_child
+```
+
+What neither covers is a CLI's own permission layer — Claude Code refusing an
+MCP tool nobody granted, which a headless turn cannot prompt for. That is
+pinned in `claude_code.rs` (`klide_mcp_server_is_pre_allowed_on_a_headless_turn`)
+and, end to end, only by a real `claude -p` run.
+
 ## Foundation success criteria
 
 - A fresh process reconstructs the same snapshot solely from the journal.
