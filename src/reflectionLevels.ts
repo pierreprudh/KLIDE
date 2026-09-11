@@ -43,6 +43,31 @@ export function reflectionBarLevel(
   return Math.max(1, Math.round(((idx + 1) / available.length) * 5));
 }
 
+/** A stored level, read back verbatim — reconciling it with a model's set is
+ *  `reflectionLevelWithin`'s job, and it needs the raw name to do it. */
+export function storedReflectionLevel(level: string | undefined | null): string | undefined {
+  return level?.trim() || undefined;
+}
+
+/**
+ * A stored level as *this model's* set sees it.
+ *
+ * `off` and `max` were older Klide names for `minimal` and `xhigh`, so they
+ * are still translated — but only when the model doesn't publish that name
+ * itself. A Codex model has a real `max`, one step above `xhigh`, and folding
+ * it into `xhigh` would quietly downgrade the run. Anything the set doesn't
+ * contain reads as Auto rather than as a level the provider will reject.
+ */
+export function reflectionLevelWithin(
+  level: string | undefined,
+  available: readonly string[],
+): string | undefined {
+  if (!level) return undefined;
+  if (available.includes(level)) return level;
+  const legacy = level === "off" ? "minimal" : level === "max" ? "xhigh" : undefined;
+  return legacy && available.includes(legacy) ? legacy : undefined;
+}
+
 /** Sort a set into the canonical order; unknown names keep their given order
  *  at the end, so a level Klide has never seen still reaches the picker. */
 export function sortReflectionLevels(levels: readonly string[]): string[] {

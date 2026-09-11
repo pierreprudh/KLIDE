@@ -701,17 +701,25 @@ fn is_claude_model_id(model: &str) -> bool {
 /// refreshes from OpenAI and then obeys. Klide reads that file rather than
 /// keeping a second table of OpenAI model facts — a private copy would be
 /// wrong the day a model ships or an effort is renamed.
-fn codex_manifest_models() -> Option<Vec<serde_json::Value>> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::Path::new(&home).join(".codex/models_cache.json");
-    let text = std::fs::read_to_string(path).ok()?;
+/// The read against an explicit home, the way every Delegate adapter
+/// takes its `home` — so the manifest parsing is exercised by a test with a
+/// fixture rather than by whatever sits in the developer's `~/.codex`.
+fn codex_manifest_models_in(home: &std::path::Path) -> Option<Vec<serde_json::Value>> {
+    let text = std::fs::read_to_string(home.join(".codex/models_cache.json")).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     Some(value.get("models")?.as_array()?.clone())
 }
 
+fn codex_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
 /// One manifest row, by the slug the CLI takes on `-m`.
-fn codex_manifest_entry(model: &str) -> Option<serde_json::Value> {
-    codex_manifest_models()?
+fn codex_manifest_entry_in(
+    home: &std::path::Path,
+    model: &str,
+) -> Option<serde_json::Value> {
+    codex_manifest_models_in(home)?
         .into_iter()
         .find(|entry| entry.get("slug").and_then(|slug| slug.as_str()) == Some(model))
 }
@@ -721,7 +729,11 @@ fn codex_manifest_entry(model: &str) -> Option<serde_json::Value> {
 /// no `minimal`, `gpt-5.5` stops at `xhigh` — so Klide offers exactly the set
 /// the CLI published for the chosen model, or no dial at all.
 pub(crate) fn codex_reasoning_levels(model: &str) -> Option<Vec<String>> {
-    reasoning_levels_of(&codex_manifest_entry(model)?)
+    codex_reasoning_levels_in(&codex_home()?, model)
+}
+
+fn codex_reasoning_levels_in(home: &std::path::Path, model: &str) -> Option<Vec<String>> {
+    reasoning_levels_of(&codex_manifest_entry_in(home, model)?)
 }
 
 /// The `supported_reasoning_levels` of one manifest row. Split out from the
@@ -739,7 +751,11 @@ fn reasoning_levels_of(entry: &serde_json::Value) -> Option<Vec<String>> {
 }
 
 pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
-    let mut models: Vec<String> = codex_manifest_models()?
+    codex_cached_models_in(&codex_home()?)
+}
+
+fn codex_cached_models_in(home: &std::path::Path) -> Option<Vec<String>> {
+    let mut models: Vec<String> = codex_manifest_models_in(home)?
         .iter()
         .filter(|model| model.get("visibility").and_then(|v| v.as_str()) != Some("hide"))
         .filter_map(|model| model.get("slug").and_then(|slug| slug.as_str()))
@@ -755,7 +771,11 @@ pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
 }
 
 fn codex_context_window(model: &str) -> Option<usize> {
-    codex_manifest_entry(model)?
+    codex_context_window_in(&codex_home()?, model)
+}
+
+fn codex_context_window_in(home: &std::path::Path, model: &str) -> Option<usize> {
+    codex_manifest_entry_in(home, model)?
         .get("context_window")
         .and_then(|window| window.as_u64())
         .map(|window| window as usize)
@@ -1538,6 +1558,85 @@ mod tests {
         .await
         .unwrap();
         assert!(!supports);
+    }
+
+    /// A throwaway HOME holding a `~/.codex/models_cache.json`, so the
+    /// manifest reads are exercised against a fixture rather than against
+    /// whatever the developer's Codex last cached.
+    fn codex_home_fixture(name: &str, manifest: &str) -> std::path::PathBuf {
+        let home = std::env::temp_dir().join(format!("klide-models-test-{name}"));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/models_cache.json"), manifest).unwrap();
+        home
+    }
+
+    /// Trimmed to the fields Klide reads, in the shape the CLI writes: a
+    /// listed model, a hidden one, and one the manifest gives no efforts.
+    const CODEX_MANIFEST: &str = r#"{
+      "fetched_at": "2026-09-10T21:34:08Z",
+      "client_version": "0.154.0",
+      "models": [
+        {
+          "slug": "gpt-6-astra",
+          "visibility": "list",
+          "context_window": 272000,
+          "default_reasoning_level": "low",
+          "supported_reasoning_levels": [
+            { "effort": "low" }, { "effort": "medium" }, { "effort": "high" },
+            { "effort": "xhigh" }, { "effort": "max" }, { "effort": "ultra" }
+          ]
+        },
+        {
+          "slug": "gpt-reserve",
+          "visibility": "hide",
+          "context_window": 200000,
+          "supported_reasoning_levels": [{ "effort": "low" }]
+        },
+        { "slug": "gpt-plain", "visibility": "list", "context_window": 128000 }
+      ]
+    }"#;
+
+    #[test]
+    fn codex_manifest_reads_levels_models_and_windows_from_one_file() {
+        let home = codex_home_fixture("manifest", CODEX_MANIFEST);
+
+        assert_eq!(
+            codex_reasoning_levels_in(&home, "gpt-6-astra").unwrap(),
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        // A row the manifest gives no efforts has no dial — not an empty one.
+        assert!(codex_reasoning_levels_in(&home, "gpt-plain").is_none());
+        // A model that isn't in the manifest at all is unknown, not empty.
+        assert!(codex_reasoning_levels_in(&home, "gpt-9-imaginary").is_none());
+
+        // The picker lists what the CLI would show: hidden rows stay hidden.
+        assert_eq!(
+            codex_cached_models_in(&home).unwrap(),
+            vec!["gpt-6-astra", "gpt-plain"]
+        );
+
+        // The window comes from the same row, so one file answers all three.
+        assert_eq!(codex_context_window_in(&home, "gpt-6-astra"), Some(272_000));
+        assert_eq!(codex_context_window_in(&home, "gpt-9-imaginary"), None);
+    }
+
+    #[test]
+    fn a_missing_or_corrupt_manifest_is_silence_not_a_panic() {
+        // Codex may never have run on this machine, and the cache is written
+        // by another process — a half-written file must not take Klide down.
+        let empty = std::env::temp_dir().join("klide-models-test-absent");
+        let _ = std::fs::remove_dir_all(&empty);
+        assert!(codex_reasoning_levels_in(&empty, "gpt-6-astra").is_none());
+        assert!(codex_cached_models_in(&empty).is_none());
+
+        let torn = codex_home_fixture("torn", r#"{"models": [{"slug": "gpt-6-as"#);
+        assert!(codex_reasoning_levels_in(&torn, "gpt-6-astra").is_none());
+        assert!(codex_cached_models_in(&torn).is_none());
+
+        // Well-formed JSON of the wrong shape reads the same way.
+        let wrong = codex_home_fixture("wrong-shape", r#"{"models": "soon"}"#);
+        assert!(codex_cached_models_in(&wrong).is_none());
     }
 
     #[test]
