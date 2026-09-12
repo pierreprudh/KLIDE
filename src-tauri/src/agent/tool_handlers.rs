@@ -491,7 +491,7 @@ where
                     "The message was recorded but its envelope could not be resolved.",
                 ));
             };
-            if call
+            let (reply_status, replies) = if call
                 .input
                 .get("waitForReply")
                 .and_then(|value| value.as_bool())
@@ -506,40 +506,45 @@ where
                 )
                 .await
                 {
-                    Ok(Some(messages)) => ToolOutcome::Produced(ToolResult {
-                        ok: true,
-                        content: coordination_messages_text(&messages),
-                        metadata: Some(serde_json::json!({
-                            "envelopeId": envelope.id,
-                            "deliveryState": "acknowledged",
-                            "replies": messages,
-                        })),
-                    }),
-                    Ok(None) => ToolOutcome::Produced(ToolResult {
-                        ok: true,
-                        content: format!(
-                            "Message {} was queued for @{target}; no reply arrived within the wait window.",
-                            envelope.id
-                        ),
-                        metadata: Some(serde_json::json!({
-                            "envelopeId": envelope.id,
-                            "deliveryState": "queued",
-                            "timedOut": true,
-                        })),
-                    }),
-                    Err(outcome) => outcome,
+                    Ok(Some(messages)) => (
+                        crate::coordination::CoordinationReplyStatus::Received,
+                        messages,
+                    ),
+                    Ok(None) => (
+                        crate::coordination::CoordinationReplyStatus::TimedOut,
+                        vec![],
+                    ),
+                    Err(outcome) => return Ok(outcome),
                 }
             } else {
-                ToolOutcome::Produced(ToolResult {
-                    ok: true,
-                    content: format!("Message {} queued for @{target}.", envelope.id),
-                    metadata: Some(serde_json::json!({
-                        "envelopeId": envelope.id,
-                        "deliveryState": "queued",
-                    })),
-                })
-            }
+                (
+                    crate::coordination::CoordinationReplyStatus::NotRequested,
+                    vec![],
+                )
+            };
+            let snapshot = match ctx.sup.coordination_snapshot(workspace_root) {
+                Ok(snapshot) => snapshot,
+                Err(error) => return Ok(coordination_tool_error(error)),
+            };
+            let receipt = match crate::coordination::send_receipt(
+                &snapshot,
+                &envelope.id,
+                reply_status,
+                &replies,
+            ) {
+                Ok(receipt) => receipt,
+                Err(error) => return Ok(coordination_tool_error(error)),
+            };
+            ToolOutcome::Produced(ToolResult {
+                ok: true,
+                content: receipt.text.clone(),
+                metadata: Some(
+                    serde_json::to_value(receipt)
+                        .map_err(|error| format!("Unable to encode send receipt: {error}"))?,
+                ),
+            })
         }
+
         tools::CoordinationFlavor::Wait => {
             let from_run_id = call
                 .input

@@ -408,41 +408,30 @@ fn execute_inner(
             )?;
             let envelope = envelope_from_outcome(&outcome, session, &target, &idempotency_key)
                 .ok_or_else(|| {
-                    "The message was recorded but its envelope could not be resolved."
-                        .to_string()
+                    "The message was recorded but its envelope could not be resolved.".to_string()
                 })?;
-            if !wait_for_reply {
-                return Ok(serde_json::json!({
-                    "envelopeId": envelope.id,
-                    "deliveryState": "queued",
-                    "text": format!("Message {} queued for @{target}.", envelope.id),
-                }));
-            }
-            match wait_for_messages(
-                store,
-                hooks,
-                session,
-                Some(&target),
-                Some(&envelope.id),
-                clamp_timeout(timeout_seconds),
-            )? {
-                Some(replies) => Ok(serde_json::json!({
-                    "envelopeId": envelope.id,
-                    "deliveryState": "acknowledged",
-                    "replies": replies,
-                    "text": messages_text(&replies),
-                })),
-                None => Ok(serde_json::json!({
-                    "envelopeId": envelope.id,
-                    "deliveryState": "queued",
-                    "timedOut": true,
-                    "text": format!(
-                        "Message {} was queued for @{target}; no reply arrived within the wait window.",
-                        envelope.id
-                    ),
-                })),
-            }
+            let (reply_status, replies) = if wait_for_reply {
+                match wait_for_messages(
+                    store,
+                    hooks,
+                    session,
+                    Some(&target),
+                    Some(&envelope.id),
+                    clamp_timeout(timeout_seconds),
+                )? {
+                    Some(replies) => (coordination::CoordinationReplyStatus::Received, replies),
+                    None => (coordination::CoordinationReplyStatus::TimedOut, vec![]),
+                }
+            } else {
+                (coordination::CoordinationReplyStatus::NotRequested, vec![])
+            };
+            let snapshot = coordination::read_snapshot(store, root)?;
+            let receipt =
+                coordination::send_receipt(&snapshot, &envelope.id, reply_status, &replies)?;
+            serde_json::to_value(receipt)
+                .map_err(|error| format!("Unable to encode send receipt: {error}"))
         }
+
         BridgeRequest::Wait {
             from_run_id,
             reply_to,
@@ -1099,6 +1088,220 @@ mod tests {
         );
         let value = waited.value.unwrap();
         assert!(value["text"].as_str().unwrap().contains("[answer"), "{value}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn send_quality_reports_the_journal_state_on_idempotent_retries() {
+        let (dir, root) = sandbox("receipt-quality");
+        let (store, _bridge, session) = bound(&root);
+        let request = BridgeRequest::Send {
+            to_run_id: "run_kit".into(),
+            body: "Please review".into(),
+            kind: None,
+            reply_to: None,
+            correlation_id: None,
+            idempotency_key: Some("receipt-quality".into()),
+            wait_for_reply: false,
+            timeout_seconds: None,
+        };
+        let sent = execute(&store, &BridgeHooks::silent(), &session, request.clone())
+            .value
+            .unwrap();
+        let id = sent["envelopeId"].as_str().unwrap();
+        for (command, expected) in [
+            (
+                CoordinationCommand::ReviewEnvelope {
+                    actor: CoordinationActor::Operator,
+                    run_id: "run_kit".into(),
+                    envelope_id: id.into(),
+                    accept: true,
+                },
+                "accepted",
+            ),
+            (
+                CoordinationCommand::MarkEnvelopeDelivered {
+                    run_id: "run_kit".into(),
+                    envelope_id: id.into(),
+                },
+                "delivered",
+            ),
+            (
+                CoordinationCommand::AcknowledgeEnvelope {
+                    run_id: "run_kit".into(),
+                    envelope_id: id.into(),
+                },
+                "acknowledged",
+            ),
+        ] {
+            coordination::apply_coordination_command(&store, &root, command).unwrap();
+            let reply = execute(&store, &BridgeHooks::silent(), &session, request.clone())
+                .value
+                .unwrap();
+            assert_eq!(reply["deliveryState"], expected, "{reply}");
+            assert_eq!(reply["envelopeId"], id);
+            assert_eq!(
+                coordination::read_snapshot(&store, &root)
+                    .unwrap()
+                    .envelopes
+                    .len(),
+                1
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn send_quality_keeps_reply_wait_separate_from_delivery() {
+        for answer in [false, true] {
+            let (dir, root) = sandbox(if answer {
+                "receipt-reply"
+            } else {
+                "receipt-timeout"
+            });
+            let (store, _bridge, session) = bound(&root);
+            let writer = store.clone();
+            // Deterministic: the recipient acts immediately after the send is
+            // journaled, before the bridge starts waiting. No model or sleeps.
+            let hooks = BridgeHooks {
+                on_change: Box::new(move |root, outcome| {
+                    let Some(line) = &outcome.appended else {
+                        return;
+                    };
+                    let CoordinationEvent::EnvelopeQueued { envelope } = &line.event else {
+                        return;
+                    };
+                    if envelope.to_run_id != "run_kit" {
+                        return;
+                    }
+                    if answer {
+                        coordination::apply_coordination_command(
+                            &writer,
+                            root,
+                            CoordinationCommand::SendEnvelope {
+                                from: CoordinationActor::Run {
+                                    run_id: "run_kit".into(),
+                                },
+                                to_run_id: "convo-1".into(),
+                                kind: CoordinationEnvelopeKind::Answer,
+                                body: "The review is ready.".into(),
+                                reply_to: Some(envelope.id.clone()),
+                                correlation_id: None,
+                                idempotency_key: None,
+                                source_refs: vec![],
+                            },
+                        )
+                        .unwrap();
+                    } else {
+                        for command in [
+                            CoordinationCommand::ReviewEnvelope {
+                                actor: CoordinationActor::Operator,
+                                run_id: "run_kit".into(),
+                                envelope_id: envelope.id.clone(),
+                                accept: true,
+                            },
+                            CoordinationCommand::MarkEnvelopeDelivered {
+                                run_id: "run_kit".into(),
+                                envelope_id: envelope.id.clone(),
+                            },
+                            CoordinationCommand::AcknowledgeEnvelope {
+                                run_id: "run_kit".into(),
+                                envelope_id: envelope.id.clone(),
+                            },
+                        ] {
+                            coordination::apply_coordination_command(&writer, root, command).unwrap();
+                        }
+                    }
+                }),
+                is_live: Box::new(|_| true),
+                resolve_session: Box::new(|_| None),
+            };
+            let result = execute(
+                &store,
+                &hooks,
+                &session,
+                BridgeRequest::Send {
+                    to_run_id: "run_kit".into(),
+                    body: "Please review".into(),
+                    kind: Some("question".into()),
+                    reply_to: None,
+                    correlation_id: None,
+                    idempotency_key: None,
+                    wait_for_reply: true,
+                    timeout_seconds: Some(1),
+                },
+            );
+            assert!(result.ok, "{result:?}");
+            let value = result.value.unwrap();
+            if answer {
+                // Receipt must not invent an acknowledgement for the sent
+                // question just because the recipient supplied an answer.
+                assert_eq!(value["deliveryState"], "queued");
+                assert_eq!(value["replyStatus"], "received");
+                assert_eq!(value["timedOut"], false);
+                assert_eq!(value["replies"][0]["deliveryState"], "acknowledged");
+                assert!(value["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("The review is ready."));
+            } else {
+                assert_eq!(value["deliveryState"], "acknowledged");
+                assert_eq!(value["replyStatus"], "timed_out");
+                assert_eq!(value["timedOut"], true);
+                assert!(value.get("replies").is_none());
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn send_quality_reports_self_acceptance_and_declined_retries() {
+        let (dir, root) = sandbox("receipt-declined");
+        let (store, _bridge, session) = bound(&root);
+        let mut request = BridgeRequest::Send {
+            to_run_id: session.run_id.clone(),
+            body: "A note".into(),
+            kind: None,
+            reply_to: None,
+            correlation_id: None,
+            idempotency_key: Some("note".into()),
+            wait_for_reply: false,
+            timeout_seconds: None,
+        };
+        let own = execute(&store, &BridgeHooks::silent(), &session, request.clone())
+            .value
+            .unwrap();
+        assert_eq!(own["deliveryState"], "accepted");
+        assert_eq!(own["replyStatus"], "not_requested");
+        if let BridgeRequest::Send {
+            to_run_id,
+            idempotency_key,
+            ..
+        } = &mut request
+        {
+            *to_run_id = "run_kit".into();
+            *idempotency_key = Some("peer-note".into());
+        }
+        let sent = execute(&store, &BridgeHooks::silent(), &session, request.clone())
+            .value
+            .unwrap();
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::ReviewEnvelope {
+                actor: CoordinationActor::Operator,
+                run_id: "run_kit".into(),
+                envelope_id: sent["envelopeId"].as_str().unwrap().into(),
+                accept: false,
+            },
+        )
+        .unwrap();
+        let retry = execute(&store, &BridgeHooks::silent(), &session, request)
+            .value
+            .unwrap();
+        assert_eq!(retry["deliveryState"], "declined");
+        assert_eq!(retry["envelopeId"], sent["envelopeId"]);
+        assert_eq!(retry["timedOut"], false);
         let _ = std::fs::remove_dir_all(dir);
     }
 

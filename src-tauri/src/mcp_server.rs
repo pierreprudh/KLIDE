@@ -93,14 +93,16 @@ pub fn tool_list() -> Value {
         },
         {
             "name": "agent_send",
-            "description": "Send a durable message to another agent by Run id. The recipient's operator reviews it before the agent reads it; delivery happens at the recipient's next safe moment. Set waitForReply to block for the answer.",
+            "outputSchema": serde_json::from_str::<Value>(include_str!("../../schemas/klide-coordination-send-receipt.schema.json"))
+                .expect("bundled send receipt schema is valid JSON"),
+            "description": "Send a durable message to another agent by Run id. The recipient's operator reviews it before the agent reads it; delivery happens at the recipient's next safe moment. Set waitForReply to block for the answer. deliveryState reports the sent message; replyStatus reports whether this call received a reply or timed out. A timeout does not cancel the message.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "toRunId": { "type": "string", "description": "Exact target Run id from agent_list." },
                     "body": { "type": "string", "description": "The message." },
                     "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Defaults to instruction." },
-                    "replyTo": { "type": "string", "description": "Envelope id being answered, when this is a reply." },
+                    "replyTo": { "type": "string", "description": "Envelope id being answered. You must be its original recipient and send back to its original sender." },
                     "correlationId": { "type": "string", "description": "Optional id grouping a multi-message exchange." },
                     "idempotencyKey": { "type": "string", "description": "Optional retry key." },
                     "waitForReply": { "type": "boolean", "description": "Wait for a reply to this exact message before returning." },
@@ -361,6 +363,44 @@ mod tests {
         fn call(&self, request: &BridgeRequest) -> Result<BridgeResponse, String> {
             self.calls.lock().unwrap().push(request.clone());
             Ok(self.reply.clone())
+        }
+    }
+
+    #[test]
+    fn send_quality_advertises_a_self_contained_output_schema() {
+        let tools = tool_list();
+        let schema = &tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "agent_send")
+            .unwrap()["outputSchema"];
+        assert_eq!(schema["type"], "object");
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("replyStatus")));
+        // Keep embedded definitions in sync with the canonical journal schemas.
+        let events: Value = serde_json::from_str(include_str!(
+            "../../schemas/klide-coordination-event.schema.json"
+        ))
+        .unwrap();
+        let snapshots: Value = serde_json::from_str(include_str!(
+            "../../schemas/klide-coordination-snapshot.schema.json"
+        ))
+        .unwrap();
+        for (name, definition) in schema["$defs"].as_object().unwrap() {
+            let original = snapshots["$defs"]
+                .get(name)
+                .or_else(|| events["$defs"].get(name))
+                .unwrap();
+            let local: Value = serde_json::from_str(
+                &serde_json::to_string(original)
+                    .unwrap()
+                    .replace("klide-coordination-event.schema.json#/", "#/"),
+            )
+            .unwrap();
+            assert_eq!(*definition, local, "schema definition {name} drifted");
         }
     }
 
