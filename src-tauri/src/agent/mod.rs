@@ -2947,6 +2947,8 @@ pub async fn agent_export_evidence(
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CheckpointEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binary: Option<types::BinaryWrite>,
     tool_call_id: String,
     path: String,
     old_content: String,
@@ -3026,7 +3028,19 @@ pub(crate) fn revert_checkpoint_at(
     let ws = crate::workspace::Workspace::new(&entry.workspace_root)?;
     let full = ws.resolve_new(&entry.path)?;
 
-    if entry.is_create {
+    if let Some(binary) = &entry.binary {
+        use base64::Engine;
+        ws.guard(&full, crate::workspace::Access::Agent)?;
+        let live = std::fs::read(&full).map_err(|e| e.to_string())?;
+        if base64::engine::general_purpose::STANDARD.encode(live) != binary.new_base64 {
+            return Err("Workbook changed since this checkpoint; refusing to overwrite newer changes".into());
+        }
+        if let Some(old) = &binary.old_base64 {
+            crate::spreadsheet::save(&entry.workspace_root, &full.to_string_lossy(), old, Some(&binary.new_base64))?;
+        } else {
+            std::fs::remove_file(&full).map_err(|e| e.to_string())?;
+        }
+    } else if entry.is_create {
         std::fs::remove_file(&full).map_err(|e| format!("Cannot remove {}: {e}", entry.path))?;
     } else {
         if let Some(parent) = full.parent() {

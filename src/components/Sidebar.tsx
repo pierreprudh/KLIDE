@@ -1,6 +1,7 @@
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { isImagePath, readWorkspaceFileDataUri } from "../workspaceFs";
+import { isSpreadsheetPath } from "../spreadsheets/paths";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, KeyboardEvent } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
@@ -530,6 +531,7 @@ export function Sidebar({
 
   async function pick(path: string) {
     if (!root) return;
+    if (isSpreadsheetPath(path)) { onOpen(path, ""); return; }
     try {
       // Images open as a rendered picture: read them as a data URI rather than
       // text (which would corrupt binary bytes). `openFile` detects the image

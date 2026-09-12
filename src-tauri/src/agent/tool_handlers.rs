@@ -960,6 +960,10 @@ where
         Some(top) => dirty_set(top).await,
         None => None,
     };
+    let old_versions = match (&repo, &before) {
+        (Some(top), Some(dirty)) => document_versions(root, top, dirty).await,
+        _ => Default::default(),
+    };
     let result = run_command_capture_in(root, cwd, command, timeout_secs).await;
     let (Some(top), Some(before)) = (repo, before) else {
         return Ok(result);
@@ -967,7 +971,8 @@ where
     let Some(after) = dirty_set(&top).await else {
         return Ok(result);
     };
-    for file in artifacts::produced(&before, &after) {
+    let new_versions = document_versions(root, &top, &after).await;
+    for file in artifacts::produced_with_versions(&before, &after, &old_versions, &new_versions) {
         let bytes = tokio::fs::metadata(top.join(&file.path))
             .await
             .map(|meta| meta.len())
@@ -981,6 +986,34 @@ where
         })?;
     }
     Ok(result)
+}
+
+/// Fingerprint previewable documents so a second command editing an already
+/// dirty file still produces a fresh preview. Stay within the active workspace
+/// and cap IO; dependency/build outputs remain governed by Git ignore rules.
+async fn document_versions(
+    root: &str, top: &std::path::Path,
+    dirty: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+    let mut versions = std::collections::BTreeMap::new();
+    let Ok(ws) = crate::workspace::Workspace::new(root) else { return versions; };
+    let mut remaining = 100_000_000u64;
+    for path in dirty.keys() {
+        let extension = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !path.to_ascii_lowercase().ends_with(".sheet.json") && !matches!(extension.as_str(), "xlsx"|"xls"|"docx"|"doc"|"pptx"|"ppt"|"pdf"|"odt"|"odp"|"ods"|"rtf"|"png"|"jpg"|"jpeg"|"webp"|"svg"|"html"|"htm") { continue; }
+        let Ok(full) = ws.resolve_abs_read(&top.join(path).to_string_lossy()) else {continue;};
+        if ws.guard(&full, crate::workspace::Access::Agent).is_err() {continue;}
+        let Ok(meta) = tokio::fs::metadata(&full).await else {continue;};
+        if !meta.is_file() || meta.len() > 20_000_000 || meta.len() > remaining {continue;}
+        let Ok(file) = tokio::fs::File::open(&full).await else {continue;};
+        let mut data = Vec::new();
+        if file.take(20_000_001).read_to_end(&mut data).await.is_err() || data.len() > 20_000_000 {continue;}
+        remaining = remaining.saturating_sub(data.len() as u64);
+        versions.insert(path.clone(), format!("{:x}", Sha256::digest(&data)));
+    }
+    versions
 }
 
 /// The repository the workspace belongs to. Porcelain paths are relative to
@@ -1489,6 +1522,7 @@ Do not propose it again — take a different approach or ask the user what they'
                 let _ = std::fs::create_dir_all(&checkpoint_dir);
                 let checkpoint_file = checkpoint_file(ctx.runs_dir, ctx.id, &proposal.tool_call_id);
                 let entry = CheckpointEntry {
+                    binary: proposal.binary.clone(),
                     tool_call_id: proposal.tool_call_id.clone(),
                     path: proposal.path.clone(),
                     old_content: proposal.old_content.clone(),
@@ -1554,5 +1588,28 @@ take a different approach or ask the user what they'd prefer.",
             content,
             metadata: None,
         }))
+    }
+}
+
+#[cfg(test)]
+mod artifact_revision_tests {
+    use super::*;
+    #[tokio::test]
+    async fn same_size_document_rewrite_is_detected_with_unchanged_git_status() {
+        let root = std::env::temp_dir().join(format!("klide-document-revision-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = root.join("budget.xlsx");
+        std::fs::write(&file, b"first").unwrap();
+        let dirty = artifacts::parse_porcelain("?? budget.xlsx\n");
+        let before = document_versions(root.to_str().unwrap(), &root, &dirty).await;
+        std::fs::write(&file, b"later").unwrap();
+        let after = document_versions(root.to_str().unwrap(), &root, &dirty).await;
+        let files = artifacts::produced_with_versions(&dirty, &dirty, &before, &after);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "budget.xlsx");
+        assert!(!files[0].created);
+        assert!(artifacts::produced_with_versions(&dirty, &dirty, &after, &after).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

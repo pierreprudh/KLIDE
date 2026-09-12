@@ -54,6 +54,7 @@ export default defineConfig(async () => ({
           // small vendor chunk the entry always loads.
           if (id.includes("vite/preload-helper")) return "vendor";
           if (!id.includes("node_modules")) return undefined;
+          if (/\/(exceljs|fast-formula-parser|ssf|frac|chevrotain|regexp-to-ast|bahttext|bessel|jstat)\//.test(id)) return "vendor-spreadsheet";
           if (id.includes("monaco-editor") || id.includes("@monaco-editor")) return "vendor-monaco";
           if (id.includes("@xterm")) return "vendor-terminal";
           if (id.includes("@tauri-apps")) return "vendor-tauri";

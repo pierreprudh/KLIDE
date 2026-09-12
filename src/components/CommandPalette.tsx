@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { readWorkspaceTextFile } from "../workspaceFs";
+import { isSpreadsheetPath } from "../spreadsheets/paths";
 import { Z } from "../zLayers";
 import { fileMatchRank } from "../fileSearch";
 
@@ -118,7 +119,7 @@ export function CommandPalette({ workspaceRoot, commands, onOpenFile, initialQue
         void (async () => {
           try {
             if (!workspaceRoot) return;
-            const content = await readWorkspaceTextFile(workspaceRoot, f.path);
+            const content = isSpreadsheetPath(f.path) ? "" : await readWorkspaceTextFile(workspaceRoot, f.path);
             onOpenFile(f.path, content);
             window.dispatchEvent(new CustomEvent("command-palette-close"));
           } catch {}

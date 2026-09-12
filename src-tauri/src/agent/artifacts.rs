@@ -114,12 +114,38 @@ pub(crate) fn produced(
     out
 }
 
+/// A repeated edit can leave Git status unchanged (?? → ?? or M → M).
+/// Compare document contents as well, without re-announcing untouched files.
+pub(crate) fn produced_with_versions(
+    before: &BTreeMap<String, String>, after: &BTreeMap<String, String>,
+    old_versions: &BTreeMap<String, String>, new_versions: &BTreeMap<String, String>,
+) -> Vec<Produced> {
+    let mut files: BTreeMap<String, Produced> = produced(before, after).into_iter()
+        .map(|file| (file.path.clone(), file)).collect();
+    for (path, version) in new_versions {
+        if old_versions.get(path).is_some_and(|old| old != version) {
+            files.entry(path.clone()).or_insert(Produced {path: path.clone(), created: false});
+        }
+    }
+    files.into_values().take(MAX_PRODUCED).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn set(lines: &str) -> BTreeMap<String, String> {
         parse_porcelain(lines)
+    }
+
+    #[test]
+    fn repeated_document_edit_is_announced_but_unchanged_document_is_not() {
+        let dirty = set("?? budget.xlsx\n M deck.pptx\n?? unchanged.docx\n");
+        let old = BTreeMap::from([("budget.xlsx".into(), "one".into()), ("deck.pptx".into(), "one".into()), ("unchanged.docx".into(), "one".into())]);
+        let mut new = old.clone();
+        new.insert("budget.xlsx".into(), "two".into()); new.insert("deck.pptx".into(), "two".into());
+        let files = produced_with_versions(&dirty, &dirty, &old, &new);
+        assert_eq!(files, vec![Produced {path:"budget.xlsx".into(),created:false}, Produced {path:"deck.pptx".into(),created:false}]);
     }
 
     #[test]

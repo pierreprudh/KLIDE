@@ -1,5 +1,6 @@
 import { enabledSkillsPrompt, type Skill } from "../../skills";
 import type { AgentMode } from "../../agent/types";
+import spreadsheetGuide from "../../spreadsheets/agent-guide.md?raw";
 
 export function buildSystemPrompt(
   workspaceRoot: string | null,
@@ -67,9 +68,9 @@ PLAN MODE is active, but the selected model/provider did not expose tool-call su
 GOAL MODE is active. Match your actions to what the user actually asked:
 - A question, an explanation, or a review → investigate and answer with evidence. Do not edit files for this.
 - Diagnose a problem → find the cause and explain it. Fix it only if the user asked for a fix.
-- Build or change something → inspect what you need, then call write_file or create_file to make the smallest edit that completes it. The task is unfinished until that tool call returns a result; only then tell the user what changed and what remains.
+- Build or change something → inspect what you need, then call the appropriate write tool (write_file, create_file, or write_spreadsheet) to make the smallest edit that completes it. The task is unfinished until that tool call returns a result; only then tell the user what changed and what remains.
 When a detail is ambiguous, make the reasonable assumption, state it, and keep going; stop to ask only when a wrong guess would be costly. Every edit is diff-reviewed by the user before it is written.
-Before you report a change as done, check this conversation for a write_file or create_file tool result. If there is none, the file is still untouched — make that tool call now.`
+Before you report a change as done, check this conversation for a successful write tool result. If there is none, the file is still untouched — make that tool call now.`
         : `
 
 GOAL MODE is active, but the selected model/provider did not expose tool-call support for this turn. You cannot inspect or edit files directly. Say that plainly and suggest switching to a tool-capable model/provider. Do not describe this as Chat mode.`);
@@ -82,9 +83,9 @@ ${
     toolsAvailable
       ? `- Find before reading: locate code with grep, glob, or list_dir, then read_file only the files the task needs. If asked what folders/files are in a directory, call list_dir first and answer only from its result.
 - Answer git questions (branch, changes, history) with get_git_status / get_git_diff / get_git_log — never from memory.
-- write_file / create_file are the only way to change a file — text in your reply changes nothing. Every edit opens a diff modal for the user to APPLY or REJECT; you never write directly. Local changes you didn't make belong to the user; preserve them and work around them.`
+- Use write_file / create_file for text files and write_spreadsheet for Excel workbooks; successful write tools are the way to change files — text in your reply changes nothing. Every edit opens a diff modal for the user to APPLY or REJECT; you never write directly. Local changes you didn't make belong to the user; preserve them and work around them.`
       : "- No tool APIs are available in this turn. Do not claim that you can read or edit files directly. Do not answer filesystem, folder, directory, file-list, git, or project-structure questions from memory; say tools are unavailable and ask the user to switch to Plan or Goal."
-  }${modeBlock}
+  }${modeBlock}${mode === "goal" ? `\n\n${spreadsheetGuide}` : ""}
 
 Paths are relative to the workspace root (e.g. "src/App.tsx" or ".").
 For the workspace root, use path ".". Do not use an absolute path like "/README.md"; use "README.md".

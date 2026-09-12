@@ -1,15 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readWorkspaceFileDataUri, workspacePath } from "./workspaceFs";
+import { isSpreadsheetPath } from "./spreadsheets/paths";
 
 /** Where a document a run produced can be read.
  *
  * The frontend twin of `src-tauri/src/agent/artifacts.rs`: that module decides
  * what a command left behind, this one decides what Klide can do with it.
  *
- * The Artifact Inspector is Monaco, so it reads text and nothing else. A deck,
- * a PDF, a spreadsheet, an image — Klide renders none of them, and a viewer
- * for each is a far bigger thing than a card. So they open in the app the
- * machine already uses for them, which is also what the reader wanted.
+ * Text goes to the Artifact Inspector. Workbooks have an interactive sheet
+ * surface; other documents use the preview viewer and the system-app handoff.
  */
 
 /** Extensions the inspector can show as text. Deliberately a list rather than
@@ -24,10 +23,11 @@ const READABLE = new Set([
   "sh", "bash", "zsh", "sql", "graphql", "diff", "patch",
 ]);
 
-export type ArtifactTarget = "inspector" | "system";
+export type ArtifactTarget = "inspector" | "system" | "spreadsheet";
 
 /** Where the row should send this file. */
 export function artifactOpensIn(path: string): ArtifactTarget {
+  if (isSpreadsheetPath(path)) return "spreadsheet";
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");
   // A dot at position 0 is a dotfile (`.env`), not an extension marker.
@@ -39,7 +39,7 @@ export function artifactOpensIn(path: string): ArtifactTarget {
  *  accessible name — "open" is vague when half of these leave the app. */
 export function artifactActionLabel(path: string): string {
   const name = path.split("/").pop() || path;
-  return artifactOpensIn(path) === "inspector" ? `Read ${name}` : `Open ${name} in its app`;
+  return artifactOpensIn(path) === "spreadsheet" ? `Open ${name} in spreadsheet` : artifactOpensIn(path) === "inspector" ? `Read ${name}` : `Open ${name} in its app`;
 }
 
 /** Images the webview draws itself; a deck, a PDF or a spreadsheet is drawn by
@@ -55,6 +55,7 @@ const PICTURES = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "b
 const RENDERED_TEXT = new Set(["html", "htm"]);
 
 export function artifactPreview(path: string): ArtifactPreview {
+  if (/\.sheet\.json$/i.test(path)) return "none";
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return "none";

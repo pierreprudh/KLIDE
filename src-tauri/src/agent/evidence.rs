@@ -422,6 +422,7 @@ mod tests {
             AgentEvent::DiffProposed {
                 run_id: id.into(),
                 proposal: DiffProposal {
+                    binary: None,
                     id: "d1".into(),
                     run_id: id.into(),
                     tool_call_id: "t2".into(),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createFold, foldedToMsgs } from "./foldEvents";
-import { hasCompletionReview } from "./completion";
+import { completionDocuments, hasCompletionReview, latestReviewCompletion } from "./completion";
 import type { AgentEvent, AgentMode } from "./types";
 import { createTurnDriver } from "../components/ai/turnDriver";
 import type { Msg } from "../components/ai/types";
@@ -18,6 +18,25 @@ function cards(messages: Msg[]) {
 }
 
 describe("completed run evidence", () => {
+  it("surfaces a spreadsheet written by an edit tool as a document without losing change evidence", () => {
+    const fold = createFold();
+    [start(), { ...changed, path: "budget.sheet.json" }, answer, done].forEach(event => fold.apply(event));
+    const [card] = cards(foldedToMsgs(fold.rows()));
+    expect(card.files).toEqual(["budget.sheet.json"]);
+    expect(completionDocuments(card).map(document => document.path)).toEqual(["budget.sheet.json"]);
+  });
+  it.each(["budget.xlsx", "report.docx", "deck.pptx", "report.pdf"])("puts a modified %s back in Documents", (path) => {
+    const fold = createFold();
+    [start(), {...changed, path}, answer, done].forEach(event => fold.apply(event));
+    const [card] = cards(foldedToMsgs(fold.rows()));
+    expect(completionDocuments(card).map(document => document.path)).toEqual([path]);
+  });
+  it("shows an existing file recovered from a legacy run without claiming a file edit", () => {
+    const completion = {runId: "legacy", completedAt: 1, outcome: "Saved", files: [], commands: [], warnings: [], references: [{path: "/Users/test/Documents/budget.xlsx", bytes: 5926}]};
+    expect(hasCompletionReview(completion)).toBe(true);
+    expect(completionDocuments(completion)).toEqual([{path: "/Users/test/Documents/budget.xlsx", bytes: 5926, created: false}]);
+    expect(completion.files).toEqual([]);
+  });
   it("only appears after a clean terminal event, deduplicates files and preserves failures", () => {
     const fold = createFold();
     [start(), changed, changed, command, result, answer].forEach((event) => fold.apply(event));
@@ -160,4 +179,27 @@ describe("completed run evidence", () => {
     expect(cards(messages)).toEqual(cards(foldedToMsgs(fold.rows())));
     expect(messages[messages.length - 1]).toBe(queued);
   });
+});
+
+
+it("keeps recovered previews through transcript replay without leaking into another conversation", () => {
+  const fold = createFold();
+  [start(), command, {...result, result: {ok: true, content: "built"}} as AgentEvent, answer, done]
+    .forEach(event => fold.apply(event));
+  const original = foldedToMsgs(fold.rows());
+  const completion = cards(original)[0];
+  const recovered = {runId: completion.runId, references: [{path: "/Users/test/Documents/budget.xlsx", bytes: 6025}]};
+  expect(latestReviewCompletion(original, null)).toBeUndefined();
+  expect(completionDocuments(latestReviewCompletion(original, recovered)!)).toHaveLength(1);
+  const replay = foldedToMsgs(fold.rows());
+  expect(completionDocuments(latestReviewCompletion(replay, recovered)!)[0].path).toBe(recovered.references[0].path);
+  expect(cards(replay)[0].references).toBeUndefined();
+  expect(latestReviewCompletion(replay, {...recovered, runId: "another-conversation"})).toBeUndefined();
+});
+
+it("shows verified documents for legacy conversations without completion rows", () => {
+  const recovered = {runId: "legacy", references: [{path: "/Users/test/Documents/budget.xlsx", bytes: 6025}]};
+  const messages = [{role: "assistant", content: "Saved the workbook."}];
+  expect(completionDocuments(latestReviewCompletion(messages, recovered, "legacy")!)).toHaveLength(1);
+  expect(latestReviewCompletion(messages, recovered, "other")).toBeUndefined();
 });

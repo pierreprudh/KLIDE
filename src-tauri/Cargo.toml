@@ -1,6 +1,6 @@
 [package]
 name = "klide"
-version = "0.6.2"
+version = "0.6.3"
 description = "A local-first agent IDE"
 authors = ["Pierre Prudh"]
 edition = "2021"
@@ -53,6 +53,8 @@ syn = { version = "2", features = ["full"] }
 # lifecycle hooks curl a tiny POST at Klide instead of Klide scraping TUI
 # output. Small sync server — one thread, no framework.
 tiny_http = "0.12"
+ironcalc = "=0.8.3"
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 
 # One keyring backend per platform. The call sites in `providers.rs` and
 # `accounts.rs` only use `Entry::new` / get / set / delete, which every backend

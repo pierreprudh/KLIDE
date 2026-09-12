@@ -18,6 +18,8 @@ mod memory;
 mod missions;
 mod models;
 mod preview;
+mod spreadsheet;
+mod run_documents;
 mod pricing;
 mod providers;
 mod pty;
@@ -904,6 +906,8 @@ pub fn run() {
             list_dir,
             read_text_file,
             read_file_data_uri,
+            spreadsheet::save_spreadsheet,
+            spreadsheet::spreadsheet_version,
             path_exists,
             write_text_file,
             create_entry,
@@ -974,6 +978,7 @@ pub fn run() {
             agent::agent_list_runs,
             agent::agent_run_origins,
             agent::agent_read_run,
+            run_documents::agent_run_document_references,
             agent::agent_export_evidence,
             agent::agent_list_checkpoints,
             agent::agent_revert_checkpoint,

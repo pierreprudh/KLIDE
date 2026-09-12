@@ -31,6 +31,10 @@ them.
   `delegate/claude_code.rs` plus a level set in `resolve_reflection_levels`;
   the seam and its tests are already there. Note the vocabulary is the CLI's,
   not a model's — unlike Codex, whose set comes from its manifest per model.
+- [ ] Dogfood the spreadsheet path in the app: create, inspect, revise, reject
+  a proposal, and roll a workbook back from a checkpoint — on a small local
+  model as well as a hosted one. The Tools shipped in 0.6.3 with Rust and
+  frontend coverage but no live in-app pass.
 - [ ] Dogfood the full Tauri race path: dispatch, permission pause, restart,
   evidence comparison, winner merge, and explicit worktree cleanup.
 - [ ] Publish the first signed/notarized macOS bundle.

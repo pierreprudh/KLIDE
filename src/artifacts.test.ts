@@ -19,10 +19,15 @@ describe("where a produced document opens", () => {
     (path) => expect(artifactOpensIn(path)).toBe("inspector"),
   );
 
-  it.each(["decks/Q3.pptx", "brief.docx", "report.pdf", "budget.xlsx", "chart.png", "bundle.zip"])(
+  it.each(["decks/Q3.pptx", "brief.docx", "report.pdf", "chart.png", "bundle.zip"])(
     "hands %s to the app that owns it",
     (path) => expect(artifactOpensIn(path)).toBe("system"),
   );
+
+  it.each(["budget.xlsx", "budget.XLSX", "report.sheet.json"])("opens %s in the built-in spreadsheet", path => {
+    expect(artifactOpensIn(path)).toBe("spreadsheet");
+    expect(artifactActionLabel(path)).toContain("in spreadsheet");
+  });
 
   it("treats an unknown or missing extension as a binary", () => {
     // Monaco showing a binary is the failure this list exists to prevent, so
