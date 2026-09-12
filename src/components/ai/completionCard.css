@@ -35,6 +35,8 @@
 .klide-result-island-title { font-size: 13px; }
 /* The count sits at the far end, the way the plan's does. */
 .klide-result-island-header .klide-result-meta { margin-left: auto; font-variant-numeric: tabular-nums; }
+.klide-result-island-header .klide-result-document-count { margin-left: auto; white-space: nowrap; }
+.klide-result-island-header .klide-result-meta + .klide-result-document-count { margin-left: 7px; }
 /* Shown on hover or once open — the row idiom the plan's steps already use. */
 .klide-result-island-chevron { display: grid; place-items: center; color: var(--fg-dim); opacity: 0; transition: opacity 140ms var(--ease-soft); }
 .klide-result-island:hover .klide-result-island-chevron, .klide-result-island[data-open="1"] .klide-result-island-chevron { opacity: 1; }
@@ -230,3 +232,7 @@
   .klide-result-footer { padding: 10px 20px 14px; }
   .klide-result-command pre { max-height: min(240px, 26dvh); }
 }
+
+.klide-result-artifacts .klide-result-document-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 7px; margin: 4px 0; border: 0; border-radius: 6px; background: transparent; }
+.klide-result-artifacts button.klide-result-document-icon:hover { background: var(--bg-hover); }
+.klide-result-artifacts button.klide-result-document-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

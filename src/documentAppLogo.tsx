@@ -29,6 +29,7 @@ const APP_LOGOS: Record<Exclude<DocumentApp, "markdown" | "html">, string> = {
 };
 
 export function documentApp(path: string): DocumentApp | undefined {
+  if (/\.sheet\.json$/i.test(path)) return "excel";
   const name = path.split("/").pop() ?? "";
   const dot = name.lastIndexOf(".");
   return dot > 0 ? APPS[name.slice(dot + 1).toLowerCase()] : undefined;

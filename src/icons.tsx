@@ -35,6 +35,7 @@ import { CirclesThree } from "@phosphor-icons/react/dist/csr/CirclesThree";
 import { FlowArrow } from "@phosphor-icons/react/dist/csr/FlowArrow";
 import { ListChecks } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { Folder } from "@phosphor-icons/react/dist/csr/Folder";
+import { FolderOpen } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { Gear } from "@phosphor-icons/react/dist/csr/Gear";
 import { GitBranch } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { House } from "@phosphor-icons/react/dist/csr/House";
@@ -77,6 +78,10 @@ export function HomeIcon(p: GlyphProps) {
 
 export function SearchIcon(p: GlyphProps) {
   return <Icon as={MagnifyingGlass} {...p} />;
+}
+
+export function FolderOpenIcon(p: GlyphProps) {
+  return <Icon as={FolderOpen} {...p} />;
 }
 
 export function FolderIcon(p: GlyphProps) {

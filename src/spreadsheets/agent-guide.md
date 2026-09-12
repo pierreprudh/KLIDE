@@ -1,0 +1,14 @@
+Built-in agent spreadsheets
+
+When asked for a spreadsheet, create the finished Excel file yourself with `write_spreadsheet` in Goal mode. The tool runs inside Klide: it calculates formulas, checks for errors and exports a real `.xlsx`. No package installation, shell script, Excel installation, or human export step is needed. The user reviews the result in Focus. Save deliverables inside the active workspace (for example artifacts/budget.xlsx). “Documents” means Klide’s result section; do not interpret it as ~/Documents unless the user explicitly requests that folder. Follow the normal write permission policy.
+
+Example call:
+{"path":"artifacts/budget.xlsx","sheets":[{"name":"Budget","widths":[28,18],"cells":{"A1":{"value":"Category","bold":true,"fill":"E8EDF4"},"B1":{"value":"Amount","bold":true},"A2":{"value":"Travel"},"B2":{"value":1200,"format":"#,##0.00"},"A3":{"value":"Total","bold":true},"B3":{"value":"=SUM(B2:B2)","format":"#,##0.00","bold":true}}}]}
+
+Each sheet has an Excel-valid unique name and cells keyed by uppercase A1 addresses. Cell values are numbers, booleans, strings, or null (clear contents). Strings beginning = are formulas; all other strings stay text. Optional cell fields: format (Excel number format), bold (boolean), color and fill (six hex digits without #). Optional widths are character units, 1–100. Keep numbers numeric; use formulas for derived values and clearly label units and assumptions. Use bounded ranges and quote sheet names containing spaces. Agent limits: 50 sheets, 10,000 populated cells total, A1:IV10000, 5 MB files; requests are limited to 220 KB, so build large workbooks in batches.
+
+After saving, use `inspect_spreadsheet` to verify the actual file and key totals. It returns cell inputs/formulas, calculated values, display formats, formula errors and a hash. Inspect is paginated: use sheet, offset and limit (up to 500) when needed. To revise an existing workbook, pass its current hash as expected_hash to write_spreadsheet. Only supplied cells and styles change; other cells and sheets remain. Omit expected_hash only when creating a new file. Errors prevent a write: fix the reported cells and retry. Do not claim a file was saved until the write tool succeeds.
+
+For an imported complex workbook, use source_path with a NEW output path to revise a copy. Charts, pivot tables, macros and other advanced Excel features are outside this tool's preservation guarantees. Explain material limitations when relevant. Never overwrite an imported workbook merely to try converting it.
+
+Return the saved `.xlsx` path in the completion artifacts and a clickable link. Do not ask the user to build the sheet, run a script or click Export. If these tools are absent from the actual provider tool list, do not invent tool calls or claim access: use that provider's available spreadsheet/file capabilities, or explain the limitation.

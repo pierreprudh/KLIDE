@@ -117,28 +117,27 @@ describe("documents a command produced", () => {
     // made, and the reader can put them away.
     expect(html).toMatch(/class="klide-result-fold klide-result-documents" data-open="1"/);
     expect(html).toContain("Q3 review.pptx");
-    expect(html).toContain("41 KB");
+    expect(html).toContain("klide-result-document-row");
+    expect(html).toContain("klide-result-document-text");
     // No diff and no checkpoint behind a produced file: it must not arrive
     // where the reviewable edits are.
     expect(html).not.toContain("Changes");
     expect(html).not.toContain("Review changes");
   });
 
-  // A document opens in two steps: the panel first, full width second. So the
-  // row's resting promise is the preview, and the destination label — which of
-  // the two things the second click does — belongs to the state after it.
-  // Opening the result is the first of the two steps: every document it
-  // produced shows its picture in the panel, each one beside the mark of the
-  // app that owns it. The row is the second step and opens the document.
+  // Documents stay compact until the reader opens one.
   it("shows every document with its app's mark, and opens on the row", () => {
     const html = renderEvidence({ ...completion, artifacts: [DECK, { path: "q3/summary.docx", bytes: 12_000, created: true }] }, () => {});
     expect(html).toContain("Open Q3 review.pptx in its app");
     expect(html).toContain("Open summary.docx in its app");
     expect(html).toContain("klide-result-app-logo");
+    expect(html).not.toContain("klide-result-thumb");
+    expect(html).toContain("Opening a preview");
     expect(html).not.toContain("in the panel");
     // The evidence counts them in its own heading; the island header carries
     // the same count where the reader sees it before opening anything.
-    expect(html).toContain('klide-result-fold-title">Documents<');
+    expect(html).toContain('aria-label="Documents"');
+    expect(html).not.toContain('klide-result-fold-title">Documents<');
     expect(renderIsland({ ...completion, files: ["src/app.tsx"], artifacts: [DECK] })).toContain("1 document");
   });
 
@@ -259,6 +258,8 @@ describe("ResultEvidence", () => {
   it("gives a Markdown document its mark in the evidence rows too", () => {
     const html = renderEvidence({ ...completion, artifacts: [{ path: "report.md", bytes: 100, created: true }] });
     expect(html).toContain("klide-result-app-logo");
+    expect(html).not.toContain("klide-result-thumb");
+    expect(html).toContain("No preview for this kind of file.");
     expect(html).toContain("<svg");
   });
 });

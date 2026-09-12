@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { completionDocumentCount, hasCompletionReview, type RunCompletion } from "../../agent/completion";
+import { completionDocumentCount, completionDocuments, hasCompletionReview, type RunCompletion } from "../../agent/completion";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
+import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon } from "../../icons";
 import { formatBytes } from "../settings/storage";
-import { ChevronIcon, CloseIcon, ReviewIcon } from "../../icons";
 import { Z } from "../../zLayers";
 import "./completionCard.css";
 
@@ -51,18 +51,19 @@ type EvidenceProps = Pick<Props, "completion" | "disabled" | "onReview" | "onOpe
  *  one height transition CSS can do without knowing the height, and the card
  *  above it grows and shrinks at the same pace. Closed, the content stays in
  *  the tree but clipped and inert. */
-function Fold({ name, open, onToggle, title, failed, children }: {
+function Fold({ name, open, onToggle, title, label, failed, children }: {
   name: string;
   open: boolean;
   onToggle: () => void;
   title: ReactNode;
+  label?: string;
   failed?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
   return (
     <div className={`klide-result-fold klide-result-${name}`} data-open={open ? "1" : undefined} data-failed={failed ? "1" : undefined}>
-      <button type="button" className="klide-result-fold-summary" aria-expanded={open} aria-controls={id} onClick={onToggle}>
+      <button type="button" className="klide-result-fold-summary" aria-label={label} title={label} aria-expanded={open} aria-controls={id} onClick={onToggle}>
         <span className="klide-result-fold-title">{title}</span>
         {/* The chevron turns at the body's pace, so the two read as one thing moving. */}
         <span className="klide-result-fold-chevron" aria-hidden="true"><ChevronIcon open={open} style={{ transition: "transform 440ms var(--ease-soft)" }} /></span>
@@ -82,15 +83,8 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   // there to put them away while reading the rest.
   const [documentsOpen, setDocumentsOpen] = useState(true);
   const review = (path?: string) => { onDone(); onReview?.(path); };
-  // A document opens in two steps: the first click previews it here in the
-  // panel, the second opens it full width (the inspector, or the app that owns
-  // the file). Going straight to full width meant every glance at a deck threw
-  // the reader out of the conversation and into another window.
-  //
-  // Opening the result *is* the first step: every document it produced shows
-  // its picture here, in the panel. So the row's own click is the second step
-  // and opens the document full width — no row has to be chosen first.
-  const artifacts = completion.artifacts ?? [];
+  // The icon opens the document; its preview stays visible below.
+  const artifacts = completionDocuments(completion);
   return (
     <>
       <div className="klide-result-body">
@@ -117,28 +111,18 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               behind them and nothing to revert. The row opens the document —
               in the inspector when Klide can read it, in the app that owns it
               when it cannot. */}
-          <Fold name="documents" open={documentsOpen} onToggle={() => setDocumentsOpen((was) => !was)} title="Documents">
+          <Fold name="documents" open={documentsOpen} onToggle={() => setDocumentsOpen((was) => !was)} label="Documents" title={<DocumentIcon size={18} />}>
           <div className="klide-result-files klide-result-artifacts">{artifacts.map((artifact) => {
             const name = artifact.path.split("/").pop() || artifact.path;
             const directory = artifact.path.slice(0, -name.length).replace(/\/$/, "");
-            // The app that owns the file, as its own mark: a reader looking for
-            // the deck finds it by the PowerPoint square faster than by
-            // reading four filenames.
-            // Four columns on one baseline: the app's mark, the name over its
-            // folder, the size, the arrow. The generic file row stacks and pins
-            // its size to a fixed 11px from the top, which only lines up while
-            // the row is one line high — with a logo and a folder under the
-            // name, everything drifted.
-            const label = (
-              <>
-                <DocumentAppMark path={artifact.path} size={20} className="klide-result-app-logo" />
-                <span className="klide-result-document-text">
-                  <span className="klide-result-filename">{name}</span>
-                  {directory && <span className="klide-result-directory">{directory}</span>}
-                </span>
-              </>
-            );
-            const size = <span className="klide-result-size">{formatBytes(artifact.bytes)}</span>;
+            const label = <>
+              <DocumentAppMark path={artifact.path} size={20} className="klide-result-app-logo" />
+              <span className="klide-result-document-text">
+                <span className="klide-result-filename">{name}</span>
+                {directory && <span className="klide-result-directory">{directory}</span>}
+              </span>
+            </>;
+            const size = <span className="klide-result-size">{artifact.bytes > 0 ? formatBytes(artifact.bytes) : ""}</span>;
             const row = onOpenArtifact
               ? <button type="button" className="klide-result-document-row" title={artifactActionLabel(artifact.path)}
                   onClick={() => { onDone(); onOpenArtifact(artifact.path); }}>{label}{size}<span className="klide-result-open" aria-hidden="true">↗</span></button>
@@ -146,7 +130,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
             return (
               <div key={artifact.path} className="klide-result-document">
                 {row}
-                <ArtifactThumb path={artifact.path} load={onPreviewArtifact} />
+                <ArtifactThumb key={`${completion.runId}:${completion.completedAt}:${artifact.path}`} path={artifact.path} load={onPreviewArtifact} />
               </div>
             );
           })}</div>
@@ -181,29 +165,16 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   );
 }
 
-/** What the document looks like, when the host can say.
- *
- *  Asked for once per row, on mount: the answer is a data URI, so nothing is
- *  refetched while the card is open, and a file with no preview simply has no
- *  picture rather than an apology in its place. */
-/** The picture of one document, in the panel. It loads when the reader asks
- *  for it — a preview per row, all at once, was a wall of pictures nobody had
- *  asked to see, and it made the first click on a row the last one. */
+/** Render the document preview beneath its compact open icon. */
 function ArtifactThumb({ path, load }: { path: string; load?: (path: string) => Promise<string | null> }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     if (!load || artifactPreview(path) === "none") return;
     let live = true;
-    void load(path).then((next) => { if (live) setSrc(next); }).catch(() => {});
+    void load(path).then(next => { if (live) setSrc(next); }).catch(() => {});
     return () => { live = false; };
   }, [path, load]);
-  if (!src) {
-    return (
-      <p className="klide-result-preview-note">
-        {artifactPreview(path) === "none" ? "No preview for this kind of file." : "Opening a preview…"}
-      </p>
-    );
-  }
+  if (!src) return <p className="klide-result-preview-note">{artifactPreview(path) === "none" ? "No preview for this kind of file." : "Opening a preview…"}</p>;
   return <img className="klide-result-thumb" src={src} alt={`Preview of ${path.split("/").pop() ?? path}`} loading="lazy" />;
 }
 
@@ -245,7 +216,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
   // and past that the count says how many more. PowerPoint, Excel, Word as
   // pictures; the Markdown and HTML glyphs drawn. A run that only changed code
   // keeps the review glass and its file count.
-  const documentPaths = (completion.artifacts ?? []).map((artifact) => artifact.path);
+  const documentPaths = completionDocuments(completion).map((artifact) => artifact.path);
   const stack = stackedDocumentMarks(documentPaths);
   const mark = stack.length > 0
     ? (

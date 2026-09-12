@@ -1,3 +1,5 @@
+#[path = "spreadsheet_tools.rs"]
+mod spreadsheets;
 use super::conversation_search;
 use super::todo;
 use super::glob_match::wildcard_match;
@@ -561,6 +563,30 @@ fn schema(
 
 fn registry() -> Vec<ToolEntry> {
     vec![
+        ToolEntry {
+            kind: ToolKind::ReadOnly,
+            schema: schema("inspect_spreadsheet", "Read and recalculate an Excel workbook. Returns cells, formulas, results, errors and a hash required for updates. No file changes.",
+                serde_json::json!({"path":{"type":"string"},"sheet":{"type":"string","description":"Optional sheet name to inspect."},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}), &["path"]),
+            run_read: Some(spreadsheets::inspect), run_write_preview: None, summary: path_summary,
+        },
+        ToolEntry {
+            kind: ToolKind::Write,
+            schema: schema("write_spreadsheet", "Create or update a real .xlsx file with built-in calculation and export. No shell, Excel installation or manual export needed. Omit expected_hash to create; for updates supply the hash from inspect_spreadsheet. Updates patch named sheets/cells and preserve other cells. Formula errors block saving. Imported complex Excel features may not survive: use a new output path and source_path to save a copy.",
+                serde_json::json!({
+                    "path":{"type":"string","description":"Workspace-relative .xlsx output path."},
+                    "source_path":{"type":"string","description":"Optional existing .xlsx to copy and update. Output path must be new."},
+                    "expected_hash":{"type":"string","description":"Hash returned by inspect_spreadsheet; required to overwrite an existing workbook."},
+                    "sheets":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","properties":{
+                        "name":{"type":"string"},
+                        "widths":{"type":"array","items":{"type":"number"}},
+                        "cells":{"type":"object","additionalProperties":{"type":"object","properties":{
+                            "value":{"type":["string","number","boolean","null"],"description":"Strings beginning = are formulas. Other strings remain text; null clears a cell."},
+                            "format":{"type":"string"},"bold":{"type":"boolean"},"color":{"type":"string"},"fill":{"type":"string"}
+                        },"required":["value"],"additionalProperties":false}}
+                    },"required":["name","cells"],"additionalProperties":false}}
+                }), &["path","sheets"]),
+            run_read: None, run_write_preview: Some(spreadsheets::preview), summary: path_summary,
+        },
         ToolEntry {
             kind: ToolKind::ReadOnly,
             schema: schema("read_file", "Read the full text contents of a file in the workspace.",
@@ -3174,6 +3200,7 @@ fn preview_write_file(
         return Err(err("Resulting file would be too large".to_string()));
     }
     Ok(DiffProposal {
+        binary: None,
         id: format!(
             "diff_{}_{}",
             run_id,
@@ -3214,6 +3241,7 @@ fn preview_create_file(
         return Err(err("Contents too large".to_string()));
     }
     Ok(DiffProposal {
+        binary: None,
         id: format!(
             "diff_{}_{}",
             run_id,
@@ -3267,6 +3295,7 @@ fn preview_create_skill(
     let content =
         format!("---\nname: {title}\ndescription: {description}\n---\n\n{instructions}\n");
     Ok(DiffProposal {
+        binary: None,
         id: format!("diff_{}_{}", run_id, safe_name),
         run_id: run_id.to_string(),
         tool_call_id: format!("skill_{}", safe_name),
@@ -3339,6 +3368,11 @@ pub fn apply_write(root: &str, diff: &DiffProposal) -> Result<ToolResult, ToolRe
     // agent-tier write also re-applies the sensitive-path refusal, so a
     // proposal that skipped preview can't land on a credential file.
     let full = ws.resolve_new(&diff.path).map_err(err)?;
+    if let Some(binary) = &diff.binary {
+        ws.guard(&full, Access::Agent).map_err(err)?;
+        crate::spreadsheet::save(root, &full.to_string_lossy(), &binary.new_base64, binary.old_base64.as_deref()).map_err(err)?;
+        return Ok(ok(format!("Saved {}. Excel export complete; formulas recalculated and checked. Use inspect_spreadsheet to verify key results. {}", diff.path, diff.reason.as_deref().unwrap_or(""))));
+    }
     ws.write_text(&full, &diff.new_content, Access::Agent)
         .map_err(err)?;
     // The model just wrote this file, so its current hash is the new one — keep
@@ -3496,6 +3530,7 @@ mod tests {
         // Apply re-checks: a proposal that skipped preview still can't land
         // on a credential file.
         let diff = DiffProposal {
+            binary: None,
             id: "diff_run1_env".to_string(),
             run_id: "run1".to_string(),
             tool_call_id: "write_.env".to_string(),

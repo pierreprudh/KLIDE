@@ -54,7 +54,7 @@ import { columnGeometry } from "./ai/canvasColumn";
 
 /** The documents a completion produced, as the viewer's rail wants them. */
 function documentSet(completion: RunCompletion): { path: string; bytes: number }[] {
-  return (completion.artifacts ?? []).map((artifact) => ({ path: artifact.path, bytes: artifact.bytes }));
+  return completionDocuments(completion).map((artifact) => ({ path: artifact.path, bytes: artifact.bytes }));
 }
 import { QuestionCard } from "./ai/QuestionCard";
 import {
@@ -94,7 +94,7 @@ import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
 import { PendingInboxRow, renderMessageBody, extractThinking, CompactionRow, ThinkingBlock, ToolRunRow } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
-import { hasCompletionReview, type RunCompletion } from "../agent/completion";
+import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, toolRunIndex, toolRunLabel } from "./ai/toolRuns";
 import type { AttachedResult } from "./ai/ChatMessage";
 import { MessageActions } from "./ai/MessageActions";
@@ -329,6 +329,9 @@ type Props = {
   onOpenArtifact?: (info: { runId: string; path: string; documents: { path: string; bytes: number }[] }) => void;
   /** A picture of a produced document, when the host can make one. */
   onPreviewArtifact?: (path: string) => Promise<string | null>;
+  onDocumentReferences?: (references: {path: string; workspaceRoot: string; bytes: number}[]) => void;
+  composerInsertion?: { id: number; text: string };
+  onComposerInsertionConsumed?: () => void;
   visible: boolean;
   width: number;
   fill?: boolean;
@@ -652,7 +655,10 @@ export function AiPanel({
   onWorkspaceChanged,
   onReviewChanges,
   onOpenArtifact,
+  composerInsertion,
+  onComposerInsertionConsumed,
   onPreviewArtifact,
+  onDocumentReferences,
   visible,
   width,
   fill,
@@ -2054,6 +2060,14 @@ This user request requires workspace inspection. Before answering, you MUST call
   const historyIndexRef = useRef<number | null>(null);
   const historyDraftRef = useRef("");
   const promptHistory = useMemo(() => promptHistoryEntries(msgs), [msgs]);
+  const lastInsertion = useRef<number | null>(null);
+  useEffect(() => {
+    if (!composerInsertion || lastInsertion.current === composerInsertion.id) return;
+    lastInsertion.current = composerInsertion.id;
+    setInput(current => `${current}${current.trim() ? "\n\n" : ""}${composerInsertion.text}\n`);
+    taRef.current?.focus();
+    onComposerInsertionConsumed?.();
+  }, [composerInsertion, onComposerInsertionConsumed]);
   const historyRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
 
@@ -2954,14 +2968,33 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   // The newest turn whose evidence is worth opening — what "the result" means
   // on the canvas, where there is room for one entry, not one per turn.
-  const latestCompletion = useMemo(() => {
-    for (let i = msgs.length - 1; i >= 0; i -= 1) {
-      const message = msgs[i];
-      const candidate = message.role === "system" ? message.completion : undefined;
-      if (candidate && hasCompletionReview(candidate)) return candidate;
-    }
-    return undefined;
-  }, [msgs]);
+  const referenceCallback = useRef(onDocumentReferences);
+  referenceCallback.current = onDocumentReferences;
+  const [recoveredDocuments, setRecoveredDocuments] = useState<{runId: string; references: {path: string; bytes: number}[]} | null>(null);
+  const recoveryCompletion = [...msgs].reverse().flatMap(message => message.role === "system" && message.completion ? [message.completion] : [])[0];
+  // The conversation owns the transcript even when a cached completion is
+  // absent or belongs to an older attempt.
+  const recoveryRunId = currentId;
+  const recoveryCompletedAt = recoveryCompletion?.completedAt;
+  useEffect(() => {
+    if (!recoveryRunId || delegateSession || streaming || msgs.length === 0) return;
+    let live = true;
+    void invoke<{path: string; workspaceRoot: string; bytes: number}[]>("agent_run_document_references", {runId: recoveryRunId}).then(references => {
+      if (!live) return;
+      referenceCallback.current?.(references);
+      // Transcript replay owns messages and may replace them after this read.
+      // Keep recovered documents separately so replay cannot erase the corner.
+      setRecoveredDocuments({runId: recoveryRunId, references});
+    }).catch(error => {
+      if (live) notify(`Could not restore document previews: ${String(error)}`, { tone: "error" });
+    });
+    return () => { live = false; };
+  }, [recoveryRunId, recoveryCompletedAt, delegateSession, streaming, msgs.length]);
+
+  const latestCompletion = useMemo(
+    () => latestReviewCompletion(msgs, recoveredDocuments, currentId),
+    [msgs, recoveredDocuments, currentId],
+  );
 
   function requestCompletionChanges(completion: RunCompletion) {
     setInput((previous) => previous || (completion.stopped

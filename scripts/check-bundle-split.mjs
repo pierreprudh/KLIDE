@@ -17,7 +17,7 @@ import { join } from "node:path";
 const DIST = process.argv[2] ?? "dist";
 // Chunks that must not be preloaded by the entry. Names come from
 // `manualChunks` in vite.config.ts.
-const DEFERRED_CHUNKS = ["vendor-monaco", "vendor-terminal"];
+const DEFERRED_CHUNKS = ["vendor-monaco", "vendor-terminal", "vendor-spreadsheet"];
 // The app shell itself. 0.53 MB today; a jump past this means something heavy
 // was statically imported into App.
 const ENTRY_LIMIT_BYTES = 1_000_000;

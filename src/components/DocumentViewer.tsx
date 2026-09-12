@@ -3,6 +3,7 @@ import { formatBytes } from "./settings/storage";
 import { CloseIcon } from "../icons";
 import { Z } from "../zLayers";
 import { documentAppLogo } from "../documentAppLogo";
+import { isSpreadsheetPath } from "../spreadsheets/paths";
 import "./documentViewer.css";
 
 export type ViewerDocument = { path: string; bytes: number };
@@ -24,6 +25,7 @@ type Props = {
   /** Hand the file to the application that owns it. */
   onOpenExternal: (path: string) => void;
   onClose: () => void;
+  onOpenSpreadsheet?: (path: string) => void;
 };
 
 const RAIL_SIZE = 220;
@@ -64,7 +66,7 @@ function RailItem({ document, active, load, onSelect }: {
  * between what the run made, the sheet, and one way out to the application
  * that can actually edit it.
  */
-export function DocumentViewer({ documents, path, load, placeholder, onOpenExternal, onClose }: Props) {
+export function DocumentViewer({ documents, path, load, placeholder, onOpenExternal, onClose, onOpenSpreadsheet }: Props) {
   const [active, setActive] = useState(path);
   const [src, setSrc] = useState<string | null>(() => placeholder?.(path) ?? null);
   const [pending, setPending] = useState(true);
@@ -93,12 +95,16 @@ export function DocumentViewer({ documents, path, load, placeholder, onOpenExter
   const step = useCallback((delta: number) => {
     const index = documents.findIndex((document) => document.path === active);
     const next = documents[index + delta];
-    if (next) setActive(next.path);
-  }, [active, documents]);
+    if (next) {
+      if (isSpreadsheetPath(next.path) && onOpenSpreadsheet) onOpenSpreadsheet(next.path);
+      else setActive(next.path);
+    }
+  }, [active, documents, onOpenSpreadsheet]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { onClose(); return; }
+      if (!(event.target instanceof Node) || !canvas.current?.closest(".klide-doc-shell")?.contains(event.target)) return;
       if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); step(1); }
       if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
     };
@@ -139,7 +145,10 @@ export function DocumentViewer({ documents, path, load, placeholder, onOpenExter
             <nav className="klide-doc-rail" aria-label="Documents from this run">
               {documents.map((document) => (
                 <RailItem key={document.path} document={document} active={document.path === active}
-                  load={load} onSelect={() => setActive(document.path)} />
+                  load={load} onSelect={() => {
+                    if (isSpreadsheetPath(document.path) && onOpenSpreadsheet) onOpenSpreadsheet(document.path);
+                    else setActive(document.path);
+                  }} />
               ))}
             </nav>
           )}

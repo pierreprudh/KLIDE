@@ -101,6 +101,8 @@ import { useArtifactInspector } from "./hooks/useArtifactInspector";
 import { listCheckpoints, readAgentRunEvents } from "./agent/client";
 import { artifactOpensIn, artifactPreview, loadArtifactPreview, openArtifactInApp } from "./artifacts";
 import { DocumentViewer } from "./components/DocumentViewer";
+import { SpreadsheetViewer } from "./components/lazySurfaces";
+import { isSpreadsheetPath } from "./spreadsheets/paths";
 import { errMessage } from "./errors";
 import {
   DEFAULT_AI_PANEL_ID,
@@ -346,7 +348,7 @@ function App() {
     setActiveIdx,
     active,
     editorRef,
-    openFile,
+    openFile: openTextFile,
     updateActiveCode,
     onEntryRenamed,
     onEntryDeleted,
@@ -1293,8 +1295,11 @@ function App() {
   // for the sharp one when Quick Look has drawn it. Rust remembers the renders
   // themselves; this only knows which one to show first.
   const bestPictures = useRef<Map<string, { size: number; src: string }>>(new Map());
+  // Only the read-only transcript recovery command registers external files.
+  // Reuse their original location; never copy a workbook to make it previewable.
+  const referencedDocumentRoots = useRef(new Map<string, string>());
   const previewRunArtifact = useCallback(async (path: string, size = 900): Promise<string | null> => {
-    const root = workspaceRoot;
+    const root = referencedDocumentRoots.current.get(path) ?? workspaceRoot;
     if (!root) return null;
     try {
       const src = await loadArtifactPreview(root, path, size);
@@ -1326,12 +1331,31 @@ function App() {
   const [documentViewer, setDocumentViewer] = useState<
     { path: string; documents: { path: string; bytes: number }[] } | null
   >(null);
+  const [spreadsheet, setSpreadsheet] = useState<{ path: string; root: string } | null>(null);
+  const [spreadsheetContext, setSpreadsheetContext] = useState<{ panelId: string; id: number; text: string } | null>(null);
+
+  function openSpreadsheet(path: string, root = workspaceRoot) {
+    if (!root) return;
+    // Keep the current editor mounted until the user saves or closes it.
+    if (spreadsheet !== null && (spreadsheet.path !== path || spreadsheet.root !== root)) {
+      notify("Close the current spreadsheet before opening another one.");
+      return;
+    }
+    setDocumentViewer(null);
+    setSpreadsheet({ path, root });
+  }
+
+  function openFile(path: string, content: string, position?: { line: number; column: number }) {
+    if (isSpreadsheetPath(path)) { openSpreadsheet(path); return; }
+    openTextFile(path, content, position);
+  }
 
   async function openRunArtifact(
     { runId, path, documents }: { runId: string; path: string; documents: { path: string; bytes: number }[] },
   ) {
-    const root = workspaceRoot;
+    const root = referencedDocumentRoots.current.get(path) ?? workspaceRoot;
     if (!root) return;
+    if (isSpreadsheetPath(path)) { openSpreadsheet(path, root); return; }
     // Text is read properly in the inspector, with its own editor. A document
     // Klide cannot render opens in the viewer — reading it in the app beats
     // bouncing to Keynote for a look, and the viewer keeps a way out to the
@@ -1350,7 +1374,7 @@ function App() {
   }
 
   async function openArtifactExternally(path: string) {
-    const root = workspaceRoot;
+    const root = referencedDocumentRoots.current.get(path) ?? workspaceRoot;
     if (!root) return;
     try {
       await openArtifactInApp(root, path);
@@ -1434,7 +1458,13 @@ function App() {
         // Focus reviews in its own column, so it offers no route into the
         // docked inspector it does not render.
         onReviewChanges={opts?.variant === "focus" ? undefined : (info) => void reviewRunChanges(info)}
-        onOpenArtifact={(info) => void openRunArtifact(info)}
+        onOpenArtifact={(info) => {
+          if (isSpreadsheetPath(info.path)) openSpreadsheet(info.path, referencedDocumentRoots.current.get(info.path) ?? root);
+          else void openRunArtifact(info);
+        }}
+        composerInsertion={spreadsheetContext?.panelId === panelId ? spreadsheetContext : undefined}
+        onComposerInsertionConsumed={() => setSpreadsheetContext(current => current?.panelId === panelId ? null : current)}
+        onDocumentReferences={(references) => { for (const reference of references) referencedDocumentRoots.current.set(reference.path, reference.workspaceRoot); }}
         onPreviewArtifact={previewRunArtifact}
         onWorkspaceChanged={() => {
           // A worktree-pinned panel changes its own branch, not the main
@@ -3989,7 +4019,21 @@ function App() {
           placeholder={placeholderPicture}
           onOpenExternal={(path) => void openArtifactExternally(path)}
           onClose={() => setDocumentViewer(null)}
+          onOpenSpreadsheet={openSpreadsheet}
         />
+      )}
+      {spreadsheet && (
+        <SpreadsheetViewer key={`${spreadsheet.root}:${spreadsheet.path}`} workspaceRoot={spreadsheet.root} path={spreadsheet.path}
+          onAddToChat={(text) => {
+            const panelId = focusedPanel && aiPanels.some(panel => panel.id === focusedPanel) ? focusedPanel : primaryPanelId;
+            if (aiPanels.length === 0) ensureAiRect();
+            setAiVisible(true);
+            focusPanel(panelId);
+            setSpreadsheetContext({ panelId, id: Date.now(), text });
+          }}
+          onClose={() => setSpreadsheet(null)} onOpenExternal={(path) => {
+            void openArtifactInApp(spreadsheet.root, path).catch(error => notify(`Unable to open ${path}: ${errMessage(error)}`, { tone: "error" }));
+          }} />
       )}
       <ToastHost />
     </div>

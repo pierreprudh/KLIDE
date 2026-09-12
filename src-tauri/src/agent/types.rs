@@ -487,6 +487,16 @@ pub struct DiffProposal {
     pub unified_diff: String,
     pub is_create: bool,
     pub reason: Option<String>,
+    /// Bytes are separate from the readable workbook diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<BinaryWrite>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryWrite {
+    pub old_base64: Option<String>,
+    pub new_base64: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
