@@ -34,6 +34,8 @@ export type ShortcutId =
   | "ai-send"
   | "ai-newline"
   | "ai-toggle-mode"
+  | "ai-history-prev"
+  | "ai-history-next"
   | "ai-stop";
 
 export type Shortcut = { keys: string[]; label: string };
@@ -66,6 +68,8 @@ export const SHORTCUTS: Record<ShortcutId, Shortcut> = {
   "ai-send": { keys: ["↵"], label: "Send message" },
   "ai-newline": { keys: ["⇧", "↵"], label: "New line" },
   "ai-toggle-mode": { keys: ["Tab"], label: "Toggle mode (Chat / Plan / Goal)" },
+  "ai-history-prev": { keys: ["↑"], label: "Recall an earlier prompt" },
+  "ai-history-next": { keys: ["↓"], label: "Back towards the draft" },
   "ai-stop": { keys: ["Esc"], label: "Stop a running turn" },
 };
 
@@ -101,6 +105,6 @@ export const SHORTCUT_GROUPS: { title: string; ids: ShortcutId[] }[] = [
   },
   {
     title: "AI panel",
-    ids: ["ai-send", "ai-newline", "ai-toggle-mode", "ai-stop"],
+    ids: ["ai-send", "ai-newline", "ai-history-prev", "ai-history-next", "ai-toggle-mode", "ai-stop"],
   },
 ];

@@ -118,6 +118,7 @@ import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
+import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
@@ -2045,6 +2046,14 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // ↑ / ↓ in the composer walk this conversation's own prompts (the rule lives
+  // in ai/promptHistory.ts). Refs, not state: a browse must not re-render the
+  // panel, and the walk reads its position inside the same keystroke that
+  // moves it. `historyDraft` holds the half-written message stashed on the way
+  // back, returned when ↓ walks past the newest prompt.
+  const historyIndexRef = useRef<number | null>(null);
+  const historyDraftRef = useRef("");
+  const promptHistory = useMemo(() => promptHistoryEntries(msgs), [msgs]);
   const historyRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
 
@@ -3669,6 +3678,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         ? "plan"
         : availableMode;
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
+    historyIndexRef.current = null; historyDraftRef.current = "";
     setPendingAttachments([]);
     const collected = await collectAttachments(effectiveText);
     // Staged photos/documents ride ahead of @-mention file attachments.
@@ -4965,6 +4975,33 @@ This user request requires workspace inspection. Before answering, you MUST call
                 if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
                 if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptMentionAt(mentionIdx); return; }
                 if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
+              }
+              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+                const ta = e.currentTarget;
+                const move = navigatePromptHistory({
+                  direction: e.key === "ArrowUp" ? "older" : "newer",
+                  entries: promptHistory,
+                  index: historyIndexRef.current,
+                  value: ta.value,
+                  selectionStart: ta.selectionStart ?? 0,
+                  selectionEnd: ta.selectionEnd ?? 0,
+                  draft: historyDraftRef.current,
+                });
+                // A null move is ordinary caret movement — the textarea keeps it.
+                if (move) {
+                  e.preventDefault();
+                  if (move.stash) historyDraftRef.current = ta.value;
+                  historyIndexRef.current = move.index;
+                  setInput(move.text);
+                  setMention(null); setSlash(null);
+                  // After the value lands, park the caret at the end so the
+                  // recalled prompt is ready to edit or send.
+                  requestAnimationFrame(() => {
+                    const el = taRef.current;
+                    if (el) el.setSelectionRange(el.value.length, el.value.length);
+                  });
+                  return;
+                }
               }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               else if (e.key === "Tab" && !delegateSession) { e.preventDefault(); toggleMode(); }
