@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+<style>text{font-family:Arial,sans-serif;fill:#242820}.muted{fill:#646b60}.label{font-size:13px;letter-spacing:1.6px;font-weight:700}.code{font-family:Menlo,monospace;font-size:16px}.title{font-size:34px;font-weight:600}.body{font-size:18px}.small{font-size:15px}.line{fill:none;stroke:#7a886a;stroke-width:2}</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#7a886a"/></marker></defs>
+<rect width="1200" height="760" fill="#f6f7f2"/>
+<title id="title">Klide message flow and receipt schema</title><desc id="desc">Native agents and identity-bound MCP delegate sessions use one coordination journal. Receipt deliveryState is independent of replyStatus.</desc>
+<text x="48" y="48" class="label muted">KLIDE / MESSAGE FLOW + SCHEMA</text>
+<text x="48" y="100" class="title">One journal. Two paths. One receipt.</text>
+<rect x="48" y="144" width="245" height="90" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="68" y="179" class="body">Native Harness</text>
+<text x="68" y="209" class="small muted">Run identity from context</text>
+<rect x="48" y="262" width="245" height="116" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="68" y="299" class="body">Delegate CLI</text>
+<text x="68" y="329" class="small muted">Embedded MCP → bridge</text>
+<text x="68" y="355" class="small muted">Identity from bound session</text>
+<path class="line" d="M293 190L400 230" marker-end="url(#arrow)"/>
+<path class="line" d="M293 320L400 280" marker-end="url(#arrow)"/>
+<rect x="404" y="190" width="335" height="151" rx="12" fill="#edf2e6" stroke="#d7ddcf"/>
+<text x="428" y="227" class="body">Coordination core</text>
+<text x="428" y="260" class="small">Validate route + retry key</text>
+<text x="428" y="287" class="small">Append under one writer gate</text>
+<text x="428" y="315" class="small">Replay the journal</text>
+<path class="line" d="M739 263L814 263" marker-end="url(#arrow)"/>
+<rect x="820" y="190" width="332" height="151" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="844" y="227" class="body">Shared send receipt</text>
+<text x="844" y="260" class="small">Read the sent envelope state</text>
+<text x="844" y="287" class="small">Record this call’s reply outcome</text>
+<text x="844" y="315" class="small">Re-read acknowledged reply ids</text>
+<text x="48" y="428" class="label muted">DELIVERY STATE / SENT ENVELOPE</text>
+<rect x="48" y="450" width="254" height="82" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="66" y="482" class="code">queued</text>
+<text x="66" y="510" class="small muted">Review pending</text>
+<path class="line" d="M302 490L324 490" marker-end="url(#arrow)"/>
+<rect x="328" y="450" width="254" height="82" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="346" y="482" class="code">accepted</text>
+<text x="346" y="510" class="small muted">Ready to deliver</text>
+<path class="line" d="M582 490L604 490" marker-end="url(#arrow)"/>
+<rect x="608" y="450" width="254" height="82" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="626" y="482" class="code">delivered</text>
+<text x="626" y="510" class="small muted">Handed to recipient</text>
+<path class="line" d="M862 490L884 490" marker-end="url(#arrow)"/>
+<rect x="888" y="450" width="254" height="82" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="906" y="482" class="code">acknowledged</text>
+<text x="906" y="510" class="small muted">Consumption recorded</text>
+<text x="48" y="562" class="small muted">A queued message can also be declined. Reply arrival does not advance these states.</text>
+<rect x="48" y="594" width="1104" height="107" rx="12" fill="#edf2e6" stroke="#d7ddcf"/>
+<text x="70" y="623" class="label muted">REPLY STATUS / THIS CALL ONLY</text>
+<text x="70" y="655" class="code">not_requested</text>
+<text x="70" y="681" class="small muted">Send without waiting</text>
+<text x="422" y="655" class="code">received</text>
+<text x="422" y="681" class="small muted">Matching reply returned</text>
+<text x="790" y="655" class="code">timed_out</text>
+<text x="790" y="681" class="small muted">Wait ended; message remains recorded</text>
+<text x="48" y="736" class="small muted">MCP structuredContent = native metadata · schema: klide-coordination-send-receipt.schema.json</text>
+</svg>

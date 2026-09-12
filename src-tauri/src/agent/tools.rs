@@ -866,12 +866,12 @@ fn registry() -> Vec<ToolEntry> {
             kind: ToolKind::Coordination,
             schema: schema(
                 "agent_send",
-                "Send a durable instruction, question, answer, progress update, or handoff to an authorized Run. Set waitForReply for an atomic ask-and-wait; delivery happens only at the recipient's safe turn boundary.",
+                "Send a durable instruction, question, answer, progress update, or handoff to an authorized Run. Set waitForReply for an atomic ask-and-wait; delivery happens only at the recipient's safe turn boundary. deliveryState reports the sent message; replyStatus reports this call's wait. A timeout does not cancel the message.",
                 serde_json::json!({
                     "toRunId": { "type": "string", "description": "Exact target Run id returned by agent_list." },
                     "body": { "type": "string", "description": "The semantic message to deliver." },
                     "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Message kind. Defaults to instruction." },
-                    "replyTo": { "type": "string", "description": "Envelope id being answered, when this is a reply." },
+                    "replyTo": { "type": "string", "description": "Envelope id being answered. You must be its original recipient and send back to its original sender." },
                     "correlationId": { "type": "string", "description": "Optional stable id grouping a multi-message exchange." },
                     "idempotencyKey": { "type": "string", "description": "Optional retry key. Reusing it with different intent is rejected." },
                     "waitForReply": { "type": "boolean", "description": "When true, wait for a reply to this exact envelope before returning." },

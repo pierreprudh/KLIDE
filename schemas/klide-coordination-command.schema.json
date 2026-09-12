@@ -73,7 +73,7 @@
         "toRunId": { "$ref": "#/$defs/runId" },
         "kind": { "$ref": "#/$defs/envelopeKind" },
         "body": { "type": "string", "minLength": 1, "maxLength": 32768 },
-        "replyTo": { "$ref": "#/$defs/componentId" },
+        "replyTo": { "$ref": "#/$defs/componentId", "description": "For Run senders, a reply must reverse the original route: original recipient to original sender. Enforced against the journal by Rust." },
         "correlationId": { "type": "string", "minLength": 1, "maxLength": 180 },
         "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 180 },
         "sourceRefs": { "$ref": "#/$defs/sourceRefs" }

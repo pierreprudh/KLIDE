@@ -338,6 +338,85 @@ pub struct CoordinationSnapshot {
     pub results: Vec<CoordinationResult>,
 }
 
+/// Waiting for an answer and delivery of the sent envelope are independent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinationReplyStatus {
+    NotRequested,
+    Received,
+    TimedOut,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinationSendReceipt {
+    pub envelope_id: String,
+    pub delivery_state: CoordinationDeliveryState,
+    pub reply_status: CoordinationReplyStatus,
+    pub timed_out: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<CoordinationEnvelopeSnapshot>,
+    pub text: String,
+}
+
+/// Both execution adapters use the same receipt. The original envelope's
+/// state always comes from the journal, never from whether a reply arrived.
+/// Reproject reply ids too: the wait has already acknowledged their delivery.
+pub fn send_receipt(
+    snapshot: &CoordinationSnapshot,
+    envelope_id: &str,
+    reply_status: CoordinationReplyStatus,
+    replies: &[CoordinationEnvelopeSnapshot],
+) -> Result<CoordinationSendReceipt, String> {
+    let sent = find_envelope(snapshot, envelope_id)
+        .ok_or_else(|| format!("Envelope `{envelope_id}` does not exist."))?;
+    let replies = replies
+        .iter()
+        .map(|reply| {
+            find_envelope(snapshot, &reply.envelope.id)
+                .cloned()
+                .ok_or_else(|| format!("Reply envelope `{}` does not exist.", reply.envelope.id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let state = match sent.delivery_state {
+        CoordinationDeliveryState::Queued => "awaiting review",
+        CoordinationDeliveryState::Accepted => "accepted for delivery",
+        CoordinationDeliveryState::Delivered => "delivered",
+        CoordinationDeliveryState::Acknowledged => "acknowledged",
+        CoordinationDeliveryState::Declined => "declined",
+    };
+    let mut text = format!(
+        "Message {envelope_id} for @{}: {state}.",
+        sent.envelope.to_run_id
+    );
+    match reply_status {
+        CoordinationReplyStatus::NotRequested => {}
+        CoordinationReplyStatus::TimedOut => {
+            text.push_str(" No reply arrived within the wait window; the message remains recorded.")
+        }
+        CoordinationReplyStatus::Received => {
+            for reply in &replies {
+                let sender = match &reply.envelope.from {
+                    CoordinationActor::Operator => "operator".to_string(),
+                    CoordinationActor::Run { run_id } => format!("@{run_id}"),
+                };
+                text.push_str(&format!(
+                    "\n\n[reply {} from {sender}]\n{}",
+                    reply.envelope.id, reply.envelope.body
+                ));
+            }
+        }
+    }
+    Ok(CoordinationSendReceipt {
+        envelope_id: envelope_id.into(),
+        delivery_state: sent.delivery_state,
+        reply_status,
+        timed_out: reply_status == CoordinationReplyStatus::TimedOut,
+        replies,
+        text,
+    })
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "type",
@@ -1364,20 +1443,38 @@ fn event_for_command(
             correlation_id,
             idempotency_key,
             source_refs,
-        } => Ok(CoordinationEvent::EnvelopeQueued {
-            envelope: CoordinationEnvelope {
-                id: mint_id("env")?,
-                from,
-                to_run_id,
-                kind,
-                body,
-                reply_to,
-                correlation_id,
-                idempotency_key,
-                source_refs,
-                created_at_ms: ts,
-            },
-        }),
+        } => {
+            // New replies must reverse the original route. Checking this at
+            // the command boundary preserves replay of historical journals.
+            if let Some(id) = &reply_to {
+                let prior = find_envelope(snapshot, id)
+                    .ok_or_else(|| format!("Reply envelope `{id}` does not exist."))?;
+                let target_is_sender = prior.envelope.from.run_id() == Some(to_run_id.as_str());
+                let sender_is_target = from.run_id() == Some(prior.envelope.to_run_id.as_str());
+                if !target_is_sender
+                    || (!matches!(from, CoordinationActor::Operator) && !sender_is_target)
+                {
+                    return Err(
+                        "A reply must go from the original recipient to the original sender."
+                            .into(),
+                    );
+                }
+            }
+            Ok(CoordinationEvent::EnvelopeQueued {
+                envelope: CoordinationEnvelope {
+                    id: mint_id("env")?,
+                    from,
+                    to_run_id,
+                    kind,
+                    body,
+                    reply_to,
+                    correlation_id,
+                    idempotency_key,
+                    source_refs,
+                    created_at_ms: ts,
+                },
+            })
+        }
         CoordinationCommand::MarkEnvelopeDelivered {
             run_id,
             envelope_id,
@@ -1731,6 +1828,100 @@ mod tests {
                 source_refs: vec![],
             },
         )
+    }
+
+    #[test]
+    fn reply_quality_rejects_third_party_participants_without_appending() {
+        let root = temp_workspace("reply-quality");
+        let state = CoordinationStoreState::default();
+        for id in ["run_a", "run_b", "run_c"] {
+            register(&state, &root, id, None);
+        }
+        let sent = send(
+            &state,
+            &root,
+            CoordinationActor::Run {
+                run_id: "run_a".into(),
+            },
+            "run_b",
+            None,
+        )
+        .unwrap();
+        let original = sent.snapshot.envelopes[0].envelope.id.clone();
+        let before = read_snapshot(&state, root.to_str().unwrap()).unwrap();
+        for (from, to) in [("run_c", "run_a"), ("run_b", "run_c")] {
+            let result = apply_coordination_command(
+                &state,
+                root.to_str().unwrap(),
+                CoordinationCommand::SendEnvelope {
+                    from: CoordinationActor::Run {
+                        run_id: from.into(),
+                    },
+                    to_run_id: to.into(),
+                    kind: CoordinationEnvelopeKind::Answer,
+                    body: "Uninvited reply".into(),
+                    reply_to: Some(original.clone()),
+                    correlation_id: None,
+                    idempotency_key: None,
+                    source_refs: vec![],
+                },
+            );
+            assert!(
+                result.is_err(),
+                "{from} → {to} must not join A ↔ B via replyTo"
+            );
+            assert_eq!(
+                read_snapshot(&state, root.to_str().unwrap()).unwrap(),
+                before
+            );
+        }
+        // The valid reverse route is still automatically accepted.
+        let reply = apply_coordination_command(
+            &state,
+            root.to_str().unwrap(),
+            CoordinationCommand::SendEnvelope {
+                from: CoordinationActor::Run {
+                    run_id: "run_b".into(),
+                },
+                to_run_id: "run_a".into(),
+                kind: CoordinationEnvelopeKind::Answer,
+                body: "Invited reply".into(),
+                reply_to: Some(original.clone()),
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            reply.snapshot.envelopes.last().unwrap().delivery_state,
+            CoordinationDeliveryState::Accepted
+        );
+        // Pre-fix journals may contain the old third-party shape. Replay
+        // preserves that history; only new commands get the stronger check.
+        let mut historical = before;
+        let legacy = CoordinationEventLine {
+            schema_version: 1,
+            seq: historical.next_seq,
+            ts: now_ms(),
+            event: CoordinationEvent::EnvelopeQueued {
+                envelope: CoordinationEnvelope {
+                    id: "env_legacy".into(),
+                    from: CoordinationActor::Run {
+                        run_id: "run_c".into(),
+                    },
+                    to_run_id: "run_a".into(),
+                    kind: CoordinationEnvelopeKind::Answer,
+                    body: "Historical reply".into(),
+                    reply_to: Some(original),
+                    correlation_id: None,
+                    idempotency_key: None,
+                    source_refs: vec![],
+                    created_at_ms: now_ms(),
+                },
+            },
+        };
+        apply_event(&mut historical, &legacy).expect("older journals remain readable");
     }
 
     #[test]
@@ -2432,6 +2623,7 @@ mod tests {
             "klide-coordination-command.schema.json",
             "klide-coordination-event.schema.json",
             "klide-coordination-snapshot.schema.json",
+            "klide-coordination-send-receipt.schema.json",
         ] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../schemas")

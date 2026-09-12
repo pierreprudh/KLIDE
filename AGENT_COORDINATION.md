@@ -122,7 +122,7 @@ An envelope progresses monotonically:
 
 ```text
 queued → accepted → delivered → acknowledged
-              ↘ declined
+   ↘ declined
 ```
 
 `queued → accepted` is the receiving side's review: another agent's words never
@@ -130,8 +130,10 @@ reach a conversation unreviewed. The operator answers an inline card (or has
 welcomed that peer for the rest of the run); a reply to a question the receiver
 itself asked, a message from the operator, and self-talk are accepted at once.
 
-Transport is at-least-once. `idempotencyKey` makes retries safe, while the
-journal gives each accepted intent exactly one projection. The recipient Run
+`idempotencyKey` makes send retries safe, while the journal gives each
+accepted intent exactly one projection. Native delivery retries until a
+successful provider request; Delegate delivery has the transport limitation
+described under [Message quality](#message-quality-routing-and-receipts). The recipient Run
 id is immutable, so a replacement process, panel, or Delegate session cannot
 accidentally satisfy another Run's delivery.
 
@@ -272,3 +274,31 @@ Verified green on 2026-09-11, ~50s for the turn.
   coordination Tools and nothing else — no file, shell, or memory Tool — so a
   Chat thread can be addressed and can answer while still touching nothing in
   the project.
+
+## Message quality: routing and receipts
+
+![Message quality before and after](public/agent-message-quality.png)
+
+A new Run-authored reply must reverse the original route: if A sends an
+Envelope to B, only B can reply to A using that Envelope's `replyTo` id.
+Knowing the id does not let C enter the exchange or bypass A's review gate.
+The trusted operator may answer on B's behalf. Enforcement happens before a
+new event is appended; historical journals keep their existing replay rules.
+
+Both the native Harness and embedded MCP use `send_receipt` in the Rust
+coordination core. It reads the sent Envelope's actual delivery state from a
+snapshot, including when an idempotent retry appends nothing. It separately
+reports whether this call waited for and received a reply. A timeout does not
+cancel, resend, or move the message back to `queued`.
+
+![Shared message flow and receipt schema](public/agent-message-flow.png)
+
+The full contract is in [KLIDE_COORDINATION_SCHEMA.md](KLIDE_COORDINATION_SCHEMA.md#send-receipt).
+The editable sources for these review visuals are the adjacent SVG files.
+
+This change does not add automatic Delegate wakeups or change permission
+policy. Delegate delivery still occurs through `agent_wait`; the native
+Harness still delivers at its safe turn boundary. A Delegate wait records
+acknowledgement before the HTTP response reaches its caller, so connection
+loss can still leave a consumed message whose response was not received.
+Reliable acknowledgement across transport failures remains separate work.
