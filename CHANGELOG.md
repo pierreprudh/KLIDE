@@ -2,9 +2,17 @@
 
 Notable changes per milestone. Dates are completion dates.
 
-## Unreleased — on the v0.6 line (since 2026-09-11)
+## v0.6.3 — Coordination and Documents (2026-09-12)
 
-Work after the 0.6.2 cut.
+Two things the v0.6 line gained after the 0.6.2 cut. Runs can address each
+other — Harness conversations and Delegate CLIs alike, through one Rust-owned
+journal — and a Run can now produce a real document instead of describing one:
+a spreadsheet it creates, recalculates and revises, and that Klide opens itself.
+
+The v0.6 orchestration milestone is unchanged: Missions as outcomes, budgets,
+capacity, capability routing and validation contracts are still open. The macOS
+bundle is still ad-hoc signed rather than Apple-notarized. This is a patch cut
+on the v0.6 line, not that milestone.
 
 ### Agent coordination
 
@@ -44,6 +52,37 @@ Work after the 0.6.2 cut.
   spawn record. Per-CLI wiring: Claude Code `--mcp-config <per-session file>`,
   Codex `-c mcp_servers.klide.*` overrides, OpenCode `OPENCODE_CONFIG`; Oh My
   Pi and custom CLIs run unchanged.
+
+### Documents
+
+- **A run makes a real workbook, and the app opens it.** Asking for a budget
+  used to end at a shell with no Excel in it. Two native Tools close that:
+  `write_spreadsheet` creates or patches an `.xlsx` — IronCalc recalculates, a
+  formula error blocks the save, and the exported bytes are produced before the
+  change is ever proposed — and the read-only `inspect_spreadsheet` returns
+  paginated cells, formulas, results, errors and the hash an update has to
+  present. A create never overwrites; an update rechecks the exact bytes at
+  apply time. Neither Tool needs a shell, an Excel install, or the network.
+- **Workbook bytes ride the write path that already exists.** `DiffProposal`
+  carries an optional binary payload beside its readable cell diff, so a
+  workbook goes through the same approval, the same rejection memory and the
+  same checkpoint as any other edit; rollback restores the original bytes and
+  refuses when the file has moved on since. A repeated edit that leaves Git
+  status unchanged is still announced, so the second revision of a workbook
+  does not quietly drop out of the evidence.
+- **`.xlsx` and `.sheet.json` open in Klide.** A built-in sheet surface —
+  worksheet tabs, formula bar, keyboard navigation, paste, undo — loads lazily
+  behind its own `vendor-spreadsheet` chunk that the entry never preloads.
+  **Add to chat** hands a cell's reference, input and calculated value to the
+  focused composer without sending a message. This is local recalculation of
+  common formulas, not Excel parity: charts, pivots, macros and full layout
+  fidelity are out, and the limits are written down in
+  `src/spreadsheets/README.md`.
+- **A completion card lists documents, not only artifacts.** A workbook written
+  by an ordinary edit tool keeps its change evidence and still appears as
+  something to open, and `agent_run_document_references` recovers files an older
+  transcript only mentions — opened from where they actually live, and never
+  claimed as an edit the run made.
 
 ## v0.6.2 — Memory, Routing, Recovery (2026-09-11)
 

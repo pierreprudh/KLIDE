@@ -1,6 +1,6 @@
 [package]
 name = "klide"
-version = "0.6.2"
+version = "0.6.3"
 description = "A local-first agent IDE"
 authors = ["Pierre Prudh"]
 edition = "2021"
