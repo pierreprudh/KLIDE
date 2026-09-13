@@ -75,11 +75,39 @@ export function eventsToMsgs(events: AgentEvent[]): Msg[] {
  * and the post-turn heal that runs when a turn stopped reaching the screen.
  * Both add back the turns queued locally — a queued turn was typed ahead and
  * has not been sent, so the Transcript cannot know about it — and both refuse a
- * replay that is *shorter* than what is on screen, which is how a half-written
- * or truncated read is kept from eating live rows.
+ * replay carrying *less conversation* than what is on screen, which is how a
+ * half-written or truncated read is kept from eating live rows.
  *
  * Returns null when the replay has nothing to add.
  */
+/**
+ * How much conversation a view actually carries: the characters of what the
+ * user and the model said.
+ *
+ * Deliberately not a row count, and deliberately blind to tool rows. A delegate
+ * CLI reports the work it did on its own as `observed_tool_call` events that
+ * stream on the live channel and are never written to the Transcript (see
+ * `agent/mod.rs`), so a live delegate view always holds rows no replay of it can
+ * ever contain. Counting rows therefore made that view permanently "longer" than
+ * its own Transcript, and the guard below refused the one replay that held the
+ * turn's answer: a reload mid-generation left the panel showing the sentence
+ * fragments it had streamed, with the finished reply sitting on disk forever.
+ *
+ * Text still protects what the row count was there to protect. A truncated or
+ * half-written read carries less of the exchange than the screen does and is
+ * refused, and a turn still streaming is refused too — nothing is persisted
+ * until it lands, so the partial on screen outweighs the replay until it does.
+ */
+function conversationWeight(msgs: Msg[]): number {
+  return msgs.reduce(
+    (total, msg) =>
+      msg.role === "user" || msg.role === "assistant"
+        ? total + msg.content.length
+        : total,
+    0,
+  );
+}
+
 export function replayForAdoption(
   events: AgentEvent[],
   current: Msg[],
@@ -97,7 +125,7 @@ export function replayForAdoption(
     ...(errorLine ? [errorLine] : []),
     ...queuedLocal,
   ];
-  return replayed.length >= current.length ? replayed : null;
+  return conversationWeight(replayed) >= conversationWeight(current) ? replayed : null;
 }
 
 /** Why a turn's view ended up short of its Run's Transcript. */

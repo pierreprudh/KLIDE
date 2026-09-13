@@ -170,6 +170,47 @@ describe("replayForAdoption", () => {
     expect(replayForAdoption([], onScreen)).toBeNull();
   });
 
+  it("adopts a delegate turn whose live view holds rows the Transcript never will", () => {
+    // The reload-mid-generation bug. An OpenCode run streams its own tool
+    // activity as `observed_tool_call`, which lives on the request-scoped
+    // channel and is never persisted — so the live view had seven rows (three
+    // sentence fragments around four tool rows) while the Transcript folds the
+    // same turn into two. A row count made the replay look like a truncated
+    // read and refused it, and the finished 2,900-character answer stayed on
+    // disk. Weighed by what was actually said, the replay plainly carries more.
+    const onScreen: Msg[] = [
+      { role: "user", content: "do you find any issues in the current context" },
+      { role: "assistant", content: "I'll take that as a review of the current work —" },
+      { role: "tool", content: "bash", toolName: "bash", observedBy: "opencode" },
+      { role: "tool", content: "read", toolName: "read", observedBy: "opencode" },
+      { role: "assistant", content: "There's a sizeable uncommitted feature in flight." },
+      { role: "tool", content: "read", toolName: "read", observedBy: "opencode" },
+      { role: "assistant", content: "The code looks well-built; let me verify it compiles." },
+    ];
+    const finished = [
+      runStarted(1),
+      userMessage("do you find any issues in the current context", 2),
+      assistantMessage(
+        "I'll take that as a review of the current work —There's a sizeable uncommitted feature in flight.The code looks well-built; let me verify it compiles.I reviewed it. One real issue: a corrupt store reads as empty and the next write overwrites it.",
+        3,
+      ),
+    ];
+    const healed = replayForAdoption(finished, onScreen);
+    expect(healed?.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(healed?.[1].content).toContain("One real issue");
+  });
+
+  it("refuses to eat a turn that is still streaming", () => {
+    // The other side of the same rule: nothing is persisted until the turn
+    // lands, so mid-stream the screen holds more of the answer than disk does
+    // and the replay must not overwrite it with the empty turn.
+    const onScreen: Msg[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "here is the first half of the answer" },
+    ];
+    expect(replayForAdoption([runStarted(1), userMessage("hi", 2)], onScreen)).toBeNull();
+  });
+
   it("explains a run that died while nobody held the live channel", () => {
     // A proxy timeout folds to no row — the failure produced no work — so a
     // reattached view ended mid-tool-call and read as a crash. The user only
