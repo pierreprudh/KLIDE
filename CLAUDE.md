@@ -405,6 +405,19 @@ the journal; nothing in React is the source of truth. Another agent's words
 never reach a conversation unreviewed — the receiving side's operator answers
 an inline card, and the accept/decline is itself a journal event.
 
+Two rules keep that gate honest, both enforced in the Rust core before an event
+is appended. A new Run-authored reply must reverse the original route: if A
+wrote to B, only B may use that Envelope's `replyTo` to answer A, so knowing an
+id never lets a third Run enter the exchange or inherit its auto-accept.
+Operator-authored mail has no Run address to reverse onto, so only its
+recipient may answer it, and the trusted operator may answer on a Run's behalf.
+And what a send reports is read from the journal, never asserted: `send_receipt`
+returns the Envelope's actual delivery state — including when an idempotent
+retry appended nothing — and reports separately whether this call waited for and
+received a reply. A wait that times out does not cancel, resend, or move the
+message back to `queued`. Historical journals keep their older replay rules;
+only new commands meet the stronger checks.
+
 There are two doors onto that one journal, and no third:
 
 - **Harness Runs** call the native Tools `agent_list` / `agent_send` /

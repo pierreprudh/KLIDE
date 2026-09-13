@@ -105,8 +105,18 @@ A durable semantic payload addressed from an operator or authenticated Run to
 one stable Run id. It has an explicit kind, correlation/reply identity,
 idempotency key, evidence references, and queued → delivered → acknowledged
 lifecycle. Delivery happens at an execution adapter's safe boundary; terminal
-bytes are never the authoritative envelope.
+bytes are never the authoritative envelope. A reply reverses the route it
+answers: only the original recipient may answer the original sender with that
+envelope's reply identity, so an id is an address, never an entry pass.
 _Avoid_: Agent event, prompt injection, terminal text, chat message
+
+**Send receipt**:
+What a Run learns about a message it just sent: the envelope's delivery state
+read back from the journal, and — reported separately — whether this call
+waited for a reply and got one. Both are observations of durable state, so a
+retry that appended nothing and a wait that timed out are described rather than
+disguised; a receipt never changes the message it reports on.
+_Avoid_: send result, ack, delivery promise, retry status
 
 **Coordination result**:
 The single structured outcome a Run publishes for its coordinator: status,
