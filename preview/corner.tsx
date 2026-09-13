@@ -4,7 +4,7 @@
 // canvas draws. The plan card is a stand-in — TodoStrip reads its store over
 // Tauri IPC, which a browser tab does not have.
 //
-//   npx vite --port 1421      →  http://localhost:1421/preview-corner.html
+//   npx vite --port 1421      →  http://localhost:1421/preview/corner.html
 //   ?theme=dark | klide-light | sage-garden | cursor-dark | …
 //
 // The cards are live: click a result to open it, type in a question.
@@ -14,11 +14,11 @@ import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
 import "@fontsource/monaspace-neon/400.css";
 import "@fontsource/monaspace-neon/700.css";
-import "./src/styles/tokens.css";
-import { CompletionCard, ResultEvidence } from "./src/components/ai/CompletionCard";
-import { QuestionCard } from "./src/components/ai/QuestionCard";
-import { columnGeometry } from "./src/components/ai/canvasColumn";
-import { CloseIcon, PlanIcon, ReviewIcon } from "./src/icons";
+import "../src/styles/tokens.css";
+import { CompletionCard, ResultEvidence } from "../src/components/ai/CompletionCard";
+import { QuestionCard } from "../src/components/ai/QuestionCard";
+import { columnGeometry } from "../src/components/ai/canvasColumn";
+import { CloseIcon, PlanIcon, ReviewIcon } from "../src/icons";
 
 const THEME = new URLSearchParams(location.search).get("theme") ?? "klide-light";
 document.documentElement.dataset.theme = THEME;
