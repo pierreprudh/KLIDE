@@ -302,16 +302,7 @@ async fn wait_for_coordination_messages(
         let matched = inbox
             .into_iter()
             .filter(|entry| {
-                let sender_matches = from_run_id.map_or(true, |expected| {
-                    matches!(
-                        &entry.envelope.from,
-                        CoordinationActor::Run { run_id } if run_id == expected
-                    )
-                });
-                let reply_matches = reply_to.map_or(true, |expected| {
-                    entry.envelope.reply_to.as_deref() == Some(expected)
-                });
-                sender_matches && reply_matches
+                crate::coordination::envelope_answers_wait(entry, from_run_id, reply_to)
             })
             .collect::<Vec<_>>();
         if !matched.is_empty() {

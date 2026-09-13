@@ -808,6 +808,32 @@ pub(crate) fn inbox_for(
         .collect())
 }
 
+/// Does this inbox entry answer a wait for `from_run_id` / `reply_to`?
+///
+/// A Run's own mail matches by id. The operator, who may answer on a Run's
+/// behalf, matches only when the wait pins the Envelope being answered: the
+/// reply-route rule already proved such a reply belongs to that exchange,
+/// while a bare `fromRunId` wait would otherwise swallow unrelated operator
+/// mail.
+pub(crate) fn envelope_answers_wait(
+    entry: &CoordinationEnvelopeSnapshot,
+    from_run_id: Option<&str>,
+    reply_to: Option<&str>,
+) -> bool {
+    let from_ok = match from_run_id {
+        None => true,
+        Some(expected) => match &entry.envelope.from {
+            CoordinationActor::Run { run_id } => run_id == expected,
+            CoordinationActor::Operator => reply_to.is_some(),
+        },
+    };
+    let reply_ok = match reply_to {
+        None => true,
+        Some(expected) => entry.envelope.reply_to.as_deref() == Some(expected),
+    };
+    from_ok && reply_ok
+}
+
 /// Envelopes addressed to this Run that its side has not reviewed yet — what
 /// the Harness asks the operator about at the turn boundary.
 pub(crate) fn awaiting_review_for(
@@ -1449,7 +1475,15 @@ fn event_for_command(
             if let Some(id) = &reply_to {
                 let prior = find_envelope(snapshot, id)
                     .ok_or_else(|| format!("Reply envelope `{id}` does not exist."))?;
-                let target_is_sender = prior.envelope.from.run_id() == Some(to_run_id.as_str());
+                // The operator is not an addressable Run, so operator-authored
+                // mail has no sender to reverse onto; only the "who may reply"
+                // half binds. Such a reply is still unsolicited for whoever
+                // receives it, so it waits for that side's review.
+                let target_is_sender = prior
+                    .envelope
+                    .from
+                    .run_id()
+                    .is_none_or(|sender| sender == to_run_id.as_str());
                 let sender_is_target = from.run_id() == Some(prior.envelope.to_run_id.as_str());
                 if !target_is_sender
                     || (!matches!(from, CoordinationActor::Operator) && !sender_is_target)
@@ -1922,6 +1956,105 @@ mod tests {
             },
         };
         apply_event(&mut historical, &legacy).expect("older journals remain readable");
+    }
+
+    #[test]
+    fn operator_authored_mail_can_still_be_answered() {
+        let root = temp_workspace("operator-reply");
+        let state = CoordinationStoreState::default();
+        for id in ["run_a", "run_b"] {
+            register(&state, &root, id, None);
+        }
+        let instruction = send(&state, &root, CoordinationActor::Operator, "run_b", None).unwrap();
+        let original = instruction.snapshot.envelopes[0].envelope.id.clone();
+        // The operator has no Run address to reverse onto, so B answering an
+        // operator instruction must not be read as a third party barging in.
+        let reply = apply_coordination_command(
+            &state,
+            root.to_str().unwrap(),
+            CoordinationCommand::SendEnvelope {
+                from: CoordinationActor::Run {
+                    run_id: "run_b".into(),
+                },
+                to_run_id: "run_a".into(),
+                kind: CoordinationEnvelopeKind::Answer,
+                body: "Here is what the operator asked for".into(),
+                reply_to: Some(original.clone()),
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            },
+        )
+        .expect("a Run may answer operator-authored mail");
+        // A's gate still stands: nobody invited this, so A reviews it.
+        assert_eq!(
+            reply.snapshot.envelopes.last().unwrap().delivery_state,
+            CoordinationDeliveryState::Queued
+        );
+        // A Run that never received the instruction still cannot use its id.
+        assert!(apply_coordination_command(
+            &state,
+            root.to_str().unwrap(),
+            CoordinationCommand::SendEnvelope {
+                from: CoordinationActor::Run {
+                    run_id: "run_a".into(),
+                },
+                to_run_id: "run_b".into(),
+                kind: CoordinationEnvelopeKind::Answer,
+                body: "Not mine to answer".into(),
+                reply_to: Some(original),
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_pinned_wait_accepts_the_operators_answer_on_a_runs_behalf() {
+        let entry = |from: CoordinationActor, reply_to: Option<&str>| CoordinationEnvelopeSnapshot {
+            envelope: CoordinationEnvelope {
+                id: "env_reply".into(),
+                from,
+                to_run_id: "run_a".into(),
+                kind: CoordinationEnvelopeKind::Answer,
+                body: "Answered".into(),
+                reply_to: reply_to.map(str::to_string),
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+                created_at_ms: now_ms(),
+            },
+            delivery_state: CoordinationDeliveryState::Accepted,
+            delivered_at_ms: None,
+            acknowledged_at_ms: None,
+        };
+        let from_b = entry(
+            CoordinationActor::Run {
+                run_id: "run_b".into(),
+            },
+            Some("env_sent"),
+        );
+        let from_operator = entry(CoordinationActor::Operator, Some("env_sent"));
+        let loose_operator = entry(CoordinationActor::Operator, None);
+
+        // The Run's own answer matches either way.
+        assert!(envelope_answers_wait(&from_b, Some("run_b"), Some("env_sent")));
+        assert!(envelope_answers_wait(&from_b, Some("run_b"), None));
+        // Waiting on the Envelope we sent, the operator may answer for B.
+        assert!(envelope_answers_wait(
+            &from_operator,
+            Some("run_b"),
+            Some("env_sent")
+        ));
+        // Unrelated operator mail does not end a wait for B.
+        assert!(!envelope_answers_wait(&loose_operator, Some("run_b"), None));
+        assert!(!envelope_answers_wait(
+            &from_operator,
+            Some("run_b"),
+            Some("env_other")
+        ));
     }
 
     #[test]

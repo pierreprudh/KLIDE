@@ -282,8 +282,12 @@ Verified green on 2026-09-11, ~50s for the turn.
 A new Run-authored reply must reverse the original route: if A sends an
 Envelope to B, only B can reply to A using that Envelope's `replyTo` id.
 Knowing the id does not let C enter the exchange or bypass A's review gate.
-The trusted operator may answer on B's behalf. Enforcement happens before a
-new event is appended; historical journals keep their existing replay rules.
+The trusted operator may answer on B's behalf, and a wait pinned to the sent
+Envelope accepts that answer. Operator-authored mail has no Run address to
+reverse onto, so only the other half of the rule binds it: the Run the operator
+wrote to may answer, and that answer still waits for the receiving side's
+review. Enforcement happens before a new event is appended; historical journals
+keep their existing replay rules.
 
 Both the native Harness and embedded MCP use `send_receipt` in the Rust
 coordination core. It reads the sent Envelope's actual delivery state from a

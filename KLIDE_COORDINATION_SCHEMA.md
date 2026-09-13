@@ -127,8 +127,11 @@ by their connection/session; callers cannot self-assert a Run id.
 `kind` is `instruction`, `question`, `answer`, `progress`, or `handoff`. Body
 size is capped at 32 KiB. A new Run-authored reply must reverse the original
 route: the original recipient sends to the original sender. The trusted operator may
-reply to the original sender on the recipient's behalf. This relational rule
-is enforced against the journal by Rust, beyond JSON Schema validation.
+reply to the original sender on the recipient's behalf. An Envelope the
+operator authored has no Run address to reverse onto, so only its recipient may
+answer it, and that answer is reviewed like any other unsolicited mail. This
+relational rule is enforced against the journal by Rust, beyond JSON Schema
+validation.
 Historical records retain their existing replay rules. File paths are
 Workspace-relative. External adapters remove any machine-local data not
 represented by this public shape.

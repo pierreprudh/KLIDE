@@ -254,20 +254,7 @@ fn wait_for_messages(
         let inbox = coordination::inbox_for(&snapshot, &session.run_id)?;
         let matched: Vec<CoordinationEnvelopeSnapshot> = inbox
             .into_iter()
-            .filter(|entry| {
-                let from_ok = match from_run_id {
-                    None => true,
-                    Some(expected) => matches!(
-                        &entry.envelope.from,
-                        CoordinationActor::Run { run_id } if run_id == expected
-                    ),
-                };
-                let reply_ok = match reply_to {
-                    None => true,
-                    Some(id) => entry.envelope.reply_to.as_deref() == Some(id),
-                };
-                from_ok && reply_ok
-            })
+            .filter(|entry| coordination::envelope_answers_wait(entry, from_run_id, reply_to))
             .collect();
         if !matched.is_empty() {
             for entry in &matched {
