@@ -210,7 +210,7 @@ Docs: <https://opencode.ai/v2/docs/migrate-v1>, <https://opencode.ai/v2/docs/bui
   deterministic local retrieval, and native `memory_search` / `memory_read`
   Harness Tools with their own `ReadProjectMemory` Transcript capability.
   Architecture, JSON Schemas, website SVGs, and the embedded-MCP PR sequence
-  live in `MEMORY_ENGINE.md` and `KLIDE_MEMORY_SCHEMA.md`.
+  live in `docs/MEMORY_ENGINE.md` and `docs/KLIDE_MEMORY_SCHEMA.md`.
 - [x] Memory auto-summarizer: when a Klide agent run settles with status "done", automatically write a durable Project Memory note from the conversation. Toggle in Settings → Harness (`autoMemoryOnRunDone`, default ON). Manual Summarize header action still works. Inline "Auto-saved" notice under the composer fades after 4s. Done runs only (skip cancelled / errored / delegate providers / single-message exchanges).
 - [x] `userAnswerQuestion` pause tool + `/interview` slash command: new tool in the Rust registry that pauses the harness via oneshot, surfaces an inline Q&A card in the AI panel, returns the user's typed answer to the model. Built-in skill "Codebase Interview" shipped in `DEFAULT_SKILLS` (src/skills.ts) — visible in the Skills modal, toggleable like the Code Review built-in, and the system prompt picks it up automatically. Plan mode, read-only, writes `docs/codebase-decisions.md` at the end. The skill explicitly forbids re-asking the same question (the model must track asked questions in its scratchpad). The `/interview` slash command inlines a self-contained prompt so it works even when the skill is disabled.
 

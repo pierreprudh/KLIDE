@@ -27,7 +27,7 @@ _Avoid_: agent loop, runner, executor
 **Harness contract**:
 The written interface of the Harness: modes, tool capabilities, permission
 rules, diff review, dynamic tools, transcript evidence, and anti-slop
-expectations. `HARNESS_CONTRACT.md` is the source of truth for this contract.
+expectations. `docs/HARNESS_CONTRACT.md` is the source of truth for this contract.
 _Avoid_: implementation notes, rough docs
 
 **Mode**:

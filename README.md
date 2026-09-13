@@ -150,9 +150,9 @@ Klide separates the interface from the durable execution layer:
 
 The Rust harness checks capabilities when it advertises tools and again before execution. Writes pause for diff review. Commands and network access pause for permission.
 
-Read the [Harness contract](./HARNESS_CONTRACT.md) for the trust model and [Harness schema](./KLIDE_HARNESS_SCHEMA.md) for the tool interface.
-The [Memory Engine](./MEMORY_ENGINE.md) and [Project Memory schema](./KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its future embedded-MCP boundary.
-The [Agent Coordination architecture](./AGENT_COORDINATION.md) and [coordination schemas](./KLIDE_COORDINATION_SCHEMA.md) define stable Run addressing, durable envelopes, replay, and the shared adapter boundary for native agents and Delegates.
+Read the [Harness contract](./docs/HARNESS_CONTRACT.md) for the trust model and [Harness schema](./docs/KLIDE_HARNESS_SCHEMA.md) for the tool interface.
+The [Memory Engine](./docs/MEMORY_ENGINE.md) and [Project Memory schema](./docs/KLIDE_MEMORY_SCHEMA.md) describe Klide's local learning layer and its future embedded-MCP boundary.
+The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordination schemas](./docs/KLIDE_COORDINATION_SCHEMA.md) define stable Run addressing, durable envelopes, replay, and the shared adapter boundary for native agents and Delegates.
 
 ## Project status
 

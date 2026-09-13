@@ -49,13 +49,17 @@ Klide/
 ├── CHANGELOG.md               Notable changes per milestone
 ├── TODO.md                    Current milestone + shipped history
 ├── Ideas.md                   Future ideas + inspiration (git-ignored, local only)
-├── HARNESS_CONTRACT.md        The harness trust model (modes, capabilities, permissions)
-├── KLIDE_HARNESS_SCHEMA.md    Tool interface schema
-├── KLIDE_MEMORY_SCHEMA.md     Project Memory entry + retrieval/MCP contract
-├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
-├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
 ├── Design.md                  Design system — tokens, themes, principles (mirror changes in styles/tokens.css)
-├── docs/                      Design docs (delegate replay, competitors, website) + adr/ (git-ignored, local only)
+├── docs/                      Contracts (tracked) + working notes (git-ignored, local only)
+│   ├── HARNESS_CONTRACT.md        The harness trust model (modes, capabilities, permissions)
+│   ├── KLIDE_HARNESS_SCHEMA.md    Tool interface schema
+│   ├── KLIDE_MEMORY_SCHEMA.md     Project Memory entry + retrieval/MCP contract
+│   ├── KLIDE_COORDINATION_SCHEMA.md  Run addressing, envelopes, replay — the coordination wire
+│   ├── AGENT_COORDINATION.md      How Runs address each other — one journal, two doors
+│   ├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
+│   ├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
+│   └── (local only)               adr/, delegate replay, competitors, website plans
+├── preview/                   Throwaway browser harnesses for single surfaces (vite, no Tauri)
 ├── schemas/                   Versioned JSON Schemas for durable/wire contracts
 ├── src/                       React + TypeScript frontend
 │   ├── main.tsx                 React boot
@@ -477,7 +481,7 @@ localStorage), and a `RouteResolved` event after `RunStarted` records the
 reason and every candidate ranked above the pick with why it lost. Delegate
 CLIs are never candidates; Mission attempts never arrive as `auto` (approval
 freezes a concrete pair). Not a classifier, not per-turn, no LLM call in
-front of a message — see `MODEL_ROUTING.md` for the reasoning and what's next.
+front of a message — see `docs/MODEL_ROUTING.md` for the reasoning and what's next.
 
 ### Provider gateway (opencodex)
 

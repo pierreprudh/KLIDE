@@ -134,7 +134,7 @@ ad-hoc signed and not Apple-notarized.
   shows what actually ran, and a new `RouteResolved` Transcript line records
   the reason plus every candidate ranked above it and why it lost. Delegate
   CLIs are never candidates. Deterministic, no classifier, no network beyond
-  the probes it already had. See `MODEL_ROUTING.md`.
+  the probes it already had. See `docs/MODEL_ROUTING.md`.
 - **A huge tool output is retained on disk, not carried in context.** A tool
   result over 20 KB is written once to `<runs>/<run id>.values/<call id>.txt`
   and the provider sees a `[retained #id]` stub with a head-and-tail preview
@@ -693,7 +693,7 @@ And the duplication sweep behind them:
 
 - `run_command` — approval-gated shell execution so the agent can run tests/build/lint and verify its own work.
 - Configurable turn cap (default 50) + command timeout (default 180s) + per-run command allowlist.
-- Eval foundation — golden tool-layer scenarios run as `cargo test`; documented tool schema + lineage in `KLIDE_HARNESS_SCHEMA.md`.
+- Eval foundation — golden tool-layer scenarios run as `cargo test`; documented tool schema + lineage in `docs/KLIDE_HARNESS_SCHEMA.md`.
 - Scripted model-loop eval — fake provider turns choose tools, real tools execute, and tool results replay into the next provider message.
 - Project-persistent command allowlist — "Approve for project" stores exact `run_command` approvals in `.klide/command-allowlist.json`.
 - Test-after-edit — optional Settings → Harness command runs after accepted edits, alongside built-in Rust/JSON syntax checks.
