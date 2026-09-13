@@ -28,7 +28,16 @@ GETTING_STARTED.md
 KLIDE_AGENT_HARNESS_IMPLEMENTATION.md
 Ideas.md
 GOAL_LOOP_DESIGN.md
-docs
+# docs/ is a local scratch shelf (ADRs, competitor notes, plans). The durable
+# contracts below are the exception: the README links them, so they ship.
+docs/*
+!docs/AGENT_COORDINATION.md
+!docs/HARNESS_CONTRACT.md
+!docs/KLIDE_COORDINATION_SCHEMA.md
+!docs/KLIDE_HARNESS_SCHEMA.md
+!docs/KLIDE_MEMORY_SCHEMA.md
+!docs/MEMORY_ENGINE.md
+!docs/MODEL_ROUTING.md
 
 .vscode
 
