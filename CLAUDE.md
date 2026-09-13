@@ -37,6 +37,7 @@ If a UI element doesn't serve clarity, it doesn't ship.
 | Frontend | **React 19 + TypeScript + Vite** | |
 | Local AI | **Ollama** (`localhost:11434`) + **MLX** (`mlx_lm.server` on `:8080`) | Both run the full tool harness; default `llama3.1:8b` |
 | Online AI | Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter + self-hosted OpenAI-wire endpoints | Keys in macOS Keychain; self-hosted tokens via `${VAR}` refs |
+| Documents | **IronCalc** (Rust) recalculates, **ExcelJS** renders | A run writes a real `.xlsx`; Klide opens it in a built-in sheet surface |
 | Auto-install | `npx skills add <owner/repo>` | Skill install + uninstall via Rust commands |
 
 ## Repo layout
@@ -114,10 +115,19 @@ Klide/
 │   ├── worktrees.ts             Worktree wire types + setup notices
 │   ├── contextTray.ts           Project context snapshot for the composer
 │   ├── agentHandoff.ts          Handoff summaries from conversation messages
+│   ├── artifacts.ts             What a Run left behind that a surface can open (files, diffs, documents)
+│   ├── spreadsheets/            Workbook seam — paths.ts (routing, engine-free), files.ts (load/save), workbook.ts (ExcelJS + formulas); limits in its README
+│   ├── documentAppLogo.tsx      App marks for document types (pdf, xlsx, docx, pptx)
+│   ├── gitStatusMark.ts         A changed file's git status → the one letter, colour and word
+│   ├── conversationDrag.ts      Dragging a conversation out of the rail onto the Focus canvas
+│   ├── reflectionLevels.ts      Reasoning-effort vocabulary (Rust owns which levels a model has)
+│   ├── todoHistory.ts           How one step in an agent's plan reached its state
+│   ├── testStorage.ts           Test-only in-memory localStorage shim shared by specs
 │   ├── ipc/                     Typed Tauri command wire — one module per family, drift-tested
 │   │   ├── git.ts                 Every git_* / github_* / create_pr command + wire types
 │   │   ├── delegatePty.ts         Delegate PTY commands, events, reattach/replay handshake
 │   │   ├── aiProviders.ts         Provider key status, model metadata, local-server start
+│   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
 │   ├── hooks/
 │   │   ├── useFlipIndicator.ts  Shared FLIP animation for rail/tab indicators
@@ -127,6 +137,7 @@ Klide/
 │   │   ├── useArtifactInspector.ts Artifact Inspector docking state
 │   │   ├── useCustomProviders.ts React subscription to the custom-provider store
 │   │   ├── usePortalMenu.ts     Body-portaled dropdown state
+│   │   ├── useSurface.ts        The Surface — which screen the app is on (Welcome / Focus / workbench)
 │   │   └── useUserInfo.ts       Cached local + GitHub identity for the rail footer
 │   ├── components/
 │   │   ├── WorkspaceRail.tsx    The app's one sidebar — actions, project/conversation tree, identity foot; shared by Focus + workbench
@@ -140,6 +151,7 @@ Klide/
 │   │   ├── DiffModal.tsx        Blocking approve/reject modal for one pending agent edit
 │   │   ├── diffView.tsx         The one diff renderer — gutters, word highlights, line comments
 │   │   ├── DiffViewerPanel.tsx  Read-only side-by-side Monaco diff panel
+│   │   ├── DocumentViewer.tsx   Read-only viewer for a document Klide can't edit (PDF, deck) via Quick Look
 │   │   ├── EditorArea.tsx       Monaco editor wrapper
 │   │   ├── fileMarks.tsx        Agent-file star + shared file-type icon set
 │   │   ├── FileViewerPanel.tsx  Read-only Quick View overlay
@@ -155,10 +167,12 @@ Klide/
 │   │   ├── InlineDiffReview.tsx Inline hunk-peek edit review — apply, reject, request changes
 │   │   ├── Kbd.tsx              The single keycap renderer (KeyboardShortcuts.tsx: cheatsheet overlay)
 │   │   ├── LayoutBento.tsx      Layout picker widget (LayoutCanvas.tsx: visual layout editor)
+│   │   ├── lazySurfaces.tsx     The heavy surfaces (Monaco, xterm, sheets) loaded on first render, not first paint
 │   │   ├── markdown.tsx         Hand-rolled markdown renderer (code highlighting, tool markers)
 │   │   ├── MemoryModal.tsx      Centered Memory handoff-notes modal (MemoryPanel.tsx: its body)
 │   │   ├── MissionControl.tsx   Run board, attention/review, races + delegate handoff
 │   │   ├── MissionControlSkeleton.tsx Geometry-matched loading skeleton
+│   │   ├── missionControl/glyphs.tsx Mission Control's source marks + action glyphs, out of the board file
 │   │   ├── MissionGraph.tsx     Mission dependency graph view + dependency editing
 │   │   ├── OrchestratorConsole.tsx Mission planner + chained execution board
 │   │   ├── ProfileModal.tsx     Local IDE profile (avatar + identity + workspace)
@@ -168,6 +182,7 @@ Klide/
 │   │   ├── Sidebar.tsx          File explorer tree
 │   │   ├── SkillsModal.tsx      Skill editor + install + provenance groups
 │   │   ├── SplitPane.tsx        Vertical/horizontal split shell
+│   │   ├── SpreadsheetViewer.tsx The built-in sheet surface — tabs, formula bar, keyboard nav, Add to chat
 │   │   ├── StatusBar.tsx        Bottom bar — file/lang/branch/notice
 │   │   ├── TabBar.tsx           Open file tabs (FLIP-animated underline)
 │   │   ├── TerminalPanel.tsx    xterm.js + Rust PTY (floats as a card in Focus)
@@ -195,6 +210,21 @@ Klide/
 │   │       ├── summarize.ts       Summarize-and-handoff + auto-skill detect
 │   │       ├── attachments.ts     Drop/paste rules — image → data URI, doc → text, refuse binaries (AttachmentTray.tsx: staged strip)
 │   │       ├── toolRuns.ts        Fold a prose-free stretch of tool messages into one openable row
+│   │       ├── CompletionCard.tsx A finished run's evidence — what changed, what it ran, documents to open
+│   │       ├── QuestionCard.tsx   A question the run is waiting on, answered in place
+│   │       ├── canvasColumn.ts    The Focus canvas' right-hand column as a rule — plan, result, question
+│   │       ├── WorkingRow.tsx     The one 'still working' row under a streaming turn
+│   │       ├── PeerLink.tsx       Two conversations talking: this thread's mark, a hairline, the peer's
+│   │       ├── coordinationPeers.ts Who a conversation is talking to, and what to call them
+│   │       ├── SlashMenu.tsx      The `/` listbox both composers float (slashCommands.ts: the vocabulary)
+│   │       ├── promptHistory.ts   ↑ / ↓ walk this conversation's own prompts, draft stashed
+│   │       ├── streamPacer.ts     Reading cadence for a streamed answer — bursts in, prose out
+│   │       ├── modelSelection.ts  Which model a live Conversation is on, and what may change it
+│   │       ├── modelActivationPolicy.ts Metadata reads must not wake a cold local model
+│   │       ├── leavingRun.ts      What leaving a conversation does to the Run working in it
+│   │       ├── conversationOriginHeal.ts Repair Stored conversations whose Provider metadata was overwritten
+│   │       ├── sidePanelInset.ts  How much room the canvas column takes from the conversation
+│   │       ├── summarizePrompts.ts The pure half of summarize-and-hand-off — prompts + parsing, no IPC
 │   │       ├── storedConversations.ts Durable localStorage conversation index + panel binding + title rule
 │   │       ├── ConversationHistory.tsx / DelegateTerminal.tsx / RaceFollowUpBar.tsx
 │   └── agent/
@@ -202,6 +232,10 @@ Klide/
 │       ├── providers.ts         Provider definitions (16 providers)
 │       ├── client.ts            Frontend agent harness client
 │       ├── foldEvents.ts        Sole owner of folding AgentEvent[] into conversation rows
+│       ├── completion.ts        Evidence for one completed attempt, from the shared transcript fold
+│       ├── pendingGates.ts      What a run is waiting on, recovered from its transcript
+│       ├── coordination.ts      Coordination journal data layer — snapshot, peers, envelopes
+│       ├── missionBoard.ts      The one projection from MissionState + live runs into board/graph rows
 │       ├── race.ts              Same-task multi-run dispatch into isolated worktrees
 │       ├── durableMissions.ts   Mission IPC + Markdown/events → MissionState projection
 │       ├── missionHarness.ts    MissionState reducer (projection model, not a second loop)
@@ -235,6 +269,9 @@ Klide/
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
     │   ├── memory.rs             Project Memory schema, Markdown I/O, and local retrieval
+    │   ├── spreadsheet.rs        File persistence for the sheet surface — containment, size, conflict checks
+    │   ├── run_documents.rs      Recover read-only document references from older transcripts
+    │   ├── preview.rs            A picture of what Klide can't render (deck, PDF) via macOS `qlmanage`
     │   ├── storage.rs            Where the runs dir lives — user-choosable folder, validated moves, cache accounting
     │   ├── missions.rs           Durable Missions — authored specs, append-only events, drive loop
     │   ├── durable.rs            Atomic + append-only write primitives for on-disk state
@@ -256,6 +293,9 @@ Klide/
     │       ├── run_core.rs        Tauri-free turn prep — provider quirks, message assembly, compaction
     │       ├── routing.rs         The `auto` Provider → one concrete provider+model at run start (gate, rank, lock)
     │       ├── tools.rs           Tool registry (schema + capability + execution, including native memory recall)
+    │       ├── spreadsheet_tools.rs Native workbook Tools — recalculated and exported before review
+    │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command
+    │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts
     │       ├── glob_match.rs      Shared */? matcher (glob tool + command allowlist)
@@ -346,19 +386,51 @@ Durable end-of-session notes in `<workspace>/.klide/memory/` so a future agent (
 - **Frontend** — `src/memory.ts` typed data layer; `MemoryPanel` is the list+detail body; `MemoryModal` is the centered overlay (same pattern as `SkillsModal`).
 - **Trigger** — the AI panel header has a "Summarize" bookmark button (`src/components/ai/summarize.ts`) that calls the model once with a structured prompt, parses the response, and writes via `memory_write`. The first user message becomes the title; file paths are extracted from the conversation; the model produces Notes + Decisions + Goal.
 
-### v0.5 closeout and next milestone
+### Documents (a run makes a real workbook)
 
-v0.5 was declared feature-complete on 2026-07-21. Mission Control is the
-operations surface for Klide Harness runs and Delegate runs; review evidence,
-worktree fleets, mission chaining, subagents, advisor escalation, and two-agent
-races are shipped. v0.5.1 owns release hardening and publishing: default
-worktree isolation and provider-aware historical lifecycle signals are done
-(the latter 2026-08-27 — per-CLI turn markers + PTY hook/exit joins, session
-ids persisted in scrollback metadata); still open are full race/restart/merge
-dogfooding, the first signed/notarized macOS bundle, and Windows/Linux
-validation (keyring feature selection is the remaining compile blocker).
+A Goal run can produce a file a person opens, not a description of one. Two
+native Tools own that. `write_spreadsheet` creates or patches an `.xlsx` —
+IronCalc recalculates in Rust before review, a formula error blocks the save,
+and the exported bytes are produced *before* the change is ever proposed. The
+read-only `inspect_spreadsheet` returns paginated cells, formulas, results,
+errors, and the hash an update has to present. A create never overwrites; an
+update rechecks the exact bytes at apply time. Neither Tool needs a shell, an
+Excel install, or the network.
 
-The next product milestone is v0.6, dependable orchestration: Missions as
+The bytes ride the write path that already exists: a `DiffProposal` carries an
+optional binary payload beside its readable cell diff, so a workbook goes
+through the same approval, the same rejection memory and the same checkpoint as
+any other edit, and rollback restores the original bytes.
+
+`.xlsx` and `.sheet.json` open in Klide's own sheet surface
+(`SpreadsheetViewer`, lazy behind the `vendor-spreadsheet` chunk the entry never
+preloads): worksheet tabs, formula bar, keyboard navigation, paste, undo, and
+**Add to chat** for a cell's reference and value. This is local recalculation of
+common formulas, not Excel parity — charts, pivots, macros and full layout
+fidelity are out, and the limits are written down in
+`src/spreadsheets/README.md`. A completion card lists documents as things to
+open, and `agent_run_document_references` recovers files an older transcript
+only mentions, without claiming the run created them. What a *command* left
+behind is a separate question, answered by bracketing the workspace's dirty set
+around the command (`agent/artifacts.rs`).
+
+### Where the product is (v0.6.3 shipped)
+
+v0.5 closed on 2026-07-21, and the v0.6 line has cut three patch releases:
+v0.6.1 — Subscriptions and Reach (2026-08-23), v0.6.2 — Memory, Routing,
+Recovery (2026-09-11), and v0.6.3 — Coordination and Documents (2026-09-12).
+Mission Control is the operations surface for Harness runs and Delegate runs;
+review evidence, worktree fleets, mission chaining, subagents, advisor
+escalation and two-agent races are shipped; `auto` resolves to one concrete
+provider+model in Rust at run start; Project Memory is recalled natively; Runs
+address each other through one journal; and a Run writes real workbooks the app
+opens.
+
+Release work still owed from v0.5.1: full race/restart/merge dogfooding, the
+first signed/notarized macOS bundle (what ships today is ad-hoc signed), and
+Windows/Linux validation.
+
+The product milestone is still v0.6, dependable orchestration: Missions as
 outcomes, visible budget and capacity, capability-based worker routing,
 automatic validation contracts, and durable background execution. Do not
 unpark scheduling or proactive suggestions ahead of those foundations.
@@ -540,7 +612,7 @@ delegate PTY, AI providers) or a domain data layer — not raw `invoke` in
 components. Rust drift tests (e.g. `every_git_command_has_a_frontend_wrapper`)
 enforce wrapper coverage for the git family.
 
-## Features shipped (through v0.5)
+## Features shipped (through v0.6.3)
 
 - [x] Activity bar — top zone (6 tools) with FLIP-animated indicator + bottom zone (Settings + Profile) with a dock-style dot and a hairline divider.
 - [x] File explorer with tree view, git decorations, context menu, inline rename
@@ -564,6 +636,14 @@ enforce wrapper coverage for the git family.
 - [x] Find in files — Cmd+Shift+F, Rust-backed search
 - [x] Checkpoint rollback — preview files changed since a turn and revert selected ones
 - [x] Project todo list — Rust-backed store, agent tools to add/complete items
+- [x] Agent coordination — one Rust-owned journal; native Tools for Harness runs and an embedded MCP server for Delegate CLIs; incoming mail is reviewed like a shell command
+- [x] Documents — `write_spreadsheet` / `inspect_spreadsheet` produce a recalculated `.xlsx` through the normal review path; `.xlsx` and `.sheet.json` open in a built-in sheet surface
+- [x] Auto model routing — `auto` resolved once in Rust at run start (gate, rank, lock) with the reasoning recorded on the run
+- [x] Project Memory recall — native `memory_search` / `memory_read` over reviewed notes, with provenance
+- [x] Provider gateway — opencodex registered as one self-hosted endpoint, ~40 upstreams behind it
+- [x] Storage settings — a user-choosable runs folder, validated moves, cache accounting
+- [x] Reasoning effort — levels read from the provider/CLI rather than assumed
+- [x] Composer `/` command menu and ↑ / ↓ prompt history
 
 ## Development
 
