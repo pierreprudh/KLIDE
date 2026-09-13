@@ -14,8 +14,9 @@ Notable changes per milestone. Dates are completion dates.
   Envelope's real delivery state, including when an idempotent retry appended
   nothing, and report separately whether this call waited for and received a
   reply. A wait that times out does not cancel, resend, or move the message
-  back to `queued`. The shape is versioned in
-  `schemas/klide-coordination-send-receipt.schema.json`.
+  back to `queued`. A send that does not wait reads the state the command
+  already returned rather than folding the journal a second time. The shape is
+  versioned in `schemas/klide-coordination-send-receipt.schema.json`.
 - **A reply stays inside the exchange it answers.** Knowing an Envelope id used
   to be enough to join someone else's thread: a third Run could send with that
   `replyTo`, and because the journal read the message as solicited it was

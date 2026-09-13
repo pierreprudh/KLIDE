@@ -269,4 +269,4 @@ must use `replyStatus: received`. Errors remain tool errors (`isError: true`),
 not successful send receipts. The journal stays at schema version 1 because
 no stored event or snapshot shape changes.
 
-![Message flow and receipt fields](public/agent-message-flow.png)
+![Message flow and receipt fields](public/agent-message-flow.svg)
