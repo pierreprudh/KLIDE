@@ -91,6 +91,16 @@ export type CoordinationResult = {
   publishedAtMs: number;
 };
 
+/** agent_send reports message delivery independently from the current wait. */
+export type CoordinationSendReceipt = {
+  envelopeId: string;
+  deliveryState: CoordinationDeliveryState;
+  replyStatus: "not_requested" | "received" | "timed_out";
+  timedOut: boolean;
+  replies?: CoordinationEnvelopeSnapshot[];
+  text: string;
+};
+
 export type CoordinationEvent =
   | {
       type: "run_registered";
