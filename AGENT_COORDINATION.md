@@ -277,7 +277,7 @@ Verified green on 2026-09-11, ~50s for the turn.
 
 ## Message quality: routing and receipts
 
-![Message quality before and after](public/agent-message-quality.png)
+![Message quality before and after](public/agent-message-quality.svg)
 
 A new Run-authored reply must reverse the original route: if A sends an
 Envelope to B, only B can reply to A using that Envelope's `replyTo` id.
@@ -295,10 +295,11 @@ snapshot, including when an idempotent retry appends nothing. It separately
 reports whether this call waited for and received a reply. A timeout does not
 cancel, resend, or move the message back to `queued`.
 
-![Shared message flow and receipt schema](public/agent-message-flow.png)
+![Shared message flow and receipt schema](public/agent-message-flow.svg)
 
 The full contract is in [KLIDE_COORDINATION_SCHEMA.md](KLIDE_COORDINATION_SCHEMA.md#send-receipt).
-The editable sources for these review visuals are the adjacent SVG files.
+These review visuals are SVG, the same as the other diagrams here: edit them
+in place rather than re-exporting a raster copy.
 
 This change does not add automatic Delegate wakeups or change permission
 policy. Delegate delivery still occurs through `agent_wait`; the native

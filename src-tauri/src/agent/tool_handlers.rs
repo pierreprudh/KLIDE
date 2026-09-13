@@ -482,13 +482,13 @@ where
                     "The message was recorded but its envelope could not be resolved.",
                 ));
             };
-            let (reply_status, replies) = if call
+            let (reply_status, replies, snapshot) = if call
                 .input
                 .get("waitForReply")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false)
             {
-                match wait_for_coordination_messages(
+                let waited = match wait_for_coordination_messages(
                     ctx,
                     workspace_root,
                     Some(target),
@@ -497,25 +497,36 @@ where
                 )
                 .await
                 {
-                    Ok(Some(messages)) => (
+                    Ok(waited) => waited,
+                    Err(outcome) => return Ok(outcome),
+                };
+                // Waiting moved mail to delivered and acknowledged, so the
+                // receipt has to read the journal after it, not before.
+                let snapshot = match ctx.sup.coordination_snapshot(workspace_root) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return Ok(coordination_tool_error(error)),
+                };
+                match waited {
+                    Some(messages) => (
                         crate::coordination::CoordinationReplyStatus::Received,
                         messages,
+                        snapshot,
                     ),
-                    Ok(None) => (
+                    None => (
                         crate::coordination::CoordinationReplyStatus::TimedOut,
                         vec![],
+                        snapshot,
                     ),
-                    Err(outcome) => return Ok(outcome),
                 }
             } else {
+                // Nothing has touched the journal since the send, and the
+                // command already handed back the post-command snapshot —
+                // including on the idempotent retry that appended nothing.
                 (
                     crate::coordination::CoordinationReplyStatus::NotRequested,
                     vec![],
+                    sent.snapshot,
                 )
-            };
-            let snapshot = match ctx.sup.coordination_snapshot(workspace_root) {
-                Ok(snapshot) => snapshot,
-                Err(error) => return Ok(coordination_tool_error(error)),
             };
             let receipt = match crate::coordination::send_receipt(
                 &snapshot,

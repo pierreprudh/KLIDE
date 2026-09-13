@@ -397,22 +397,41 @@ fn execute_inner(
                 .ok_or_else(|| {
                     "The message was recorded but its envelope could not be resolved.".to_string()
                 })?;
-            let (reply_status, replies) = if wait_for_reply {
-                match wait_for_messages(
+            let (reply_status, replies, snapshot) = if wait_for_reply {
+                let waited = wait_for_messages(
                     store,
                     hooks,
                     session,
                     Some(&target),
                     Some(&envelope.id),
                     clamp_timeout(timeout_seconds),
-                )? {
-                    Some(replies) => (coordination::CoordinationReplyStatus::Received, replies),
-                    None => (coordination::CoordinationReplyStatus::TimedOut, vec![]),
+                )?;
+                // Waiting moved mail to delivered and acknowledged, so the
+                // receipt has to read the journal after it, not before.
+                let snapshot = coordination::read_snapshot(store, root)?;
+                match waited {
+                    Some(replies) => (
+                        coordination::CoordinationReplyStatus::Received,
+                        replies,
+                        snapshot,
+                    ),
+                    None => (
+                        coordination::CoordinationReplyStatus::TimedOut,
+                        vec![],
+                        snapshot,
+                    ),
                 }
             } else {
-                (coordination::CoordinationReplyStatus::NotRequested, vec![])
+                // Nothing has touched the journal since the send, and `apply`
+                // already handed back the post-command snapshot — including on
+                // the idempotent retry that appended nothing, which is exactly
+                // the state this receipt reports.
+                (
+                    coordination::CoordinationReplyStatus::NotRequested,
+                    vec![],
+                    outcome.snapshot,
+                )
             };
-            let snapshot = coordination::read_snapshot(store, root)?;
             let receipt =
                 coordination::send_receipt(&snapshot, &envelope.id, reply_status, &replies)?;
             serde_json::to_value(receipt)
