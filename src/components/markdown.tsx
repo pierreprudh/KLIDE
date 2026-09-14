@@ -1,4 +1,10 @@
-import { useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { memo, useLayoutEffect, useRef, useId, useMemo, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { prepareVisual, type VisualHtml } from "./visualHtml";
+
+import { createPortal } from "react-dom";
+import { VisualExpandIcon, DownloadIcon, CodeIcon, CopyIcon, CheckIcon } from "../icons";
+import { fitVisualCanvases, fitViewerCanvas } from "./visualLayout";
+import { saveVisualPng } from "./visualExport";
 
 type MdNode = string | ReactElement;
 
@@ -59,17 +65,9 @@ function highlightCode(code: string): MdNode[] {
   return out;
 }
 
-// Premium code block: language chip in the header, a Copy button on the
-// right, a subtle bg-elevated tint, monospace body with our token highlighter.
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {}
-  }
+// The shell every fenced block shares: hairline frame, a lowercase language
+// mark on the left, actions on the right.
+function BlockShell({ lang, actions, children }: { lang: string; actions: ReactNode; children: ReactNode }) {
   return (
     <div
       style={{
@@ -104,34 +102,76 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         >
           {lang || "code"}
         </span>
-        <button
-          onClick={copy}
-          title="Copy code"
-          style={{
-            fontSize: 9,
-            fontWeight: 600,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            fontFamily: "var(--font-mono)",
-            color: copied ? "var(--accent)" : "var(--fg-dim)",
-            padding: "2px 7px",
-            borderRadius: "var(--radius-xs)",
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            transition: "color var(--motion-fast) var(--ease-out)",
-          }}
-          onMouseEnter={(e) => {
-            if (!copied) e.currentTarget.style.color = "var(--fg-strong)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = copied ? "var(--accent)" : "var(--fg-dim)";
-          }}
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>{actions}</div>
       </div>
-      <pre
+      {children}
+    </div>
+  );
+}
+
+// One header action. Text, not a chip — the row reads as a line of small
+// labels and only the hovered one comes forward.
+function BlockAction({
+  label,
+  title,
+  active,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        fontSize: 9,
+        fontWeight: 600,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        fontFamily: "var(--font-mono)",
+        color: active ? "var(--accent)" : "var(--fg-dim)",
+        padding: "2px 7px",
+        borderRadius: "var(--radius-xs)",
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.color = "var(--fg-strong)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = active ? "var(--accent)" : "var(--fg-dim)";
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function useCopy(code: string): [boolean, () => void] {
+  const [copied, setCopied] = useState(false);
+  return [
+    copied,
+    () => {
+      void navigator.clipboard
+        .writeText(code)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        })
+        .catch(() => {});
+    },
+  ];
+}
+
+// The monospace body with our token highlighter.
+function CodeBody({ code }: { code: string }) {
+  return (
+    <pre
         style={{
           margin: 0,
           padding: "10px 12px",
@@ -146,7 +186,225 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
       >
         <code style={{ fontFamily: "inherit" }}>{highlightCode(code)}</code>
       </pre>
+  );
+}
+
+// Premium code block: language mark in the header, a Copy button on the right,
+// a subtle bg-elevated tint, monospace body.
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, copy] = useCopy(code);
+  return (
+    <BlockShell
+      lang={lang}
+      actions={<BlockAction label={copied ? "Copied" : "Copy"} title="Copy code" active={copied} onClick={copy} />}
+    >
+      <CodeBody code={code} />
+    </BlockShell>
+  );
+}
+
+// Fences a model writes to *show* something rather than to quote source. The
+// markup is rendered in place; the source stays one click away.
+const VISUAL_LANGS = new Set(["html", "svg", "visual", "visualizer", "viz", "preview"]);
+
+// The visual itself. Sanitized markup joins the app's own document — which is
+// what earns the block its theme, its fonts and its tokens for free — and the
+// stylesheet the model wrote is re-anchored to this one block so it cannot
+// reach the app around it. See `visualHtml.ts` for the rules.
+const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: VisualHtml; scope: string }) {
+  const content = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    let active = true;
+    const fit = () => { if (active && content.current) fitVisualCanvases(content.current); };
+    fit();
+    void document.fonts.ready.then(fit);
+    return () => { active = false; };
+  }, [visual]);
+  return (
+    // `klide-viz` carries the visual palette (tokens.css): the neutrals follow
+    // the theme, the chroma is fixed and readable on either ground, and
+    // `visualHtml.ts` has already mapped everything the model wrote onto it.
+    <div
+      className={`${scope} klide-viz`}
+      style={{
+        padding: "4px 0",
+        background: "transparent",
+        overflowX: "auto",
+        // Traps paint and layout — including anything that asked to be fixed —
+        // inside the block, and makes the block the unit a width query asks
+        // about (the drawing's @media size queries are rewritten to @container).
+        contain: "layout paint",
+        containerType: "inline-size",
+        color: "var(--viz-ink)",
+        fontFamily: "var(--font-ui)",
+        fontSize: "var(--fs-base)",
+        lineHeight: 1.5,
+        // Models reach for `--font-sans`; Klide's UI face answers to it here.
+        ["--font-sans" as string]: "var(--font-ui)",
+      } as CSSProperties}
+    >
+      {visual.css ? <style>{visual.css}</style> : null}
+      <div ref={content} data-visual-content dangerouslySetInnerHTML={{ __html: visual.html }} />
+      {visual.dropped.length > 0 ? (
+        <div
+          style={{
+            marginTop: 10,
+            fontFamily: "var(--font-mono)",
+            fontSize: 9,
+            letterSpacing: "0.04em",
+            color: "var(--fg-dim)",
+          }}
+        >
+          {visual.dropped.join(", ")} not rendered
+        </div>
+      ) : null}
     </div>
+  );
+});
+
+const VISUAL_MOTION = { duration: 280, easing: "cubic-bezier(.2,.8,.2,1)" };
+
+function VisualControl({ label, children, onClick, disabled = false }: {
+  label: string; children: ReactNode; onClick: (event: React.MouseEvent<HTMLButtonElement>) => void; disabled?: boolean;
+}) {
+  return <button type="button" className="visual-icon-button" aria-label={label} data-tooltip={label} disabled={disabled} onClick={onClick}>{children}</button>;
+}
+
+function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLDivElement | null }; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+  const visual = useMemo(() => prepareVisual(code, scope), [code, scope]);
+  const content = useRef<HTMLDivElement>(null);
+  const closing = useRef(false);
+  const motion = useRef<Animation[]>([]);
+  const [opened, setOpened] = useState(false);
+  const [copied, copy] = useCopy(code);
+  useLayoutEffect(() => {
+    const element = dialog.current!;
+    const opener = document.activeElement;
+    element.showModal();
+    element.querySelector<HTMLButtonElement>('[aria-label="Close fullscreen"]')?.focus({ preventScroll: true });
+    let active = true;
+    const fit = () => { if (active && viewport.current && content.current) fitViewerCanvas(viewport.current, content.current); };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(viewport.current!);
+    void document.fonts.ready.then(fit);
+    const frame = requestAnimationFrame(() => {
+      if (!active) return;
+      fit();
+      setOpened(true);
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches && origin.current) {
+        const from = origin.current.getBoundingClientRect();
+        const to = content.current!.getBoundingClientRect();
+        if (from.width && from.height && to.width && to.height) {
+          motion.current.push(content.current!.animate([
+            { transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${from.width / to.width}, ${from.height / to.height})`, opacity: 0.4 },
+            { transform: "none", opacity: 1 },
+          ], VISUAL_MOTION));
+        }
+      }
+    });
+    return () => {
+      active = false;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      motion.current.forEach(animation => animation.cancel());
+      element.close();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
+  async function close() {
+    if (closing.current) return;
+    closing.current = true;
+    setOpened(false);
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches && content.current && origin.current) {
+      const from = content.current.getBoundingClientRect();
+      const to = origin.current.getBoundingClientRect();
+      const animation = content.current.animate([
+        { transform: "none", opacity: 1 },
+        { transform: `translate(${to.x - from.x}px, ${to.y - from.y}px) scale(${to.width / from.width}, ${to.height / from.height})`, opacity: 0 },
+      ], { ...VISUAL_MOTION, fill: "forwards" });
+      motion.current.push(animation);
+      await animation.finished.catch(() => {});
+    }
+    onClose();
+  }
+  return createPortal(
+    <dialog ref={dialog} className="visual-viewer" data-opened={opened} aria-label="Visual fullscreen" onCancel={event => { event.preventDefault(); void close(); }}>
+      <div ref={viewport} className="visual-viewer-body"><div ref={content} className="visual-viewer-content"><VisualSurface visual={visual} scope={scope} /></div></div>
+      <div className="visual-viewer-toolbar" role="group" aria-label="Visual controls">
+        <VisualControl label={copied ? "Copied" : "Copy code"} onClick={copy}>{copied ? <CheckIcon size={18} /> : <CopyIcon size={18} />}</VisualControl>
+        <VisualSaveButton content={content} />
+        <span className="visual-toolbar-divider" aria-hidden="true" />
+        <VisualControl label="Close fullscreen" onClick={() => void close()}><VisualExpandIcon expanded={opened} /></VisualControl>
+      </div>
+    </dialog>, document.body,
+  );
+}
+
+function VisualSaveButton({ content }: { content: { current: HTMLDivElement | null } }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  async function save() {
+    const node = content.current?.querySelector<HTMLElement>(".klide-viz");
+    if (!node || saving) return;
+    setSaving(true);
+    setError("");
+    try { await saveVisualPng(node); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save PNG. Please try again."); }
+    finally { setSaving(false); }
+  }
+  return <>
+    <VisualControl label={saving ? "Saving PNG…" : "Save as PNG"} disabled={saving} onClick={() => void save()}><DownloadIcon size={18} /></VisualControl>
+    {error ? <span role="alert" className="visual-export-error">{error}</span> : null}
+  </>;
+}
+
+function VisualBlock({ code, lang, closed }: { code: string; lang: string; closed: boolean }) {
+  const content = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [copied, copy] = useCopy(code);
+  // No choice yet: source while the fence is still arriving, the visual once
+  // it closes. A choice, once made, outlives the stream.
+  const [chosen, setChosen] = useState<"visual" | "code" | null>(null);
+  // `useId` is per-instance and stable across re-renders; the punctuation it
+  // carries is not valid in a class name or an id.
+  const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+  const visual = useMemo(() => prepareVisual(code, scope), [code, scope]);
+  // Nothing survived the allowlist (or the fence held prose, not markup):
+  // there is no visual to offer and the block is an ordinary code block.
+  const renderable = /<[A-Za-z]/.test(visual.html);
+  const showVisual = renderable && (chosen ?? (closed ? "visual" : "code")) === "visual";
+  const actions = (
+    <>
+      {renderable ? (
+        <BlockAction
+          label={showVisual ? "Code" : "Preview"}
+          title={showVisual ? "Show the source" : "Render it"}
+          onClick={() => setChosen(showVisual ? "code" : "visual")}
+        />
+      ) : null}
+      <BlockAction label={copied ? "Copied" : "Copy"} title="Copy code" active={copied} onClick={copy} />
+    </>
+  );
+  return showVisual ? (
+    <figure className="inline-visual" style={{ margin: "16px 0", minWidth: 0 }}>
+      <div ref={content}><VisualSurface visual={visual} scope={scope} /></div>
+      <div className="inline-visual-actions" role="group" aria-label="Visual controls">
+        <VisualControl label="Show code" onClick={() => setChosen("code")}><CodeIcon size={18} /><span className="visual-sr-only">Code</span></VisualControl>
+        <VisualControl label={copied ? "Copied" : "Copy code"} onClick={copy}>{copied ? <CheckIcon size={18} /> : <CopyIcon size={18} />}</VisualControl>
+        <VisualSaveButton content={content} />
+        <span className="visual-toolbar-divider" aria-hidden="true" />
+        <VisualControl label="Open fullscreen" onClick={event => { event.currentTarget.focus(); setExpanded(true); }}><VisualExpandIcon expanded={expanded} /></VisualControl>
+      </div>
+      {expanded ? <VisualViewer code={code} origin={content} onClose={() => setExpanded(false)} /> : null}
+    </figure>
+  ) : (
+    <BlockShell lang={lang} actions={actions}>
+      <CodeBody code={code} />
+    </BlockShell>
   );
 }
 
@@ -770,7 +1028,14 @@ function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
         if (/^[\w+#-]*$/.test(first)) { lang = first; code = seg.slice(nl + 1); }
       }
       code = code.replace(/\n$/, "");
-      out.push(<CodeBlock key={`code-${idx}`} code={code} lang={lang} />);
+      // A fence the split did not close is the streaming tail: its markup is
+      // half-written, so it stays source until the closing fence arrives.
+      const closed = idx < segments.length - 1;
+      out.push(
+        VISUAL_LANGS.has(lang.toLowerCase())
+          ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} />
+          : <CodeBlock key={`code-${idx}`} code={code} lang={lang} />,
+      );
     } else if (seg) {
       // Only the last segment can be the streaming tail; an earlier one is
       // already closed off by a code fence.

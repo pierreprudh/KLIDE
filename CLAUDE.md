@@ -156,6 +156,7 @@ Klide/
 │   │   ├── Kbd.tsx              The single keycap renderer (KeyboardShortcuts.tsx: cheatsheet overlay)
 │   │   ├── LayoutBento.tsx      Layout picker widget (LayoutCanvas.tsx: visual layout editor)
 │   │   ├── markdown.tsx         Hand-rolled markdown renderer (code highlighting, tool markers)
+│   │   ├── visualHtml.ts        Sanitize + scope model-authored markup for the inline visualizer
 │   │   ├── MemoryModal.tsx      Centered Memory handoff-notes modal (MemoryPanel.tsx: its body)
 │   │   ├── MissionControl.tsx   Run board, attention/review, races + delegate handoff
 │   │   ├── MissionControlSkeleton.tsx Geometry-matched loading skeleton

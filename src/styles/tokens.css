@@ -3031,6 +3031,76 @@ button:focus-visible .menu-leadout {
 .klide-quote::before { content: "\2014\00a0\00a0"; color: var(--fg-dim); }
 .klide-quote::after  { content: ""; }
 
+/* ── The visual palette (inline `html` / `svg` fences) ──────────────────────
+   A drawing in a conversation has one job the app chrome doesn't: it must stay
+   readable whichever theme it lands in, drawn by a model that cannot see the
+   ground it is drawing on. Two references solve that the same way — a palette
+   of its own, complete, per polarity:
+
+     Codex        a grey ramp (#0D0D0D → #FAFAFA) and exactly one accent, #3B82F6.
+     Claude Code  neutrals plus a small semantic set (success / warning / error,
+                  each with a light and a dark value) and eight categorical hues
+                  held apart from the semantics and reused in both polarities.
+
+   So Klide's visuals get the same shape. The neutrals come from Klide's own
+   tokens, which are already theme-correct; the chroma is Claude Code's set,
+   which is chosen to read on bone and on near-black alike. `visualHtml.ts`
+   maps whatever a model writes — a guessed token name, a hardcoded hex — onto
+   these, so every color in a drawing comes from one palette and one ground. */
+.klide-viz {
+  --viz-surface:    var(--bg-elevated);
+  /* Mixed from --fg-strong, never --fg: the light theme's --fg carries 0.82
+     alpha, so mixing it silently weakens every line and tint by a fifth. */
+  --viz-surface-2:  color-mix(in srgb, var(--fg-strong) 6%, var(--bg-elevated));
+
+  /* A diagram's lines are structure, not chrome: a box outline at the app's
+     hairline weight measures 1.6:1 against its own ground and reads as an
+     empty rectangle. These clear 3:1 on both grounds, the WCAG bar for a
+     graphical object; --viz-line-soft is the divider weight. */
+  --viz-line:       color-mix(in srgb, var(--fg-strong) 48%, transparent);
+  --viz-line-soft:  color-mix(in srgb, var(--fg-strong) 24%, transparent);
+
+  --viz-ink:        var(--fg-strong);
+  /* --fg-dim is tuned for app chrome and measures 3.0:1; a caption in a figure
+     has to be read, not merely noticed. 70% clears 4.5:1 on every ground a
+     caption lands on — the surface, a raised box, and a 16% chroma tint. */
+  --viz-ink-dim:    color-mix(in srgb, var(--fg-strong) 70%, var(--viz-surface));
+
+  /* Semantics — Claude Code's light-theme values, which clear 4.5:1 on bone.
+     The accent is deepened from their professional blue, which does not. */
+  --viz-accent:     #3f6f9f;
+  --viz-success:    #2c7a39;
+  --viz-warning:    #966c1e;
+  --viz-danger:     #ab2b3f;
+
+  /* Categorical — eight hues for telling N things apart, never a verdict.
+     Claude Code's set, with the two that fall under 3:1 on bone deepened. */
+  --viz-1: #dc2626;
+  --viz-2: #d97757;
+  --viz-3: #8a6410;
+  --viz-4: #16a34a;
+  --viz-5: #0891b2;
+  --viz-6: #3f6f9f;
+  --viz-7: #827dbd;
+  --viz-8: #c46686;
+}
+
+/* The semantics brighten on a dark ground, exactly as Claude Code's dark theme
+   does — a #2c7a39 green disappears against near-black. */
+:root[data-theme="dark"] .klide-viz,
+:root[data-theme="cursor-dark"] .klide-viz,
+:root[data-theme="vscode-dark"] .klide-viz,
+:root[data-theme="sage-garden-dark"] .klide-viz,
+:root[data-theme="solarized-dark"] .klide-viz {
+  --viz-accent:   #6a9bcc;
+  --viz-success:  #4eba65;
+  --viz-warning:  #ffc107;
+  --viz-danger:   #ff6b80;
+  --viz-1: #ff6b80;
+  --viz-3: #e0a92c;
+  --viz-6: #6a9bcc;
+}
+
 /* Paper card — a recessed surface for reading content. Stronger
    inner top highlight than .klide-surface, with a 1px border. Used
    for instructions and detail bodies where the content needs to
@@ -8113,4 +8183,79 @@ button:focus-visible .menu-leadout {
     animation: none;
     opacity: 0;
   }
+}
+
+/* One quiet set of controls, shared by inline figures and the expanded viewer. */
+.inline-visual-actions, .visual-viewer-toolbar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 2px;
+  width: fit-content; padding: 3px; border-radius: 11px;
+  color: var(--fg-subtle);
+}
+.inline-visual-actions { margin: 6px 0 0 auto; }
+.inline-visual-actions:hover, .inline-visual-actions:focus-within {
+  background: color-mix(in srgb, var(--fg-strong) 4%, transparent);
+}
+.visual-icon-button {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+.visual-icon-button:hover { background: color-mix(in srgb, var(--fg-strong) 7%, transparent); color: var(--fg-strong); }
+.visual-icon-button:active { transform: scale(.92); }
+.visual-icon-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.visual-icon-button:disabled { opacity: .45; cursor: wait; }
+.visual-icon-button::after {
+  content: attr(data-tooltip); position: absolute; bottom: calc(100% + 8px); left: 50%;
+  transform: translate(-50%, 3px); pointer-events: none; opacity: 0;
+  padding: 5px 8px; border-radius: 6px; white-space: nowrap;
+  font: 11px/1.4 var(--font-ui); background: var(--bg-elevated); color: var(--fg-strong);
+  border: 1px solid var(--border); z-index: 2;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.visual-icon-button:hover::after, .visual-icon-button:focus-visible::after {
+  opacity: 1; transform: translate(-50%, 0); transition-delay: 350ms;
+}
+.visual-toolbar-divider { height: 14px; width: 1px; margin: 0 4px; background: var(--border); }
+.visual-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.visual-export-error { color: var(--danger); font-size: 12px; max-width: 240px; }
+.visual-expand-corner, .visual-expand-arm-v, .visual-expand-arm-h {
+  transition: transform 280ms cubic-bezier(.2,.8,.2,1);
+  transform-box: view-box; transform-origin: 5px 5px;
+}
+.visual-expand-arm-v, .visual-expand-arm-h { vector-effect: non-scaling-stroke; }
+[data-expanded="true"] .visual-expand-corner { transform: translate(2px, 2px); }
+[data-expanded="true"] .visual-expand-arm-v { transform: rotate(-45deg) scale(1.414214); }
+[data-expanded="true"] .visual-expand-arm-h { transform: rotate(45deg) scale(1.414214); }
+.visual-viewer {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
+  background: transparent; color: var(--fg); overflow: hidden;
+  transition: background 240ms ease;
+}
+.visual-viewer[data-opened="true"] { background: var(--bg); }
+.visual-viewer::backdrop { background: color-mix(in srgb, var(--bg) 88%, transparent); }
+.visual-viewer[open] { display: flex; flex-direction: column; }
+.visual-viewer-toolbar {
+  position: absolute; top: 18px; right: 24px; margin: 0;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.visual-viewer-toolbar .visual-icon-button::after { top: calc(100% + 8px); bottom: auto; }
+.visual-viewer-toolbar .visual-icon-button:last-child::after { left: auto; right: 0; transform: translateY(3px); }
+.visual-viewer-toolbar .visual-icon-button:last-child:hover::after,
+.visual-viewer-toolbar .visual-icon-button:last-child:focus-visible::after { transform: translateY(0); }
+.visual-viewer-body {
+  display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto;
+  padding: 88px clamp(20px, 5vw, 80px) 64px;
+}
+.visual-viewer-content { width: 100%; margin: auto; flex-shrink: 0; transform-origin: top left; }
+.visual-viewer-content .klide-viz svg { margin-inline: auto; }
+@media (max-width: 600px) {
+  .visual-viewer-toolbar { top: 12px; right: 16px; }
+  .visual-viewer-body { padding: 72px 20px 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .visual-icon-button, .visual-icon-button::after, .visual-viewer,
+  .visual-expand-corner, .visual-expand-arm-v, .visual-expand-arm-h { transition: none; }
 }

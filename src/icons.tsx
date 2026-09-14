@@ -23,6 +23,11 @@
 import type { CSSProperties } from "react";
 import type { Icon as PhosphorGlyph } from "@phosphor-icons/react";
 
+import { Code } from "@phosphor-icons/react/dist/csr/Code";
+import { Copy } from "@phosphor-icons/react/dist/csr/Copy";
+import { Check } from "@phosphor-icons/react/dist/csr/Check";
+import { ArrowsOut } from "@phosphor-icons/react/dist/csr/ArrowsOut";
+import { DownloadSimple } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ArrowUp } from "@phosphor-icons/react/dist/csr/ArrowUp";
 import { BookmarkSimple } from "@phosphor-icons/react/dist/csr/BookmarkSimple";
 import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -284,4 +289,23 @@ export function ChevronIcon({ open = false, style, ...rest }: GlyphProps & { ope
       {...rest}
     />
   );
+}
+
+export function ExpandIcon(p: GlyphProps) { return <Icon as={ArrowsOut} {...p} />; }
+export function DownloadIcon(p: GlyphProps) { return <Icon as={DownloadSimple} {...p} />; }
+
+export function CodeIcon(p: GlyphProps) { return <Icon as={Code} {...p} />; }
+export function CopyIcon(p: GlyphProps) { return <Icon as={Copy} {...p} />; }
+export function CheckIcon(p: GlyphProps) { return <Icon as={Check} {...p} />; }
+
+/** Four corners fold into an X; the same strokes remain visible throughout. */
+export function VisualExpandIcon({ expanded = false, size = 18, ...props }: GlyphProps & { expanded?: boolean }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_WEIGHT === "light" ? 1.25 : 1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" data-expanded={expanded} {...props}>
+    {[0, 90, 180, 270].map(angle => <g key={angle} transform={`rotate(${angle} 12 12)`}>
+      <g className="visual-expand-corner">
+        <path className="visual-expand-arm-v" d="M5 5V10" />
+        <path className="visual-expand-arm-h" d="M5 5H10" />
+      </g>
+    </g>)}
+  </svg>;
 }
