@@ -8191,10 +8191,35 @@ button:focus-visible .menu-leadout {
   width: fit-content; padding: 3px; border-radius: 11px;
   color: var(--fg-subtle);
 }
-.inline-visual-actions { margin: 6px 0 0 auto; }
-.inline-visual-actions:hover, .inline-visual-actions:focus-within {
-  background: color-mix(in srgb, var(--fg-strong) 4%, transparent);
+/* Inline, the controls sit in the figure's own margin with nothing behind
+   them — no tray, no pill under each glyph. Hover speaks through the glyph
+   itself: it grows, darkens and comes up to full contrast. (The expanded
+   viewer's toolbar floats over arbitrary content, so it keeps its ground.) */
+.inline-visual-actions { margin: 6px 0 0 auto; padding: 0; border-radius: 0; background: none; }
+.inline-visual-actions .visual-icon-button:hover,
+.inline-visual-actions .visual-icon-button:focus-visible { background: none; color: var(--fg-strong); }
+
+/* At rest a figure keeps only what a reader reaches for — save it, open it —
+   small and faint enough to read as part of the margin. Pointing at the figure
+   brings the whole set up: the rest slide in, and all of them come up to size
+   and to full contrast. The expanded viewer's toolbar is always in hand, so
+   none of this applies there. */
+.inline-visual-actions { --visual-control: 24px; opacity: .4; transition: opacity 160ms ease; }
+.inline-visual:hover > .inline-visual-actions,
+.inline-visual:focus-within > .inline-visual-actions { --visual-control: 28px; opacity: 1; }
+.inline-visual-actions .visual-icon-button {
+  width: var(--visual-control); height: var(--visual-control);
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease,
+              width 180ms ease, height 180ms ease, opacity 140ms ease;
 }
+.inline-visual-actions .visual-control-more { width: 0; opacity: 0; pointer-events: none; }
+.inline-visual:hover .visual-control-more,
+.inline-visual:focus-within .visual-control-more { width: var(--visual-control); opacity: 1; pointer-events: auto; }
+.inline-visual .visual-toolbar-divider.visual-control-more {
+  width: 0; margin: 0; transition: width 180ms ease, margin 180ms ease, opacity 140ms ease;
+}
+.inline-visual:hover .visual-toolbar-divider.visual-control-more,
+.inline-visual:focus-within .visual-toolbar-divider.visual-control-more { width: 1px; margin: 0 4px; }
 .visual-icon-button {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px;
@@ -8259,3 +8284,4 @@ button:focus-visible .menu-leadout {
   .visual-icon-button, .visual-icon-button::after, .visual-viewer,
   .visual-expand-corner, .visual-expand-arm-v, .visual-expand-arm-h { transition: none; }
 }
+  .inline-visual-actions, .visual-toolbar-divider,

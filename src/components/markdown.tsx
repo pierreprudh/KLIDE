@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useRef, useId, useMemo, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { prepareVisual, type VisualHtml } from "./visualHtml";
+import { typesetVisual } from "./visualTypeset";
 
 import { createPortal } from "react-dom";
 import { VisualExpandIcon, DownloadIcon, CodeIcon, CopyIcon, CheckIcon } from "../icons";
@@ -215,10 +216,20 @@ const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: V
   const content = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     let active = true;
-    const fit = () => { if (active && content.current) fitVisualCanvases(content.current); };
+    // Two passes that both need the drawing measured rather than described:
+    // canvases sized to their box, and labels — placed by a model that could
+    // not know how wide they would render — nudged off each other.
+    const fit = () => {
+      if (!active || !content.current) return;
+      fitVisualCanvases(content.current);
+      typesetVisual(content.current);
+    };
     fit();
     void document.fonts.ready.then(fit);
-    return () => { active = false; };
+    // The drawing is fluid: what fits at 720px can collide at 380px.
+    const ro = new ResizeObserver(() => fit());
+    if (content.current) ro.observe(content.current);
+    return () => { active = false; ro.disconnect(); };
   }, [visual]);
   return (
     // `klide-viz` carries the visual palette (tokens.css): the neutrals follow
@@ -264,10 +275,11 @@ const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: V
 
 const VISUAL_MOTION = { duration: 280, easing: "cubic-bezier(.2,.8,.2,1)" };
 
-function VisualControl({ label, children, onClick, disabled = false }: {
-  label: string; children: ReactNode; onClick: (event: React.MouseEvent<HTMLButtonElement>) => void; disabled?: boolean;
+function VisualControl({ label, children, onClick, disabled = false, className = "" }: {
+  label: string; children: ReactNode; onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  disabled?: boolean; className?: string;
 }) {
-  return <button type="button" className="visual-icon-button" aria-label={label} data-tooltip={label} disabled={disabled} onClick={onClick}>{children}</button>;
+  return <button type="button" className={`visual-icon-button ${className}`.trim()} aria-label={label} data-tooltip={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 
 function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLDivElement | null }; onClose: () => void }) {
@@ -357,7 +369,7 @@ function VisualSaveButton({ content }: { content: { current: HTMLDivElement | nu
     finally { setSaving(false); }
   }
   return <>
-    <VisualControl label={saving ? "Saving PNG…" : "Save as PNG"} disabled={saving} onClick={() => void save()}><DownloadIcon size={18} /></VisualControl>
+    <VisualControl label={saving ? "Saving PNG…" : "Save as PNG"} disabled={saving} onClick={() => void save()}><DownloadIcon size={15} /></VisualControl>
     {error ? <span role="alert" className="visual-export-error">{error}</span> : null}
   </>;
 }
@@ -393,11 +405,11 @@ function VisualBlock({ code, lang, closed }: { code: string; lang: string; close
     <figure className="inline-visual" style={{ margin: "16px 0", minWidth: 0 }}>
       <div ref={content}><VisualSurface visual={visual} scope={scope} /></div>
       <div className="inline-visual-actions" role="group" aria-label="Visual controls">
-        <VisualControl label="Show code" onClick={() => setChosen("code")}><CodeIcon size={18} /><span className="visual-sr-only">Code</span></VisualControl>
-        <VisualControl label={copied ? "Copied" : "Copy code"} onClick={copy}>{copied ? <CheckIcon size={18} /> : <CopyIcon size={18} />}</VisualControl>
+        <VisualControl className="visual-control-more" label="Show code" onClick={() => setChosen("code")}><CodeIcon size={15} /><span className="visual-sr-only">Code</span></VisualControl>
+        <VisualControl className="visual-control-more" label={copied ? "Copied" : "Copy code"} onClick={copy}>{copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />}</VisualControl>
         <VisualSaveButton content={content} />
-        <span className="visual-toolbar-divider" aria-hidden="true" />
-        <VisualControl label="Open fullscreen" onClick={event => { event.currentTarget.focus(); setExpanded(true); }}><VisualExpandIcon expanded={expanded} /></VisualControl>
+        <span className="visual-toolbar-divider visual-control-more" aria-hidden="true" />
+        <VisualControl label="Open fullscreen" onClick={event => { event.currentTarget.focus(); setExpanded(true); }}><VisualExpandIcon expanded={expanded} size={15} /></VisualControl>
       </div>
       {expanded ? <VisualViewer code={code} origin={content} onClose={() => setExpanded(false)} /> : null}
     </figure>

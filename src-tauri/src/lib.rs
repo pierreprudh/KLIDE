@@ -1,3 +1,4 @@
+mod visual_export;
 mod accounts;
 mod adapters;
 mod blocking;
@@ -892,6 +893,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_resize,
+            visual_export::save_visual_png,
             pty_write,
             pty_close,
             delegate_pty_spawn,
@@ -1177,6 +1179,7 @@ mod blocking_door_tests {
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
         ("models.rs", include_str!("models.rs")),
+        ("visual_export.rs", include_str!("visual_export.rs")),
         ("coordination.rs", include_str!("coordination.rs")),
         ("storage.rs", include_str!("storage.rs")),
         ("providers.rs", include_str!("providers.rs")),

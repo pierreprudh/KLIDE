@@ -50,6 +50,7 @@ Drawing a visual (\`html\` / \`svg\` fences) — use these token names, nothing 
 - Telling N things apart: var(--viz-1) … var(--viz-8) — categorical, never a verdict.
 - Type: var(--font-ui); var(--font-mono) for paths, ids and code.
 Give an svg a viewBox and no fixed width — it is made fluid, and a width query (@media (max-width: 420px)) asks about the block it sits in, not the window, so it works in a narrow panel.
+Leave room around a label — text in an svg is placed, not laid out, so budget about 0.55em per character and keep labels off each other and off the lines.
 Define every class you use in the same block, or put the styling inline — a class you reference but never define is drawn as nothing.
 No hex literals and no other token names: they are re-mapped onto the palette above, and the drawing reads better if you pick from it yourself.
 Compose a compact inline figure, not a slide: no outer card, toolbar, large canvas margins, or repeated heading already present in the prose.

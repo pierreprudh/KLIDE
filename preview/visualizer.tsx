@@ -130,6 +130,22 @@ one accent, a verdict color only where a verdict is earned, no pills:
 <div class="f"><div class="sev">Hygiene</div><div class="what"><b>Untracked files in the tree</b> <span class="why"><code>preview-connectors.*</code>, <code>q3-demo/</code> — ignore or delete before the commit</span></div></div>
 \`\`\`
 
+**3b — labels that collide.** Placed deliberately on top of each other and on
+the line: the halo keeps the crossing legible, and the later label is nudged off
+the earlier one after measuring. Drag the column — the repair re-runs at every
+width:
+
+\`\`\`svg
+<svg width="100%" viewBox="0 0 660 120">
+  <line x1="0" y1="40" x2="660" y2="40" stroke="var(--viz-line)"/>
+  <text x="20" y="44" font-family="var(--font-ui)" font-size="12" fill="var(--viz-ink)">a label that crosses the line</text>
+  <text x="40" y="80" font-family="var(--font-ui)" font-size="12" fill="var(--viz-ink)">embedding</text>
+  <text x="96" y="80" font-family="var(--font-ui)" font-size="12" fill="var(--viz-ink)">attention 17%</text>
+  <text x="180" y="80" font-family="var(--font-ui)" font-size="12" fill="var(--viz-ink)">feed-forward 70%</text>
+  <text x="300" y="80" font-family="var(--font-mono)" font-size="11" fill="var(--viz-ink-dim)">unembed</text>
+</svg>
+\`\`\`
+
 **4 — the hostile one** — a script, a global style, a beacon, a full-screen overlay,
 a \`javascript:\` link. Nothing below should escape the block or fire:
 

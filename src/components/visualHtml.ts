@@ -198,7 +198,12 @@ function responsiveBase(scope: string, drawingWidths: number[]): string {
     `.${scope} svg{max-width:100%;height:auto}` +
     `.${scope} svg[viewBox]{width:100%${floor ? `;min-width:${Math.round(floor)}px` : ""}}` +
     (widest ? `.${scope} svg[viewBox]{max-width:${Math.round(widest)}px}` : "") +
-    `.${scope} img,.${scope} table,.${scope} pre{max-width:100%}`
+    `.${scope} img,.${scope} table,.${scope} pre{max-width:100%}` +
+    // A label that crosses a line or a shape is read through it. The halo is
+    // the ground's own color drawn behind the glyphs — invisible where nothing
+    // overlaps, and the difference between legible and not where something
+    // does. Sized in em so it holds at any viewBox scale.
+    `.${scope} svg text{paint-order:stroke fill;stroke:var(--viz-surface);stroke-width:0.22em;stroke-linejoin:round}`
   );
 }
 

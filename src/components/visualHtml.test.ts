@@ -3,9 +3,10 @@ import { normalizeColor, normalizeColors, prepareVisual, safeVisualUrl, sanitize
 
 const SCOPE = "kv1";
 
-// Every block opens with its own responsive base sheet; these assertions are
-// about the rules the *drawing* contributed after it.
-const drawn = (css: string) => css.slice(css.lastIndexOf("max-width:100%}") + "max-width:100%}".length);
+// Every block opens with its own base sheet — fluid sizing and the label halo.
+// These assertions are about the rules the *drawing* contributed after it.
+const BASE = prepareVisual("", SCOPE).css;
+const drawn = (css: string) => (css.startsWith(BASE) ? css.slice(BASE.length) : css);
 
 describe("prepareVisual", () => {
   it("keeps the drawing vocabulary a diagram is made of", () => {
