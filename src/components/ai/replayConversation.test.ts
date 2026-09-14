@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   eventsToConversation,
   eventsToMsgs,
+  hasOpenTurn,
   isSilentRunError,
   replayForAdoption,
   runMessagesToMsgs,
@@ -412,5 +413,39 @@ describe("runMessagesToMsgs", () => {
     // nothing rather than one still unaccounted for.
     expect(msgs).toHaveLength(2);
     expect(msgs[1]).toMatchObject({ role: "tool", content: "Error: exit 1" });
+  });
+});
+
+describe("hasOpenTurn", () => {
+  const user = (text: string, ts: number): AgentEvent => ({
+    type: "user_message",
+    runId: "r1",
+    messageId: `u${ts}`,
+    text,
+    attachments: [],
+    ts,
+  });
+  const assistant = (text: string, ts: number): AgentEvent => ({
+    type: "assistant_message",
+    runId: "r1",
+    messageId: `a${ts}`,
+    content: [{ type: "text", text }],
+    ts,
+  });
+
+  it("is true for a transcript that ends on an unanswered user message", () => {
+    expect(hasOpenTurn([runStarted(1), user("hello", 2)])).toBe(true);
+    expect(hasOpenTurn([user("one", 1), assistant("first", 2), user("two", 3)])).toBe(true);
+  });
+
+  it("is false once the turn was answered or settled", () => {
+    expect(hasOpenTurn([user("one", 1), assistant("first", 2)])).toBe(false);
+    expect(hasOpenTurn([user("one", 1), { type: "run_result", runId: "r1", result: { status: "done" }, ts: 2 }])).toBe(false);
+    expect(hasOpenTurn([user("one", 1), { type: "run_error", runId: "r1", error: { code: "provider_unavailable", message: "500", retryable: false }, ts: 2 }])).toBe(false);
+  });
+
+  it("is false for a transcript with no turn at all", () => {
+    expect(hasOpenTurn([])).toBe(false);
+    expect(hasOpenTurn([runStarted(1)])).toBe(false);
   });
 });

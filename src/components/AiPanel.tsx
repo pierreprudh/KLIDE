@@ -92,7 +92,7 @@ import { WorkingRow } from "./ai/WorkingRow";
 import { AttachIcon, CloseIcon } from "../icons";
 import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
-import { PendingInboxRow, renderMessageBody, extractThinking, CompactionRow, ThinkingBlock, ToolRunRow } from "./ai/ChatMessage";
+import { PendingInboxRow, renderMessageBody, extractThinking, CompactionRow, ThinkingBlock, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, toolRunIndex, toolRunLabel } from "./ai/toolRuns";
@@ -122,10 +122,10 @@ import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory"
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
-import { isSilentRunError, replayForAdoption, shouldHealFromTranscript } from "./ai/replayConversation";
+import { hasOpenTurn, isSilentRunError, replayForAdoption, shouldHealFromTranscript } from "./ai/replayConversation";
 import { createTurnDriver } from "./ai/turnDriver";
 import { decideOnLeavingRun, shouldReadoptConversation, type RunLeaveDecision } from "./ai/leavingRun";
-import { compactionMsg, extractAssistantText } from "../agent/foldEvents";
+import { compactionMsg, extractAssistantText, interruptedMsg } from "../agent/foldEvents";
 import { pendingGatesFromEvents } from "../agent/pendingGates";
 import {
   applyConversationSessionTransition,
@@ -2229,10 +2229,21 @@ This user request requires workspace inspection. Before answering, you MUST call
         // with the process and can no longer be answered.
         let status: string | null = null;
         try { status = await getAgentRunStatus(reattachId); } catch { /* ignore */ }
-        if (
-          !isActiveRunStatus(status) ||
-          conversationSessionRef.current.conversationId !== reattachId
-        ) return;
+        if (conversationSessionRef.current.conversationId !== reattachId) return;
+        if (!isActiveRunStatus(status)) {
+          // No live run, and a turn that never settled: it died with the app.
+          // Say so where the answer would have been, or the user message just
+          // sits there and reads as a lost conversation. Tail case only — once
+          // a later turn is written the fold draws the same line itself.
+          if (hasOpenTurn(snapshot.events)) {
+            const current = msgsRef.current;
+            const last = current[current.length - 1];
+            if (!(last?.role === "system" && last.runInterrupted)) {
+              setMsgs([...current, interruptedMsg()]);
+            }
+          }
+          return;
+        }
 
         // Follow it live. Every persisted event just signals "re-read the
         // transcript" — disk is the source of truth, so there are no gaps to
@@ -3132,7 +3143,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     // different engine behind it.
     const delegateConsole = isDelegateProvider(turn.provider) && variant !== "focus";
     const delegateProvider = providerName(turn.provider);
-    nextMsgs.splice(userIndex + 1, 0, { role: "assistant", content: "", delegateConsole, delegateProvider });
+    // The headless path hands back the whole reply at once, so its placeholder
+    // shows a status word and a clock instead of the streaming loader.
+    const delegateHeadless = isDelegateProvider(turn.provider) && variant === "focus" ? (true as const) : undefined;
+    nextMsgs.splice(userIndex + 1, 0, { role: "assistant", content: "", delegateConsole, delegateProvider, delegateHeadless });
     const assistantIndex = userIndex + 1;
     msgsRef.current = nextMsgs;
     setMsgs(nextMsgs);
@@ -3174,7 +3188,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       setMsgs(next);
     };
 
-    const delegate = { delegateConsole, delegateProvider };
+    const delegate = { delegateConsole, delegateProvider, delegateHeadless };
 
     // The streaming state machine for this turn — delta batching, TTFT/turn
     // timing, the assistant-index cursor, flush-before-finalize. See
@@ -4258,6 +4272,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           const following = msgs[i + 1];
           const isLast = i === lastExchangeIndex || (i + 1 === lastExchangeIndex && following?.role === "system" && !!following.completion);
           const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls;
+          const previous = msgs[i - 1];
           const activeToolRunning =
             streaming &&
             isLast &&
@@ -4460,6 +4475,17 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
+          // Interrupted marker: the turn above died with the app. Same row
+          // family as the failure line, drawn here rather than through
+          // `renderMessageBody` because Retry is this panel's resend.
+          if (m.role === "system" && m.runInterrupted) {
+            return (
+              <div key={i} className="ai-msg-in" style={{ display: "flex", justifyContent: "center", margin: "16px 0 10px" }}>
+                <RunInterruptedRow onRetry={() => retryFromMessage(i)} disabled={streaming} />
+              </div>
+            );
+          }
+
           // Compaction marker: a system event, not an assistant utterance —
           // render it gutter-less and indented to align with tool output.
           if (m.role === "system" && m.compaction) {
@@ -4531,7 +4557,11 @@ This user request requires workspace inspection. Before answering, you MUST call
               )}
               <div style={{ flex: 1, minWidth: 0, color: "var(--fg-strong)", fontSize: 13, lineHeight: 1.6 }}>
                 {hoistedInbox && <div style={{ margin: "0 0 4px" }}>{renderMessageBody(hoistedInbox, false, { workspaceRoot })}</div>}
-                {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content)) ? <AssistantPlaceholderLoader /> : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
+                {isAssistantPlaceholder && !msgs.some((msg, idx) => idx > i && msg.role === "tool" && /^Running /.test(msg.content))
+                  ? (m.delegateHeadless
+                    ? <WorkingSince since={previous?.role === "user" ? previous.ts : undefined} />
+                    : <AssistantPlaceholderLoader />)
+                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
