@@ -236,20 +236,19 @@ const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: V
     // the theme, the chroma is fixed and readable on either ground, and
     // `visualHtml.ts` has already mapped everything the model wrote onto it.
     <div
-      className={`${scope} klide-viz`}
+      className={`${scope} klide-viz${visual.kind === "page" ? " klide-viz-page" : ""}`}
       style={{
-        padding: "4px 0",
-        background: "transparent",
+        // Only what a visual must never be able to restyle stays inline. The
+        // ground, the gutters and the type live on `.klide-viz` in tokens.css,
+        // one class deep and declared before any visual's own stylesheet — so a
+        // model that wrote `body { padding: 72px }` still gets 72px, which an
+        // inline default would have silently outranked.
         overflowX: "auto",
         // Traps paint and layout — including anything that asked to be fixed —
         // inside the block, and makes the block the unit a width query asks
         // about (the drawing's @media size queries are rewritten to @container).
         contain: "layout paint",
         containerType: "inline-size",
-        color: "var(--viz-ink)",
-        fontFamily: "var(--font-ui)",
-        fontSize: "var(--fs-base)",
-        lineHeight: 1.5,
         // Models reach for `--font-sans`; Klide's UI face answers to it here.
         ["--font-sans" as string]: "var(--font-ui)",
       } as CSSProperties}

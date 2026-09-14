@@ -31,7 +31,7 @@ describe("the inline visualizer", () => {
   it("renders nothing a hostile block asked for", () => {
     const html = render(
       "```html\n" +
-        '<style>body { background: red }</style>\n' +
+        '<style>body { background: red; padding: 40px } .note { background: red }</style>\n' +
         '<script>window.x = 1</script>\n' +
         '<img src="https://tracker.example/b.gif" onerror="window.y = 1">\n' +
         '<a href="javascript:void(0)">link</a>\n' +
@@ -45,10 +45,14 @@ describe("the inline visualizer", () => {
     expect(html).not.toContain("onerror");
     expect(html).not.toContain("tracker.example");
     expect(html).toContain("iframe, script not rendered");
-    // The model's `body` rule is re-anchored to the block, never left global —
-    // and its color lands on the block's palette.
+    // The model's `body` rule is re-anchored to the block, never left global.
+    // Its gutters survive; its ground does not — a page's background is a
+    // whole-window decision, and the block's own ground is the themed one.
+    expect(html).toMatch(/\.kv[A-Za-z0-9]+\{padding: 40px\}/);
+    expect(html).not.toContain("background: red");
+    // A rule that is not the page itself still lands on the block's palette.
     expect(html).toMatch(
-      /\.kv[A-Za-z0-9]+\{background: color-mix\(in srgb, var\(--viz-danger\) 16%, var\(--viz-surface\)\);color:var\(--viz-ink\)\}/,
+      /\.kv[A-Za-z0-9]+ \.note\{background: color-mix\(in srgb, var\(--viz-danger\) 16%, var\(--viz-surface\)\);color:var\(--viz-ink\)\}/,
     );
   });
 
