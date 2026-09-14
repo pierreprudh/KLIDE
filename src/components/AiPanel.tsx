@@ -3064,13 +3064,14 @@ This user request requires workspace inspection. Before answering, you MUST call
   // from `pendingPermission`.
   // What a *page* may take back from those gutters. A diagram sits in the
   // reading column like a paragraph; a document a model wrote is a surface of
-  // its own and spans the canvas — up to the 20px the column never gives up,
-  // and never over the island column. Handed down as a variable so the figure
-  // in `markdown.tsx` can pull itself out without knowing where it is rendered
+  // its own and grows past the column — wide, not edge to edge: to 1040px at
+  // most, never past the 20px the column always keeps, never over the island
+  // column. Handed down as a variable so the figure in `markdown.tsx` can
+  // pull itself out without knowing where it is rendered
   // (`.inline-visual-page` in tokens.css); in the workbench panel it is 0 and
   // the page spans the panel.
   const readingBleed = variant === "focus" && canvasWidth > 0
-    ? Math.max(0, (canvasWidth - 760 - focusInset) / 2 - 20)
+    ? Math.max(0, Math.min((1040 - 760) / 2, (canvasWidth - 760 - focusInset) / 2 - 20))
     : 0;
   const [pendingPermission, setPendingPermission] = useState<{
     runId: string;

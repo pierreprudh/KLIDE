@@ -3133,8 +3133,10 @@ button:focus-visible .menu-leadout {
   padding-block: 40px;
   padding-inline: clamp(20px, 6%, 64px);
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  /* The frame — hairline and corners — belongs to the figure around it
+     (`.inline-visual-page`), so the controls under the page sit inside the
+     same frame; the page rounds only its top corners to meet it. */
+  border-radius: calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px) 0 0;
   font-size: var(--fs-md);
   line-height: 1.65;
 }
@@ -8418,3 +8420,16 @@ button:focus-visible .menu-leadout {
   .visual-expand-corner, .visual-expand-arm-v, .visual-expand-arm-h { transition: none; }
 }
   .inline-visual-actions, .visual-toolbar-divider,
+  /* The page's frame is the figure's, so page and controls are one object. */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+/* The controls are the page's foot — a row inside the frame under a hairline,
+   not glyphs left hanging under the card. */
+.inline-visual-page > .inline-visual-actions {
+  width: auto; margin: 0;
+  /* The glyphs end where the page's own text does: its gutter, less the
+     button's inner slack around its glyph. */
+  padding: 4px calc(clamp(20px, 6%, 64px) - 8px);
+  border-top: 1px solid var(--border);
