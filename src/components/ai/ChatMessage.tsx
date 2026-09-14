@@ -1121,6 +1121,96 @@ export function RunFailedRow({ message }: { message: string }) {
   );
 }
 
+/**
+ * The line for a turn the app was closed on — the RunFailedRow family
+ * (centered, hairlines), but nothing failed, so quiet ink rather than red, and
+ * one plain verb to move on. `onRetry` is the panel's resend; a read-only
+ * surface renders the line without it.
+ */
+export function RunInterruptedRow({ onRetry, disabled }: { onRetry?: () => void; disabled?: boolean }) {
+  const hairline = (
+    <span
+      aria-hidden="true"
+      style={{
+        height: 1,
+        flex: "1 1 44px",
+        minWidth: 28,
+        maxWidth: 72,
+        background: "color-mix(in srgb, var(--border) 82%, transparent)",
+      }}
+    />
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, width: "100%" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", maxWidth: "min(520px, 100%)" }}>
+        {hairline}
+        <span style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", fontWeight: 500, flexShrink: 0 }}>
+          Interrupted
+        </span>
+        {hairline}
+      </div>
+      <div style={{ ...COMPACT_MONO, color: "var(--fg-subtle)", textAlign: "center", maxWidth: "min(520px, 92%)", lineHeight: 1.5 }}>
+        Klide closed before this turn answered.
+        {onRetry && (
+          <>
+            {" "}
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={disabled}
+              style={{
+                ...COMPACT_MONO,
+                background: "none",
+                border: 0,
+                padding: 0,
+                color: disabled ? "var(--fg-dim)" : "var(--fg)",
+                cursor: disabled ? "default" : "pointer",
+                textDecoration: "underline",
+                textDecorationColor: "var(--border)",
+                textUnderlineOffset: 3,
+              }}
+            >
+              Retry
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What stands in for the first token on a turn that will not stream: the
+ * run's status word and a clock that counts from `since`. The orbit loader
+ * promises a token any second; on the Delegate headless path none comes until
+ * the whole reply does, and a minute of that reads as a stall. Static ink and
+ * a counting number read as progress.
+ */
+export function WorkingSince({ since }: { since?: number }) {
+  // The user turn's own timestamp when it has one; otherwise the moment this
+  // line appeared, held for as long as it stays mounted.
+  const [mountedAt] = useState(() => Date.now());
+  const from = since ?? mountedAt;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - from) / 1000));
+  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  return (
+    <span
+      role="status"
+      aria-label={`Working, ${clock} elapsed`}
+      style={{ ...COMPACT_MONO, color: "var(--fg-dim)", letterSpacing: "0.02em", display: "inline-flex", alignItems: "center", height: 22, gap: 8 }}
+    >
+      <span>Working</span>
+      <span aria-hidden="true" style={{ opacity: 0.6 }}>·</span>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>{clock}</span>
+    </span>
+  );
+}
+
 type MessageBodyOptions = {
   /** Skip the ThinkingBlock — the caller renders it elsewhere (AiPanel
    *  hoists a folded tool run's reasoning above the "N tool calls" row). */
@@ -1145,6 +1235,9 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
   }
   if (m.role === "system" && m.runError) {
     return <RunFailedRow message={m.runError.message} />;
+  }
+  if (m.role === "system" && m.runInterrupted) {
+    return <RunInterruptedRow />;
   }
   if (m.role === "system" && m.compaction) {
     return <CompactionRow count={m.compaction.count} summary={m.compaction.summary} source={m.compaction.source} messages={m.compaction.messages} toolCalls={m.compaction.toolCalls} />;

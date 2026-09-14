@@ -3048,6 +3048,24 @@ button:focus-visible .menu-leadout {
    maps whatever a model writes — a guessed token name, a hardcoded hex — onto
    these, so every color in a drawing comes from one palette and one ground. */
 .klide-viz {
+  /* The block's own defaults, class-level rather than inline and declared
+     before any visual's stylesheet: a model that wrote `body { padding: 72px }`
+     means it, and at equal specificity the later rule — the visual's — wins.
+     An inline default would have outranked the author silently. */
+  padding: 4px 0;
+  background: transparent;
+  color: var(--viz-ink);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+
+  /* What `100vh` resolves to in here. A visual has no window: its height is
+     whatever its content comes to, so the block declares a notional page
+     instead of measuring the app around it (visualHtml.ts rewrites the unit).
+     640px is a screenful at reading scale — enough that a section sized to
+     "one screen" still reads as one, without a fold that means nothing. */
+  --viz-vh: 6.4px;
+
   --viz-surface:    var(--bg-elevated);
   /* Mixed from --fg-strong, never --fg: the light theme's --fg carries 0.82
      alpha, so mixing it silently weakens every line and tint by a fifth. */
@@ -3099,6 +3117,101 @@ button:focus-visible .menu-leadout {
   --viz-1: #ff6b80;
   --viz-3: #e0a92c;
   --viz-6: #6a9bcc;
+}
+
+/* A visual that declared a page — a doctype, an <html>/<body> wrapper, a
+   `:root` rule — asked for a document, not a diagram. A diagram sits on the
+   conversation's own ground with nothing around it; a document gets its page
+   back: one ground, one hairline, and gutters wide enough to read in.
+
+   Every rule below is one class, or one class and one element, deep — exactly
+   what an authored `body { … }` or `h1 { … }` scopes to — and tokens.css is
+   read before the visual's own <style>. So these are defaults in the real
+   sense: they hold for a page that styled nothing, and lose to every page
+   that did. */
+.klide-viz-page {
+  padding-block: 40px;
+  padding-inline: clamp(20px, 6%, 64px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-md);
+  line-height: 1.65;
+}
+
+/* A page's own first and last blocks sit against the gutter, not a doubled one. */
+.klide-viz-page > [data-visual-content] > :first-child { margin-top: 0; }
+.klide-viz-page > [data-visual-content] > :last-child { margin-bottom: 0; }
+
+/* Emphasis is size and color, never weight — Atkinson Hyperlegible is
+   single-weight, and a faux-bold heading is the one thing that makes a
+   Klide document look like someone else's. */
+.klide-viz-page :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 400;
+  color: var(--viz-ink);
+  line-height: 1.25;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+  margin: 1.6em 0 0.5em;
+}
+.klide-viz-page h1 { font-size: 1.9em; letter-spacing: -0.018em; }
+.klide-viz-page h2 { font-size: 1.4em; }
+.klide-viz-page h3 { font-size: 1.15em; }
+.klide-viz-page :is(h4, h5, h6) { font-size: 1em; color: var(--viz-ink-dim); }
+
+.klide-viz-page p { margin: 0 0 1em; }
+.klide-viz-page :is(ul, ol) { margin: 0 0 1em; padding-left: 1.4em; }
+.klide-viz-page li { margin: 0.25em 0; }
+.klide-viz-page :is(dt, strong, b) { color: var(--viz-ink); }
+.klide-viz-page small { font-size: 0.86em; color: var(--viz-ink-dim); }
+
+/* A rule is a hairline and a breath, not a divider people notice. */
+.klide-viz-page hr {
+  border: 0;
+  border-top: 1px solid var(--viz-line-soft);
+  margin: 2.2em 0;
+}
+
+/* A quote is marked by a spine, never boxed. */
+.klide-viz-page blockquote {
+  margin: 1.4em 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--viz-line);
+  color: var(--viz-ink-dim);
+}
+
+.klide-viz-page a { color: var(--viz-accent); text-underline-offset: 2px; }
+
+.klide-viz-page :is(code, kbd, samp) {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--viz-ink);
+}
+.klide-viz-page pre {
+  margin: 0 0 1.2em;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--viz-line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--viz-surface-2);
+  line-height: 1.5;
+}
+
+.klide-viz-page table { border-collapse: collapse; margin: 0 0 1.2em; }
+.klide-viz-page :is(th, td) {
+  padding: 7px 14px 7px 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--viz-line-soft);
+}
+.klide-viz-page th { font-weight: 400; color: var(--viz-ink-dim); }
+.klide-viz-page caption { margin-bottom: 8px; color: var(--viz-ink-dim); text-align: left; }
+
+/* A measure, for the page that set none. Only direct children of the block are
+   caught: the moment a page wraps its content in a column of its own, that
+   column is what this would have to fight, and the author's measure wins. */
+.klide-viz-page > [data-visual-content] > :is(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 70ch;
 }
 
 /* Paper card — a recessed surface for reading content. Stronger

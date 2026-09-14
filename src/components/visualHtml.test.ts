@@ -323,3 +323,106 @@ describe("an arrowhead that follows its line", () => {
     expect(prepareVisual("<style>.head { fill: context-fill }</style>", SCOPE).css).toContain("fill: var(--viz-line)");
   });
 });
+
+describe("a model that wrote a page, not a drawing", () => {
+  it("knows a page from a drawing by what the source declared", () => {
+    expect(prepareVisual("<svg viewBox='0 0 10 10'><rect/></svg>", SCOPE).kind).toBe("drawing");
+    expect(prepareVisual("<div><h1>Hi</h1></div>", SCOPE).kind).toBe("drawing");
+    expect(prepareVisual("<!doctype html><h1>Hi</h1>", SCOPE).kind).toBe("page");
+    expect(prepareVisual("<body><h1>Hi</h1></body>", SCOPE).kind).toBe("page");
+    expect(prepareVisual("<style>body { margin: 0 }</style><h1>Hi</h1>", SCOPE).kind).toBe("page");
+  });
+
+  it("unwraps the page skeleton instead of reporting it as missing", () => {
+    // "body, head, html not rendered" under every page is noise about wrappers
+    // whose children are all right there.
+    const { html, dropped } = prepareVisual(
+      '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Klide</title>' +
+        '<link rel="stylesheet" href="x.css"></head><body><h1>Hi</h1></body></html>',
+      SCOPE,
+    );
+    expect(html).toBe("<h1>Hi</h1>");
+    expect(dropped).toEqual([]);
+  });
+
+  it("keeps a title that is a tooltip and drops one that is a document's name", () => {
+    expect(prepareVisual("<title>Klide</title><p>body</p>", SCOPE).html).toBe("<p>body</p>");
+    expect(prepareVisual("<svg><title>A map</title><rect/></svg>", SCOPE).html).toContain("<title>A map</title>");
+  });
+});
+
+describe("a block has no window", () => {
+  it("measures the block, not the app, for an inline viewport unit", () => {
+    // 6vw of a 1850px window is 111px — which is how a hero sized for a page
+    // arrives in a 900px column already pinned to its cap.
+    const { css } = prepareVisual("<style>h1 { font-size: clamp(2rem, 6vw, 4rem) }</style>", SCOPE);
+    expect(css).toContain("clamp(2rem, 6cqw, 4rem)");
+  });
+
+  it("drops a screenful and keeps the proportion beside it", () => {
+    // `min-height: 100vh` means "fill the screen". There is no screen and no
+    // fold, so honoring it literally opens a screenful of nothing mid-answer.
+    const { css } = prepareVisual("<style>section { min-height: 100vh; padding: 8vh 0 }</style>", SCOPE);
+    expect(css).not.toContain("min-height");
+    expect(css).toContain("padding: calc(8 * var(--viz-vh)) 0");
+  });
+
+  it("maps the units in a style attribute the same way", () => {
+    expect(prepareVisual('<div style="width: 50vw; margin-top: 4vh"></div>', SCOPE).html)
+      .toContain('style="width: 50cqw; margin-top: calc(4 * var(--viz-vh))"');
+    expect(prepareVisual('<div style="height: 20vh"></div>', SCOPE).html).toBe("<div></div>");
+  });
+
+  it("spans both axes for vmin and vmax", () => {
+    const { css } = prepareVisual("<style>.a { font-size: 4vmin; width: 60vmax }</style>", SCOPE);
+    expect(css).toContain("min(4cqw, calc(4 * var(--viz-vh)))");
+    expect(css).toContain("max(60cqw, calc(60 * var(--viz-vh)))");
+  });
+
+  it("leaves a property name and an unrelated word alone", () => {
+    const { css } = prepareVisual("<style>.a { --gap: 4px; overflow: visible; font: 12px/1.5 serif }</style>", SCOPE);
+    expect(css).toContain("--gap: 4px");
+    expect(css).toContain("overflow: visible");
+  });
+});
+
+describe("a page's own conditions", () => {
+  it("scopes body.dark to the block itself, not to everything inside it", () => {
+    // As a descendant it would paint any `.dark` in the page instead.
+    expect(scopeCss("body.dark { color: #eee }", SCOPE)).toContain(".kv1.dark{");
+    expect(scopeCss("body .dark { color: #eee }", SCOPE)).toContain(".kv1 .dark{");
+    expect(scopeCss(".dark { color: #eee }", SCOPE)).toContain(".kv1 .dark{");
+  });
+});
+
+describe("a page written on a dark ground", () => {
+  it("reads its neutrals against the ground it was authored on", () => {
+    // `#151515` is a *raised* box in a dark page and `#f2f2f2` is its text.
+    // Read as a drawing on paper, both flip: a near-white slab in a dark theme,
+    // with its own label invisible on it.
+    const { css } = prepareVisual(
+      "<style>body { background: #0b0b0b; color: #f2f2f2 }" +
+        ".callout { background: #151515 } .muted { color: #8a8a8a }</style>",
+      SCOPE,
+    );
+    // The box lands on a surface with ink on it, never ink with a hole in it.
+    expect(css).toContain(".kv1 .callout{background: var(--viz-surface);color:var(--viz-ink)}");
+    expect(css).toContain(".kv1 .muted{color: var(--viz-ink-dim)}");
+  });
+
+  it("leaves a page written on paper reading as one", () => {
+    const { css } = prepareVisual(
+      "<style>body { background: #ffffff } .callout { background: #f1f1f1 }</style>",
+      SCOPE,
+    );
+    expect(css).toContain(".kv1 .callout{background: var(--viz-surface)");
+  });
+
+  it("does not invert a hue, which means the same on either ground", () => {
+    const { css } = prepareVisual(
+      "<style>body { background: #0b0b0b } .warn { color: #e0a92c }</style>",
+      SCOPE,
+    );
+    expect(css).toContain("var(--viz-warning)");
+  });
+});

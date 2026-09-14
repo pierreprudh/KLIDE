@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   eventsToConversation,
   eventsToMsgs,
+  hasOpenTurn,
   isSilentRunError,
   replayForAdoption,
   runMessagesToMsgs,
@@ -171,31 +172,74 @@ describe("replayForAdoption", () => {
   });
 
   it("adopts a delegate turn whose live view holds rows the Transcript never will", () => {
-    // The reload-mid-generation bug. An OpenCode run streams its own tool
-    // activity as `observed_tool_call`, which lives on the request-scoped
-    // channel and is never persisted — so the live view had seven rows (three
-    // sentence fragments around four tool rows) while the Transcript folds the
-    // same turn into two. A row count made the replay look like a truncated
-    // read and refused it, and the finished 2,900-character answer stayed on
-    // disk. Weighed by what was actually said, the replay plainly carries more.
-    const onScreen: Msg[] = [
-      { role: "user", content: "do you find any issues in the current context" },
-      { role: "assistant", content: "I'll take that as a review of the current work —" },
-      { role: "tool", content: "bash", toolName: "bash", observedBy: "opencode" },
-      { role: "tool", content: "read", toolName: "read", observedBy: "opencode" },
-      { role: "assistant", content: "There's a sizeable uncommitted feature in flight." },
-      { role: "tool", content: "read", toolName: "read", observedBy: "opencode" },
-      { role: "assistant", content: "The code looks well-built; let me verify it compiles." },
+    // The reload-mid-generation bug, built from the two streams Rust actually
+    // produces. A delegate CLI's own tool activity is sent on the
+    // request-scoped channel and never written to disk (agent/mod.rs), so the
+    // live view is folded from events the Transcript does not contain — three
+    // sentence fragments around four tool rows, seven rows against the two the
+    // replay folds. A row count read that as a truncated read and refused it,
+    // and the finished answer stayed on disk. Weighed by what was said, the
+    // replay plainly carries more.
+    // A call and its result, the pair the CLI reports — the row only lands
+    // once the result does, which is how the live view reaches seven rows.
+    const observed = (id: string, name: string, ts: number): AgentEvent[] => [
+      {
+        type: "observed_tool_call",
+        runId: "r1",
+        toolCallId: id,
+        provider: "opencode",
+        name,
+        input: {},
+        summary: name,
+        ts,
+      },
+      { type: "observed_tool_result", runId: "r1", toolCallId: id, ok: true, content: "…", ts: ts + 1 },
     ];
-    const finished = [
+    const delta = (text: string, ts: number): AgentEvent => ({
+      type: "assistant_delta",
+      runId: "r1",
+      messageId: "a1",
+      text,
+      ts,
+    });
+
+    const said = [
+      "I'll take that as a review of the current work — let me check what's in flight.",
+      "There's a sizeable uncommitted feature in flight. Let me review the diffs.",
+      "The code looks well-built; let me verify it compiles before reporting.",
+    ];
+    const answer = "I reviewed it. One real issue: a corrupt store reads as empty, and the next write overwrites it.";
+
+    // What the panel had on screen when the webview reloaded: everything the
+    // live channel had sent, minus the answer still being generated.
+    const liveStream: AgentEvent[] = [
       runStarted(1),
       userMessage("do you find any issues in the current context", 2),
-      assistantMessage(
-        "I'll take that as a review of the current work —There's a sizeable uncommitted feature in flight.The code looks well-built; let me verify it compiles.I reviewed it. One real issue: a corrupt store reads as empty and the next write overwrites it.",
-        3,
-      ),
+      delta(said[0], 3),
+      ...observed("t1", "bash", 4),
+      ...observed("t2", "read", 6),
+      delta(said[1], 8),
+      ...observed("t3", "read", 9),
+      delta(said[2], 11),
+      ...observed("t4", "bash", 12),
     ];
-    const healed = replayForAdoption(finished, onScreen);
+    const onScreen = eventsToMsgs(liveStream);
+
+    // What the Transcript holds once the turn lands: no observed rows, and the
+    // whole turn folded into one assistant message.
+    const transcriptAfter: AgentEvent[] = [
+      runStarted(1),
+      userMessage("do you find any issues in the current context", 2),
+      assistantMessage(said.join("") + answer, 10),
+    ];
+
+    // Eight rows against the two the Transcript folds — the shape the bug
+    // report showed: sentence fragments around tool rows, and no answer.
+    expect(onScreen).toHaveLength(8);
+    expect(onScreen.filter((m) => m.role === "tool")).toHaveLength(4);
+    expect(eventsToMsgs(transcriptAfter).length).toBeLessThan(onScreen.length);
+
+    const healed = replayForAdoption(transcriptAfter, onScreen);
     expect(healed?.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(healed?.[1].content).toContain("One real issue");
   });
@@ -369,5 +413,39 @@ describe("runMessagesToMsgs", () => {
     // nothing rather than one still unaccounted for.
     expect(msgs).toHaveLength(2);
     expect(msgs[1]).toMatchObject({ role: "tool", content: "Error: exit 1" });
+  });
+});
+
+describe("hasOpenTurn", () => {
+  const user = (text: string, ts: number): AgentEvent => ({
+    type: "user_message",
+    runId: "r1",
+    messageId: `u${ts}`,
+    text,
+    attachments: [],
+    ts,
+  });
+  const assistant = (text: string, ts: number): AgentEvent => ({
+    type: "assistant_message",
+    runId: "r1",
+    messageId: `a${ts}`,
+    content: [{ type: "text", text }],
+    ts,
+  });
+
+  it("is true for a transcript that ends on an unanswered user message", () => {
+    expect(hasOpenTurn([runStarted(1), user("hello", 2)])).toBe(true);
+    expect(hasOpenTurn([user("one", 1), assistant("first", 2), user("two", 3)])).toBe(true);
+  });
+
+  it("is false once the turn was answered or settled", () => {
+    expect(hasOpenTurn([user("one", 1), assistant("first", 2)])).toBe(false);
+    expect(hasOpenTurn([user("one", 1), { type: "run_result", runId: "r1", result: { status: "done" }, ts: 2 }])).toBe(false);
+    expect(hasOpenTurn([user("one", 1), { type: "run_error", runId: "r1", error: { code: "provider_unavailable", message: "500", retryable: false }, ts: 2 }])).toBe(false);
+  });
+
+  it("is false for a transcript with no turn at all", () => {
+    expect(hasOpenTurn([])).toBe(false);
+    expect(hasOpenTurn([runStarted(1)])).toBe(false);
   });
 });

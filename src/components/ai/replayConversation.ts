@@ -38,6 +38,23 @@ export function isSilentRunError(code: string): boolean {
  * appended after it) is history, not the state of the thread, and pinning it
  * to the bottom would report a recovered conversation as failed.
  */
+/**
+ * True when the transcript's last turn was never answered: a `user_message`
+ * with no `assistant_message`, `run_result` or `run_error` after it. The
+ * Harness writes one of those on every exit it controls, so with no live run
+ * in Rust this is a turn the app was closed on — the panel then appends
+ * `interruptedMsg` where the answer would have been. Same rule as the fold's
+ * `turnOpen`, which draws the line once a later turn exists.
+ */
+export function hasOpenTurn(events: AgentEvent[]): boolean {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const type = events[i].type;
+    if (type === "run_result" || type === "run_error" || type === "assistant_message") return false;
+    if (type === "user_message") return true;
+  }
+  return false;
+}
+
 export function runErrorLine(events: AgentEvent[]): Msg | null {
   const last = events[events.length - 1];
   if (last?.type !== "run_error" || isSilentRunError(last.error.code)) return null;

@@ -112,6 +112,11 @@ export type FoldedRow =
   | {
       kind: "steering";
       reason: string;
+    }
+  | {
+      /** The turn above was killed with the process: a later turn began while
+       *  it had neither a result nor an error. See `interruptedMsg`. */
+      kind: "interrupted";
     };
 
 type AssistantRow = Extract<FoldedRow, { kind: "assistant" }>;
@@ -158,6 +163,11 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
   const rows: FoldedRow[] = [];
   const pricing = opts.pricing ?? null;
   let turnStartTs: number | undefined;
+  /** A `user_message` opened a turn that nothing has answered or settled yet —
+   *  no `assistant_message`, no `run_result`, no `run_error`. The next turn
+   *  starting while this is set means the process died before the reply
+   *  landed: the Harness writes one of those three on every exit it controls. */
+  let turnOpen = false;
   // The still-streaming assistant row deltas accumulate into. Closed by the
   // turn's `assistant_message`, and by any event that means "the next text
   // belongs below me" (tool card, steering marker, user turn) — mirroring how
@@ -261,6 +271,18 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
   };
 
   const apply = (event: AgentEvent, live?: FoldLiveTiming): FoldStep => {
+    if (event.type === "run_result" || event.type === "run_error" || event.type === "assistant_message") turnOpen = false;
+    // A turn that never settled before the next one began was killed with the
+    // app. Its rows stay as they were; one marker in their place says why the
+    // answer is missing, and the new turn opens below it.
+    const interrupted: number[] = [];
+    if ((event.type === "run_started" || event.type === "user_message") && turnOpen) {
+      turnOpen = false;
+      open = null;
+      rows.push({ kind: "interrupted" });
+      interrupted.push(rows.length - 1);
+    }
+
     if (event.type === "run_started") {
       completionMode = event.mode;
       completed = false;
@@ -277,12 +299,13 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       if (open && open.row.model === undefined && open.row.provider === undefined) {
         open.row.provider = dispatch.provider;
         open.row.model = dispatch.model;
-        return { changed: [open.idx] };
+        return { changed: [...interrupted, open.idx] };
       }
-      return { changed: [] };
+      return { changed: interrupted };
     }
 
     if (event.type === "user_message") {
+      turnOpen = true;
       turnStartTs = event.ts;
       open = null;
       turnRendered = "";
@@ -292,7 +315,7 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         attachments: event.attachments?.length ? event.attachments : undefined,
         ts: event.ts,
       });
-      return { changed: [rows.length - 1] };
+      return { changed: [...interrupted, rows.length - 1] };
     }
 
     if (event.type === "assistant_delta") {
@@ -652,7 +675,7 @@ function isToolCallBlock(
  *  view tags rows with its delegate flags and shows "Running…" placeholders
  *  for calls that have started but not finished. */
 export type FoldedMsgView = {
-  delegate?: { delegateConsole?: boolean; delegateProvider?: string };
+  delegate?: { delegateConsole?: boolean; delegateProvider?: string; delegateHeadless?: true };
   runningPlaceholders?: boolean;
 };
 
@@ -699,6 +722,9 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
         steering: { reason: row.reason },
       },
     ];
+  }
+  if (row.kind === "interrupted") {
+    return [interruptedMsg()];
   }
   const msgs: Msg[] = [
     {
@@ -761,6 +787,16 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
   return msgs;
 }
 
+/**
+ * The panel line for a turn the app was closed on. The fold draws it once a
+ * later turn is written (an open turn followed by another); for the tail of a
+ * transcript only the panel can, because only it knows Rust holds no live run
+ * — `followConversationRun` appends this same line there.
+ */
+export function interruptedMsg(): Msg {
+  return { role: "system", content: "Interrupted", runInterrupted: true };
+}
+
 export function foldedToMsgs(rows: FoldedRow[]): Msg[] {
   return rows.flatMap((row) => foldedRowToMsgs(row));
 }
@@ -775,7 +811,7 @@ export function foldedToRunMessages(rows: FoldedRow[]): RunMessage[] {
     // `RunMessage.role` is "user" | "assistant" by wire contract (the Rust
     // struct and every Delegate adapter agree), so AI-panel transcript
     // annotations have no row to occupy in Mission Control.
-    if (row.kind === "compaction" || row.kind === "steering" || row.kind === "completion") continue;
+    if (row.kind === "compaction" || row.kind === "steering" || row.kind === "completion" || row.kind === "interrupted") continue;
     if (!row.text.trim() && row.toolCalls.length === 0) continue;
     out.push({
       role: "assistant",

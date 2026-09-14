@@ -1,5 +1,17 @@
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { conversationMark, modelIdentity } from "./modelIdentity";
+import type { ProviderId } from "./agent/types";
+
+/** What a mark actually draws, as markup — the only way to tell a mark that
+ *  wears the CLI from one that wears the maker, since both arrive as one node. */
+function drawn(model: string | null, provider: ProviderId, size: number): string {
+  const mark = conversationMark(model, provider, size);
+  if (!mark) throw new Error("no mark");
+  return renderToStaticMarkup(mark.node);
+}
+
+const OPENCODE_MARK = "opencode-logo-light.svg";
 
 describe("modelIdentity", () => {
   it.each([
@@ -110,5 +122,36 @@ describe("a delegate whose catalogue is one house", () => {
     // no maker to name, and inventing one would be a claim about the run.
     expect(conversationMark("default", "opencode", 22)?.label).toBe("OpenCode");
     expect(conversationMark("kimi-k2", "opencode", 22)?.label).toBe("OpenCode · Kimi");
+  });
+});
+
+describe("a single slot, at rail size", () => {
+  // The rail draws its rows at 15: too small for a pair, so one mark has to
+  // carry the row. Under an "OpenCode" group heading that mark repeated the
+  // heading and said nothing — the maker is the half the row didn't have.
+  it("lets the maker lead a multi-house delegate", () => {
+    const kimi = drawn("kimi-k2", "opencode", 15);
+    expect(kimi).toContain("kimi-logo-light.svg");
+    expect(kimi).not.toContain(OPENCODE_MARK);
+
+    expect(drawn("anthropic/claude-opus-5", "opencode", 15)).not.toContain(OPENCODE_MARK);
+  });
+
+  it("keeps the CLI when a multi-house delegate pinned no model", () => {
+    expect(drawn("default", "opencode", 15)).toContain(OPENCODE_MARK);
+  });
+
+  // Claude Code names Anthropic by naming itself, so the CLI stays: swapping it
+  // for the maker would lose a fact and gain none.
+  it("keeps the CLI for a one-house delegate", () => {
+    expect(drawn("claude-opus-5", "claude-code", 15)).toContain("claude-code-logo.png");
+  });
+
+  // The maker leading is a rule about the single slot, not a demotion of the
+  // runner: wherever both fit, both are drawn.
+  it("still pairs both at a size that fits them", () => {
+    const pair = drawn("kimi-k2", "opencode", 24);
+    expect(pair).toContain(OPENCODE_MARK);
+    expect(pair).toContain("kimi-logo-light.svg");
   });
 });
