@@ -401,7 +401,9 @@ function VisualBlock({ code, lang, closed }: { code: string; lang: string; close
     </>
   );
   return showVisual ? (
-    <figure className="inline-visual" style={{ margin: "16px 0", minWidth: 0 }}>
+    // A page leaves the reading column (`.inline-visual-page`, tokens.css);
+    // a drawing stays in it, sized to itself by `fitVisualCanvases`.
+    <figure className={`inline-visual${visual.kind === "page" ? " inline-visual-page" : ""}`} style={{ minWidth: 0 }}>
       <div ref={content}><VisualSurface visual={visual} scope={scope} /></div>
       <div className="inline-visual-actions" role="group" aria-label="Visual controls">
         <VisualControl className="visual-control-more" label="Show code" onClick={() => setChosen("code")}><CodeIcon size={15} /><span className="visual-sr-only">Code</span></VisualControl>

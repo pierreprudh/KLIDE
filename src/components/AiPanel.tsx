@@ -3062,6 +3062,16 @@ This user request requires workspace inspection. Before answering, you MUST call
   // a network target, or a message to another agent — and the user approves or
   // rejects (approveCommand / rejectCommand) before it runs. The card renders
   // from `pendingPermission`.
+  // What a *page* may take back from those gutters. A diagram sits in the
+  // reading column like a paragraph; a document a model wrote is a surface of
+  // its own and spans the canvas — up to the 20px the column never gives up,
+  // and never over the island column. Handed down as a variable so the figure
+  // in `markdown.tsx` can pull itself out without knowing where it is rendered
+  // (`.inline-visual-page` in tokens.css); in the workbench panel it is 0 and
+  // the page spans the panel.
+  const readingBleed = variant === "focus" && canvasWidth > 0
+    ? Math.max(0, (canvasWidth - 760 - focusInset) / 2 - 20)
+    : 0;
   const [pendingPermission, setPendingPermission] = useState<{
     runId: string;
     requestId: string;
@@ -4156,7 +4166,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
-          style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain" }}
+          style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain", ["--reading-bleed" as string]: `${Math.round(readingBleed)}px` } as CSSProperties}
         >
         {delegateSession ? (
           <DelegateTerminalSurface
