@@ -44,6 +44,10 @@ export type Msg =
       thinkingMs?: number;
       delegateConsole?: boolean;
       delegateProvider?: string;
+      /** A Delegate CLI answering through the Harness in one piece (the Focus
+       *  headless path) — no token arrives before the whole reply does, so the
+       *  panel shows a status word and a clock instead of the streaming loader. */
+      delegateHeadless?: true;
       /** What produced THIS turn — the pair the harness dispatched it with, as
        *  recorded by the `run_started` line in effect at the time. The
        *  discussion draws each response's mark from it, so a thread continued
@@ -100,6 +104,10 @@ export type Msg =
       runError?: {
         message: string;
       };
+      /** Set when the turn above never settled — no result, no error — because
+       *  the app was closed while it ran. Drawn as a quiet centered line with a
+       *  Retry; not a failure, so not the Run-failed red. */
+      runInterrupted?: true;
     }
   | {
       role: "tool";

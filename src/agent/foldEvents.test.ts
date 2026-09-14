@@ -645,6 +645,55 @@ describe("foldAgentEvents", () => {
   });
 });
 
+describe("a turn the app was closed on", () => {
+  // The transcript of a run killed mid-turn ends on the user message: no
+  // assistant_message, no run_result, no run_error — the Harness writes one
+  // of those on every exit it controls. When the thread continues, the fold
+  // has to say why that answer is missing, or the message reads as ignored.
+  it("marks a turn that the next one began over without an answer", () => {
+    const rows = foldAgentEvents([
+      userMessage("I need something more detailed"),
+      userMessage("so"),
+      assistantMessage("Here are four deeper schemas."),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["user", "interrupted", "user", "assistant"]);
+  });
+
+  it("marks it when the continuation opens with run_started as well", () => {
+    const rows = foldAgentEvents([
+      runStarted("opencode", "glm"),
+      userMessage("first"),
+      runStarted("opencode", "glm"),
+      userMessage("second"),
+      assistantMessage("answer"),
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["user", "interrupted", "user", "assistant"]);
+  });
+
+  it("leaves an answered turn alone whether or not its run_result was written", () => {
+    const rows = foldAgentEvents([
+      userMessage("one"),
+      assistantMessage("first"),
+      userMessage("two"),
+      assistantMessage("second"),
+      { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
+      userMessage("three"),
+      assistantMessage("third"),
+    ]);
+    expect(rows.every((r) => r.kind !== "interrupted")).toBe(true);
+  });
+
+  it("never marks the tail — only the panel knows whether Rust still holds the run", () => {
+    const rows = foldAgentEvents([userMessage("one"), assistantMessage("first"), userMessage("two")]);
+    expect(rows.map((r) => r.kind)).toEqual(["user", "assistant", "user"]);
+  });
+
+  it("becomes a system line the panel draws as the Interrupted row", () => {
+    const msgs = foldedToMsgs(foldAgentEvents([userMessage("a"), userMessage("b"), assistantMessage("c")]));
+    expect(msgs[1]).toEqual({ role: "system", content: "Interrupted", runInterrupted: true });
+  });
+});
+
 describe("foldedToMsgs — the AI panel shape", () => {
   it("emits an assistant row plus one tool row per finished call", () => {
     const msgs = foldedToMsgs(
