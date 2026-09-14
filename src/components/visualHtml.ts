@@ -17,6 +17,15 @@
 // Pure string work on purpose: no DOMParser, so the rules are testable in a
 // plain Node test run and identical in the webview.
 
+/**
+ * What the model wrote. A `drawing` is a diagram — it sits on the conversation's
+ * own ground with nothing around it. A `page` is a document: the source declared
+ * one (a doctype, an `<html>`/`<body>` wrapper, a `:root`/`body` rule), so it
+ * gets a page back — a ground, a hairline, and gutters. Nothing is inferred
+ * from shape; a page is a page because its author said so.
+ */
+export type VisualKind = "drawing" | "page";
+
 export type VisualHtml = {
   /** Sanitized markup — safe for `dangerouslySetInnerHTML`. */
   html: string;
@@ -24,6 +33,8 @@ export type VisualHtml = {
   css: string;
   /** Element names removed whole, deduped, for the "not rendered" note. */
   dropped: string[];
+  /** Whether the source declared a document or a drawing. */
+  kind: VisualKind;
 };
 
 // Structure, text, tables, and the SVG drawing vocabulary. Anything that
@@ -59,8 +70,45 @@ const DROP_SUBTREE = new Set([
   "textarea", "button",
 ]);
 
+// A page's own skeleton. These wrap content rather than being content, so they
+// are unwrapped — not reported as dropped, which would put "body, head, html
+// not rendered" under every page a model writes. Seeing one is also how the
+// block learns a document was meant.
+const PAGE_WRAPPERS = new Set(["html", "head", "body"]);
+
+// Head metadata renders nothing anywhere. Naming it in the "not rendered" note
+// would be noise about something no reader expected to see.
+const SILENT_DROP = new Set(["meta", "link", "base"]);
+
 // `<style>` is neither kept nor dropped — it is lifted out and scoped.
 const STYLE_TAG = "style";
+
+// A stylesheet can declare a page without any markup saying so.
+const ROOT_RULE_RE = /(?:^|[},])\s*(?::root|html|body)\b/i;
+
+// The page's own ground, wherever it wrote it: a `body`/`html`/`:root` rule, or
+// the wrapper's own style attribute.
+const GROUND_RULE_RE = /(?:^|[},>])\s*(?::root|html|body)\b[^{}]*\{([^}]*)\}/gi;
+const GROUND_ATTR_RE = /<body\b[^>]*\sstyle\s*=\s*("[^"]*"|'[^']*')/i;
+
+/**
+ * Whether the source was written on a dark ground. Read once, before anything
+ * is rewritten, because the page's own background is the only thing that says
+ * which world its neutrals came from — and the block drops that background.
+ */
+function authoredDark(source: string): boolean {
+  const grounds: string[] = [];
+  GROUND_RULE_RE.lastIndex = 0;
+  for (let m = GROUND_RULE_RE.exec(source); m; m = GROUND_RULE_RE.exec(source)) grounds.push(m[1]);
+  const attr = GROUND_ATTR_RE.exec(source);
+  if (attr) grounds.push(attr[1].slice(1, -1));
+  for (const decls of grounds) {
+    const background = BACKGROUND_DECL_RE.exec(decls);
+    const color = background && parseColor(background[1].trim());
+    if (color && color.a > 0.5) return lightnessOf(color) < 0.5;
+  }
+  return false;
+}
 
 // Attributes that carry a URL, a form target, or a legacy fetch. Names not
 // listed here pass the generic shape check below, which is what gives the SVG
@@ -101,6 +149,12 @@ export function prepareVisual(source: string, scope: string): VisualHtml {
   const drawingWidths: number[] = [];
   let out = "";
   let i = 0;
+  let page = false;
+  const invert = authoredDark(source);
+  // `<title>` is the one name that means two things: a tooltip inside a
+  // drawing, the document's name outside one. Only the first is content, so
+  // the block has to know which side of an `<svg>` it is reading.
+  let svgDepth = 0;
 
   while (i < source.length) {
     const lt = source.indexOf("<", i);
@@ -118,6 +172,7 @@ export function prepareVisual(source: string, scope: string): VisualHtml {
       continue;
     }
     if (rest.startsWith("<!") || rest.startsWith("<?")) {
+      if (/^<!doctype\s+html/i.test(rest)) page = true;
       const end = source.indexOf(">", lt);
       i = end < 0 ? source.length : end + 1;
       continue;
@@ -127,7 +182,9 @@ export function prepareVisual(source: string, scope: string): VisualHtml {
     if (close) {
       // SVG is case-sensitive — `foreignObject`, `linearGradient`, `clipPath`.
       // Case is folded to look a name up and never to write one out.
-      if (ALLOWED_TAGS.has(close[1].toLowerCase())) out += `</${close[1]}>`;
+      const closing = close[1].toLowerCase();
+      if (closing === "svg") svgDepth = Math.max(0, svgDepth - 1);
+      if (ALLOWED_TAGS.has(closing)) out += `</${close[1]}>`;
       i = lt + close[0].length;
       continue;
     }
@@ -151,6 +208,19 @@ export function prepareVisual(source: string, scope: string): VisualHtml {
       i = body.end;
       continue;
     }
+    if (PAGE_WRAPPERS.has(name)) {
+      page = true;
+      i = tagEnd.end;
+      continue;
+    }
+    if (SILENT_DROP.has(name)) {
+      i = tagEnd.end;
+      continue;
+    }
+    if (name === "title" && svgDepth === 0) {
+      i = readRawText(source, tagEnd.end, name).end;
+      continue;
+    }
     if (DROP_SUBTREE.has(name)) {
       dropped.add(name);
       const body = readRawText(source, tagEnd.end, name);
@@ -164,19 +234,23 @@ export function prepareVisual(source: string, scope: string): VisualHtml {
     }
 
     if (name === "svg") {
+      if (!tagEnd.selfClosing) svgDepth++;
       const viewBox = /viewbox\s*=\s*["']?\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)/i.exec(raw);
       if (viewBox) drawingWidths.push(Number(viewBox[1]));
     }
-    const attrs = sanitizeAttrs(raw, name, scope);
+    const attrs = sanitizeAttrs(raw, name, scope, invert);
     out += `<${written}${attrs}${tagEnd.selfClosing ? "/>" : ">"}`;
     i = tagEnd.end;
   }
 
+  const authored = styles.join("\n");
+  if (ROOT_RULE_RE.test(authored)) page = true;
   return {
     html: out,
     // The block's own rules come first so the drawing's can override them.
-    css: responsiveBase(scope, drawingWidths) + (styles.length ? scopeCss(styles.join("\n"), scope) : ""),
+    css: responsiveBase(scope, drawingWidths) + (authored ? scopeCss(authored, scope, invert) : ""),
     dropped: [...dropped].sort(),
+    kind: page ? "page" : "drawing",
   };
 }
 
@@ -244,7 +318,7 @@ function readRawText(src: string, from: number, tag: string): { text: string; en
 
 const ATTR_RE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 
-function sanitizeAttrs(raw: string, tag: string, scope: string): string {
+function sanitizeAttrs(raw: string, tag: string, scope: string, invert: boolean): string {
   let out = "";
   let m: RegExpExecArray | null;
   ATTR_RE.lastIndex = 0;
@@ -256,7 +330,7 @@ function sanitizeAttrs(raw: string, tag: string, scope: string): string {
     // Every event handler, under every spelling.
     if (name.startsWith("on")) continue;
     if (name === "style") {
-      const decls = sanitizeDeclsPaired(value, scope);
+      const decls = sanitizeDeclsPaired(value, scope, invert);
       if (decls) out += ` ${written}="${quote(decls)}"`;
       continue;
     }
@@ -275,7 +349,7 @@ function sanitizeAttrs(raw: string, tag: string, scope: string): string {
     // `fill="#e9e5dc"` the same hardcoded surface.
     let rewritten = value.includes("url(#") ? namespaceUrlRefs(value, scope) : value;
     if (rewritten.includes("var(--")) rewritten = withTokenFallbacks(rewritten);
-    if (COLOR_ATTRS.has(name)) rewritten = normalizeColors(rewritten, attrColorRole(tag, name));
+    if (COLOR_ATTRS.has(name)) rewritten = normalizeColors(rewritten, attrColorRole(tag, name), invert);
     out += rewritten ? ` ${written}="${quote(rewritten)}"` : ` ${written}`;
   }
   // A link that survives leaves the app, so it never carries a referrer or an
@@ -505,9 +579,22 @@ const NEUTRALS: Record<ColorRole, [number, string][]> = {
   auto: [[0.72, "--viz-surface"], [0.45, "--viz-line"], [0.28, "--viz-ink-dim"], [0, "--viz-ink"]],
 };
 
-function paletteToken(color: Rgba, role: ColorRole): { token: string; chromatic: boolean } {
+/**
+ * The ramp above reads a neutral as a drawing on paper does — light is surface,
+ * dark is ink. A page authored on a dark ground says the opposite with the same
+ * hexes: `#151515` is its *raised* box and `#f2f2f2` is its text. Read straight,
+ * every one of them flips, and the page comes back half-themed — a near-white
+ * slab across a dark theme with its own label invisible on it.
+ *
+ * The page already told us which world it was written in, in the `body`
+ * background the block drops. So a dark-authored page has its neutrals read
+ * against that ground, and only its neutrals: a hue means the same thing on
+ * either ground.
+ */
+function paletteToken(color: Rgba, role: ColorRole, invert = false): { token: string; chromatic: boolean } {
   if (saturationOf(color) < 0.14) {
-    return { token: NEUTRALS[role].find(([from]) => lightnessOf(color) >= from)?.[1] ?? "--viz-ink", chromatic: false };
+    const lightness = invert ? 1 - lightnessOf(color) : lightnessOf(color);
+    return { token: NEUTRALS[role].find(([from]) => lightness >= from)?.[1] ?? "--viz-ink", chromatic: false };
   }
   const hue = hueOf(color);
   const match = HUES.find(([from, to]) => (from > to ? hue >= from || hue < to : hue >= from && hue < to));
@@ -521,10 +608,10 @@ function paletteToken(color: Rgba, role: ColorRole): { token: string; chromatic:
 const TINT = 16;
 
 /** One literal color, re-expressed in the visual palette. */
-export function normalizeColor(literal: string, role: ColorRole = "auto"): string | null {
+export function normalizeColor(literal: string, role: ColorRole = "auto", invert = false): string | null {
   const color = parseColor(literal);
   if (!color) return null;
-  const { token, chromatic } = paletteToken(color, role);
+  const { token, chromatic } = paletteToken(color, role, invert);
   if (chromatic && role === "surface") return `color-mix(in srgb, var(${token}) ${TINT}%, var(--viz-surface))`;
   // A wash stays a wash: a 6% black tint must not come back as solid ink.
   return color.a < 0.92
@@ -542,9 +629,9 @@ export function normalizeColor(literal: string, role: ColorRole = "auto"): strin
 const CONTEXT_PAINT_RE = /\bcontext-(?:stroke|fill)\b/gi;
 
 /** Every literal color in one value, onto the palette. */
-export function normalizeColors(value: string, role: ColorRole = "auto"): string {
+export function normalizeColors(value: string, role: ColorRole = "auto", invert = false): string {
   return value.replace(CONTEXT_PAINT_RE, "var(--viz-line)").replace(COLOR_LITERAL_RE, (literal) =>
-    KEYWORD_RE.test(literal) ? literal : (normalizeColor(literal, role) ?? literal),
+    KEYWORD_RE.test(literal) ? literal : (normalizeColor(literal, role, invert) ?? literal),
   );
 }
 
@@ -578,7 +665,7 @@ function fillRole(decls: string): ColorRole {
 }
 
 /** Each declaration's colors, normalized for what that declaration paints. */
-function normalizeDeclColors(decls: string): string {
+function normalizeDeclColors(decls: string, invert: boolean): string {
   return decls
     .split(";")
     .map((decl) => {
@@ -590,7 +677,7 @@ function normalizeDeclColors(decls: string): string {
       const role =
         property === "fill" ? fillRole(decls) : (ROLE_BY_PROPERTY.find(([re]) => re.test(property))?.[1] ?? "auto");
       // Soften first: a tint normalization produced must not be tinted again.
-      return `${decl.slice(0, split)}:${normalizeColors(softenChroma(value, role), role)}`;
+      return `${decl.slice(0, split)}:${normalizeColors(softenChroma(value, role), role, invert)}`;
     })
     .join(";");
 }
@@ -600,7 +687,7 @@ function normalizeDeclColors(decls: string): string {
 // answer is local and certain: the fill is right there.
 const BACKGROUND_DECL_RE = /(?:^|[;\s])(?:background|background-color)\s*:\s*([^;!]+)/i;
 
-function withPairedInk(decls: string, original: string): string {
+function withPairedInk(decls: string, original: string, invert: boolean): string {
   if (/(?:^|[;\s])color\s*:/i.test(decls)) return decls;
   const background = BACKGROUND_DECL_RE.exec(original);
   if (!background) return decls;
@@ -609,14 +696,64 @@ function withPairedInk(decls: string, original: string): string {
   // Pair against the token the fill *became*, never against the literal the
   // model wrote: `#1c1c1c` is a dark box on bone and a light one on near-black,
   // so reading the literal's lightness picks the wrong ink in one theme.
-  const { token } = paletteToken(color, "surface");
+  const { token } = paletteToken(color, "surface", invert);
   const inverted = token === "--viz-ink" || token === "--viz-ink-dim";
   return `${decls.replace(/;\s*$/, "")};color:var(${inverted ? "--viz-surface" : "--viz-ink"})`;
 }
 
+/**
+ * A block has no window, so a viewport unit measures the app around the visual
+ * instead of the visual. That is how a hero sized `clamp(2rem, 6vw, 4rem)`
+ * lands on its cap in a 900px column — 6vw of a 1850px window is 111px — and
+ * how `section { min-height: 100vh }` becomes a screenful of empty space
+ * nobody asked for.
+ *
+ * The inline axis has an exact answer: the block is a container-query
+ * container, so `cqw` *is* the width the author meant by `vw`. The block axis
+ * has none — the visual's height is whatever its content comes to — so the
+ * block declares a notional page height (`--viz-vh`, in tokens.css) and `vh`
+ * resolves against that. Proportions survive; no viewport is invented.
+ */
+const VIEWPORT_UNIT_RE = /(-?\d*\.?\d+)(vw|vh|vmin|vmax|vi|vb)(?![\w%-])/gi;
+
+function mapViewportUnits(value: string): string {
+  return value.replace(VIEWPORT_UNIT_RE, (_all, n: string, unit: string) => {
+    const block = `calc(${n} * var(--viz-vh))`;
+    switch (unit.toLowerCase()) {
+      case "vw": case "vi": return `${n}cqw`;
+      case "vh": case "vb": return block;
+      case "vmin": return `min(${n}cqw, ${block})`;
+      default: return `max(${n}cqw, ${block})`;
+    }
+  });
+}
+
+// `min-height: 100vh` does not mean 640px. It means "fill the screen", and a
+// visual has no screen and no fold — so the honest height is the one its
+// content comes to. The declaration goes, rather than opening a screenful of
+// nothing in the middle of a conversation. Every other property means a
+// proportion, which --viz-vh can keep.
+const SCREENFUL_PROPERTY_RE = /^(?:min-|max-)?(?:height|block-size)$/i;
+const BLOCK_AXIS_UNIT_RE = /\d\s*(?:vh|vb|vmin|vmax)(?![\w%-])/i;
+
+/** Every declaration re-measured against the block instead of the window. */
+function withBlockRelativeUnits(decls: string): string {
+  return decls
+    .split(";")
+    .map((decl) => {
+      const split = decl.indexOf(":");
+      if (split < 0) return decl;
+      const value = decl.slice(split + 1);
+      if (SCREENFUL_PROPERTY_RE.test(decl.slice(0, split).trim()) && BLOCK_AXIS_UNIT_RE.test(value)) return null;
+      return `${decl.slice(0, split)}:${mapViewportUnits(value)}`;
+    })
+    .filter((decl): decl is string => decl !== null)
+    .join(";");
+}
+
 /** A declaration list from a `style="…"` attribute, with the unsafe parts out. */
-export function sanitizeDecls(value: string, scope: string): string {
-  return normalizeDeclColors(withTokenFallbacks(namespaceUrlRefs(value, scope)))
+export function sanitizeDecls(value: string, scope: string, invert = false): string {
+  return withBlockRelativeUnits(normalizeDeclColors(withTokenFallbacks(namespaceUrlRefs(value, scope)), invert))
     // A `url()` that is not an inline image or an own-id reference would be a
     // network fetch the model chose — a beacon. Neutralize the value, keep the
     // property, so a broken background does not take the layout with it.
@@ -629,8 +766,8 @@ export function sanitizeDecls(value: string, scope: string): string {
 }
 
 /** The same list, plus the text color a literal background implies. */
-function sanitizeDeclsPaired(value: string, scope: string): string {
-  return withPairedInk(sanitizeDecls(value, scope), value);
+function sanitizeDeclsPaired(value: string, scope: string, invert = false): string {
+  return withPairedInk(sanitizeDecls(value, scope, invert), value, invert);
 }
 
 /**
@@ -638,7 +775,7 @@ function sanitizeDeclsPaired(value: string, scope: string): string {
  * become the block itself; everything else becomes a descendant of it. At-rules
  * that reach outside a block — `@import`, `@font-face`, `@page` — are dropped.
  */
-export function scopeCss(css: string, scope: string): string {
+export function scopeCss(css: string, scope: string, invert = false): string {
   let out = "";
   let i = 0;
   while (i < css.length) {
@@ -655,7 +792,7 @@ export function scopeCss(css: string, scope: string): string {
     if (prelude.startsWith("@")) {
       const at = prelude.slice(1).split(/[\s({]/)[0].toLowerCase();
       if (at === "media" || at === "supports" || at === "container" || at === "layer") {
-        const inner = scopeCss(block.inner, scope);
+        const inner = scopeCss(block.inner, scope, invert);
         // A drawing sits in a column, not in a window: a width query has to ask
         // about the block. Anything else a @media can ask — a color scheme, a
         // motion preference — is still about the window and stays put.
@@ -668,17 +805,34 @@ export function scopeCss(css: string, scope: string): string {
       }
       // @import, @font-face, @page, @charset: dropped.
     } else {
-      const selector = prelude
+      const parts = prelude
         .split(",")
         .map((part) => scopeSelector(part.trim(), scope))
-        .filter(Boolean)
-        .join(", ");
-      const decls = sanitizeDeclsPaired(block.inner, scope);
-      if (selector && decls) out += `${selector}{${decls}}`;
+        .filter(Boolean);
+      // A page's ground is the block's ground. `body { background: #0b0b0b }`
+      // is a whole-window decision made for a window this block does not have,
+      // and kept it half-themes the visual — a near-black slab across a light
+      // theme, or, once the palette maps that literal to ink, a white slab
+      // across a dark one. The gutters, the measure, the type all stay.
+      const authored = parts.includes(`.${scope}`) ? withoutGround(block.inner) : block.inner;
+      const decls = sanitizeDeclsPaired(authored, scope, invert);
+      if (parts.length && decls) out += `${parts.join(", ")}{${decls}}`;
     }
     i = block.end;
   }
   return out;
+}
+
+const GROUND_PROPERTY_RE = /^(?:background(?:-color|-image)?|color)$/i;
+
+function withoutGround(decls: string): string {
+  return decls
+    .split(";")
+    .filter((decl) => {
+      const split = decl.indexOf(":");
+      return split < 0 || !GROUND_PROPERTY_RE.test(decl.slice(0, split).trim());
+    })
+    .join(";");
 }
 
 // Only width/height/aspect-ratio conditions — no `prefers-*`, no `print`.
@@ -686,9 +840,12 @@ const SIZE_QUERY_RE = /^@media\s*(?:\(\s*(?:min-|max-)?(?:width|height|aspect-ra
 
 function scopeSelector(selector: string, scope: string): string {
   if (!selector || selector.startsWith("@")) return "";
-  const self = selector.replace(/^(:root|html|body)\b/i, "").trim();
+  const rest = selector.replace(/^(:root|html|body)\b/i, "");
+  const self = rest.trim();
   if (!self) return `.${scope}`;
-  if (self.startsWith(">")) return `.${scope} ${self}`;
+  // `body.dark` is one element wearing two conditions, not a descendant of one:
+  // scoped as a descendant it would paint any `.dark` inside the block instead.
+  if (rest !== selector && rest === self && /^[.#:[]/.test(self)) return `.${scope}${self}`;
   return `.${scope} ${self}`;
 }
 
