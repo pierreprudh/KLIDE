@@ -57,6 +57,7 @@ Klide/
 │   ├── KLIDE_MEMORY_SCHEMA.md     Project Memory entry + retrieval/MCP contract
 │   ├── KLIDE_COORDINATION_SCHEMA.md  Run addressing, envelopes, replay — the coordination wire
 │   ├── AGENT_COORDINATION.md      How Runs address each other — one journal, two doors
+│   ├── MISSION_ORCHESTRATION.md   Agent dispatch of approved tasks, exact-attempt inspection, and limits
 │   ├── MEMORY_ENGINE.md           All-in-one memory architecture + PR sequence
 │   ├── MODEL_ROUTING.md           Auto model routing — the rule, the wire, what it deliberately is not
 │   └── (local only)               adr/, delegate replay, competitors, website plans

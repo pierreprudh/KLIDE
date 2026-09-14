@@ -1,0 +1,314 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klide.dev/schemas/klide-mission-orchestration.schema.json",
+  "title": "Klide Mission orchestration receipt",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "action"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "action": {
+      "enum": [
+        "list",
+        "dispatch",
+        "inspect"
+      ]
+    },
+    "missions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "missionId",
+          "title",
+          "tasks"
+        ],
+        "properties": {
+          "missionId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskId",
+                "title",
+                "dispatch",
+                "dependencies",
+                "acceptanceCriteria",
+                "ready",
+                "runIds",
+                "acceptedRunId"
+              ],
+              "properties": {
+                "taskId": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "dispatch": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/dispatch"
+                    }
+                  ]
+                },
+                "dependencies": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "acceptanceCriteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ready": {
+                  "type": "boolean"
+                },
+                "runIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "acceptedRunId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "missionId": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "awaiting_review",
+        "accepted",
+        "rejected",
+        "dispatch_failed",
+        "interrupted"
+      ]
+    },
+    "settled": {
+      "type": "boolean"
+    },
+    "accepted": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "validation": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "exitCode": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "failure": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timedOut": {
+      "type": "boolean"
+    },
+    "summary": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "checkout": {
+      "type": "object",
+      "required": [
+        "path",
+        "exclusive",
+        "note"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "exclusive": {
+          "const": false
+        },
+        "note": {
+          "type": "string"
+        },
+        "baseCommit": {
+          "type": "string"
+        },
+        "diffScope": {
+          "const": "working_tree_vs_HEAD"
+        },
+        "diffFormat": {
+          "const": "stat"
+        },
+        "diff": {
+          "type": "string"
+        },
+        "diffTruncated": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "statusTruncated": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "baseCommit",
+            "diffScope",
+            "diffFormat",
+            "diff",
+            "diffTruncated",
+            "status",
+            "statusTruncated"
+          ],
+          "not": {
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "required": [
+            "error"
+          ],
+          "not": {
+            "required": [
+              "diff"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "action": {
+          "const": "list"
+        }
+      },
+      "required": [
+        "missions"
+      ]
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "dispatch"
+        }
+      },
+      "required": [
+        "missionId",
+        "taskId",
+        "runId",
+        "status",
+        "settled",
+        "accepted",
+        "validation",
+        "exitCode",
+        "failure",
+        "timedOut"
+      ]
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "inspect"
+        }
+      },
+      "required": [
+        "missionId",
+        "taskId",
+        "runId",
+        "status",
+        "settled",
+        "accepted",
+        "validation",
+        "exitCode",
+        "failure",
+        "timedOut",
+        "summary",
+        "checkout"
+      ]
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "dispatch": {
+      "type": "object",
+      "required": [
+        "workerKind",
+        "provider",
+        "model",
+        "requireDiffReview"
+      ],
+      "properties": {
+        "workerKind": {
+          "enum": [
+            "harness",
+            "delegate"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "requireDiffReview": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

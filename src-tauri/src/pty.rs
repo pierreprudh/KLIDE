@@ -1107,7 +1107,13 @@ fn bridge_hooks(app: &tauri::AppHandle) -> crate::coordination_bridge::BridgeHoo
     let emit_app = app.clone();
     let live_app = app.clone();
     let recover_app = app.clone();
+    let mission_app = app.clone();
     crate::coordination_bridge::BridgeHooks {
+        orchestrate: Some(Box::new(move |session, request| {
+            tauri::async_runtime::block_on(crate::missions::orchestration::execute(
+                mission_app.clone(), session.workspace_root.clone(), session.run_id.clone(), request,
+            ))
+        })),
         on_change: Box::new(move |root, outcome| {
             crate::coordination::emit_coordination_changed(&emit_app, root, outcome);
         }),

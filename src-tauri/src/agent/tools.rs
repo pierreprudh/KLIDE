@@ -95,6 +95,7 @@ pub fn pause_flavor(name: &str) -> Option<PauseFlavor> {
 /// than becoming a second, drifting switch in the run loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinationFlavor {
+    Orchestrate,
     List,
     Send,
     Wait,
@@ -104,6 +105,7 @@ pub enum CoordinationFlavor {
 
 pub fn coordination_flavor(name: &str) -> Option<CoordinationFlavor> {
     match name {
+        "mission_orchestrate" => Some(CoordinationFlavor::Orchestrate),
         "agent_list" => Some(CoordinationFlavor::List),
         "agent_send" => Some(CoordinationFlavor::Send),
         "agent_wait" => Some(CoordinationFlavor::Wait),
@@ -852,6 +854,18 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Coordination,
+            schema: {
+                let tool = crate::missions::orchestration::tool();
+                serde_json::json!({"type":"function","function":{
+                    "name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]
+                }})
+            },
+            run_read: None,
+            run_write_preview: None,
+            summary: |_| "coordinate approved Mission".into(),
+        },
+        ToolEntry {
+            kind: ToolKind::Coordination,
             schema: schema(
                 "agent_list",
                 "List the coordinated Runs this Run is authorized to contact: itself, direct parent/children, and peers in the same Mission. Returns durable state and labels; unrelated Runs are never exposed.",
@@ -1069,7 +1083,8 @@ pub fn list_tools_for_workspace(
         .iter()
         .filter(|e| {
             let name = e.schema["function"]["name"].as_str().unwrap_or("");
-            let kind_ok = tool_allowed_in_mode(mode, e.kind)
+            let mission_ok = !schema_has_name(&e.schema, "mission_orchestrate") || matches!(mode, AgentMode::Goal);
+            let kind_ok = mission_ok && tool_allowed_in_mode(mode, e.kind)
                 // consult_advisor is a side-effect-free Pause tool — escalating
                 // a hard decision to a stronger model is as useful while
                 // planning as while executing. Offer it in Plan too, even
@@ -4483,7 +4498,7 @@ mod tests {
                 (_, None) => {}
             }
         }
-        assert_eq!(seen.len(), 5, "expected five native coordination Tools");
+        assert_eq!(seen.len(), 6, "expected six native coordination Tools");
         assert!(tool_allowed_in_mode(
             &AgentMode::Plan,
             ToolKind::Coordination

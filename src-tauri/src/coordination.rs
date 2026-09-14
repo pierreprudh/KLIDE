@@ -1188,7 +1188,7 @@ fn main_checkout_root(root: &Path) -> Option<PathBuf> {
 /// Coordination crosses private worktrees. Resolve `.klide/coordination`
 /// against the checkout that owns the real `.git` directory so all Runs see
 /// the same inbox and journal.
-fn effective_workspace(workspace_root: &str) -> Result<Workspace, String> {
+pub(crate) fn effective_workspace(workspace_root: &str) -> Result<Workspace, String> {
     let base = Workspace::new(workspace_root)?;
     let Some(main_root) = main_checkout_root(base.root()) else {
         return Ok(base);
