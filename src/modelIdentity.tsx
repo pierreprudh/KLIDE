@@ -179,9 +179,7 @@ export function resolveModelLogo(
 /* ─────────────────────── provider + model, as one mark ───────────────────── */
 
 /** The pair splits one slot between two marks, so below this neither half is
- *  legible and the provider stands alone — which is also the right answer for
- *  the 16px source-filter marks, where the row is *about* the runner and a
- *  maker would be noise. */
+ *  legible and one of them has to stand alone — `soloMark` decides which. */
 const PAIR_MIN_SIZE = 22;
 
 /**
@@ -201,6 +199,33 @@ const DELEGATE_HOUSE: Partial<Record<ProviderId, ProviderId>> = {
   "claude-code": "anthropic",
   codex: "openai",
 };
+
+/**
+ * The one mark to draw when the pair doesn't fit — or when there is no maker to
+ * pair with.
+ *
+ * A delegate whose catalogue is one house names its maker by naming itself, so
+ * the CLI leads and nothing is lost. A delegate that runs *other* makers'
+ * models is the opposite case: its own mark says where the run lives and
+ * nothing about what replied, and in a rail the runner is already written above
+ * the row as the group it sits in. So there the maker leads when the saved id
+ * names one, and the CLI is the floor — "an OpenCode thread, on something" is
+ * still the honest answer for `default`.
+ *
+ * Everything else keeps the runner — a hosted provider's small mark is about
+ * where the run lives, and an unbranded model gives nothing to swap it for.
+ */
+function soloMark(
+  provider: ProviderId,
+  model: string | null | undefined,
+  size: number,
+): ReactElement {
+  if (isDelegateProvider(provider) && !DELEGATE_HOUSE[provider]) {
+    const maker = resolveModelLogo(model, size);
+    if (maker) return maker;
+  }
+  return <ProviderLogo id={provider} size={size} />;
+}
 
 /** The maker's share of the box; the rest goes to the runner. */
 const MAKER_SHARE = 0.46;
@@ -244,7 +269,7 @@ export function ProviderModelMark({
   const maker =
     resolveModelLogo(model, makerSize) ??
     (house ? <ProviderLogo id={house} size={makerSize} /> : null);
-  if (size < PAIR_MIN_SIZE || !maker) return <ProviderLogo id={provider} size={size} />;
+  if (size < PAIR_MIN_SIZE || !maker) return soloMark(provider, model, size);
 
   const runnerSize = size - makerSize + Math.round(makerSize * OVERLAP);
   const corner: CSSProperties = { position: "absolute", display: "grid", placeItems: "center" };
