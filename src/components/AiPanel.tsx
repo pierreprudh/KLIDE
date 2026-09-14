@@ -3073,6 +3073,15 @@ This user request requires workspace inspection. Before answering, you MUST call
   const readingBleed = variant === "focus" && canvasWidth > 0
     ? Math.max(0, Math.min((1040 - 760) / 2, (canvasWidth - 760 - focusInset) / 2 - 20))
     : 0;
+  // In Focus the transcript scrolls under the composer, so its last lines
+  // dissolve over the final 40px instead of being cut flat at the composer's
+  // top edge; the bottom padding grows by the same amount so a transcript
+  // scrolled to its end still shows its last line in full above the fade.
+  const focusFade = variant === "focus" ? 40 : 0;
+  // Permission gate: the harness pauses and emits a request — a shell command,
+  // a network target, or a message to another agent — and the user approves or
+  // rejects (approveCommand / rejectCommand) before it runs. The card renders
+  // from `pendingPermission`.
   const [pendingPermission, setPendingPermission] = useState<{
     runId: string;
     requestId: string;
@@ -4167,7 +4176,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         <div
           ref={scrollRef}
           onScroll={updateStickFromScroll}
-          style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain", ["--reading-bleed" as string]: `${Math.round(readingBleed)}px` } as CSSProperties}
+          style={{ flex: 1, overflowX: "hidden", overflowY: delegateSession ? "hidden" : "auto", padding: delegateSession ? 0 : variant === "focus" ? `14px ${focusGutterRight} ${16 + focusFade + todoDockHeight}px ${focusGutterLeft}` : `10px 12px ${12 + todoDockHeight}px`, transition: "padding 420ms cubic-bezier(0.32, 0.72, 0, 1)", maskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, WebkitMaskImage: focusFade && !delegateSession ? `linear-gradient(to bottom, black calc(100% - ${focusFade}px), transparent)` : undefined, fontSize: variant === "focus" ? 13.5 : 13, display: delegateSession ? "flex" : msgs.length === 0 ? "grid" : "block", placeItems: !delegateSession && msgs.length === 0 ? "center" : undefined, minWidth: 0, minHeight: 0, overscrollBehavior: "contain", ["--reading-bleed" as string]: `${Math.round(readingBleed)}px` } as CSSProperties}
         >
         {delegateSession ? (
           <DelegateTerminalSurface
