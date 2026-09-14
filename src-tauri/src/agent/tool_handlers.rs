@@ -302,16 +302,7 @@ async fn wait_for_coordination_messages(
         let matched = inbox
             .into_iter()
             .filter(|entry| {
-                let sender_matches = from_run_id.map_or(true, |expected| {
-                    matches!(
-                        &entry.envelope.from,
-                        CoordinationActor::Run { run_id } if run_id == expected
-                    )
-                });
-                let reply_matches = reply_to.map_or(true, |expected| {
-                    entry.envelope.reply_to.as_deref() == Some(expected)
-                });
-                sender_matches && reply_matches
+                crate::coordination::envelope_answers_wait(entry, from_run_id, reply_to)
             })
             .collect::<Vec<_>>();
         if !matched.is_empty() {
@@ -491,13 +482,13 @@ where
                     "The message was recorded but its envelope could not be resolved.",
                 ));
             };
-            if call
+            let (reply_status, replies, snapshot) = if call
                 .input
                 .get("waitForReply")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false)
             {
-                match wait_for_coordination_messages(
+                let waited = match wait_for_coordination_messages(
                     ctx,
                     workspace_root,
                     Some(target),
@@ -506,40 +497,56 @@ where
                 )
                 .await
                 {
-                    Ok(Some(messages)) => ToolOutcome::Produced(ToolResult {
-                        ok: true,
-                        content: coordination_messages_text(&messages),
-                        metadata: Some(serde_json::json!({
-                            "envelopeId": envelope.id,
-                            "deliveryState": "acknowledged",
-                            "replies": messages,
-                        })),
-                    }),
-                    Ok(None) => ToolOutcome::Produced(ToolResult {
-                        ok: true,
-                        content: format!(
-                            "Message {} was queued for @{target}; no reply arrived within the wait window.",
-                            envelope.id
-                        ),
-                        metadata: Some(serde_json::json!({
-                            "envelopeId": envelope.id,
-                            "deliveryState": "queued",
-                            "timedOut": true,
-                        })),
-                    }),
-                    Err(outcome) => outcome,
+                    Ok(waited) => waited,
+                    Err(outcome) => return Ok(outcome),
+                };
+                // Waiting moved mail to delivered and acknowledged, so the
+                // receipt has to read the journal after it, not before.
+                let snapshot = match ctx.sup.coordination_snapshot(workspace_root) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return Ok(coordination_tool_error(error)),
+                };
+                match waited {
+                    Some(messages) => (
+                        crate::coordination::CoordinationReplyStatus::Received,
+                        messages,
+                        snapshot,
+                    ),
+                    None => (
+                        crate::coordination::CoordinationReplyStatus::TimedOut,
+                        vec![],
+                        snapshot,
+                    ),
                 }
             } else {
-                ToolOutcome::Produced(ToolResult {
-                    ok: true,
-                    content: format!("Message {} queued for @{target}.", envelope.id),
-                    metadata: Some(serde_json::json!({
-                        "envelopeId": envelope.id,
-                        "deliveryState": "queued",
-                    })),
-                })
-            }
+                // Nothing has touched the journal since the send, and the
+                // command already handed back the post-command snapshot —
+                // including on the idempotent retry that appended nothing.
+                (
+                    crate::coordination::CoordinationReplyStatus::NotRequested,
+                    vec![],
+                    sent.snapshot,
+                )
+            };
+            let receipt = match crate::coordination::send_receipt(
+                &snapshot,
+                &envelope.id,
+                reply_status,
+                &replies,
+            ) {
+                Ok(receipt) => receipt,
+                Err(error) => return Ok(coordination_tool_error(error)),
+            };
+            ToolOutcome::Produced(ToolResult {
+                ok: true,
+                content: receipt.text.clone(),
+                metadata: Some(
+                    serde_json::to_value(receipt)
+                        .map_err(|error| format!("Unable to encode send receipt: {error}"))?,
+                ),
+            })
         }
+
         tools::CoordinationFlavor::Wait => {
             let from_run_id = call
                 .input

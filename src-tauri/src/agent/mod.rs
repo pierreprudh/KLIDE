@@ -4753,6 +4753,14 @@ mod run_supervisor_tests {
         };
         assert!(result.ok, "{}", result.content);
         assert!(result.content.contains("seq stayed contiguous"));
+        let receipt = result.metadata.as_ref().unwrap();
+        assert_eq!(
+            receipt["deliveryState"], "queued",
+            "a reply cannot imply delivery of the sent question"
+        );
+        assert_eq!(receipt["replyStatus"], "received");
+        assert_eq!(receipt["timedOut"], false);
+        assert_eq!(receipt["replies"][0]["deliveryState"], "acknowledged");
         let snapshot = sup.coordination_snapshot(&root_text).unwrap();
         let reply = snapshot
             .envelopes

@@ -2,6 +2,33 @@
 
 Notable changes per milestone. Dates are completion dates.
 
+## Unreleased
+
+### Agent coordination
+
+- **A send receipt reports the journal, not an assumption.** `agent_send` used
+  to assert its own outcome: `acknowledged` whenever a reply came back,
+  `queued` on every send that did not wait, whatever the receiving side had
+  actually done with the message. Both doors — the native Harness Tool and the
+  embedded MCP server — now build one receipt in the Rust core from the
+  Envelope's real delivery state, including when an idempotent retry appended
+  nothing, and report separately whether this call waited for and received a
+  reply. A wait that times out does not cancel, resend, or move the message
+  back to `queued`. A send that does not wait reads the state the command
+  already returned rather than folding the journal a second time. The shape is
+  versioned in `schemas/klide-coordination-send-receipt.schema.json`.
+- **A reply stays inside the exchange it answers.** Knowing an Envelope id used
+  to be enough to join someone else's thread: a third Run could send with that
+  `replyTo`, and because the journal read the message as solicited it was
+  auto-accepted, straight past the receiving side's review card. A new
+  Run-authored reply must now reverse the original route — if A wrote to B,
+  only B may answer A with that id. Operator-authored mail has no Run address
+  to reverse onto, so only its recipient may answer it and that answer is
+  reviewed like any other unsolicited message; the trusted operator may still
+  answer on a Run's behalf, and a wait pinned to the sent Envelope accepts that
+  answer. Enforcement happens before an event is appended, so historical
+  journals keep their existing replay rules. (PR #101, 2026-09-13.)
+
 ## v0.6.3 — Coordination and Documents (2026-09-12)
 
 Two things the v0.6 line gained after the 0.6.2 cut. Runs can address each

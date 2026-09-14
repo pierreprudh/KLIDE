@@ -82,6 +82,8 @@ Klide has three capability modes:
 | Area | Included |
 |---|---|
 | **Agent operations** | Mission Control, shared run lifecycle, attention queue, transcripts, session resume, cross-agent handoff, sub-agent visibility |
+| **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, and another agent's words are reviewed before they reach a conversation |
+| **Documents** | Native workbook tools that create and revise a recalculated `.xlsx` through the normal review path, plus a built-in sheet surface for `.xlsx` and `.sheet.json` |
 | **Review and evidence** | Diff comments sent to agents, command approval, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
 | **Parallel work** | Git worktrees, worktree setup recipes, agent races on the same task, evidence comparison, and merge controls |
 | **Editor and shell** | Monaco editor, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
@@ -96,7 +98,7 @@ Klide currently targets macOS. Apple Silicon is the primary development platform
 
 ### Download the unsigned Apple Silicon build
 
-Download the latest `.app.zip` from [GitHub Releases](https://github.com/pierreprudh/KLIDE/releases/latest), unzip it, and move `Klide.app` to Applications.
+Download the newest `.app.zip` attached to a release on [GitHub Releases](https://github.com/pierreprudh/KLIDE/releases), unzip it, and move `Klide.app` to Applications. Not every patch release ships a bundle — take the most recent release that has one.
 
 This build is ad-hoc signed and is not Apple-notarized. On first launch, macOS may block it because the developer cannot be verified. Control-click `Klide.app`, choose **Open**, then confirm **Open**. Only install builds published from this repository.
 
@@ -158,7 +160,11 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 Klide is under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now; Apple-notarized bundles are not yet published.
 
-v0.6.1 is the current release: Focus reaches every provider Klide supports, delegate CLIs run there on their own subscription and show their work, and the opencodex gateway adds around forty upstreams behind one self-hosted endpoint. Since that cut, main has landed hardening on the same line: historical delegate runs settle their lifecycle correctly, replayed CLI sessions show each tool call's input and result, runs near the turn cap finish instead of erroring, storage grew a Settings section with a movable transcript folder, and the agent can search previous conversations. The v0.6 orchestration milestone itself — Missions as outcomes, budget and capacity in the dispatch path, capability routing, automatic validation contracts — is still open, so treat those surfaces as unfinished.
+v0.6.3 — Coordination and Documents is the current release (2026-09-12). Runs can address each other through one Rust-owned journal — Klide's own conversations and the delegate CLIs alike, the latter through an embedded MCP server — and no agent's words reach a conversation without its operator reviewing them. A run can also produce a real document instead of describing one: it writes and revises an `.xlsx` that Klide recalculates and opens in a built-in sheet surface.
+
+The two cuts before it are on the same line. v0.6.2 — Memory, Routing, Recovery gave the agent native recall over reviewed Project Memory, resolved the `auto` model choice once in Rust at run start, and made a run near the turn cap finish instead of erroring. v0.6.1 — Subscriptions and Reach let Focus use every provider Klide supports, ran delegate CLIs there on their own subscription, and added around forty upstreams behind the opencodex gateway.
+
+The v0.6 orchestration milestone itself — Missions as outcomes, budget and capacity in the dispatch path, capability routing, automatic validation contracts — is still open, so treat those surfaces as unfinished.
 
 Current priorities:
 

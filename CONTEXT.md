@@ -105,8 +105,18 @@ A durable semantic payload addressed from an operator or authenticated Run to
 one stable Run id. It has an explicit kind, correlation/reply identity,
 idempotency key, evidence references, and queued → delivered → acknowledged
 lifecycle. Delivery happens at an execution adapter's safe boundary; terminal
-bytes are never the authoritative envelope.
+bytes are never the authoritative envelope. A reply reverses the route it
+answers: only the original recipient may answer the original sender with that
+envelope's reply identity, so an id is an address, never an entry pass.
 _Avoid_: Agent event, prompt injection, terminal text, chat message
+
+**Send receipt**:
+What a Run learns about a message it just sent: the envelope's delivery state
+read back from the journal, and — reported separately — whether this call
+waited for a reply and got one. Both are observations of durable state, so a
+retry that appended nothing and a wait that timed out are described rather than
+disguised; a receipt never changes the message it reports on.
+_Avoid_: send result, ack, delivery promise, retry status
 
 **Coordination result**:
 The single structured outcome a Run publishes for its coordinator: status,
@@ -121,6 +131,35 @@ requests, envelope delivery, and results at one journal cursor. Consumers take
 a snapshot and then read events from `nextSeq`; React state and focused panels
 never become the source of truth.
 _Avoid_: agent registry, live panel list, cached bus state
+
+**Document**:
+A file a Run produced or referenced that a person opens rather than reads as a
+diff — a workbook, a PDF, a deck. Listed on the completion card as something to
+open; a reference recovered from an older transcript is shown as a reference,
+never as an edit the Run made.
+_Avoid_: output file, attachment, deliverable
+
+**Workbook**:
+An `.xlsx` or `.sheet.json` Klide recalculates and opens itself. Written by the
+`write_spreadsheet` Tool (created or patched, recalculated and exported before
+review) and read by `inspect_spreadsheet`; its bytes travel as the binary
+payload of an ordinary DiffProposal, so approval, rejection memory, checkpoint
+and rollback are the same ones every edit gets.
+_Avoid_: Excel file, sheet (the file), xlsx blob
+
+**Sheet surface**:
+Klide's built-in workbook editor — worksheet tabs, formula bar, keyboard
+navigation, paste, undo, and Add to chat. Local recalculation of common
+formulas, not Excel parity; the limits are written down in
+`src/spreadsheets/README.md`.
+_Avoid_: spreadsheet viewer, grid, Excel mode
+
+**Retained value**:
+A tool result too large to carry in the provider messages, written once to the
+Run's value store and shown to the model as a stub with a head/tail preview;
+`peek_value` reads slices on demand. The Transcript still records the full
+result, so replay rebuilds the same stub.
+_Avoid_: truncated output, cached result
 
 **Transcript**:
 The append-only JSONL record of a run's agent events on disk. A run can be replayed from it.

@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klide.dev/schemas/klide-coordination-send-receipt.schema.json",
+  "title": "Klide agent_send receipt",
+  "description": "Successful MCP structuredContent and native ToolResult metadata. Delivery state describes the sent envelope as observed in the journal; replyStatus describes this call's wait only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeId",
+    "deliveryState",
+    "replyStatus",
+    "timedOut",
+    "text"
+  ],
+  "properties": {
+    "envelopeId": {
+      "$ref": "#/$defs/componentId"
+    },
+    "deliveryState": {
+      "$ref": "#/$defs/deliveryState"
+    },
+    "replyStatus": {
+      "enum": [
+        "not_requested",
+        "received",
+        "timed_out"
+      ]
+    },
+    "timedOut": {
+      "type": "boolean",
+      "description": "Whether this call exhausted its reply wait. Does not cancel or requeue the message."
+    },
+    "replies": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/envelopeSnapshot"
+      }
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "replyStatus": {
+            "const": "timed_out"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "timedOut": {
+            "const": true
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "timedOut": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "replyStatus": {
+            "const": "received"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "replies"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "replies"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "componentId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180,
+      "pattern": "^[^/\\\\]+$"
+    },
+    "deliveryState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "accepted",
+        "delivered",
+        "acknowledged",
+        "declined"
+      ]
+    },
+    "envelopeSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "envelope",
+        "deliveryState"
+      ],
+      "properties": {
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        },
+        "deliveryState": {
+          "$ref": "#/$defs/deliveryState"
+        },
+        "deliveredAtMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acknowledgedAtMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "from",
+        "toRunId",
+        "kind",
+        "body",
+        "sourceRefs",
+        "createdAtMs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/componentId"
+        },
+        "from": {
+          "$ref": "#/$defs/actor"
+        },
+        "toRunId": {
+          "$ref": "#/$defs/runId"
+        },
+        "kind": {
+          "$ref": "#/$defs/envelopeKind"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        },
+        "replyTo": {
+          "$ref": "#/$defs/componentId"
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "actor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "operator"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "runId"
+          ],
+          "properties": {
+            "type": {
+              "const": "run"
+            },
+            "runId": {
+              "$ref": "#/$defs/runId"
+            }
+          }
+        }
+      ]
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180,
+      "pattern": "^[^/\\\\]+$"
+    },
+    "envelopeKind": {
+      "type": "string",
+      "enum": [
+        "instruction",
+        "question",
+        "answer",
+        "progress",
+        "handoff"
+      ]
+    },
+    "sourceRefs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/sourceRef"
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceType",
+        "id"
+      ],
+      "properties": {
+        "sourceType": {
+          "$ref": "#/$defs/sourceType"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-relative path. Absolute local paths never cross an adapter boundary."
+        },
+        "lineStart": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lineEnd": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "dependentRequired": {
+        "lineEnd": [
+          "lineStart"
+        ]
+      }
+    },
+    "sourceType": {
+      "type": "string",
+      "enum": [
+        "run",
+        "transcript",
+        "commit",
+        "file",
+        "memory",
+        "mission_task"
+      ]
+    }
+  },
+  "examples": [
+    {
+      "envelopeId": "env_example",
+      "deliveryState": "accepted",
+      "replyStatus": "not_requested",
+      "timedOut": false,
+      "text": "Message env_example for @convo-1: accepted for delivery."
+    },
+    {
+      "envelopeId": "env_example",
+      "deliveryState": "queued",
+      "replyStatus": "received",
+      "timedOut": false,
+      "replies": [
+        {
+          "envelope": {
+            "id": "env_reply",
+            "from": {
+              "type": "run",
+              "runId": "run_kit"
+            },
+            "toRunId": "convo-1",
+            "kind": "answer",
+            "body": "The review is ready.",
+            "replyTo": "env_example",
+            "sourceRefs": [],
+            "createdAtMs": 1000
+          },
+          "deliveryState": "acknowledged",
+          "deliveredAtMs": 1001,
+          "acknowledgedAtMs": 1002
+        }
+      ],
+      "text": "Message env_example for @run_kit: awaiting review.\n\n[reply env_reply from @run_kit]\nThe review is ready."
+    },
+    {
+      "envelopeId": "env_example",
+      "deliveryState": "acknowledged",
+      "replyStatus": "timed_out",
+      "timedOut": true,
+      "text": "Message env_example for @run_kit: acknowledged. No reply arrived within the wait window; the message remains recorded."
+    }
+  ]
+}

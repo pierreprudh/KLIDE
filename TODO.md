@@ -83,7 +83,9 @@ them.
   follow-ups: wake an idle Delegate on accepted mail (Claude Code Stop hook
   blocking with the inbox as reason); dogfood Codex `-c` overrides after
   `resume` and OpenCode's `OPENCODE_CONFIG` merge; hold #3
-  `From<AgentRunStatus>` in coordination.rs.
+  `From<AgentRunStatus>` in coordination.rs. Message quality hardened in
+  PR #101 (2026-09-13): receipts read from the journal, replies bound to the
+  original route, and the operator path answerable on both sides.
 
 ### v0.6 Slice 1 — durable Mission tracer bullet (started 2026-07-22)
 

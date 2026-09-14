@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+<style>text{font-family:Arial,sans-serif;fill:#242820}.muted{fill:#646b60}.label{font-size:13px;letter-spacing:1.6px;font-weight:700}.code{font-family:Menlo,monospace;font-size:16px}.title{font-size:34px;font-weight:600}.body{font-size:18px}.small{font-size:15px}.line{fill:none;stroke:#7a886a;stroke-width:2}</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#7a886a"/></marker></defs>
+<rect width="1200" height="760" fill="#f6f7f2"/>
+<title id="title">Reliable agent messages: before and after</title><desc id="desc">Send receipts preserve the original delivery state, report reply waits separately, and reject third-party replies.</desc>
+<text x="48" y="48" class="label muted">KLIDE / AGENT COORDINATION</text>
+<text x="48" y="100" class="title">Every message has a truthful receipt.</text>
+<text x="48" y="133" class="body muted">Behavior comparison · protocol examples, not app screenshots</text>
+<rect x="48" y="168" width="532" height="354" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<rect x="604" y="168" width="548" height="354" rx="12" fill="#edf2e6" stroke="#d7ddcf"/>
+<text x="72" y="204" class="label muted">BEFORE</text>
+<text x="628" y="204" class="label muted">AFTER</text>
+<text x="72" y="247" class="body">Retry after approval</text>
+<text x="628" y="247" class="body">Retry after approval</text>
+<text x="72" y="279" class="code">deliveryState: &quot;queued&quot;</text>
+<text x="628" y="279" class="code">deliveryState: &quot;accepted&quot;</text>
+<text x="72" y="348" class="body">Read, but no answer before timeout</text>
+<text x="628" y="348" class="body">Read, but no answer before timeout</text>
+<text x="72" y="380" class="code">deliveryState: &quot;queued&quot;</text>
+<text x="628" y="380" class="code">deliveryState: &quot;acknowledged&quot;</text>
+<text x="628" y="408" class="code">replyStatus: &quot;timed_out&quot;</text>
+<text x="72" y="447" class="body">An answer arrives</text>
+<text x="628" y="447" class="body">An answer arrives</text>
+<text x="72" y="479" class="code">deliveryState: &quot;acknowledged&quot;</text>
+<text x="628" y="479" class="code">deliveryState: journal value</text>
+<text x="628" y="507" class="code">replyStatus: &quot;received&quot;</text>
+<text x="48" y="569" class="label muted">REPLIES STAY BETWEEN THE ORIGINAL PARTICIPANTS</text>
+<rect x="48" y="592" width="330" height="95" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<rect x="402" y="592" width="354" height="95" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<rect x="780" y="592" width="372" height="95" rx="12" fill="#ffffff" stroke="#d7ddcf"/>
+<text x="68" y="625" class="body">A sends a question to B</text>
+<text x="68" y="657" class="small muted">One durable envelope id</text>
+<text x="422" y="625" class="body">B replies to A</text>
+<text x="422" y="657" class="small muted">Valid route · accepted automatically</text>
+<text x="800" y="625" class="body">C cites that envelope id</text>
+<text x="800" y="657" class="small muted">Rejected before a new event is written</text>
+<text x="48" y="729" class="small muted">Native Harness + MCP share one Rust receipt. Existing journals remain readable.</text>
+</svg>
