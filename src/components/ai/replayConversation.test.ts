@@ -171,31 +171,74 @@ describe("replayForAdoption", () => {
   });
 
   it("adopts a delegate turn whose live view holds rows the Transcript never will", () => {
-    // The reload-mid-generation bug. An OpenCode run streams its own tool
-    // activity as `observed_tool_call`, which lives on the request-scoped
-    // channel and is never persisted — so the live view had seven rows (three
-    // sentence fragments around four tool rows) while the Transcript folds the
-    // same turn into two. A row count made the replay look like a truncated
-    // read and refused it, and the finished 2,900-character answer stayed on
-    // disk. Weighed by what was actually said, the replay plainly carries more.
-    const onScreen: Msg[] = [
-      { role: "user", content: "do you find any issues in the current context" },
-      { role: "assistant", content: "I'll take that as a review of the current work —" },
-      { role: "tool", content: "bash", toolName: "bash", observedBy: "opencode" },
-      { role: "tool", content: "read", toolName: "read", observedBy: "opencode" },
-      { role: "assistant", content: "There's a sizeable uncommitted feature in flight." },
-      { role: "tool", content: "read", toolName: "read", observedBy: "opencode" },
-      { role: "assistant", content: "The code looks well-built; let me verify it compiles." },
+    // The reload-mid-generation bug, built from the two streams Rust actually
+    // produces. A delegate CLI's own tool activity is sent on the
+    // request-scoped channel and never written to disk (agent/mod.rs), so the
+    // live view is folded from events the Transcript does not contain — three
+    // sentence fragments around four tool rows, seven rows against the two the
+    // replay folds. A row count read that as a truncated read and refused it,
+    // and the finished answer stayed on disk. Weighed by what was said, the
+    // replay plainly carries more.
+    // A call and its result, the pair the CLI reports — the row only lands
+    // once the result does, which is how the live view reaches seven rows.
+    const observed = (id: string, name: string, ts: number): AgentEvent[] => [
+      {
+        type: "observed_tool_call",
+        runId: "r1",
+        toolCallId: id,
+        provider: "opencode",
+        name,
+        input: {},
+        summary: name,
+        ts,
+      },
+      { type: "observed_tool_result", runId: "r1", toolCallId: id, ok: true, content: "…", ts: ts + 1 },
     ];
-    const finished = [
+    const delta = (text: string, ts: number): AgentEvent => ({
+      type: "assistant_delta",
+      runId: "r1",
+      messageId: "a1",
+      text,
+      ts,
+    });
+
+    const said = [
+      "I'll take that as a review of the current work — let me check what's in flight.",
+      "There's a sizeable uncommitted feature in flight. Let me review the diffs.",
+      "The code looks well-built; let me verify it compiles before reporting.",
+    ];
+    const answer = "I reviewed it. One real issue: a corrupt store reads as empty, and the next write overwrites it.";
+
+    // What the panel had on screen when the webview reloaded: everything the
+    // live channel had sent, minus the answer still being generated.
+    const liveStream: AgentEvent[] = [
       runStarted(1),
       userMessage("do you find any issues in the current context", 2),
-      assistantMessage(
-        "I'll take that as a review of the current work —There's a sizeable uncommitted feature in flight.The code looks well-built; let me verify it compiles.I reviewed it. One real issue: a corrupt store reads as empty and the next write overwrites it.",
-        3,
-      ),
+      delta(said[0], 3),
+      ...observed("t1", "bash", 4),
+      ...observed("t2", "read", 6),
+      delta(said[1], 8),
+      ...observed("t3", "read", 9),
+      delta(said[2], 11),
+      ...observed("t4", "bash", 12),
     ];
-    const healed = replayForAdoption(finished, onScreen);
+    const onScreen = eventsToMsgs(liveStream);
+
+    // What the Transcript holds once the turn lands: no observed rows, and the
+    // whole turn folded into one assistant message.
+    const transcriptAfter: AgentEvent[] = [
+      runStarted(1),
+      userMessage("do you find any issues in the current context", 2),
+      assistantMessage(said.join("") + answer, 10),
+    ];
+
+    // Eight rows against the two the Transcript folds — the shape the bug
+    // report showed: sentence fragments around tool rows, and no answer.
+    expect(onScreen).toHaveLength(8);
+    expect(onScreen.filter((m) => m.role === "tool")).toHaveLength(4);
+    expect(eventsToMsgs(transcriptAfter).length).toBeLessThan(onScreen.length);
+
+    const healed = replayForAdoption(transcriptAfter, onScreen);
     expect(healed?.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(healed?.[1].content).toContain("One real issue");
   });
