@@ -125,6 +125,9 @@ function Page() {
           margin: "0 auto",
           resize: "horizontal",
           overflow: "auto",
+          // The panel's 32px mark lane: a page pulls itself over it
+          // (`.inline-visual-page`), a drawing does not.
+          paddingLeft: 32,
           paddingRight: 12,
           borderRight: "1px dashed var(--border-strong)",
           fontFamily: "var(--font-ui)",

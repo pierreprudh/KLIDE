@@ -8298,6 +8298,26 @@ button:focus-visible .menu-leadout {
   }
 }
 
+/* The figure's own margin lives here, not inline, so a page's rule below can
+   outrank it. */
+.inline-visual { margin: 16px 0; }
+
+/* A page a model wrote is a document, and a document spans the canvas — not
+   the reading column the prose sits in. The figure takes back the column's
+   gutters (`--reading-bleed`, set by the AI panel: the Focus gutter less the
+   20px it keeps, 0 in the workbench panel) plus the 32px mark lane on its
+   left, so both edges land the same distance from the canvas edge. Drawings
+   (`.inline-visual` without the page class) stay in the column at their own
+   size. The margin follows the gutter's own easing when the island column
+   opens, so the page and the prose move together. */
+.inline-visual-page {
+  margin-inline: calc(-1 * var(--reading-bleed, 0px) - 32px) calc(-1 * var(--reading-bleed, 0px));
+  transition: margin 420ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* A page that opens a reply would otherwise run under the response mark
+   beside it; it starts below the mark instead. */
+.inline-visual-page:first-child { margin-top: 30px; }
+
 /* One quiet set of controls, shared by inline figures and the expanded viewer. */
 .inline-visual-actions, .visual-viewer-toolbar {
   display: flex; align-items: center; justify-content: flex-end; gap: 2px;
