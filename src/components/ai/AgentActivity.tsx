@@ -1,11 +1,42 @@
-import { useEffect, useMemo, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useState, type ReactNode, type ComponentProps } from "react";
 import { onCoordinationChanged, readCoordinationSnapshot, type CoordinationRunSnapshot } from "../../agent/coordination";
 import { createListenerScope } from "../../tauriEvents";
 import { conversationMark } from "../../modelIdentity";
-import { PeerLink } from "./PeerLink";
+import type { PeerLink } from "./PeerLink";
 import { peerName } from "./coordinationPeers";
 import { shellAgentsOf } from "./shellAgentEvidence";
-import type { Msg } from "./types";
+import type { Conversation, Msg } from "./types";
+import { createPortal } from "react-dom";
+import { usePortalMenu } from "../../hooks/usePortalMenu";
+import { ProviderLogo } from "./icons";
+import { AgentMark } from "../fileMarks";
+import { loadConversations } from "./storedConversations";
+import { participantStats } from "./participantStats";
+
+function Participant({ name, mark, status, stats, children }: {
+  name: string; mark: ReactNode; status: string; stats: () => string; children?: ReactNode;
+}) {
+  const menu = usePortalMenu({ closeOnOutsideClick: true, computePos: (rect) => ({
+    left: Math.max(12, Math.min(rect.right - 380, window.innerWidth - 392)),
+    bottom: window.innerHeight - rect.top + 10,
+  }) });
+  const [line, setLine] = useState("");
+  useEffect(() => {
+    if (!menu.open) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { menu.close(); menu.triggerRef.current?.focus(); } };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [menu.open, menu.close]);
+  return <>
+    <button ref={menu.triggerRef} type="button" className="ai-agent-avatar" title={name}
+      aria-label={`${name} — show stats`} aria-expanded={menu.open}
+      onClick={() => { if (menu.open) menu.close(); else { setLine(stats()); menu.openMenu(); } }}>{mark}</button>
+    {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" style={menu.pos} role="dialog" aria-label={`${name} stats`}>
+      <div className="ai-agent-stats-heading"><span className="ai-agent-activity-name">{mark}<strong>{name}</strong></span><span>{status}</span>{children}</div>
+      <div className="ai-agent-stats-line" title={line}>{line}</div>
+    </div>, document.body)}
+  </>;
+}
 
 export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink> & { msgs: Msg[] }) {
   const { workspaceRoot, selfId } = props;
@@ -33,24 +64,18 @@ export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink
   const index = new Map(props.index);
   for (const run of runs) if (!index.has(run.registration.runId)) index.set(run.registration.runId, { title: run.registration.label ?? run.registration.runId, provider: null, model: null });
   if (!peers.length && !shellAgents.length) return null;
-  return <details className="ai-agent-activity" key={key}>
-    <summary>
-      <span>Agents · {peers.length + shellAgents.length}</span>
-      {peers.slice(0, 3).map((id) => <span key={id} className="ai-agent-activity-name">{conversationMark(index.get(id)?.model, index.get(id)?.provider, 13)?.node}{peerName(id, index)}</span>)}
-      {peers.length > 3 && <span>+{peers.length - 3}</span>}
-      {shellAgents.map((name) => <span key={name} className="ai-agent-activity-name">{conversationMark(name === "Codex" ? "codex" : "claude", null, 13)?.node}{name}</span>)}
-    </summary>
-    <div className="ai-agent-activity-card">
-      <strong>Agents in this conversation</strong>
-      {peers.map((id) => <div key={id} className="ai-agent-activity-row">
-        <span>{peerName(id, index)}<small>{runs.find((r) => r.registration.runId === id)?.state ?? "Message peer"}</small></span>
-        <PeerLink {...props} peers={[id]} index={index} active={false} />
-      </div>)}
-      {shellAgents.map((name) => <div key={name} className="ai-agent-activity-row">
-        <span className="ai-agent-activity-name">{conversationMark(name === "Codex" ? "codex" : "claude", null, 16)?.node}{name}</span><span>via shell</span>
-      </div>)}
-      {shellAgents.length > 0 && <p>CLI requests appear in the transcript. Their live status, messages, and usage are not tracked here.</p>}
-      <p>Response metrics cover the parent model only.</p>
-    </div>
-  </details>;
+  return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">
+    {peers.map((id) => <Participant key={id} name={peerName(id, index)}
+      mark={conversationMark(index.get(id)?.model, index.get(id)?.provider, 16)?.node ?? <AgentMark size={16} />}
+      status={runs.find((r) => r.registration.runId === id)?.state ?? "Message peer"}
+      stats={() => participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === id)?.msgs ?? [])}>
+      <button type="button" className="ai-agent-open" disabled={!props.onOpen} onClick={() => props.onOpen?.(id)} aria-label={`Open ${peerName(id, index)}`} title="Open conversation">↗</button>
+    </Participant>)}
+    {shellAgents.map((name) => <Participant key={name} name={name}
+      mark={<ProviderLogo id={name === "Codex" ? "codex" : "claude-code"} size={16} />}
+      status="via shell" stats={() => {
+        const count = msgs.reduce((total, msg) => total + (msg.role === "assistant" ? (msg.toolCalls ?? []).filter((call) => shellAgentsOf([{ role: "assistant", content: "", toolCalls: [call] }]).includes(name)).length : 0), 0);
+        return `${count} ${count === 1 ? "request" : "requests"} · Usage unavailable`;
+      }} />)}
+  </div>;
 }
