@@ -2,10 +2,11 @@
 //!
 //! Same binary as the app (the `klide ptyd` pattern: nothing extra to bundle,
 //! sign, or version-skew). Claude Code, Codex and OpenCode each start it as a
-//! stdio child, speak MCP JSON-RPC to it, and see five tools whose names
+//! stdio child, speak MCP JSON-RPC to it, and see messaging tools whose names
 //! match the Harness's native ones — `agent_list`, `agent_send`, `agent_wait`,
 //! `agent_read_result`, `agent_publish_result` — so one skill text about
 //! peers holds for a Kit Run and a Claude Code session alike.
+//! `mission_orchestrate` also exposes the approved Mission supervisor.
 //!
 //! This process owns nothing. Every tool call becomes one POST to the
 //! coordination bridge in the app (coordination_bridge.rs); the bridge binds
@@ -86,6 +87,7 @@ impl Bridge for HttpBridge {
 /// Harness ones (agent/tools.rs) minus the Harness-only wording.
 pub fn tool_list() -> Value {
     json!([
+        crate::missions::orchestration::tool(),
         {
             "name": "agent_list",
             "description": "List the other agents working on this project right now — Klide Harness Runs and Delegate CLI sessions alike — with their Run id, state, whether they are live, and a label. Use the runId with agent_send.",
@@ -164,6 +166,9 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, String> {
     let timeout = args.get("timeoutSeconds").and_then(Value::as_u64);
     match name {
+        "mission_orchestrate" => Ok(BridgeRequest::Orchestrate {
+            request: serde_json::from_value(args.clone()).map_err(|e| format!("Invalid Mission request: {e}"))?,
+        }),
         "agent_list" => Ok(BridgeRequest::List),
         "agent_send" => Ok(BridgeRequest::Send {
             to_run_id: str_arg(args, "toRunId").ok_or("agent_send requires toRunId.")?,
@@ -454,8 +459,23 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["agent_list", "agent_send", "agent_wait", "agent_read_result", "agent_publish_result"]
+            ["mission_orchestrate", "agent_list", "agent_send", "agent_wait", "agent_read_result", "agent_publish_result"]
         );
+    }
+
+    #[test]
+    fn mission_requests_preserve_exact_attempt_identity_and_reject_overrides() {
+        let request = bridge_request_for("mission_orchestrate", &json!({
+            "action":"inspect","missionId":"m1","taskId":"t1","runId":"r1","timeoutSeconds":12
+        })).unwrap();
+        assert_eq!(request, BridgeRequest::Orchestrate {
+            request: crate::missions::orchestration::Request::Inspect {
+                mission_id:"m1".into(),task_id:"t1".into(),run_id:"r1".into(),timeout_seconds:12,
+            },
+        });
+        assert!(bridge_request_for("mission_orchestrate", &json!({"action":"dispatch","missionId":"m1","taskId":"t1","workspaceRoot":"/other"})).is_err());
+        let schema = &tool_list()[0]["outputSchema"];
+        assert_eq!(schema["title"], "Klide Mission orchestration receipt");
     }
 
     #[test]
@@ -631,7 +651,7 @@ mod chain {
         // What a CLI asks before it will call anything.
         let listed =
             handle_message(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &bridge).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 5);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
 
         // agent_list sees the Harness peer under its thread title, and itself.
         let reply = handle_message(
@@ -887,6 +907,7 @@ mod chain {
                 &first.endpoint,
                 restarted_workspace.store.clone(),
                 BridgeHooks {
+                    orchestrate: None,
                     on_change: Box::new(|_, _| {}),
                     is_live: Box::new(|_| false),
                     // What pty.rs reads back from the session's spawn record.

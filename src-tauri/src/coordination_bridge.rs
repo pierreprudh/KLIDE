@@ -63,7 +63,7 @@ pub struct BridgeSession {
 
 pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
 
-/// The five operations a Delegate may perform, mirroring the Harness Tools
+/// Messaging and approved-Mission operations a Delegate may perform, mirroring the Harness Tools
 /// `agent_list` / `agent_send` / `agent_wait` / `agent_read_result` plus
 /// `agent_publish_result` (a Harness Run publishes its result automatically
 /// at settle; a Delegate has to say so). This is the wire between the MCP
@@ -72,6 +72,7 @@ pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
 #[serde(tag = "op", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum BridgeRequest {
     List,
+    Orchestrate { request: crate::missions::orchestration::Request },
     Send {
         to_run_id: String,
         body: String,
@@ -138,7 +139,14 @@ impl BridgeResponse {
 /// change (the Tauri event), a way to say whether a Run is around right now,
 /// and a way to recover a session binding this process never made. All
 /// closures, so the executor and its tests stay Tauri-free.
+pub type OrchestrationHook = Box<
+    dyn Fn(&BridgeSession, crate::missions::orchestration::Request) -> Result<serde_json::Value, String>
+        + Send
+        + Sync,
+>;
+
 pub struct BridgeHooks {
+    pub orchestrate: Option<OrchestrationHook>,
     pub on_change: Box<dyn Fn(&str, &CoordinationCommandOutcome) + Send + Sync>,
     pub is_live: Box<dyn Fn(&str) -> bool + Send + Sync>,
     /// Called when a request names a session this process has not bound —
@@ -152,6 +160,7 @@ pub struct BridgeHooks {
 impl BridgeHooks {
     pub fn silent() -> Self {
         Self {
+            orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
             resolve_session: Box::new(|_| None),
@@ -338,6 +347,8 @@ fn execute_inner(
     let root = session.workspace_root.as_str();
     let me = session.run_id.as_str();
     match request {
+        BridgeRequest::Orchestrate { request } => hooks.orchestrate.as_ref()
+            .ok_or("Mission orchestration is unavailable in this host.")?(session, request),
         BridgeRequest::List => {
             let snapshot = coordination::read_snapshot(store, root)?;
             let visible = coordination::visible_runs_for(&snapshot, me)?;
@@ -942,10 +953,30 @@ mod tests {
     }
 
     #[test]
+    fn orchestration_receives_only_the_bound_identity() {
+        let (dir, root) = sandbox("orchestration-identity");
+        let (store, _bridge, session) = bound(&root);
+        let mut hooks = BridgeHooks::silent();
+        hooks.orchestrate = Some(Box::new(|session, request| {
+            Ok(serde_json::json!({"runId":session.run_id,"root":session.workspace_root,"request":request}))
+        }));
+        let response = execute(&store, &hooks, &session, BridgeRequest::Orchestrate {
+            request: crate::missions::orchestration::Request::List {},
+        });
+        assert!(response.ok);
+        let value = response.value.unwrap();
+        assert_eq!(value["runId"], session.run_id);
+        assert_eq!(value["root"], root);
+        assert_eq!(value["request"], serde_json::json!({"action":"list"}));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn list_shows_the_harness_peer_and_self() {
         let (dir, root) = sandbox("list");
         let (store, _bridge, session) = bound(&root);
         let hooks = BridgeHooks {
+            orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|id| id == "run_kit"),
             resolve_session: Box::new(|_| None),
@@ -968,6 +999,7 @@ mod tests {
         let changes = Arc::new(Mutex::new(0usize));
         let counter = changes.clone();
         let hooks = BridgeHooks {
+            orchestrate: None,
             on_change: Box::new(move |_, _| *counter.lock().unwrap() += 1),
             is_live: Box::new(|_| false),
             resolve_session: Box::new(|_| None),
@@ -1170,6 +1202,7 @@ mod tests {
             // Deterministic: the recipient acts immediately after the send is
             // journaled, before the bridge starts waiting. No model or sleeps.
             let hooks = BridgeHooks {
+                orchestrate: None,
                 on_change: Box::new(move |root, outcome| {
                     let Some(line) = &outcome.appended else {
                         return;
@@ -1452,6 +1485,7 @@ mod tests {
         let asked = Arc::new(Mutex::new(0usize));
         let counted = asked.clone();
         let hooks = BridgeHooks {
+            orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
             resolve_session: Box::new(move |session_id| {

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="680" viewBox="0 0 1280 680">
+ <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#53675f"/></marker></defs>
+ <rect width="1280" height="680" fill="#f7f8f5"/>
+ <g font-family="Arial, sans-serif" fill="#24352d">
+  <text x="60" y="62" font-size="15" letter-spacing="3">KLIDE · MISSION ORCHESTRATION</text>
+  <text x="60" y="112" font-size="34">One durable workflow. Two agent entry points.</text>
+  <text x="60" y="148" font-size="18" fill="#657068">Discover approved tasks → dispatch once → inspect the exact attempt</text>
+  <g stroke="#bdc8bf" fill="#ffffff"><rect x="60" y="210" width="250" height="150" rx="12"/><rect x="400" y="210" width="380" height="150" rx="12"/><rect x="870" y="210" width="350" height="150" rx="12"/><rect x="400" y="430" width="380" height="150" rx="12"/><rect x="870" y="430" width="350" height="150" rx="12"/></g>
+  <text x="84" y="248" font-size="22">Coordinator</text><text x="84" y="285" font-size="18">Goal Harness Run</text><text x="84" y="316" font-size="18">or Delegate via MCP</text>
+  <text x="425" y="248" font-size="22">Rust Mission supervisor</text><text x="425" y="285" font-size="18">Approved provider and model</text><text x="425" y="316" font-size="18">Dependency + retry admission</text>
+  <text x="895" y="248" font-size="22">Worker · exact Run ID</text><text x="895" y="285" font-size="18">Harness or Delegate CLI</text><text x="895" y="316" font-size="18">Existing command / diff gates</text>
+  <text x="425" y="468" font-size="22">Append-only Mission journal</text><text x="425" y="505" font-size="18">Attachment before launch</text><text x="425" y="536" font-size="18">Repeated dispatch → same attempt</text>
+  <text x="895" y="468" font-size="22">Review evidence</text><text x="895" y="505" font-size="18">Validation + exit + summary</text><text x="895" y="536" font-size="18">Shared-checkout diff statistics</text>
+  <g fill="none" stroke="#53675f" stroke-width="2" marker-end="url(#arrow)"><path d="M310 280H390"/><path d="M780 280H860"/><path d="M590 360V420"/><path d="M1045 360V420"/><path d="M870 505H790"/></g>
+  <text x="60" y="620" font-size="17">Exit ≠ acceptance. Timeout ≠ cancellation. Shared checkout ≠ isolated worker.</text>
+  <text x="60" y="651" font-size="15" fill="#657068">Operator approval, intentional retries, Delegate acceptance, and integration remain explicit.</text>
+ </g>
+</svg>

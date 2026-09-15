@@ -293,6 +293,19 @@ trait RunSupervisor: Send + Sync {
     /// reattach/status callers already treat a missing handle as "show the
     /// snapshot". Default no-op keeps headless test supervisors simple.
     fn retire_run(&self, _run_id: &str) {}
+    /// Execute an approved Mission operation in the app-owned supervisor.
+    /// The receiver keeps the host seam object-safe and the caller cancellable.
+    fn orchestrate(
+        &self,
+        _root: String,
+        _actor: String,
+        _request: crate::missions::orchestration::Request,
+    ) -> tokio::sync::oneshot::Receiver<Result<serde_json::Value, String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = tx.send(Err("Mission orchestration is unavailable in this host.".into()));
+        rx
+    }
+
     /// Start a nested subagent Run and resolve with its report once it settles.
     ///
     /// This is what makes a subagent durable. It used to be the frontend's job:
@@ -536,6 +549,21 @@ impl RunSupervisor for TauriSupervisor {
             return;
         };
         runs.remove(run_id);
+    }
+
+    fn orchestrate(
+        &self,
+        root: String,
+        actor: String,
+        request: crate::missions::orchestration::Request,
+    ) -> tokio::sync::oneshot::Receiver<Result<serde_json::Value, String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = crate::missions::orchestration::execute(app, root, actor, request).await;
+            let _ = tx.send(result);
+        });
+        rx
     }
 
     fn spawn_subagent(

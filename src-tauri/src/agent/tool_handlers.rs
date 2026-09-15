@@ -358,6 +358,28 @@ where
     };
 
     let outcome = match flavor {
+        tools::CoordinationFlavor::Orchestrate => {
+            // Enforce at execution too: a hallucinated tool name cannot let a
+            // Chat/Plan Run launch a Goal worker indirectly.
+            if !matches!(ctx.request.mode, AgentMode::Goal) {
+                return Ok(coordination_tool_error("Mission orchestration requires Goal mode."));
+            }
+            let request = match serde_json::from_value(call.input.clone()) {
+                Ok(request) => request,
+                Err(error) => return Ok(coordination_tool_error(format!("Invalid Mission request: {error}"))),
+            };
+            let receiver = ctx.sup.orchestrate(workspace_root.to_string(), ctx.id.to_string(), request);
+            let response = tokio::select! {
+                _ = ctx.cancel.cancelled() => return Ok(ToolOutcome::Cancelled),
+                result = receiver => result.map_err(|_| "Mission host ended without responding.".to_string()).and_then(|r| r),
+            };
+            match response {
+                Ok(value) => ToolOutcome::Produced(ToolResult {
+                    ok: true, content: serde_json::to_string_pretty(&value).unwrap_or_default(), metadata: Some(value),
+                }),
+                Err(error) => coordination_tool_error(error),
+            }
+        }
         tools::CoordinationFlavor::List => {
             let snapshot = match ctx.sup.coordination_snapshot(workspace_root) {
                 Ok(snapshot) => snapshot,

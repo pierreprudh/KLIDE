@@ -24,6 +24,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use tauri::Manager;
 
+pub(crate) mod orchestration;
+
 const MISSION_SCHEMA_VERSION: u8 = 1;
 
 /// Mission file/event writes are small. One process-wide gate gives append
@@ -1415,6 +1417,16 @@ async fn dispatch_task(
     mission_id: &str,
     task_id: &str,
 ) -> Result<(), String> {
+    dispatch_task_for(app, workspace_root, mission_id, task_id, None).await.map(|_| ())
+}
+
+async fn dispatch_task_for(
+    app: &tauri::AppHandle,
+    workspace_root: &str,
+    mission_id: &str,
+    task_id: &str,
+    coordinator: Option<&str>,
+) -> Result<String, String> {
     let (run_id, launch) = {
         let state = app.state::<MissionStoreState>();
         let _guard = state
@@ -1424,6 +1436,11 @@ async fn dispatch_task(
         let dir = mission_dir(workspace_root, mission_id, true)?;
         let bundle = load_bundle_from_dir(&dir)?;
         let runtime = fold_runtime(&bundle);
+        if let Some(actor) = coordinator {
+            if let Some(id) = orchestration::existing_attempt(&runtime, actor, task_id)? {
+                return Ok(id);
+            }
+        }
         if !task_is_ready(&bundle, &runtime, task_id)? {
             return Err(format!(
                 "Task `{task_id}` is not ready. Its plan must be approved and every dependency accepted."
@@ -1456,9 +1473,10 @@ async fn dispatch_task(
         }
     };
     let result = match launch {
-        MissionLaunch::Harness(request) => crate::agent::start_background_run(app.clone(), request)
-            .await
-            .map(|_| ()),
+        MissionLaunch::Harness(mut request) => {
+            request.parent_id = coordinator.map(str::to_string);
+            crate::agent::start_background_run(app.clone(), request).await.map(|_| ())
+        },
         MissionLaunch::Delegate {
             provider,
             model,
@@ -1477,7 +1495,7 @@ async fn dispatch_task(
             // a Mission attempt runs at the CLI's own configured level.
             None,
             None,
-            None,
+            coordinator.map(str::to_string),
             Some(mission_id.to_string()),
             Some(task_id.to_string()),
             Some(true),
@@ -1487,7 +1505,7 @@ async fn dispatch_task(
         record_dispatch_failure(app, workspace_root, mission_id, task_id, &run_id, &error)?;
         return Err(error);
     }
-    Ok(())
+    Ok(run_id)
 }
 
 async fn drive_mission_inner(

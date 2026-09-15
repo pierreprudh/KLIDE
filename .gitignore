@@ -38,6 +38,7 @@ docs/*
 !docs/KLIDE_MEMORY_SCHEMA.md
 !docs/MEMORY_ENGINE.md
 !docs/MODEL_ROUTING.md
+!docs/MISSION_ORCHESTRATION.md
 
 .vscode
 

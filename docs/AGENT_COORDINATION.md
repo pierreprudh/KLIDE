@@ -307,3 +307,10 @@ Harness still delivers at its safe turn boundary. A Delegate wait records
 acknowledgement before the HTTP response reaches its caller, so connection
 loss can still leave a consumed message whose response was not received.
 Reliable acknowledgement across transport failures remains separate work.
+
+## Approved Mission orchestration
+
+Goal Harness Runs and MCP Delegates also expose `mission_orchestrate`: list
+approved tasks, dispatch one using its frozen execution settings, and inspect or
+wait for an exact attempt. Repeated dispatch returns the existing Run ID.
+See the [workflow, evidence contract, and current isolation limits](MISSION_ORCHESTRATION.md).
