@@ -8398,3 +8398,13 @@ button:focus-visible .menu-leadout {
   .visual-expand-corner, .visual-expand-arm-v, .visual-expand-arm-h { transition: none; }
 }
   .inline-visual-actions, .visual-toolbar-divider,
+
+.ai-agent-activity { position: relative; margin-left: auto; min-width: 0; font-size: 11px; }
+.ai-agent-activity summary { cursor: pointer; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; color: var(--fg-muted); }
+.ai-agent-activity summary:focus-visible { outline: 2px solid var(--fg-muted); outline-offset: 4px; }
+.ai-agent-activity-name { display: inline-flex; align-items: center; gap: 5px; }
+.ai-agent-activity-card { position: absolute; bottom: calc(100% + 10px); right: 0; width: min(320px, calc(100vw - 40px)); max-height: 300px; overflow: auto; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg); box-shadow: 0 8px 30px #0002; z-index: 30; }
+.ai-agent-activity-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ai-agent-activity-row > span { min-width: 0; overflow-wrap: anywhere; }
+.ai-agent-activity-row small { display: block; color: var(--fg-muted); margin-top: 3px; }
+.ai-agent-activity-card p { color: var(--fg-muted); line-height: 1.5; margin: 10px 0 0; }

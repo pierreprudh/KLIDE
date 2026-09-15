@@ -108,8 +108,8 @@ import {
 } from "./ai/modelSelection";
 import { modificationAcceptanceMode } from "./ai/panelHost";
 import { ModelPicker, modelLabel } from "./ai/ModelPicker";
-import { inboxSenders, latestCoordinationPeer, parseDeliveryReason, peerName, useCoordinationInbox, usePeerIndex } from "./ai/coordinationPeers";
-import { PeerLink } from "./ai/PeerLink";
+import { inboxSenders, coordinationPeersOf, parseDeliveryReason, peerName, useCoordinationInbox, usePeerIndex } from "./ai/coordinationPeers";
+import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
 import { conversationMark } from "../modelIdentity";
@@ -2444,14 +2444,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   // taken in yet — read from the journal, refreshed on its change event, so
   // they show here the moment they are sent rather than at the next turn.
   const pendingInbox = useCoordinationInbox(workspaceRoot, currentId);
-  // The one conversation this thread is talking to right now: whoever has
-  // something waiting for it, else the peer it last exchanged with. One link,
-  // not a row of every peer it ever met.
-  const coordinationPeers = useMemo(() => {
-    const senders = inboxSenders(pendingInbox);
-    const latest = senders.length > 0 ? senders[senders.length - 1] : latestCoordinationPeer(msgs);
-    return latest ? [latest] : [];
-  }, [msgs, pendingInbox]);
+  const coordinationPeers = useMemo(() =>
+    [...new Set([...coordinationPeersOf(msgs), ...inboxSenders(pendingInbox)])]
+      .filter((id) => id !== currentId), [msgs, pendingInbox, currentId]);
   const peerIndex = usePeerIndex();
 
   // Write a structured memory note to .klide/memory/. Delegates to
@@ -5440,11 +5435,9 @@ This user request requires workspace inspection. Before answering, you MUST call
               {acceptingChanges ? "Accepting…" : "Accept modification"}
             </button>
           )}
-          {/* Who this thread is talking to, at the right end of the same line
-              as the branch and the Goal policy: this thread's mark, a hairline,
-              the peer's mark and title. The dot moves only while this thread
-              streams — out first, then back. */}
-          <PeerLink
+          {/* Recorded participants and direct CLI invocation evidence. */}
+          <AgentActivity
+            msgs={msgs}
             peers={coordinationPeers}
             index={peerIndex}
             selfId={currentId}

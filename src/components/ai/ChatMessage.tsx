@@ -780,7 +780,7 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
   // Wall clock only earns its own slot when it's meaningfully longer — that
   // gap is tool execution and time the turn sat waiting on a diff review.
   const durationMs = meta.modelMs ?? meta.ms;
-  if (durationMs !== undefined) parts.push(formatDuration(durationMs));
+  if (durationMs !== undefined) parts.push(`${formatDuration(durationMs)} ${meta.modelMs !== undefined ? "model" : "elapsed"}`);
   if (meta.modelMs !== undefined && meta.ms !== undefined && meta.ms - meta.modelMs >= 1000) {
     parts.push(`${formatDuration(meta.ms)} total`);
   }
@@ -793,10 +793,12 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
   return (
     <div
       className="klide-msg-meta"
+      title="This response only. Model speed excludes tool execution. Tokens and cost exclude external CLI agents; their usage is unavailable here."
       style={{
         marginTop: 6,
         display: "flex",
         justifyContent: "center",
+        flexWrap: "wrap",
         gap: 14,
         fontSize: 10,
         fontFamily: "var(--font-mono)",
@@ -805,6 +807,7 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
         userSelect: "none",
       }}
     >
+      <span>This response</span>
       {parts.map((p, i) => (
         <span key={i}>{p}</span>
       ))}
