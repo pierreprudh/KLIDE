@@ -1181,10 +1181,11 @@ export function RunInterruptedRow({ onRetry, disabled }: { onRetry?: () => void;
 
 /**
  * What stands in for the first token on a turn that will not stream: the
- * run's status word and a clock that counts from `since`. The orbit loader
- * promises a token any second; on the Delegate headless path none comes until
- * the whole reply does, and a minute of that reads as a stall. Static ink and
- * a counting number read as progress.
+ * panel's loader, the status word with its shimmer, and a clock that counts
+ * from `since` — the same three parts the Working row under a tool turn
+ * wears, so "the model is busy" reads the same everywhere. On the Delegate
+ * headless path no token comes until the whole reply does, and the clock is
+ * what keeps a minute of that from reading as a stall.
  */
 export function WorkingSince({ since }: { since?: number }) {
   // The user turn's own timestamp when it has one; otherwise the moment this
@@ -1204,7 +1205,8 @@ export function WorkingSince({ since }: { since?: number }) {
       aria-label={`Working, ${clock} elapsed`}
       style={{ ...COMPACT_MONO, color: "var(--fg-dim)", letterSpacing: "0.02em", display: "inline-flex", alignItems: "center", height: 22, gap: 8 }}
     >
-      <span>Working</span>
+      <DotGridLoader size={11} label="Working" />
+      <span className="ai-working-label">Working</span>
       <span aria-hidden="true" style={{ opacity: 0.6 }}>·</span>
       <span style={{ fontVariantNumeric: "tabular-nums" }}>{clock}</span>
     </span>
