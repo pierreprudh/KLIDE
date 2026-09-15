@@ -69,3 +69,8 @@ scripts/prompt-ab/results.json
 
 # --- OS noise ---
 Thumbs.db
+
+# --- Local demo output ---
+# Files a dogfood run produced (decks, docs, rendered pages). Never repo content.
+artifacts/
+q3-demo/

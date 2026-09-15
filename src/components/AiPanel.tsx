@@ -1,3 +1,5 @@
+import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
+import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
   memo,
   useCallback,
@@ -1055,7 +1057,7 @@ export function AiPanel({
     close: closeModeMenu,
   } = usePortalMenu({
     computePos: (rect) => {
-      const width = 204;
+      const width = 238;
       return {
         bottom: Math.round(window.innerHeight - rect.top + 8),
         left: Math.round(Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)),
@@ -1109,12 +1111,12 @@ export function AiPanel({
       return next;
     });
   };
-  function selectMode(mode: AgentMode) {
+  function selectMode(mode: AgentMode, closeMenu = true) {
     setNextSendMode(null);
     agentModeRef.current = mode;
     setAgentMode(mode);
     localStorage.setItem("klide.agentMode", mode);
-    closeModeMenu();
+    if (closeMenu) closeModeMenu();
   }
   useEffect(() => { agentModeRef.current = agentMode; }, [agentMode]);
   // Outside-click + scroll/resize auto-close for all three popovers now lives
@@ -1798,6 +1800,8 @@ This user request requires workspace inspection. Before answering, you MUST call
   // the thread and depends on `msgs` alone; the rest moves with each keystroke
   // of the draft. Unmemoized, the whole walk ran ~28 times a second while a
   // Run streamed and once more per keystroke while the user typed.
+  const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
+  useEffect(() => setArtifactOutput(null), [currentId]);
   const skillsPrompt = useMemo(() => enabledSkillsPrompt(skills), [skills]);
   const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
   const budget = useMemo(
@@ -3069,10 +3073,6 @@ This user request requires workspace inspection. Before answering, you MUST call
   const focusInset = variant === "focus" ? column.inset : 0;
   const focusGutterLeft = `calc(max(20px, (100% - ${760 + focusInset}px) / 2))`;
   const focusGutterRight = `calc(max(20px, (100% - ${760 + focusInset}px) / 2) + ${focusInset}px)`;
-  // Permission gate: the harness pauses and emits a request — a shell command,
-  // a network target, or a message to another agent — and the user approves or
-  // rejects (approveCommand / rejectCommand) before it runs. The card renders
-  // from `pendingPermission`.
   // What a *page* may take back from those gutters. A diagram sits in the
   // reading column like a paragraph; a document a model wrote is a surface of
   // its own and grows past the column — wide, not edge to edge: to 1040px at
@@ -3693,8 +3693,12 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   async function send(opts?: { text?: string; mode?: AgentMode; attachments?: Attachment[] }) {
-    const text = opts?.text ?? input;
+    const rawText = opts?.text ?? input;
     const stagedFiles = opts?.attachments ?? pendingAttachments;
+    const selectedOutput = opts?.text === undefined ? artifactOutput : null;
+    const text = rawText.trim() || stagedFiles.length
+      ? artifactPrompt(rawText, selectedOutput, skills)
+      : rawText;
     if (serverStarting) return;
     // An attachment-only turn (no text) is valid; a bare empty turn is not.
     if (!text.trim() && stagedFiles.length === 0) return;
@@ -3704,6 +3708,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       // Delegate TUIs take text only — attachments aren't wired to their stdin.
       setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
       await writeDelegatePty(delegateSessionId(currentId, provider), `${text}\r`);
+      if (selectedOutput) setArtifactOutput(null);
       return;
     }
     cancelledWarmupRef.current = false;
@@ -3746,6 +3751,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         : availableMode;
     setInput(""); setMention(null); setSlash(null); setNextSendMode(null);
     historyIndexRef.current = null; historyDraftRef.current = "";
+    if (selectedOutput) setArtifactOutput(null);
     setPendingAttachments([]);
     const collected = await collectAttachments(effectiveText);
     // Staged photos/documents ride ahead of @-mention file attachments.
@@ -5121,7 +5127,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
                   </button>
                   {modeOpen && modeMenuPos && createPortal(
-                    <div ref={modeMenuRef} role="menu" aria-label="Add context and mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 204, padding: 5, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-elevated)", boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)", zIndex: Z.popover }}>
+                    <div ref={modeMenuRef} role="menu" aria-label="Add context and mode" className="popover-enter" style={{ position: "fixed", left: modeMenuPos.left, bottom: modeMenuPos.bottom, width: 238, maxHeight: `calc(100vh - ${modeMenuPos.bottom + 8}px)`, overflowY: "auto", padding: 5, borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-elevated)", boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)", zIndex: Z.popover }}>
                       <button type="button" role="menuitem" onClick={addFileMention} title="Add a file to the conversation context"
                         style={{ width: "100%", display: "flex", alignItems: "center", height: 32, padding: "0 10px", border: "none", borderRadius: "var(--radius-sm)", background: "transparent", color: "var(--fg)", font: "inherit", fontSize: 13, cursor: "pointer" }}
                         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -5145,6 +5151,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                         <AttachIcon size={14} />
                       </button>
                       <div style={{ height: 1, background: "var(--border)", margin: "4px 8px" }} />
+                      <ArtifactOutputRows value={artifactOutput} disabled={goalDisabled} onChange={(value) => { setArtifactOutput(value); if (value) selectMode("goal", false); }} />
                       {MODE_CHOICES.map((rung) => {
                         const disabled = rung.mode === "goal" && goalDisabled;
                         const active = rung.mode === effectiveMode;
@@ -5173,6 +5180,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
+              <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
               {/* Focus keeps the same footer order as the start-stage composer
                   (FocusMode.tsx): the "+" leads, the provider follows — firing
                   the first message must not shuffle the controls. */}

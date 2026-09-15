@@ -1,0 +1,46 @@
+.artifact-output-disclosure {
+  position: relative;
+  height: 40px;
+  overflow: hidden;
+  transition: height 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.artifact-output-disclosure.is-expanded { height: 102px; }
+.artifact-output-trigger {
+  position: absolute;
+  inset: 0 0 auto;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 140ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s;
+}
+.is-expanded .artifact-output-trigger {
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 140ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s 140ms;
+}
+.artifact-output-choices {
+  visibility: hidden;
+}
+.is-expanded .artifact-output-choices {
+  visibility: visible;
+}
+.artifact-output-choices > button {
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity 240ms ease, transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.is-expanded .artifact-output-choices > button {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 60ms;
+}
+.is-expanded .artifact-output-choices > button:nth-child(2) { transition-delay: 90ms; }
+.is-expanded .artifact-output-choices > button:nth-child(3) { transition-delay: 120ms; }
+@media (prefers-reduced-motion: reduce) {
+  .artifact-output-disclosure, .artifact-output-trigger,
+  .artifact-output-choices, .artifact-output-choices > button {
+    transition: none !important;
+    transform: none;
+  }
+}

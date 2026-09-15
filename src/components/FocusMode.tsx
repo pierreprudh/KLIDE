@@ -1,3 +1,5 @@
+import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
+import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 // FocusMode — Klide's chat-first workspace, blending the project/thread
 // command-centre pattern with an artifact-first agent home. A quiet left rail
 // groups conversations by project; the main canvas pairs a centered start /
@@ -1055,6 +1057,8 @@ function StarterIcon({ kind }: { kind: StarterKind }) {
  *  report on, and the start stage should read as one line of intent. Once the
  *  first message lands, AiPanel's foot bar carries the note as usual. */
 function FocusAddMenu({
+  artifactOutput,
+  onArtifactOutputChange,
   workspaceRoot,
   mode,
   supportsTools,
@@ -1090,6 +1094,8 @@ function FocusAddMenu({
   /** Bumped by the composer when a command wants the file list open — `/explain`
    *  has nothing to explain until a file is picked. Zero means never asked. */
   openFilesRequest?: number;
+  artifactOutput: ArtifactOutput | null;
+  onArtifactOutputChange: (value: ArtifactOutput | null) => void;
 }) {
   const [view, setView] = useState<"actions" | "files">("actions");
   // The OS file picker, for a photo or document that isn't in the workspace.
@@ -1289,6 +1295,7 @@ function FocusAddMenu({
                 <AttachIcon size={14} />
               </button>
               <div className="klide-focus-add-menu-divider" />
+              <ArtifactOutputRows value={artifactOutput} disabled={!supportsTools && !providerDelegatesWork} onChange={(value) => { onArtifactOutputChange(value); if (value) onModeChange("goal"); }} />
               {MODE_CHOICES.map((choice) => {
                 const disabled = choice.mode === "goal" && !supportsTools;
                 const active = choice.mode === effectiveMode;
@@ -1428,6 +1435,7 @@ function FocusComposer({
     onOpenSettingsSection,
   } = controls;
   const [draft, setDraft] = useState("");
+  const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
   const [focused, setFocused] = useState(false);
   // Photos and documents staged on the first turn. They ride the handoff into
   // the AI panel with the text, so a Focus task can start from a screenshot.
@@ -1584,7 +1592,7 @@ function FocusComposer({
     setAttachments([]);
     setSlash(null);
     setNextSendMode(null);
-    onSubmit(text, attachments, mode ? { mode } : undefined);
+    onSubmit(artifactPrompt(text, artifactOutput), attachments, artifactOutput ? { mode: "goal" } : mode ? { mode } : undefined);
   }
 
   function changeDraft(value: string) {
@@ -1799,6 +1807,8 @@ function FocusComposer({
         <div className="klide-focus-composer-footer">
           <div className="klide-focus-provider-control">
             <FocusAddMenu
+              artifactOutput={artifactOutput}
+              onArtifactOutputChange={setArtifactOutput}
               workspaceRoot={workspaceRoot}
               mode={agentMode}
               supportsTools={supportsTools}
@@ -1814,6 +1824,7 @@ function FocusComposer({
               onAutoApproveCommandsChange={onAutoApproveCommandsChange}
               openFilesRequest={openFilesRequest}
             />
+            <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
             <InlineMenu
               label="Provider"
               display={providerName(provider)}
