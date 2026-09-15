@@ -261,7 +261,7 @@ export const FocusGitIsland = memo(function FocusGitIsland({
           {commits === null ? (
             <span className="klide-focus-git-island-empty">Loading history…</span>
           ) : unavailable || islandRows.length === 0 ? (
-            <span className="klide-focus-git-island-empty">No commit history</span>
+            <span className="klide-focus-git-island-empty">{unavailable ? "Not a Git repository" : "No commits yet"}</span>
           ) : islandRows.map((row) => (
             <span className="klide-focus-git-island-row" key={row.commit.hash}>
               <PreviewGraphCell row={row} width={graphWidth} isHead={row.commit.hash === headHash} rowHeight={ISLAND_ROW_HEIGHT} />
@@ -314,8 +314,14 @@ export const FocusGitIsland = memo(function FocusGitIsland({
           <div className="klide-focus-git-preview-heading">
             <span>Git graph</span>
             <small>
-              {branch || "Repository"}
-              {changeCount > 0 ? ` · ${changeCount} change${changeCount === 1 ? "" : "s"}` : " · clean"}
+              <span>{branch || "Repository"}</span>
+              {/* Two facts, set apart by space rather than a dot. A folder that
+                  isn't a repository has no working tree to call clean. */}
+              {!unavailable && (
+                <span style={{ marginLeft: 10 }}>
+                  {changeCount > 0 ? `${changeCount} change${changeCount === 1 ? "" : "s"}` : "clean"}
+                </span>
+              )}
             </small>
           </div>
         </div>
@@ -324,7 +330,7 @@ export const FocusGitIsland = memo(function FocusGitIsland({
           {commits === null ? (
             <div className="klide-focus-git-preview-empty">Loading history…</div>
           ) : unavailable || sideRows.length === 0 ? (
-            <div className="klide-focus-git-preview-empty">No commit history</div>
+            <div className="klide-focus-git-preview-empty">{unavailable ? "Not a Git repository" : "No commits yet"}</div>
           ) : sideRows.map((row) => (
             <div className="klide-focus-git-preview-row" key={row.commit.hash} title={`${row.commit.shortHash} · ${row.commit.author}\n${row.commit.subject}`}>
               <PreviewGraphCell row={row} width={graphWidth} isHead={row.commit.hash === headHash} rowHeight={PREVIEW_ROW_HEIGHT} />
