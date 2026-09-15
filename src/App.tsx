@@ -3056,6 +3056,7 @@ function App() {
             <SettingsPanel
               key={settingsInitial ?? "default"}
               initialSection={settingsInitial}
+              workspaceRoot={workspaceRoot}
               aiVisible={aiVisible}
               onAiVisibleChange={setAiVisible}
               terminalVisible={terminalVisible}

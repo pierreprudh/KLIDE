@@ -56,6 +56,7 @@ import {
 import { API_KEY_PROVIDERS, ApiKeyRow, ApiKeySummary, ProviderBalanceBlock } from "./settings/apiKeys";
 import { notify } from "../toast";
 import { CustomCliAgentsBlock, CustomEndpointsBlock } from "./settings/customProviders";
+import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
 import { LocalServerRow } from "./settings/localServers";
 import { AccountControl, GitHubAccountRow } from "./settings/accounts";
@@ -70,6 +71,7 @@ import {
   GearIcon,
   GridIcon,
   KeyIcon,
+  PlugIcon,
   SearchIcon,
   ServerIcon,
   SparkIcon,
@@ -102,6 +104,9 @@ type Props = {
   onApplyLayout: (layout: ResolvedLayout) => void;
   onProviderKeyChange?: (provider: string) => void;
   initialSection?: string | null;
+  /** The open project. Connectors reads it to offer this repo's own
+   *  `.mcp.json`; every other section is workspace-independent. */
+  workspaceRoot: string | null;
   onBack: () => void;
 };
 
@@ -177,6 +182,7 @@ const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "ai", label: "AI Assistant", icon: <SparkIcon /> },
   { id: "local-ai", label: "Local AI", icon: <ServerIcon /> },
   { id: "api", label: "API", icon: <KeyIcon /> },
+  { id: "connectors", label: "Connectors", icon: <PlugIcon /> },
   { id: "subscription", label: "Subscription", icon: <CloudIcon /> },
   { id: "editor", label: "Editor", icon: <CodeIcon /> },
   { id: "terminal", label: "Terminal", icon: <TerminalIcon /> },
@@ -193,6 +199,7 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
   ai: "How the assistant edits files, runs tools, and reasons.",
   "local-ai": "Run models on-device with Ollama and MLX — no key needed.",
   api: "Hosted provider keys, the opencodex gateway, and self-hosted endpoints.",
+  connectors: "MCP servers Klide connects to — import the ones your other tools already use.",
   subscription: "Connect Claude Code, Codex, OpenCode, and Oh My Pi CLI logins — plus your ollama.com account.",
   editor: "Monaco editor preferences — font, gutter, and wrapping.",
   terminal: "The built-in shell's appearance and behaviour.",
@@ -216,6 +223,7 @@ const panelOnlyIndex: SettingIndexEntry[] = [
   { label: "Local servers (Ollama / MLX)", section: "local-ai", keywords: "local ollama mlx server start stop concurrency model" },
   { label: "API keys", section: "api", keywords: "api key keychain anthropic openai mistral xai deepseek openrouter token secret" },
   { label: "Provider gateway (opencodex)", section: "api", keywords: "gateway opencodex ocx proxy oauth subscription route provider bridge localhost 10100" },
+  { label: "Connectors (MCP servers)", section: "connectors", keywords: "connector mcp server model context protocol tool linear notion figma playwright stdio npx import claude codex opencode" },
   { label: "CLI subscriptions", section: "subscription", keywords: "subscription claude code codex opencode omp oh my pi ollama signin login account auth cli" },
   { label: "GitHub account", section: "subscription", keywords: "github account gh avatar profile picture identity work personal switch pin push pr" },
   { label: "Terminal", section: "terminal", keywords: "terminal shell font xterm" },
@@ -359,6 +367,7 @@ export function SettingsPanel({
   onApplyLayout,
   onProviderKeyChange,
   initialSection,
+  workspaceRoot,
   onBack,
 }: Props) {
   // Durable settings come from the settings store, not props — App and any
@@ -1735,6 +1744,14 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+          </Section>
+
+          <Section
+            id="connectors"
+            active={activeSection}
+            mounted={visitedSections.has("connectors")}
+          >
+            <ConnectorsSection workspaceRoot={workspaceRoot} />
           </Section>
 
           <Section id="subscription" active={activeSection} mounted={visitedSections.has("subscription")}>
