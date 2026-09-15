@@ -106,6 +106,7 @@ Klide/
 │   ├── diffComments.ts          Line-anchored diff comments sent back to running agents
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
+│   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe)
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
 │   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
 │   ├── gitGraph.ts              Lane layout for the commit graph (gitTypes.ts: wire types)
@@ -180,7 +181,7 @@ Klide/
 │   │   ├── ProfileModal.tsx     Local IDE profile (avatar + identity + workspace)
 │   │   ├── SearchPanel.tsx      Find-in-files results
 │   │   ├── SettingsPanel.tsx    Settings shell (sections live in settings/)
-│   │   ├── settings/            accounts, apiKeys, controls, customProviders, gateway, icons, localServers, stats, storage
+│   │   ├── settings/            accounts, apiKeys, connectors, controls, customProviders, gateway, icons, localServers, stats, storage
 │   │   ├── Sidebar.tsx          File explorer tree
 │   │   ├── SkillsModal.tsx      Skill editor + install + provenance groups
 │   │   ├── SplitPane.tsx        Vertical/horizontal split shell
@@ -267,6 +268,7 @@ Klide/
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
     │   ├── gateway.rs            opencodex proxy process — install check, start/stop, Codex un-inject
+    │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
@@ -289,6 +291,7 @@ Klide/
     │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one writer gate, replayed snapshot
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
+    │   ├── mcp_client.rs         Klide as an MCP client — start a connector's stdio server, handshake, list tools, kill it (a probe, not a session)
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop

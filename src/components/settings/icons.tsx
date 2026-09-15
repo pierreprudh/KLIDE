@@ -29,6 +29,18 @@ export function ArrowLeftIcon() {
   );
 }
 
+/** A plug — a connector is something Klide plugs into. */
+export function PlugIcon() {
+  return (
+    <IconBase>
+      <path d="M9 3v5" />
+      <path d="M15 3v5" />
+      <path d="M6 8h12v2.5a6 6 0 0 1-12 0V8Z" />
+      <path d="M12 16.5V21" />
+    </IconBase>
+  );
+}
+
 export function SearchIcon() {
   return (
     <IconBase>
