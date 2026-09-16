@@ -254,6 +254,51 @@ mod tests {
     }
 
     #[test]
+    fn workers_are_exactly_the_delegates() {
+        // No brand is listed by hand: a fifth Delegate is a fifth worker.
+        let delegates: Vec<&str> = crate::delegate::ALL.iter().map(|d| d.id()).collect();
+        assert_eq!(worker_ids(), delegates);
+        for id in worker_ids() {
+            assert_eq!(resolve_worker(id).map(|w| w.id()), Some(id));
+            assert_eq!(resolve_worker(&format!("  {id} ")).map(|w| w.id()), Some(id), "trimmed");
+        }
+        assert!(resolve_worker("gemini-cli").is_none());
+    }
+
+    #[test]
+    fn with_a_worker_every_role_is_selectable() {
+        let all: Vec<&str> = ALL.iter().map(|s| s.id).collect();
+        assert_eq!(worker_selectable_ids(), all);
+        assert!(worker_selectable_ids().contains(&"implementer"));
+        assert!(worker_selectable_ids().contains(&"tester"));
+    }
+
+    #[test]
+    fn worker_branch_follows_the_frontend_rule() {
+        // klide/<kind>-<slug>-<suffix>: lowercase slug capped at 36, the last 8
+        // alphanumerics of the request id as the suffix.
+        let branch = worker_branch("Implement slugify in src/", "sub_mu2tz_call_ABC12345");
+        assert_eq!(branch, "klide/worker-implement-slugify-in-src-abc12345");
+        let long = worker_branch(&"x".repeat(80), "id");
+        assert!(long.starts_with("klide/worker-"));
+        assert!(long.len() <= "klide/worker-".len() + 36 + 1 + 8);
+        assert_eq!(worker_branch("!!!", ""), "klide/worker-task-run");
+    }
+
+    #[test]
+    fn a_worker_prompt_is_about_the_role_and_the_report_not_kit() {
+        let def = resolve("implementer").unwrap();
+        let prompt = build_worker_prompt(def, "Claude Code", Some("klide/worker-x-1"));
+        assert!(prompt.starts_with("You are Claude Code"));
+        assert!(prompt.contains("klide/worker-x-1"));
+        assert!(prompt.contains(def.instructions));
+        assert!(prompt.contains("report"));
+        assert!(!prompt.contains("Kit"));
+        let plain = build_worker_prompt(def, "Codex", None);
+        assert!(plain.contains("not a Git repository"));
+    }
+
+    #[test]
     fn read_only_roles_stay_in_plan_mode() {
         // The explorer and reviewer are advertised as read-only; Plan mode is
         // what actually enforces it via schemas_for_mode.
