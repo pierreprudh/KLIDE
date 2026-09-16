@@ -1025,11 +1025,71 @@ export function renderMarkdown(text: string, options?: MarkdownOptions): MdNode[
   return out;
 }
 
+// A drawing the model forgot to fence. The visualizer's contract is a fenced
+// `html` / `svg` block and the prompt asks for one, but a model sometimes
+// writes `<svg …>…</svg>` straight into the prose — and the reader gets a
+// page of angle brackets instead of the picture. Markup that opens at the
+// start of a line and closes is the same intent as a fence, so it is given
+// one before parsing. While the text is still arriving, an `<svg` at the tail
+// that has not closed yet is fenced too, so it is held as source until it
+// does — like any other streaming fence. Only an `<svg>` or a whole `<html>`
+// document qualify: a bare `<div>` in prose is as often a quotation as a
+// drawing. Segments inside real fences are never touched.
+const BARE_MARKUP_OPEN = /^[ \t]*<(svg|!doctype html|html)\b/gim;
+
+function closeOfBareMarkup(seg: string, from: number, kind: "svg" | "html"): number {
+  if (kind === "html") {
+    const end = seg.indexOf("</html>", from);
+    return end < 0 ? -1 : end + "</html>".length;
+  }
+  // Nested `<svg>` (a symbol inside a drawing) must not end the block early.
+  const tag = /<svg\b|<\/svg\s*>/gi;
+  tag.lastIndex = from;
+  let depth = 0;
+  for (let m = tag.exec(seg); m; m = tag.exec(seg)) {
+    if (m[0][1] === "/") {
+      if (--depth === 0) return m.index + m[0].length;
+    } else depth++;
+  }
+  return -1;
+}
+
+function fenceBareMarkupInProse(seg: string, tail: boolean): string {
+  let out = "";
+  let cursor = 0;
+  BARE_MARKUP_OPEN.lastIndex = 0;
+  for (let m = BARE_MARKUP_OPEN.exec(seg); m; m = BARE_MARKUP_OPEN.exec(seg)) {
+    if (m.index < cursor) continue;
+    const start = m.index + m[0].indexOf("<");
+    const kind = m[1].toLowerCase() === "svg" ? "svg" : "html";
+    const end = closeOfBareMarkup(seg, start, kind);
+    if (end < 0) {
+      // Unclosed. Only the streaming tail may hold it open as source; a
+      // finished message that never closed its tag stays what it is — text.
+      if (tail) return out + seg.slice(cursor, start) + "```" + kind + "\n" + seg.slice(start);
+      continue;
+    }
+    out += seg.slice(cursor, start) + "```" + kind + "\n" + seg.slice(start, end) + "\n```";
+    cursor = end;
+    BARE_MARKUP_OPEN.lastIndex = end;
+  }
+  return out + seg.slice(cursor);
+}
+
+export function fenceBareMarkup(text: string, streaming = false): string {
+  BARE_MARKUP_OPEN.lastIndex = 0;
+  if (!BARE_MARKUP_OPEN.test(text)) return text;
+  const segments = text.split("```");
+  return segments
+    .map((seg, idx) => (idx % 2 === 1 ? seg : fenceBareMarkupInProse(seg, streaming && idx === segments.length - 1)))
+    .join("```");
+}
+
 function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
   // Split on ``` so every odd-indexed segment is a code block and every
   // even-indexed segment is prose. Render code blocks first so their
   // contents (which can contain their own ```) are not interpreted again.
-  const segments = text.split("```");
+  const segments = fenceBareMarkup(text, options?.streaming === true).split("```");
   const out: MdNode[] = [];
   segments.forEach((seg, idx) => {
     if (idx % 2 === 1) {

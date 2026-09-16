@@ -56,6 +56,37 @@ describe("the inline visualizer", () => {
     );
   });
 
+  // A model that skips the fence (DeepSeek did, 2026-09-16) still meant a
+  // picture. Block-level markup is drawn; markup quoted mid-sentence or
+  // inside a source fence is not.
+  it("draws a bare <svg> block the model wrote without a fence", () => {
+    const html = render("Here it is.\n\n<svg viewBox=\"0 0 10 10\"><circle r=\"4\"/></svg>\n\nDone.");
+    expect(html).toContain("<circle");
+    expect(html).toContain(">Code<");
+    expect(html).not.toContain("&lt;svg");
+    expect(html).toContain("Done.");
+  });
+
+  it("keeps a nested <svg> inside one bare drawing", () => {
+    const html = render("<svg viewBox=\"0 0 10 10\"><svg x=\"1\"><rect/></svg><circle/></svg>\n\nafter");
+    expect(html).toContain("<rect");
+    expect(html).toContain("<circle");
+    expect(html).not.toContain("&lt;/svg");
+  });
+
+  it("holds a bare <svg> as source while it is still streaming", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("<svg viewBox=\"0 0 10 10\"><circle", { streaming: true })}</>);
+    expect(html).toContain(">Preview<");
+    expect(html).toContain("&lt;svg");
+  });
+
+  it("leaves an <svg> quoted mid-sentence, or in a source fence, as text", () => {
+    expect(render("Use an <svg> element here.")).toContain("&lt;svg&gt;");
+    const fenced = render("```ts\nconst s = `<svg viewBox=\"0 0 1 1\"></svg>`;\n```");
+    expect(fenced).toContain("&lt;svg");
+    expect(fenced).not.toContain(">Code<");
+  });
+
   it("gives two visuals in one message their own ids", () => {
     const html = render(
       "```svg\n<svg><marker id=\"arrow\"/><path marker-end=\"url(#arrow)\"/></svg>\n```\n\n" +
