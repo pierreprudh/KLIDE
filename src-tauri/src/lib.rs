@@ -5,6 +5,7 @@ mod blocking;
 mod cli;
 mod agent;
 mod coordination;
+mod connectors;
 mod coordination_bridge;
 mod custom_cli;
 mod custom_providers;
@@ -14,6 +15,7 @@ mod file_memo;
 mod gateway;
 mod git;
 mod local_servers;
+mod mcp_client;
 pub mod mcp_server;
 mod memory;
 mod missions;
@@ -891,9 +893,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            visual_export::save_visual_png,
             pty_spawn,
             pty_resize,
-            visual_export::save_visual_png,
             pty_write,
             pty_close,
             delegate_pty_spawn,
@@ -969,6 +971,11 @@ pub fn run() {
             gateway::gateway_status,
             gateway::gateway_start,
             gateway::gateway_stop,
+            connectors::connectors_list,
+            connectors::connectors_upsert,
+            connectors::connectors_remove,
+            connectors::connectors_discover,
+            connectors::connectors_probe,
             agent::agent_start_run,
             agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
@@ -1172,14 +1179,15 @@ mod blocking_door_tests {
 
     const COMMAND_SOURCES: &[(&str, &str)] = &[
         ("lib.rs", include_str!("lib.rs")),
+        ("visual_export.rs", include_str!("visual_export.rs")),
         ("skills.rs", include_str!("skills.rs")),
         ("memory.rs", include_str!("memory.rs")),
         ("missions.rs", include_str!("missions.rs")),
         ("pty.rs", include_str!("pty.rs")),
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
+        ("connectors.rs", include_str!("connectors.rs")),
         ("models.rs", include_str!("models.rs")),
-        ("visual_export.rs", include_str!("visual_export.rs")),
         ("coordination.rs", include_str!("coordination.rs")),
         ("storage.rs", include_str!("storage.rs")),
         ("providers.rs", include_str!("providers.rs")),

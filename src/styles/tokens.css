@@ -8311,6 +8311,223 @@ button:focus-visible .menu-leadout {
   }
 }
 
+/* ── Connectors (Settings › Connectors) ──────────────────────────────────────
+   The page borrows its shape from a reference sheet of AI-native primitives
+   (beautifului.dev): a numbered section head with a one-line note, a dashed
+   rule between sections, and — the idea worth stealing — a single highlight
+   that *glides* between rows rather than each row lighting up on its own.
+   Everything inside it is Klide's: bone surfaces, sage, Atkinson, hairlines.
+
+   A ledger, not a stack of cards. State is carried by type colour, and the
+   verbs stay out of the way until a row is hovered or focused. */
+
+.klide-primitive-section {
+  border-bottom: 1px dashed color-mix(in srgb, var(--border-strong) 32%, transparent);
+  padding-bottom: 26px;
+  margin-bottom: 26px;
+}
+
+.klide-primitive-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+/* `01  Your connectors   2 of 3 on · 14 tools seen        Check all` */
+.klide-primitive-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.klide-primitive-index {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.klide-primitive-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-strong);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.klide-primitive-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One highlight for the whole list: it moves to the row under the pointer (or
+   the focused row) instead of every row owning a hover background. The list is
+   the positioning context, so a row's offsetTop is the only measurement. */
+.klide-glide-list {
+  position: relative;
+}
+
+.klide-glide {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  pointer-events: none;
+  transition:
+    top 220ms var(--ease-out),
+    height 220ms var(--ease-out),
+    opacity var(--motion-fast) ease;
+}
+
+.klide-connector-row {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  animation: klide-connector-row-in 0.3s var(--ease-out) both;
+}
+
+.klide-connector-row:last-child,
+.klide-connector-row[data-open="true"] {
+  border-bottom: none;
+}
+
+/* A disabled connector keeps its whole row legible — it recedes in colour,
+   which is the one lever here, rather than being struck through or badged. */
+.klide-connector-row[data-off="true"] .klide-row-title {
+  color: var(--fg-subtle);
+}
+
+.klide-connector-meta {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+}
+
+.klide-connector-command {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.klide-connector-verbs {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  opacity: 0;
+  transition: opacity var(--motion-med) var(--ease-out);
+}
+
+/* Keyboard reaches the verbs even though the mouse hasn't: focus-within is
+   what keeps a hover reveal from being a mouse-only feature. */
+.klide-connector-row:hover .klide-connector-verbs,
+.klide-connector-row:focus-within .klide-connector-verbs,
+.klide-connector-offer:hover .klide-connector-verbs,
+.klide-connector-offer:focus-within .klide-connector-verbs {
+  opacity: 1;
+}
+
+.klide-connector-verb {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.klide-connector-verb:hover {
+  color: var(--fg-strong);
+}
+
+.klide-connector-verb[data-danger="true"]:hover {
+  color: var(--danger);
+}
+
+.klide-connector-verb:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The import list is deliberately lighter than the ledger above it: no card,
+   no fill — these are offers, not settings you own yet. */
+.klide-connector-offer {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 11px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  animation: klide-connector-row-in 0.3s var(--ease-out) both;
+}
+
+.klide-connector-offer:last-child {
+  border-bottom: none;
+}
+
+.klide-connector-detail {
+  position: relative;
+  z-index: 1;
+  padding: 0 18px 18px;
+  animation: klide-connector-detail-in var(--motion-slow) var(--ease-out) both;
+}
+
+@keyframes klide-connector-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes klide-connector-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-connector-row,
+  .klide-connector-offer,
+  .klide-connector-detail {
+    animation: none;
+  }
+  .klide-connector-verbs,
+  .klide-glide {
+    transition: none;
+  }
+}
+
 /* The figure's own margin lives here, not inline, so a page's rule below can
    outrank it. */
 .inline-visual { margin: 16px 0; }
