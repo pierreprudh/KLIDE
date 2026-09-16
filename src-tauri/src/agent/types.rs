@@ -366,6 +366,16 @@ pub struct QuestionChoices {
     pub options: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub more_models_from: Option<String>,
+    /// `dispatch`: the options are workers, and the card walks two steps —
+    /// which agent, then which of its models — answering with both as one
+    /// JSON object, `{"worker":"codex","model":"default"}`. Absent for a
+    /// plain list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// For a dispatch: the worker the call already named, so the card opens
+    /// on the model step with the agent step one link back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preselected: Option<String>,
 }
 
 /// `serde_json::Value` and nothing read the field.

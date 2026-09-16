@@ -130,7 +130,7 @@ impl Worker {
 /// Display names for the hosted API providers a worker may run on. The
 /// frontend owns the full table (`src/agent/providers.ts`); these few are
 /// repeated here only because a gate summary is composed in Rust.
-fn api_provider_label(id: &str) -> &str {
+pub fn api_provider_label(id: &str) -> &str {
     match id {
         "anthropic" => "Anthropic",
         "openai" => "OpenAI",

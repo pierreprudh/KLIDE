@@ -101,6 +101,8 @@ where
     let choices = (!options.is_empty()).then(|| QuestionChoices {
         options,
         more_models_from: None,
+        kind: None,
+        preselected: None,
     });
     let Some(answer) = run_pause_tool(
         ctx,
@@ -213,29 +215,45 @@ where
             }
         },
     };
-    // Without a worker the tool promises the child cannot edit. An editing
-    // role with no worker is therefore not a refusal but a question: which
-    // pair of hands should take it? The user picks from what is actually
-    // usable here — installed CLIs, API providers with a key — and skipping
-    // is the old refusal, worded as the user's decision.
-    if worker.is_none() && !subagents::is_model_selectable(def) {
+    // Without a worker the tool promises the child cannot edit, so an editing
+    // role with no worker is a question, not a refusal — and a worker with no
+    // model is a question too. They are one question, on one card: which
+    // agent should take this, and on which of its models. The card walks the
+    // two steps itself, with a way back from the model step to change the
+    // agent, and answers with both at once. A call that named the worker opens
+    // the card on the model step; a call that named both asks nothing.
+    let mut chosen_model: Option<String> = model_arg.map(str::to_string);
+    let needs_worker = worker.is_none() && !subagents::is_model_selectable(def);
+    let needs_model = worker.is_some() && chosen_model.is_none();
+    if needs_worker || needs_model {
         let mut options = available_worker_ids().await;
         if options.is_empty() {
             options = subagents::worker_ids().into_iter().map(str::to_string).collect();
         }
+        if let Some(named) = worker.map(|w| w.id().to_string()) {
+            if !options.contains(&named) {
+                options.insert(0, named);
+            }
+        }
+        let question = match worker {
+            Some(worker) => format!("Which model should {} use for this task?", worker.label()),
+            None => format!("Which agent should take this as {}, and on which model?", def.id),
+        };
         let Some(answer) = run_pause_tool(
             ctx,
             call,
             emit,
-            "qw",
+            "q",
             "(skipped)",
             |request_id| AgentEvent::UserQuestionRequested {
                 run_id: ctx.id.to_string(),
                 request_id: request_id.to_string(),
-                question: format!("Which agent should take this as {}?", def.id),
+                question,
                 choices: Some(QuestionChoices {
                     options: options.clone(),
-                    more_models_from: None,
+                    more_models_from: worker.map(|w| w.id().to_string()),
+                    kind: Some("dispatch".to_string()),
+                    preselected: worker.map(|w| w.id().to_string()),
                 }),
                 ts: now_ms(),
             },
@@ -250,8 +268,10 @@ where
         else {
             return Ok(ToolOutcome::Cancelled);
         };
-        match subagents::resolve_worker(answer.trim()) {
+        let (picked_worker, picked_model) = parse_dispatch_answer(&answer);
+        match picked_worker.as_deref().and_then(subagents::resolve_worker) {
             Some(picked) => worker = Some(picked),
+            None if worker.is_some() => {}
             None => {
                 return Ok(ToolOutcome::Produced(ToolResult {
                     ok: false,
@@ -265,89 +285,32 @@ where
                 }));
             }
         }
+        chosen_model = picked_model
+            .filter(|m| !m.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+            .or(chosen_model);
     }
-
-    let request_id = format!("sub_{}_{}", ctx.id, call.id);
-
-    // A worker with no model named is a question for the user, not a default
-    // to assume: for a CLI, "default" hands the choice to the CLI, and the
-    // user may want the strong model for this task or the cheap one; for an
-    // API provider there is no default at all. Asked through the same question
-    // pause Kit uses — the CLI's default first where there is one, the next
-    // models the provider lists, and the whole catalogue behind the card's
-    // picker. A model named by the call is not re-asked.
-    let mut chosen_model: Option<String> = model_arg.map(str::to_string);
-    if let (Some(worker), None) = (worker, chosen_model.as_deref()) {
-        let label = worker.label();
-        let listed: Vec<String> = match worker {
-            subagents::Worker::Delegate(delegate) => {
-                match crate::providers::lookup(delegate.id()).and_then(|p| p.subscription) {
-                    Some(spec) => crate::blocking::run(move || crate::models::subscription_models(&spec))
-                        .await
-                        .unwrap_or_default(),
-                    None => Vec::new(),
-                }
+    // An API worker has no default to fall back on: with no model picked,
+    // take the first the provider lists, and say so when it lists none.
+    if let (Some(subagents::Worker::Api(entry)), None) = (worker, chosen_model.as_deref()) {
+        let listed = crate::models::ai_provider_models(entry.id.to_string())
+            .await
+            .unwrap_or_default();
+        match listed.into_iter().next() {
+            Some(first) => chosen_model = Some(first),
+            None => {
+                return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!(
+                        "{} lists no models here, so the worker has nothing to run on. Name one \
+                         with `model`, or pick another worker.",
+                        subagents::api_provider_label(entry.id)
+                    ),
+                    metadata: None,
+                }));
             }
-            subagents::Worker::Api(entry) => crate::models::ai_provider_models(entry.id.to_string())
-                .await
-                .unwrap_or_default(),
-        };
-        let (options, fallback): (Vec<String>, Option<String>) = if worker.is_delegate() {
-            let mut options = vec![crate::delegate::CLI_DEFAULT_MODEL.to_string()];
-            options.extend(
-                listed
-                    .into_iter()
-                    .filter(|m| !m.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
-                    .take(2),
-            );
-            (options, Some(crate::delegate::CLI_DEFAULT_MODEL.to_string()))
-        } else {
-            let options: Vec<String> = listed.into_iter().take(3).collect();
-            let first = options.first().cloned();
-            (options, first)
-        };
-        let Some(default_answer) = fallback.clone() else {
-            return Ok(ToolOutcome::Produced(ToolResult {
-                ok: false,
-                content: format!(
-                    "{label} lists no models here, so the worker has nothing to run on. Name one \
-                     with `model`, or pick another worker."
-                ),
-                metadata: None,
-            }));
-        };
-        let Some(answer) = run_pause_tool(
-            ctx,
-            call,
-            emit,
-            "q",
-            &default_answer,
-            |request_id| AgentEvent::UserQuestionRequested {
-                run_id: ctx.id.to_string(),
-                request_id: request_id.to_string(),
-                question: format!("Which model should {label} use for this task?"),
-                choices: Some(QuestionChoices {
-                    options: options.clone(),
-                    more_models_from: Some(worker.id().to_string()),
-                }),
-                ts: now_ms(),
-            },
-            |request_id, answer| AgentEvent::UserQuestionResolved {
-                run_id: ctx.id.to_string(),
-                request_id: request_id.to_string(),
-                answer: answer.to_string(),
-                ts: now_ms(),
-            },
-        )
-        .await?
-        else {
-            return Ok(ToolOutcome::Cancelled);
-        };
-        let answer = answer.trim();
-        let picked = if answer.is_empty() || answer == "(skipped)" { default_answer.as_str() } else { answer };
-        chosen_model = (!picked.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
-            .then(|| picked.to_string());
+        }
     }
+    let request_id = format!("sub_{}_{}", ctx.id, call.id);
     let model_arg: Option<&str> = chosen_model.as_deref();
 
     // A worker is dispatched, not spawned: the user approves it first, and it
@@ -579,6 +542,30 @@ where
             "cwd": worktree_path,
         })),
     }))
+}
+
+/// The card answers a dispatch question with `{"worker":"…","model":"…"}`;
+/// a bare word is read as a worker id, so a typed answer still works, and
+/// "(skipped)" is neither.
+pub(super) fn parse_dispatch_answer(answer: &str) -> (Option<String>, Option<String>) {
+    let answer = answer.trim();
+    if answer.is_empty() || answer == "(skipped)" {
+        return (None, None);
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(answer) {
+        if value.is_object() {
+            let field = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            return (field("worker"), field("model"));
+        }
+    }
+    (Some(answer.to_string()), None)
 }
 
 /// The workers that can actually take a task on this machine: Delegates whose
