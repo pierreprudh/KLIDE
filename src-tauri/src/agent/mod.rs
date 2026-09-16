@@ -6665,6 +6665,7 @@ mod worker_dispatch_tests {
     //! through, and what the child that finally starts looks like — a Delegate
     //! running as itself, in a worktree of its own.
     use super::test_support::*;
+    use super::types::QuestionChoices;
     use super::*;
     use std::process::Command;
 
@@ -6832,8 +6833,9 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex" }));
-        let (outcome, _) = tokio::join!(
+        let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "(skipped)"),
             answer_permission(&sup, "run", r#"{"behavior":"deny"}"#),
         );
         let result = produced(outcome);
@@ -6867,8 +6869,9 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Implement slugify", "worker": "claude-code" }));
-        let (outcome, _) = tokio::join!(
+        let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "default"),
             answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
         );
         let result = produced(outcome);
@@ -6930,5 +6933,92 @@ mod worker_dispatch_tests {
         assert!(spawned[0].system_prompt.contains("not a Git repository"));
         assert_eq!(requested_children(&events)[0].2, None, "no branch to record");
         assert!(result.content.contains("no branch to review"), "{}", result.content);
+    }
+
+    fn questions(events: &EventLog) -> Vec<(String, Option<QuestionChoices>)> {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::UserQuestionRequested { question, choices, .. } => Some((question.clone(), choices.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_worker_with_no_model_asks_which_one_with_the_default_first_and_the_catalogue_behind() {
+        let root = plain_folder("ask-model");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("ask-model");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex" }));
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "gpt-5.5-codex"),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+
+        let asked = questions(&events);
+        assert_eq!(asked.len(), 1, "one question, before the gate");
+        let (question, choices) = &asked[0];
+        assert!(question.contains("Codex"), "names the worker: {question}");
+        let choices = choices.clone().expect("a which-model question carries choices");
+        assert_eq!(choices.options.first().map(String::as_str), Some("default"), "the CLI's own default leads");
+        assert!(choices.options.len() <= 3, "at most the default and two more: {:?}", choices.options);
+        assert_eq!(choices.more_models_from.as_deref(), Some("codex"), "the picker offers the worker's catalogue");
+
+        // The gate came after the question and already knew the answer.
+        let prompt = &permission_requests(&events)[0];
+        assert_eq!(prompt.input["model"], "gpt-5.5-codex");
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned[0].model, "gpt-5.5-codex", "the picked model reaches the worker");
+    }
+
+    #[tokio::test]
+    async fn skipping_the_model_question_leaves_the_cli_its_default() {
+        let root = plain_folder("skip-model");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("skip-model");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (_events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "tester", "task": "Test slugify", "worker": "claude-code" }));
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "(skipped)"),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        assert!(produced(outcome).ok);
+        assert_eq!(sup.spawned.lock().unwrap()[0].model, crate::delegate::CLI_DEFAULT_MODEL);
+    }
+
+    #[tokio::test]
+    async fn a_worker_with_a_model_named_is_not_asked_again() {
+        let root = plain_folder("named-model");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("named-model");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex", "model": "gpt-5.4" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        assert!(produced(outcome).ok);
+        assert!(questions(&events).is_empty(), "a named model is the caller's decision");
+        assert_eq!(sup.spawned.lock().unwrap()[0].model, "gpt-5.4");
     }
 }
