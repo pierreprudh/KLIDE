@@ -6758,7 +6758,7 @@ mod worker_dispatch_tests {
     }
 
     #[tokio::test]
-    async fn an_editing_role_without_a_worker_is_refused_and_points_at_workers() {
+    async fn an_editing_role_without_a_worker_asks_which_one_and_skipping_is_the_users_no() {
         let root = plain_folder("no-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -6768,13 +6768,90 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify" }));
-        let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "(skipped)"),
+        );
+        let result = produced(outcome);
 
         assert!(!result.ok);
-        assert!(result.content.contains("worker"), "{}", result.content);
-        assert!(result.content.contains("claude-code"), "names the workers: {}", result.content);
-        assert!(permission_requests(&events).is_empty(), "a refusal never prompts");
+        assert!(result.content.contains("did not pick a worker"), "{}", result.content);
+        let asked = questions(&events);
+        assert_eq!(asked.len(), 1, "one question: which worker");
+        let (question, choices) = &asked[0];
+        assert!(question.contains("implementer"), "{question}");
+        let choices = choices.clone().expect("worker choices");
+        assert!(!choices.options.is_empty());
+        for option in &choices.options {
+            assert!(subagents::resolve_worker(option).is_some(), "{option} is a worker");
+        }
+        assert!(choices.more_models_from.is_none(), "a which-worker question has no model picker");
+        assert!(permission_requests(&events).is_empty(), "no dispatch was proposed");
         assert!(sup.spawned.lock().unwrap().is_empty(), "nothing was started");
+    }
+
+    #[tokio::test]
+    async fn picking_a_worker_on_the_card_carries_on_to_the_model_question_and_the_gate() {
+        let root = plain_folder("pick-worker");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("pick-worker");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "tester", "task": "Test slugify" }));
+        // Two questions in a row — which worker, then which model — each on its
+        // own request id, so one poller answers the first and a second the next.
+        let answers = async {
+            answer_question(&sup, "run", "codex").await;
+            answer_question(&sup, "run", "(skipped)").await;
+        };
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answers,
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        assert!(produced(outcome).ok);
+        let asked = questions(&events);
+        assert_eq!(asked.len(), 2, "which worker, then which model");
+        assert!(asked[1].0.contains("Codex"), "the model question names the picked worker: {}", asked[1].0);
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned[0].provider, "codex");
+        assert_eq!(spawned[0].model, crate::delegate::CLI_DEFAULT_MODEL);
+    }
+
+    #[tokio::test]
+    async fn an_api_worker_runs_klides_own_harness_on_that_house_without_review() {
+        let root = git_repo("api-worker");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("api-worker");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "anthropic", "model": "claude-sonnet-4-6" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+        assert!(questions(&events).is_empty(), "worker and model both named: nothing to ask");
+        let prompt = &permission_requests(&events)[0];
+        assert!(prompt.summary.contains("Anthropic (claude-sonnet-4-6)"), "an API worker is named with its model: {}", prompt.summary);
+        assert!(prompt.reason.contains("Klide's own tools"), "{}", prompt.reason);
+        let spawned = sup.spawned.lock().unwrap();
+        let spec = &spawned[0];
+        assert_eq!(spec.provider, "anthropic");
+        assert_eq!(spec.model, "claude-sonnet-4-6");
+        assert_eq!(spec.mode, AgentMode::Goal);
+        assert_eq!(spec.require_diff_review, Some(false), "edits apply inside the worktree");
+        assert!(spec.workspace_root.as_deref().unwrap().contains("-worktrees/klide-worker-add-slugify-"));
+        assert!(spec.system_prompt.contains("Implementer"), "the role rides along");
+        assert!(spec.system_prompt.contains("klide/worker-add-slugify-"), "and so does the branch");
+        assert!(result.content.contains("Anthropic worked in the worktree"), "{}", result.content);
     }
 
     #[tokio::test]

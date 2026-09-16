@@ -8,6 +8,11 @@ describe("choiceLabel", () => {
     expect(choiceLabel("claude-opus-4-6", choices)).toEqual({ label: "claude-opus-4-6" });
   });
 
+  it("reads a provider id as its name, for a which-worker question", () => {
+    expect(choiceLabel("codex", { options: ["claude-code", "codex", "anthropic"] })).toEqual({ label: "Codex" });
+    expect(choiceLabel("anthropic", { options: ["claude-code", "codex", "anthropic"] })).toEqual({ label: "Anthropic" });
+  });
+
   it("leaves a plain question's choices as they were written", () => {
     expect(choiceLabel("default", { options: ["default", "custom"] })).toEqual({ label: "default" });
   });
