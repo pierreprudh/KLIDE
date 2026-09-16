@@ -376,6 +376,10 @@ pub struct QuestionChoices {
     /// on the model step with the agent step one link back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preselected: Option<String>,
+    /// For a dispatch: the model the call already named, drawn as the current
+    /// row on the model step — one click confirms it, another changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preselected_model: Option<String>,
 }
 
 /// `serde_json::Value` and nothing read the field.

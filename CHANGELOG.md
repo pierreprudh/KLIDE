@@ -28,8 +28,10 @@ Notable changes per milestone. Dates are completion dates.
 - **An editing role with no worker asks which agent should take it**, and
   which model, on one card in two steps: the agents usable here — Delegates
   installed, API providers with a key — each wearing its mark, then the picked
-  agent's models, with the agent's name one link back to change it. A call
-  that named the agent opens on the model step. Skipping is the user's no.
+  agent's models, with the agent's name one link back to change it. Every
+  dispatch is put to the user this way: what Kit named only pre-selects rows
+  — one click confirms, another changes — and skipping keeps Kit's pick, or
+  is the user's no when Kit named nothing.
 - **API providers are workers too.** `worker: "anthropic"` (or any hosted
   provider with a key) runs Klide's own Harness on a model of that house as a
   nested Run in its own worktree, edits applied without review there; the

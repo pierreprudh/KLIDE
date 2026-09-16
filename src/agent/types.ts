@@ -131,6 +131,9 @@ export type QuestionChoices = {
   /** For a dispatch: the agent the call already named; the card opens on the
    *  model step with the agent step one link back. */
   preselected?: ProviderId;
+  /** For a dispatch: the model the call already named, drawn as the current
+   *  row — one click confirms it, another changes it. */
+  preselectedModel?: string;
 };
 
 export type PermissionRequest = {

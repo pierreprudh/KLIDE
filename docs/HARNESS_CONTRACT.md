@@ -136,10 +136,11 @@ never pass this Run's Diff review — so the Harness isolates it in a worktree o
 a `klide/worker-…` branch and asks the operator before starting it.
 The dispatch approval offers only "this once" and "reject": it is never
 remembered per run or per project, and the full-auto policy does not silence
-it. A dispatch that names no model first puts a question to the operator
-through the ordinary question pause, with the CLI's default and the catalogue
-as choices; the answer is the worker's model, and skipping leaves the CLI its
-own default. A project that is not a Git repository is named as such on the card, and
+it. Every dispatch first puts one question to the operator through the ordinary
+question pause: which agent, and which of its models. What the call named is
+a pre-selection the operator confirms or changes; skipping keeps it, or is the
+operator's no when the call named no agent. The answer is the worker and its
+model; a CLI with no model picked keeps its own default. A project that is not a Git repository is named as such on the card, and
 the worker then edits the folder directly. The child's report names the
 worktree and branch; the operator reviews and merges that branch, and nothing
 in the parent's checkout changes.

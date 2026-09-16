@@ -103,6 +103,7 @@ where
         more_models_from: None,
         kind: None,
         preselected: None,
+        preselected_model: None,
     });
     let Some(answer) = run_pause_tool(
         ctx,
@@ -216,16 +217,16 @@ where
         },
     };
     // Without a worker the tool promises the child cannot edit, so an editing
-    // role with no worker is a question, not a refusal — and a worker with no
-    // model is a question too. They are one question, on one card: which
-    // agent should take this, and on which of its models. The card walks the
-    // two steps itself, with a way back from the model step to change the
-    // agent, and answers with both at once. A call that named the worker opens
-    // the card on the model step; a call that named both asks nothing.
+    // role with no worker is a question, not a refusal — and every dispatch is
+    // a question: which agent should take this, and on which of its models.
+    // The card walks the two steps itself, with a way back from the model step
+    // to change the agent, and answers with both at once. What the call named
+    // is only a pre-selection: the card opens on the model step with that
+    // agent and that model current, so one click confirms Kit's choice and
+    // another changes it. The operator always sees who is about to be sent.
     let mut chosen_model: Option<String> = model_arg.map(str::to_string);
     let needs_worker = worker.is_none() && !subagents::is_model_selectable(def);
-    let needs_model = worker.is_some() && chosen_model.is_none();
-    if needs_worker || needs_model {
+    if needs_worker || worker.is_some() {
         let mut options = available_worker_ids().await;
         if options.is_empty() {
             options = subagents::worker_ids().into_iter().map(str::to_string).collect();
@@ -235,9 +236,10 @@ where
                 options.insert(0, named);
             }
         }
-        let question = match worker {
-            Some(worker) => format!("Which model should {} use for this task?", worker.label()),
-            None => format!("Which agent should take this as {}, and on which model?", def.id),
+        let question = match (worker, chosen_model.as_deref()) {
+            (Some(worker), Some(model)) => format!("Send {} on {model} as {}?", worker.label(), def.id),
+            (Some(worker), None) => format!("Which model should {} use for this task?", worker.label()),
+            (None, _) => format!("Which agent should take this as {}, and on which model?", def.id),
         };
         let Some(answer) = run_pause_tool(
             ctx,
@@ -254,6 +256,7 @@ where
                     more_models_from: worker.map(|w| w.id().to_string()),
                     kind: Some("dispatch".to_string()),
                     preselected: worker.map(|w| w.id().to_string()),
+                    preselected_model: chosen_model.clone(),
                 }),
                 ts: now_ms(),
             },
@@ -285,9 +288,12 @@ where
                 }));
             }
         }
-        chosen_model = picked_model
-            .filter(|m| !m.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
-            .or(chosen_model);
+        // A picked model replaces the call's; picking a CLI's "default" clears
+        // it; no pick (skipped) keeps whatever the call named.
+        if let Some(picked) = picked_model {
+            chosen_model = (!picked.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+                .then_some(picked);
+        }
     }
     // An API worker has no default to fall back on: with no model picked,
     // take the first the provider lists, and say so when it lists none.
