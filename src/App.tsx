@@ -215,6 +215,13 @@ function App() {
   // The Run Mission Control's detail pane is showing. While that overlay is
   // up, its row is "you are here" in the rail (see `railSelection.ts`).
   const [missionSelectedRunId, setMissionSelectedRunId] = useState<string | null>(null);
+  // A rail row asked to be inspected rather than resumed: the Run Mission
+  // Control should land on when it opens. Dropped once the overlay is gone,
+  // so the next plain visit lands on the newest row like any other.
+  const [missionOpenRequest, setMissionOpenRequest] = useState<string | null>(null);
+  useEffect(() => {
+    if (overlay !== "runs") setMissionOpenRequest(null);
+  }, [overlay]);
   const [focusConvoError, setFocusConvoError] = useState<{ title: string } | null>(null);
   const [focusInitialMessage, setFocusInitialMessage] = useState<string | null>(null);
   // Photos/documents staged on the start stage, travelling with that first
@@ -909,6 +916,15 @@ function App() {
     setWorkbenchPickedConvoId(convo.id);
     revealAiPanel(panelId);
     offerRaceSplit(convo.id);
+  }
+
+  /** A rail row's "Open in Mission Control": inspect the conversation as a Run
+   *  — transcript, evidence, hand-offs — instead of resuming it into a panel.
+   *  Works from either shell; the overlay sits over Focus and the workbench
+   *  alike, and closing it lands you back where you were. */
+  function openConversationInMissionControl(convo: Conversation) {
+    setMissionOpenRequest(convo.id);
+    openOverlay("runs");
   }
 
   const railNav: RailNavItem[] = [
@@ -3157,6 +3173,7 @@ function App() {
                 }
                 openConversationInAiPanel(convo);
               }}
+              onOpenConversationInMissionControl={openConversationInMissionControl}
               onConversationDeleted={(convo) => {
                 // The panel showing it has already dropped to a fresh chat.
                 // What the rail cannot see is Focus's canvas: if the thread
@@ -3264,6 +3281,7 @@ function App() {
                   workspaceRoot={workspaceRoot}
                   theme={theme}
                   onSelectedRunChange={setMissionSelectedRunId}
+                  initialSelectedRunId={missionOpenRequest}
                   onResumeKlideRun={resumeKlideRun}
                   onOpenInAiPanel={openRunInAiPanel}
                   onReattachLiveSession={reattachLiveSession}

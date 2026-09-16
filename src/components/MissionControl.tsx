@@ -4056,6 +4056,7 @@ export function MissionControl({
   onMergeWorktreeRun,
   summarizingFromRunId,
   onSelectedRunChange,
+  initialSelectedRunId,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
@@ -4064,6 +4065,11 @@ export function MissionControl({
    *  again when this surface unmounts. The host lights the matching row in
    *  the rail's history (a Run id is its conversation's id). */
   onSelectedRunChange?: (runId: string | null) => void;
+  /** Land on this Run when the surface opens (a rail row's "Open in Mission
+   *  Control"). Applied once the ledger holds it, and pinned so the filter
+   *  effect below cannot swap it for the newest row; a later click moves on
+   *  as usual. */
+  initialSelectedRunId?: string | null;
   /** Land the user in a new AI panel pinned to the chosen delegate provider.
    *  Used by every "Resume in {CLI}" / "Open in {CLI}" action — the AI panel
    *  is the natural home for an agent TUI. */
@@ -4366,6 +4372,18 @@ export function MissionControl({
   // Subagent nesting. Built from ALL linked runs, not the filtered set, so a
   // child still knows its parent exists when the filter hides it.
   const childIndex = useMemo(() => buildChildIndex(linkedRuns, filtered), [linkedRuns, filtered]);
+
+  // The row the host asked for, applied once the ledger has it — on first
+  // paint the ledger is still loading and the filter effect below would
+  // otherwise settle on the newest row and never look back.
+  const appliedInitialRunId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialSelectedRunId || appliedInitialRunId.current === initialSelectedRunId) return;
+    if (!allRuns.some((r) => r.id === initialSelectedRunId)) return;
+    appliedInitialRunId.current = initialSelectedRunId;
+    setSelectedId(initialSelectedRunId);
+    setPinnedId(initialSelectedRunId);
+  }, [initialSelectedRunId, allRuns]);
 
   // Keep a valid selection as the filter/data changes — unless pinned.
   useEffect(() => {
