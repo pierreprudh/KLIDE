@@ -67,12 +67,15 @@ export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink
   // nothing about it; the spawn call in this transcript says which Delegate
   // it ran as, and that is the mark it should wear.
   const workers = useMemo(() => workerChildrenOf(msgs, selfId), [msgs, selfId]);
-  for (const run of runs) if (!index.has(run.registration.runId)) index.set(run.registration.runId, { title: run.registration.label ?? run.registration.runId, provider: (workers.get(run.registration.runId) as ProviderId | undefined) ?? null, model: null });
+  for (const run of runs) if (!index.has(run.registration.runId)) {
+    const worker = workers.get(run.registration.runId);
+    index.set(run.registration.runId, { title: run.registration.label ?? run.registration.runId, provider: (worker?.provider as ProviderId | undefined) ?? null, model: worker?.model ?? null });
+  }
   if (!peers.length && !shellAgents.length) return null;
   return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">
     {peers.map((id) => <Participant key={id} name={peerName(id, index)}
       mark={conversationMark(index.get(id)?.model, index.get(id)?.provider, 16)?.node ?? <AgentMark size={16} />}
-      status={runs.find((r) => r.registration.runId === id)?.state ?? "Message peer"}
+      status={[runs.find((r) => r.registration.runId === id)?.state ?? "Message peer", index.get(id)?.model].filter(Boolean).join(" · ")}
       stats={() => participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === id)?.msgs ?? [])}>
       <button type="button" className="ai-agent-open" disabled={!props.onOpen} onClick={() => props.onOpen?.(id)} aria-label={`Open ${peerName(id, index)}`} title="Open conversation">↗</button>
     </Participant>)}
