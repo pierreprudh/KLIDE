@@ -6820,6 +6820,64 @@ mod worker_dispatch_tests {
     }
 
     #[test]
+    fn the_users_own_words_settle_a_dispatch() {
+        use super::tool_handlers::user_named_dispatch as named;
+        let codex = subagents::resolve_worker("codex").unwrap();
+        let claude = subagents::resolve_worker("claude-code").unwrap();
+        let anthropic = subagents::resolve_worker("anthropic").unwrap();
+        assert!(named("Send it to Codex on gpt-5.4", codex, Some("gpt-5.4")));
+        assert!(named("have claude code test it", claude, None), "a CLI named alone means its default");
+        assert!(named("use claude-code please", claude, None));
+        assert!(!named("have Claude Code test it", claude, Some("claude-opus-4-6")), "Kit picked the model, not the user");
+        assert!(!named("use the best agent for this", codex, Some("gpt-5.4")));
+        assert!(!named("ask Anthropic", anthropic, None), "an API worker needs a model named");
+        assert!(named("ask Anthropic with claude-sonnet-4-6", anthropic, Some("claude-sonnet-4-6")));
+    }
+
+    #[tokio::test]
+    async fn a_dispatch_the_user_spelled_out_asks_nothing_and_goes_straight_to_the_gate() {
+        let root = plain_folder("user-named");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "Have Codex on gpt-5.4 add a slugify helper.".to_string();
+        let runs = runs_dir("user-named");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex", "model": "gpt-5.4" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        assert!(produced(outcome).ok);
+        assert!(questions(&events).is_empty(), "the user said it; nothing to confirm");
+        assert_eq!(permission_requests(&events).len(), 1, "the dispatch gate still stands");
+        assert_eq!(sup.spawned.lock().unwrap()[0].model, "gpt-5.4");
+    }
+
+    #[tokio::test]
+    async fn a_cli_the_user_named_without_a_model_runs_on_its_default_unasked() {
+        let root = plain_folder("user-named-cli");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "have claude code write the tests".to_string();
+        let runs = runs_dir("user-named-cli");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "tester", "task": "Write tests", "worker": "claude-code" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        assert!(produced(outcome).ok);
+        assert!(questions(&events).is_empty());
+        assert_eq!(sup.spawned.lock().unwrap()[0].model, crate::delegate::CLI_DEFAULT_MODEL);
+    }
+
+    #[test]
     fn the_card_answer_is_an_object_a_word_or_nothing() {
         assert_eq!(
             super::tool_handlers::parse_dispatch_answer(r#"{"worker":"codex","model":"gpt-5.4"}"#),
