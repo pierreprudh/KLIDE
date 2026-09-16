@@ -194,9 +194,10 @@ where
             metadata: None,
         }));
     };
-    // A worker is a Delegate CLI, named by its provider id. Same rule: an
-    // unknown one is answered with the list, never with a dead parent run.
-    let worker = match worker_arg {
+    // A worker is a Delegate CLI or a hosted API provider, named by its id.
+    // Same rule as roles: an unknown one is answered with the list, never with
+    // a dead parent run.
+    let mut worker: Option<subagents::Worker> = match worker_arg {
         None => None,
         Some(id) => match subagents::resolve_worker(id) {
             Some(worker) => Some(worker),
@@ -204,7 +205,7 @@ where
                 return Ok(ToolOutcome::Produced(ToolResult {
                     ok: false,
                     content: format!(
-                        "Unknown worker \"{id}\". Workers are the CLI agents Klide can run: {}.",
+                        "Unknown worker \"{id}\". Workers are the CLI agents and API providers Klide can run: {}.",
                         subagents::worker_ids().join(", ")
                     ),
                     metadata: None,
@@ -212,56 +213,115 @@ where
             }
         },
     };
-    // Without a worker the tool promises the child cannot edit. Until now only
-    // the schema's `enum` held that line, so a model that named an editing role
-    // anyway got one. Refuse here too: a contract worth stating is worth
-    // enforcing — and say what *would* work, which is naming a worker.
+    // Without a worker the tool promises the child cannot edit. An editing
+    // role with no worker is therefore not a refusal but a question: which
+    // pair of hands should take it? The user picks from what is actually
+    // usable here — installed CLIs, API providers with a key — and skipping
+    // is the old refusal, worded as the user's decision.
     if worker.is_none() && !subagents::is_model_selectable(def) {
-        return Ok(ToolOutcome::Produced(ToolResult {
-            ok: false,
-            content: format!(
-                "Subagent \"{}\" makes edits and cannot run on this conversation's own model. \
-                 Pick a read-only subagent ({}) or name a `worker` ({}) to hand the task to a CLI \
-                 agent in its own worktree.",
-                def.id,
-                subagents::model_selectable_ids().join(", "),
-                subagents::worker_ids().join(", ")
-            ),
-            metadata: None,
-        }));
+        let mut options = available_worker_ids().await;
+        if options.is_empty() {
+            options = subagents::worker_ids().into_iter().map(str::to_string).collect();
+        }
+        let Some(answer) = run_pause_tool(
+            ctx,
+            call,
+            emit,
+            "qw",
+            "(skipped)",
+            |request_id| AgentEvent::UserQuestionRequested {
+                run_id: ctx.id.to_string(),
+                request_id: request_id.to_string(),
+                question: format!("Which agent should take this as {}?", def.id),
+                choices: Some(QuestionChoices {
+                    options: options.clone(),
+                    more_models_from: None,
+                }),
+                ts: now_ms(),
+            },
+            |request_id, answer| AgentEvent::UserQuestionResolved {
+                run_id: ctx.id.to_string(),
+                request_id: request_id.to_string(),
+                answer: answer.to_string(),
+                ts: now_ms(),
+            },
+        )
+        .await?
+        else {
+            return Ok(ToolOutcome::Cancelled);
+        };
+        match subagents::resolve_worker(answer.trim()) {
+            Some(picked) => worker = Some(picked),
+            None => {
+                return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!(
+                        "The user did not pick a worker for \"{}\". Pick a read-only subagent ({}) \
+                         instead, or ask them how they would like it done.",
+                        def.id,
+                        subagents::model_selectable_ids().join(", ")
+                    ),
+                    metadata: None,
+                }));
+            }
+        }
     }
 
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
 
     // A worker with no model named is a question for the user, not a default
-    // to assume: "default" hands the choice to the CLI, and the user may want
-    // the strong model for this task or the cheap one. Asked through the same
-    // question pause Kit uses, with the CLI's own default first, the two next
-    // models its cache lists, and the whole catalogue behind the card's picker.
-    // Skipping is the CLI's default. A model named by the call is not re-asked.
+    // to assume: for a CLI, "default" hands the choice to the CLI, and the
+    // user may want the strong model for this task or the cheap one; for an
+    // API provider there is no default at all. Asked through the same question
+    // pause Kit uses — the CLI's default first where there is one, the next
+    // models the provider lists, and the whole catalogue behind the card's
+    // picker. A model named by the call is not re-asked.
     let mut chosen_model: Option<String> = model_arg.map(str::to_string);
     if let (Some(worker), None) = (worker, chosen_model.as_deref()) {
-        let label = worker_label(worker.id());
-        let spec = crate::providers::lookup(worker.id()).and_then(|p| p.subscription);
-        let listed: Vec<String> = match spec {
-            Some(spec) => crate::blocking::run(move || crate::models::subscription_models(&spec))
+        let label = worker.label();
+        let listed: Vec<String> = match worker {
+            subagents::Worker::Delegate(delegate) => {
+                match crate::providers::lookup(delegate.id()).and_then(|p| p.subscription) {
+                    Some(spec) => crate::blocking::run(move || crate::models::subscription_models(&spec))
+                        .await
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                }
+            }
+            subagents::Worker::Api(entry) => crate::models::ai_provider_models(entry.id.to_string())
                 .await
                 .unwrap_or_default(),
-            None => Vec::new(),
         };
-        let mut options = vec![crate::delegate::CLI_DEFAULT_MODEL.to_string()];
-        options.extend(
-            listed
-                .into_iter()
-                .filter(|m| !m.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
-                .take(2),
-        );
+        let (options, fallback): (Vec<String>, Option<String>) = if worker.is_delegate() {
+            let mut options = vec![crate::delegate::CLI_DEFAULT_MODEL.to_string()];
+            options.extend(
+                listed
+                    .into_iter()
+                    .filter(|m| !m.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+                    .take(2),
+            );
+            (options, Some(crate::delegate::CLI_DEFAULT_MODEL.to_string()))
+        } else {
+            let options: Vec<String> = listed.into_iter().take(3).collect();
+            let first = options.first().cloned();
+            (options, first)
+        };
+        let Some(default_answer) = fallback.clone() else {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: format!(
+                    "{label} lists no models here, so the worker has nothing to run on. Name one \
+                     with `model`, or pick another worker."
+                ),
+                metadata: None,
+            }));
+        };
         let Some(answer) = run_pause_tool(
             ctx,
             call,
             emit,
             "q",
-            crate::delegate::CLI_DEFAULT_MODEL,
+            &default_answer,
             |request_id| AgentEvent::UserQuestionRequested {
                 run_id: ctx.id.to_string(),
                 request_id: request_id.to_string(),
@@ -284,10 +344,9 @@ where
             return Ok(ToolOutcome::Cancelled);
         };
         let answer = answer.trim();
-        chosen_model = (!answer.is_empty()
-            && answer != "(skipped)"
-            && !answer.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
-        .then(|| answer.to_string());
+        let picked = if answer.is_empty() || answer == "(skipped)" { default_answer.as_str() } else { answer };
+        chosen_model = (!picked.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+            .then(|| picked.to_string());
     }
     let model_arg: Option<&str> = chosen_model.as_deref();
 
@@ -296,7 +355,7 @@ where
     let mut branch: Option<String> = None;
     let mut child_root = ctx.request.workspace_root.clone();
     let mut worktree_path: Option<String> = None;
-    let worker_label = worker.map(|w| worker_label(w.id()));
+    let worker_label = worker.map(|w| w.label());
     if let Some(worker) = worker {
         let label = worker_label.clone().unwrap_or_default();
         let Some(root) = ctx.request.workspace_root.clone() else {
@@ -317,6 +376,23 @@ where
             "directly in the project folder (not a Git repository, so no worktree can isolate it)"
                 .to_string()
         };
+        // An API worker is named with its model — the model is the whole
+        // difference between one Anthropic dispatch and another.
+        let who = match (worker.is_delegate(), model_arg) {
+            (false, Some(model)) => format!("{label} ({model})"),
+            _ => label.clone(),
+        };
+        let how_it_edits = if worker.is_delegate() {
+            format!(
+                "{label} runs as its own Run with its own tools and auto-accepted edits; nothing it \
+                 writes passes through this conversation's diff review."
+            )
+        } else {
+            format!(
+                "{label} runs Klide's own tools as its own Run, with edits applied without review; \
+                 nothing it writes passes through this conversation's diff review."
+            )
+        };
 
         // The gate. Always asked, never remembered: the full-auto rung excludes
         // subagents by design, and a dispatch approved once says nothing about
@@ -336,11 +412,10 @@ where
                 "cwd": root,
                 "model": model_arg,
             }),
-            summary: format!("Dispatch {label} as {} {where_it_works}", def.id),
+            summary: format!("Dispatch {who} as {} {where_it_works}", def.id),
             reason: format!(
-                "{label} runs as its own Run with its own tools and auto-accepted edits; nothing it \
-                 writes passes through this conversation's diff review. Its work lands on that \
-                 branch for you to review and merge. Dispatch approvals are never remembered."
+                "{how_it_edits} Its work lands on that branch for you to review and merge. \
+                 Dispatch approvals are never remembered."
             ),
             options: worker_gate_options(),
         };
@@ -393,23 +468,42 @@ where
     })?;
 
     let spec = match worker {
-        // A worker is the Delegate running as itself: its own provider, the
+        // A Delegate worker is the CLI running as itself: its own provider, the
         // model the call asked for or the CLI's own default, and a prompt that
         // is about the role and the report — not Kit's persona. Diff review is
         // moot; the worktree is the review boundary.
-        Some(worker) => subagents::SubagentRunSpec {
+        Some(subagents::Worker::Delegate(delegate)) => subagents::SubagentRunSpec {
             run_id: request_id.clone(),
             parent_id: ctx.id.to_string(),
             workspace_root: child_root,
             mode: def.mode.clone(),
-            provider: worker.id().to_string(),
+            provider: delegate.id().to_string(),
             model: model_arg
                 .map(str::to_string)
                 .unwrap_or_else(|| crate::delegate::CLI_DEFAULT_MODEL.to_string()),
             task: task.clone(),
             system_prompt: subagents::build_worker_prompt(
                 def,
-                worker_label.as_deref().unwrap_or(worker.id()),
+                worker_label.as_deref().unwrap_or(delegate.id()),
+                branch.as_deref(),
+            ),
+            max_turns: ctx.request.max_turns,
+            require_diff_review: Some(false),
+        },
+        // An API worker is Klide's own Harness on another house's model: Kit's
+        // tools and conventions, the role appended, edits applied without
+        // review inside the worktree that isolates it.
+        Some(subagents::Worker::Api(entry)) => subagents::SubagentRunSpec {
+            run_id: request_id.clone(),
+            parent_id: ctx.id.to_string(),
+            workspace_root: child_root,
+            mode: def.mode.clone(),
+            provider: entry.id.to_string(),
+            model: model_arg.map(str::to_string).unwrap_or_default(),
+            task: task.clone(),
+            system_prompt: subagents::build_api_worker_prompt(
+                def,
+                &base_system_prompt(ctx.request),
                 branch.as_deref(),
             ),
             max_turns: ctx.request.max_turns,
@@ -487,13 +581,28 @@ where
     }))
 }
 
-/// A worker's human name — "Claude Code", not "claude-code" — from the
-/// provider registry's subscription row, falling back to the id.
-fn worker_label(id: &str) -> String {
-    crate::providers::lookup(id)
-        .and_then(|p| p.subscription)
-        .map(|s| s.label.to_string())
-        .unwrap_or_else(|| id.to_string())
+/// The workers that can actually take a task on this machine: Delegates whose
+/// CLI resolves, and API providers with a key. Probed off the async runtime —
+/// a login-shell PATH walk and a keychain read both block.
+async fn available_worker_ids() -> Vec<String> {
+    crate::blocking::run_infallible(|| {
+        let mut ids = Vec::new();
+        for id in subagents::delegate_worker_ids() {
+            let installed = crate::providers::lookup(id)
+                .and_then(|p| p.subscription)
+                .is_some_and(|spec| crate::models::subscription_models(&spec).is_ok());
+            if installed {
+                ids.push(id.to_string());
+            }
+        }
+        for id in subagents::api_worker_ids() {
+            if crate::providers::key_status(id).is_ok_and(|k| k.has_key) {
+                ids.push(id.to_string());
+            }
+        }
+        ids
+    })
+    .await
 }
 
 /// Whether `root` is inside a Git working tree — the one question that decides

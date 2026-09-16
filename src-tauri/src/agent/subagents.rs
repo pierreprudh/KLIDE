@@ -93,17 +93,93 @@ pub fn is_model_selectable(def: &Subagent) -> bool {
     def.mode == AgentMode::Plan
 }
 
-/// The CLI agents a subagent may be handed to as a Run of its own. Mirrors
-/// `delegate::ALL` — the Harness never lists a brand by hand, so a fifth
-/// Delegate becomes a fifth worker with no edit here.
-pub fn worker_ids() -> Vec<&'static str> {
+/// Who a task may be handed to as a Run of its own: a Delegate CLI running
+/// as itself, or a hosted API provider running Klide's own Harness on a model
+/// of that house. Both edit in a worktree; they differ in whose tools they
+/// use and whose prompt they read.
+#[derive(Clone, Copy)]
+pub enum Worker {
+    Delegate(&'static dyn crate::delegate::Delegate),
+    Api(&'static crate::providers::ProviderEntry),
+}
+
+impl Worker {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Worker::Delegate(d) => d.id(),
+            Worker::Api(p) => p.id,
+        }
+    }
+
+    pub fn is_delegate(&self) -> bool {
+        matches!(self, Worker::Delegate(_))
+    }
+
+    /// The human name the card and the report use — "Claude Code", "Anthropic".
+    pub fn label(&self) -> String {
+        match self {
+            Worker::Delegate(d) => crate::providers::lookup(d.id())
+                .and_then(|p| p.subscription)
+                .map(|s| s.label.to_string())
+                .unwrap_or_else(|| d.id().to_string()),
+            Worker::Api(p) => api_provider_label(p.id).to_string(),
+        }
+    }
+}
+
+/// Display names for the hosted API providers a worker may run on. The
+/// frontend owns the full table (`src/agent/providers.ts`); these few are
+/// repeated here only because a gate summary is composed in Rust.
+fn api_provider_label(id: &str) -> &str {
+    match id {
+        "anthropic" => "Anthropic",
+        "openai" => "OpenAI",
+        "mistral" => "Mistral",
+        "xai" => "xAI",
+        "deepseek" => "DeepSeek",
+        "openrouter" => "OpenRouter",
+        other => other,
+    }
+}
+
+/// The Delegate CLIs a task may be handed to. Mirrors `delegate::ALL` — the
+/// Harness never lists a brand by hand, so a fifth Delegate is a fifth worker
+/// with no edit here.
+pub fn delegate_worker_ids() -> Vec<&'static str> {
     crate::delegate::ALL.iter().map(|d| d.id()).collect()
 }
 
-/// Resolve a worker by its Delegate id. `None` is a model mistake the caller
-/// answers with the list, not a crash.
-pub fn resolve_worker(id: &str) -> Option<&'static dyn crate::delegate::Delegate> {
-    crate::delegate::lookup(id.trim())
+/// The hosted API providers a task may be handed to — every registry row that
+/// takes a key and is not a subscription CLI. Local servers are not workers:
+/// a worker is another pair of hands, and Kit's own local model is the same
+/// pair.
+pub fn api_worker_ids() -> Vec<&'static str> {
+    crate::providers::PROVIDERS
+        .iter()
+        .filter(|p| p.subscription.is_none())
+        .filter(|p| matches!(p.key, crate::providers::KeySource::Hosted { .. }))
+        .map(|p| p.id)
+        .collect()
+}
+
+/// Every id `worker` may name: the Delegates, then the API providers.
+pub fn worker_ids() -> Vec<&'static str> {
+    let mut ids = delegate_worker_ids();
+    ids.extend(api_worker_ids());
+    ids
+}
+
+/// Resolve a worker by id. `None` is a model mistake the caller answers with
+/// the list, not a crash.
+pub fn resolve_worker(id: &str) -> Option<Worker> {
+    let id = id.trim();
+    if let Some(delegate) = crate::delegate::lookup(id) {
+        return Some(Worker::Delegate(delegate));
+    }
+    crate::providers::lookup(id)
+        .filter(|p| p.subscription.is_none())
+        .filter(|p| matches!(p.key, crate::providers::KeySource::Hosted { .. }))
+        .map(Worker::Api)
 }
 
 /// Every role, for a call that names a worker. The bare tool promises a
@@ -169,6 +245,28 @@ When you are done, end with a short report: what changed (file paths), what you 
 what it showed, and anything left undone.",
         id = def.id,
         instructions = def.instructions,
+    )
+}
+
+/// The prompt an API worker starts from: Kit's own harness prompt with the
+/// role appended — it runs Klide's tools, so it needs Klide's conventions —
+/// plus where its edits land, which the plain subagent prompt never says
+/// because a plain subagent edits nowhere.
+pub fn build_api_worker_prompt(def: &Subagent, base: &str, branch: Option<&str>) -> String {
+    let landing = match branch {
+        Some(branch) => format!(
+            "You are working in an isolated Git worktree on branch `{branch}`. Your edits are \
+             applied without review and committed to that branch when you finish; the operator \
+             reviews and merges them afterwards. Do not switch branches, and do not push."
+        ),
+        None => "You are working directly in the project folder (not a Git repository). Your edits \
+                 are applied without review, so keep every change reversible and minimal."
+            .to_string(),
+    };
+    format!(
+        "{}\n\n{landing}\n\nWhen you are done, end with a short report: what changed (file paths), \
+what you ran and what it showed, and anything left undone.",
+        build_system_prompt(def, base)
     )
 }
 
@@ -257,12 +355,22 @@ mod tests {
     fn workers_are_exactly_the_delegates() {
         // No brand is listed by hand: a fifth Delegate is a fifth worker.
         let delegates: Vec<&str> = crate::delegate::ALL.iter().map(|d| d.id()).collect();
-        assert_eq!(worker_ids(), delegates);
+        assert_eq!(delegate_worker_ids(), delegates);
+        assert!(worker_ids().starts_with(&delegates), "delegates lead the list");
         for id in worker_ids() {
             assert_eq!(resolve_worker(id).map(|w| w.id()), Some(id));
             assert_eq!(resolve_worker(&format!("  {id} ")).map(|w| w.id()), Some(id), "trimmed");
         }
         assert!(resolve_worker("gemini-cli").is_none());
+        // Hosted API providers with a key are workers; local servers and the
+        // CLIs' own rows are not API workers.
+        assert!(api_worker_ids().contains(&"anthropic"));
+        assert!(api_worker_ids().contains(&"openrouter"));
+        assert!(!api_worker_ids().contains(&"ollama"));
+        assert!(!api_worker_ids().contains(&"claude-code"));
+        assert!(resolve_worker("ollama").is_none(), "Kit's own local model is not another pair of hands");
+        assert!(matches!(resolve_worker("codex"), Some(Worker::Delegate(_))));
+        assert!(matches!(resolve_worker("anthropic"), Some(Worker::Api(_))));
     }
 
     #[test]
