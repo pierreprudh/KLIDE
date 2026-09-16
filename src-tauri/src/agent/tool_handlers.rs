@@ -365,8 +365,8 @@ where
             )
         } else {
             format!(
-                "{label} runs Klide's own tools as its own Run, with edits applied without review; \
-                 nothing it writes passes through this conversation's diff review."
+                "{label} runs Klide's own tools as its own Run, with edits applied and commands run \
+                 without asking; nothing it does passes through this conversation's review."
             )
         };
 
@@ -466,10 +466,13 @@ where
             ),
             max_turns: ctx.request.max_turns,
             require_diff_review: Some(false),
+            auto_approve_commands: None,
         },
         // An API worker is Klide's own Harness on another house's model: Kit's
-        // tools and conventions, the role appended, edits applied without
-        // review inside the worktree that isolates it.
+        // tools and conventions, the role appended, edits applied and commands
+        // run without asking inside the worktree that isolates it — the card
+        // the operator approved said so, and a headless child has nothing to
+        // ask on.
         Some(subagents::Worker::Api(entry)) => subagents::SubagentRunSpec {
             run_id: request_id.clone(),
             parent_id: ctx.id.to_string(),
@@ -485,6 +488,7 @@ where
             ),
             max_turns: ctx.request.max_turns,
             require_diff_review: Some(false),
+            auto_approve_commands: Some(true),
         },
         None => subagents::SubagentRunSpec {
             run_id: request_id.clone(),
@@ -502,6 +506,7 @@ where
             system_prompt: subagents::build_system_prompt(def, &base_system_prompt(ctx.request)),
             max_turns: ctx.request.max_turns,
             require_diff_review: ctx.request.require_diff_review,
+            auto_approve_commands: None,
         },
     };
 

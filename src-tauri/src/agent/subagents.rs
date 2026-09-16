@@ -307,6 +307,11 @@ pub struct SubagentRunSpec {
     /// Inherited from the parent so a child cannot outlive the parent's budget.
     pub max_turns: Option<usize>,
     pub require_diff_review: Option<bool>,
+    /// Whether the child runs shell commands without asking. A headless child
+    /// has no card to ask on, so a gate it hits parks it — and its parent — for
+    /// good. An API worker the operator dispatched runs with it on, the way a
+    /// Delegate CLI runs with its own auto policy; a plain subagent never has it.
+    pub auto_approve_commands: Option<bool>,
 }
 
 #[cfg(test)]
