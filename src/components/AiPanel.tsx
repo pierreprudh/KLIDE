@@ -3172,7 +3172,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       kind: isCommand ? ("command" as const) : isMessage ? ("message" as const) : isWorker ? ("worker" as const) : ("network" as const),
       command,
       peer: isMessage ? peerName(input.fromRunId!, peerIndex)
-        : isWorker ? `${input.workerLabel ?? input.worker} · ${input.subagent ?? "worker"}`
+        : isWorker ? `${input.workerLabel ?? input.worker} ${input.subagent ?? "worker"}`
           : undefined,
       worker: isWorker ? (input.worker as ProviderId) : undefined,
       envelopeId: isMessage ? input.envelopeId : undefined,

@@ -6,7 +6,8 @@ type Props = {
   command: string;
   kind?: "command" | "network" | "message" | "worker";
   /** For a message: the peer it goes to, by thread title. For a worker
-   *  dispatch: who is being sent and as what — "Claude Code · implementer". */
+   *  dispatch: who is being sent and as what — "Claude Code implementer", two
+   *  facts set apart by a space, not a dot. */
   peer?: string;
   /** For a worker dispatch: the Delegate's provider id, so the card wears its
    *  mark in front of the name — the same logo the picker and the rail use. */
