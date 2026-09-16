@@ -5372,7 +5372,8 @@ button:focus-visible .menu-leadout {
    near-white on a dark one. No box of its own, ever: the row's fill is already
    under it, and a second shape inside a rail row is exactly the chrome this
    rail refuses. The glyph alone changes, and it dips slightly on click. */
-.klide-focus-convo-delete {
+.klide-focus-convo-delete,
+.klide-focus-convo-inspect {
   position: absolute;
   top: 50%;
   right: var(--rail-row-pad);
@@ -5390,6 +5391,10 @@ button:focus-visible .menu-leadout {
     opacity var(--motion-slow) var(--ease-soft),
     transform var(--motion-slow) var(--ease-soft);
 }
+/* One step inward from the delete: 18px target plus a 4px gap. */
+.klide-focus-convo-inspect {
+  right: calc(var(--rail-row-pad) + 22px);
+}
 
 .klide-focus-convo-row:hover .klide-focus-convo-time,
 .klide-focus-convo-row:focus-within .klide-focus-convo-time {
@@ -5398,19 +5403,24 @@ button:focus-visible .menu-leadout {
 }
 
 .klide-focus-convo-row:hover .klide-focus-convo-delete,
-.klide-focus-convo-row:focus-within .klide-focus-convo-delete {
+.klide-focus-convo-row:focus-within .klide-focus-convo-delete,
+.klide-focus-convo-row:hover .klide-focus-convo-inspect,
+.klide-focus-convo-row:focus-within .klide-focus-convo-inspect {
   opacity: 0.55;
   transform: translate(0, -50%);
   pointer-events: auto;
 }
 
 .klide-focus-convo-row .klide-focus-convo-delete:hover,
-.klide-focus-convo-row .klide-focus-convo-delete:focus-visible {
+.klide-focus-convo-row .klide-focus-convo-delete:focus-visible,
+.klide-focus-convo-row .klide-focus-convo-inspect:hover,
+.klide-focus-convo-row .klide-focus-convo-inspect:focus-visible {
   opacity: 1;
   background: none;
 }
 
-.klide-focus-convo-row .klide-focus-convo-delete:active {
+.klide-focus-convo-row .klide-focus-convo-delete:active,
+.klide-focus-convo-row .klide-focus-convo-inspect:active {
   transform: translate(0, -50%) scale(0.92);
   transition-duration: 80ms;
 }
@@ -7578,6 +7588,7 @@ button:focus-visible .menu-leadout {
   .klide-focus-convo-content,
   .klide-focus-convo-time,
   .klide-focus-convo-delete,
+  .klide-focus-convo-inspect,
   .klide-focus-provider-history-content,
   .klide-focus-more-projects,
   .klide-focus-more-conversations,

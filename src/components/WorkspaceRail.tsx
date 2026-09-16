@@ -40,7 +40,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { CloseIcon, DeleteIcon, FolderIcon, SearchIcon, SidebarIcon } from "../icons";
+import { CloseIcon, DeleteIcon, FolderIcon, MissionIcon, SearchIcon, SidebarIcon } from "../icons";
 import { Z } from "../zLayers";
 import { beginDragSession } from "../dragSession";
 import { SETTINGS, getSetting, useSetting } from "../settingsStore";
@@ -106,6 +106,10 @@ type Props = {
   onOpenConversation: (convo: Conversation) => void;
   /** The row pointed at a conversation local history no longer holds. */
   onConversationUnavailable?: (convo: Conversation) => void;
+  /** A row's second action: inspect this conversation as a Run in Mission
+   *  Control — its transcript, evidence and hand-offs — instead of resuming
+   *  it into a panel. Absent, the row offers only open and delete. */
+  onOpenConversationInMissionControl?: (convo: Conversation) => void;
   /** A row's delete action removed the conversation from local history. The
    *  panels showing it have already let go of it; this is for canvas state the
    *  rail cannot see — Focus goes back to its start stage when the thread it
@@ -436,6 +440,7 @@ function SectionLabel({ children }: { children: ReactNode }) {
 function ConvoRow({
   convo,
   onOpen,
+  onInspect,
   onDelete,
   indent = false,
   selected = false,
@@ -449,6 +454,9 @@ function ConvoRow({
   /** Remove this conversation from local history. Revealed on hover in the
    *  trailing slot, where the timestamp was — the row keeps one trailing mark. */
   onDelete?: () => void;
+  /** Open this conversation in Mission Control rather than a panel. Shares
+   *  the hover-revealed trailing slot with delete, one step inward. */
+  onInspect?: () => void;
   indent?: boolean;
   selected?: boolean;
   /** The last selected row in this group — where the active route peels into
@@ -543,9 +551,25 @@ function ConvoRow({
           )}
         </span>
       </button>
-      {/* Same slot, on hover: the timestamp steps aside and the delete takes
-          its place. Not offered while the run is live — its snapshot is still
-          being written, and the loader already owns the slot. */}
+      {/* Same slot, on hover: the timestamp steps aside and the actions take
+          its place — inspect one step inward, delete at the edge, so the
+          destructive one is never the first thing the pointer meets. Neither
+          is offered while the run is live: its snapshot is still being
+          written, and the loader already owns the slot. */}
+      {onInspect && !running ? (
+        <button
+          type="button"
+          className="klide-focus-convo-inspect"
+          title="Open in Mission Control"
+          aria-label={`Open “${convo.title || "Untitled"}” in Mission Control`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onInspect();
+          }}
+        >
+          <MissionIcon size={13} />
+        </button>
+      ) : null}
       {onDelete && !running ? (
         <button
           type="button"
@@ -746,6 +770,7 @@ function ProviderHistoryGroup({
   conversationRevealBase,
   onToggle,
   onOpen,
+  onInspect,
   onDelete,
 }: {
   group: ProviderHistory;
@@ -762,6 +787,7 @@ function ProviderHistoryGroup({
   conversationRevealBase: number;
   onToggle: () => void;
   onOpen: (conversation: Conversation) => void;
+  onInspect?: (conversation: Conversation) => void;
   onDelete: (conversation: Conversation) => void;
 }) {
   const [showAllConversations, setShowAllConversations] = useState(false);
@@ -934,6 +960,7 @@ function ProviderHistoryGroup({
                   open={openConversationIds.has(conversation.id)}
                   onSelectedPath={lastSelectedConversationIndex >= index}
                   onOpen={() => onOpen(conversation)}
+                  onInspect={onInspect ? () => onInspect(conversation) : undefined}
                   onDelete={() => onDelete(conversation)}
                 />
               );
@@ -969,6 +996,7 @@ export function WorkspaceRail({
   onOpenConversation,
   onConversationUnavailable,
   onConversationDeleted,
+  onOpenConversationInMissionControl,
   onNavigateAway,
   onOpenSettings,
   onOpenProfile,
@@ -1460,6 +1488,11 @@ export function WorkspaceRail({
                         selected={selectedIds.has(c.id)}
                         open={openIds.has(c.id)}
                         onOpen={() => openHistoryConversation(c)}
+                        onInspect={
+                          onOpenConversationInMissionControl
+                            ? () => onOpenConversationInMissionControl(c)
+                            : undefined
+                        }
                         onDelete={() => deleteHistoryConversation(c)}
                       />
                     ))}
@@ -1537,6 +1570,7 @@ export function WorkspaceRail({
                                     )
                                   }
                                   onOpen={openHistoryConversation}
+                                  onInspect={onOpenConversationInMissionControl}
                                   onDelete={deleteHistoryConversation}
                                 />
                               );
