@@ -73,9 +73,13 @@ const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
 /** The rows of a dispatch's model step: a Delegate leads with its own
  *  default and two more from its list; an API provider has no default, so
  *  its first three. The picker behind them offers the rest. */
-export function dispatchModelRows(worker: ProviderId, models: string[]): string[] {
+export function dispatchModelRows(worker: ProviderId, models: string[], current?: string): string[] {
   const named = models.filter((m) => m && m !== "default");
-  return isDelegateProvider(worker) ? ["default", ...named.slice(0, 2)] : named.slice(0, 3);
+  const rows = isDelegateProvider(worker) ? ["default", ...named.slice(0, 2)] : named.slice(0, 3);
+  // The model the call named leads when it is not already among the rows, so
+  // confirming Kit's choice is the first click, not a hunt through the picker.
+  if (current && !rows.includes(current)) rows.unshift(current);
+  return rows;
 }
 
 /** What a dispatch card sends back: the agent and the model as one object,
@@ -110,7 +114,8 @@ function DispatchPicker({ choices, onChoose, island }: { choices: QuestionChoice
       />
     );
   }
-  const rows = dispatchModelRows(worker, models);
+  const current = worker === choices.preselected ? choices.preselectedModel : undefined;
+  const rows = dispatchModelRows(worker, models, current);
   const rowPad = island ? "6px 16px 2px 14px" : "5px 14px 2px 12px";
   return (
     <div style={{ display: "grid" }}>
@@ -130,6 +135,7 @@ function DispatchPicker({ choices, onChoose, island }: { choices: QuestionChoice
       <ChoiceRows
         key={worker}
         choices={{ options: rows, moreModelsFrom: worker }}
+        current={current}
         onChoose={(model) => onChoose(dispatchAnswer(worker, model))}
         island={island}
       />
@@ -137,7 +143,7 @@ function DispatchPicker({ choices, onChoose, island }: { choices: QuestionChoice
   );
 }
 
-function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean }) {
+function ChoiceRows({ choices, onChoose, island, current }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean; current?: string }) {
   const [models, setModels] = useState<string[]>([]);
   const provider = choices.moreModelsFrom;
   useEffect(() => {
@@ -171,7 +177,8 @@ function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; o
             key={option}
             type="button"
             role="option"
-            aria-selected={false}
+            aria-selected={option === current}
+            data-current={option === current ? "1" : undefined}
             className="klide-choice-row"
             onClick={() => onChoose(option)}
             style={{
@@ -194,6 +201,7 @@ function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; o
             </span>
             <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: note || isKnownProvider(option) ? undefined : "var(--font-mono)", fontSize: note || isKnownProvider(option) ? undefined : 12 }}>{label}</span>
             {note && <span style={{ color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{note}</span>}
+            {option === current && <span style={{ marginLeft: "auto", color: "var(--fg-dim)", fontSize: 11, flexShrink: 0 }}>Kit's pick</span>}
           </button>
         );
       })}

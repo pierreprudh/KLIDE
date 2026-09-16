@@ -8469,3 +8469,10 @@ button:focus-visible .menu-leadout {
   font-weight: 400;
   padding-left: 0;
 }
+
+/* The row the call pre-selected reads as current: the soft fill the others
+   only get on hover, and a 2px accent spine in place of a check. */
+.klide-choice-row[data-current="1"] {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
