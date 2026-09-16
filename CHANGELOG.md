@@ -29,9 +29,12 @@ Notable changes per milestone. Dates are completion dates.
   which model, on one card in two steps: the agents usable here — Delegates
   installed, API providers with a key — each wearing its mark, then the picked
   agent's models, with the agent's name one link back to change it. Every
-  dispatch is put to the user this way: what Kit named only pre-selects rows
-  — one click confirms, another changes — and skipping keeps Kit's pick, or
-  is the user's no when Kit named nothing.
+  dispatch Kit decided is put to the user this way: what Kit named only
+  pre-selects rows — one click confirms, another changes — and skipping keeps
+  Kit's pick, or is the user's no when Kit named nothing. A dispatch the user
+  spelled out themselves — "have Codex on gpt-5.4 do it", or a CLI named
+  alone, which means its default — asks nothing and goes straight to the
+  dispatch approval.
 - **API providers are workers too.** `worker: "anthropic"` (or any hosted
   provider with a key) runs Klide's own Harness on a model of that house as a
   nested Run in its own worktree, edits applied without review there; the

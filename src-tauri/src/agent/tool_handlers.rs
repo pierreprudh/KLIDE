@@ -226,7 +226,13 @@ where
     // another changes it. The operator always sees who is about to be sent.
     let mut chosen_model: Option<String> = model_arg.map(str::to_string);
     let needs_worker = worker.is_none() && !subagents::is_model_selectable(def);
-    if needs_worker || worker.is_some() {
+    // The one case with nothing to ask: the user already said it. When the
+    // user's own words name the agent — and the model, or it is a CLI that
+    // has its own default — Kit passing them on is not a decision to confirm.
+    let settled_by_user = worker.is_some_and(|w| {
+        user_named_dispatch(&ctx.request.initial_text, w, chosen_model.as_deref())
+    });
+    if (needs_worker || worker.is_some()) && !settled_by_user {
         let mut options = available_worker_ids().await;
         if options.is_empty() {
             options = subagents::worker_ids().into_iter().map(str::to_string).collect();
@@ -549,6 +555,29 @@ where
             "cwd": worktree_path,
         })),
     }))
+}
+
+/// Whether the user's own message already names this dispatch: the agent by
+/// its name or id, and the model by its id — or no model at all for a CLI,
+/// whose own default is then what "Claude Code" plainly means. Matching is on
+/// words the user typed, case-insensitive, so "have claude code test it" and
+/// "send it to codex on gpt-5.4" both count and "the best agent for this"
+/// does not.
+pub(super) fn user_named_dispatch(user_text: &str, worker: subagents::Worker, model: Option<&str>) -> bool {
+    let text = user_text.to_lowercase();
+    let id = worker.id().to_lowercase();
+    let label = worker.label().to_lowercase();
+    let names_agent = text.contains(&id)
+        || text.contains(&label)
+        || text.contains(&id.replace('-', " "))
+        || text.contains(&id.replace('-', ""));
+    if !names_agent {
+        return false;
+    }
+    match model {
+        Some(model) => text.contains(&model.to_lowercase()),
+        None => worker.is_delegate(),
+    }
 }
 
 /// The card answers a dispatch question with `{"worker":"…","model":"…"}`;
