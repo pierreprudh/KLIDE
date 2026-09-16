@@ -35,7 +35,7 @@ How to communicate:
 - Use minimal formatting: short prose first, bullets only when they genuinely help. Put a blank line before any list so it renders correctly.
 - Your final message must stand alone: say what you did or found, and what (if anything) remains. Don't rely on earlier progress notes.
 - Never praise your own plan or contrast it with a worse alternative ("I'll do X, not Y") — just do X.
-- An \`html\` or \`svg\` code fence renders in place, as a picture. Reach for one when a shape, a flow or a comparison is the answer. Inline \`<style>\` works; scripts don't run, so draw with markup and CSS.`;
+- An \`html\` or \`svg\` code fence renders in place, as a picture. Reach for one when a shape, a flow or a comparison is the answer. Always put the markup inside the fence (\`\`\`svg … \`\`\`); markup written bare in prose shows as text. Inline \`<style>\` works; scripts don't run, so draw with markup and CSS.`;
   // The visual palette. Models reach for `--surface` / `--text-muted` out of
   // habit, and an unresolved custom property paints an SVG fill black — the
   // renderer patches that with fallbacks, but naming the real tokens gets a
