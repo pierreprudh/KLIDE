@@ -4062,10 +4062,15 @@ export function MissionControl({
   onContinueRunInFocus,
   onMergeWorktreeRun,
   summarizingFromRunId,
+  onSelectedRunChange,
 }: {
   workspaceRoot: string | null;
   theme: ThemeId;
   onResumeKlideRun?: (runId: string) => void;
+  /** The Run the detail pane is showing, as it changes — null when none, and
+   *  again when this surface unmounts. The host lights the matching row in
+   *  the rail's history (a Run id is its conversation's id). */
+  onSelectedRunChange?: (runId: string | null) => void;
   /** Land the user in a new AI panel pinned to the chosen delegate provider.
    *  Used by every "Resume in {CLI}" / "Open in {CLI}" action — the AI panel
    *  is the natural home for an agent TUI. */
@@ -4379,6 +4384,13 @@ export function MissionControl({
       if (selectedId !== nextSelectedId) setSelectedId(nextSelectedId);
     }
   }, [filtered, selectedId, pinnedId, allRuns]);
+
+  // Tell the host what the detail pane is on, and that it is on nothing once
+  // this surface goes away.
+  useEffect(() => {
+    onSelectedRunChange?.(selectedId);
+  }, [selectedId, onSelectedRunChange]);
+  useEffect(() => () => onSelectedRunChange?.(null), [onSelectedRunChange]);
 
   const inspection = useMemo(
     () =>
