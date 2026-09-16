@@ -1030,16 +1030,25 @@ fn registry() -> Vec<ToolEntry> {
         // themselves, which is also what bounds subagent recursion.
         ToolEntry {
             kind: ToolKind::Pause,
-            schema: schema("spawn_subagent", "Delegate a focused, read-only investigation to a named subagent and get its report back as the tool result. Use this to parallelise discovery without spending your own context — e.g. have the explorer map a subsystem or the reviewer critique a file. The subagent cannot edit; it returns findings only.",
+            schema: schema("spawn_subagent", "Delegate one focused task to a subagent and get its report back as the tool result. Without a `worker`, the subagent runs on your own model, read-only: use 'explorer' to map a subsystem or 'reviewer' to critique a file without spending your own context. Name a `worker` — a CLI agent installed on this machine, such as claude-code or codex — to hand the task to that agent as a Run of its own; then the editing roles 'implementer' and 'tester' are allowed too. A worker edits inside an isolated Git worktree on its own branch, the user approves the dispatch first, and the report tells you the branch to look at. Prefer this over running `claude` or `codex` yourself in the shell.",
                 serde_json::json!({
-                    "subagent": { "type": "string", "enum": crate::agent::subagents::model_selectable_ids(), "description": "Which subagent to delegate to: 'explorer' locates and maps code; 'reviewer' critiques code for bugs and clarity." },
-                    "task": { "type": "string", "description": "The focused task for the subagent, with enough context for it to act standalone." }
+                    "subagent": { "type": "string", "enum": crate::agent::subagents::worker_selectable_ids(), "description": "The role: 'explorer' locates and maps code; 'reviewer' critiques code for bugs and clarity; 'implementer' makes the change; 'tester' writes and runs tests. 'implementer' and 'tester' require a `worker`." },
+                    "task": { "type": "string", "description": "The focused task for the subagent, with enough context for it to act standalone." },
+                    "worker": { "type": "string", "enum": crate::agent::subagents::worker_ids(), "description": "Optional. The CLI agent to hand this task to, as its own Run in an isolated worktree." },
+                    "model": { "type": "string", "description": "Optional, only with a `worker`: the model the worker CLI should use. Omit to let the CLI use its own default." }
                 }),
                 &["subagent", "task"]),
             run_read: None,
             run_write_preview: None,
-            summary: |call| call.input.get("subagent").and_then(|v| v.as_str())
-                .map(|s| format!("delegate → @{s}")).unwrap_or_else(|| "spawn_subagent".to_string()),
+            summary: |call| {
+                let role = call.input.get("subagent").and_then(|v| v.as_str());
+                let worker = call.input.get("worker").and_then(|v| v.as_str()).filter(|w| !w.trim().is_empty());
+                match (role, worker) {
+                    (Some(role), Some(worker)) => format!("delegate → @{role} via {worker}"),
+                    (Some(role), None) => format!("delegate → @{role}"),
+                    _ => "spawn_subagent".to_string(),
+                }
+            },
         },
         // `consult_advisor` is a Pause tool, like spawn_subagent: it does not
         // execute in Rust. The loop dispatches it to `process_advisor_tool`,

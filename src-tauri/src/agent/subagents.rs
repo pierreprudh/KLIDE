@@ -93,6 +93,85 @@ pub fn is_model_selectable(def: &Subagent) -> bool {
     def.mode == AgentMode::Plan
 }
 
+/// The CLI agents a subagent may be handed to as a Run of its own. Mirrors
+/// `delegate::ALL` — the Harness never lists a brand by hand, so a fifth
+/// Delegate becomes a fifth worker with no edit here.
+pub fn worker_ids() -> Vec<&'static str> {
+    crate::delegate::ALL.iter().map(|d| d.id()).collect()
+}
+
+/// Resolve a worker by its Delegate id. `None` is a model mistake the caller
+/// answers with the list, not a crash.
+pub fn resolve_worker(id: &str) -> Option<&'static dyn crate::delegate::Delegate> {
+    crate::delegate::lookup(id.trim())
+}
+
+/// Every role, for a call that names a worker. The bare tool promises a
+/// read-only child, and only `Plan` roles keep that promise on Kit's own
+/// provider. A worker is a foreign CLI with its own tools and its own edit
+/// policy, so the promise cannot be kept there — instead the worker is
+/// isolated in a worktree and the dispatch is gated. With that in place an
+/// editing role is exactly what a worker is for.
+pub fn worker_selectable_ids() -> Vec<&'static str> {
+    ALL.iter().map(|s| s.id).collect()
+}
+
+/// The branch a worker's worktree is created on. Mirrors `isolatedRunBranch`
+/// in `src/runIsolation.ts` — `klide/<kind>-<slug>-<suffix>` — so a worker's
+/// branch reads like every other Klide-made branch in the Worktrees modal.
+pub fn worker_branch(task: &str, request_id: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = true;
+    for ch in task.to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+        if slug.len() >= 36 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let slug = if slug.is_empty() { "task" } else { slug };
+    let suffix: String = request_id
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    let suffix = &suffix[suffix.len().saturating_sub(8)..];
+    let suffix = if suffix.is_empty() { "run" } else { suffix };
+    format!("klide/worker-{slug}-{suffix}")
+}
+
+/// The prompt a worker starts from. Not Kit's — a worker is Claude Code or
+/// Codex running as itself, and handing it Kit's persona and identity guard
+/// would only confuse it. What it needs is the role, the fact that another
+/// agent is waiting on a report, and where its edits land.
+pub fn build_worker_prompt(def: &Subagent, worker_label: &str, branch: Option<&str>) -> String {
+    let landing = match branch {
+        Some(branch) => format!(
+            "You are working in an isolated Git worktree on branch `{branch}`. Edit freely there: \
+             your changes are committed to that branch when you finish and the operator reviews \
+             and merges them afterwards. Do not switch branches, and do not push."
+        ),
+        None => "You are working directly in the project folder (it is not a Git repository, so \
+                 there is no worktree to isolate you). Keep every change reversible and minimal."
+            .to_string(),
+    };
+    format!(
+        "You are {worker_label}, running as the \"{id}\" worker for another agent inside Klide. \
+That agent delegated one focused task to you and is waiting on your report; it cannot see \
+your tool calls, only your final message.\n\n{landing}\n\n{instructions}\n\n\
+When you are done, end with a short report: what changed (file paths), what you ran and \
+what it showed, and anything left undone.",
+        id = def.id,
+        instructions = def.instructions,
+    )
+}
+
 /// Compose a subagent's system prompt by appending its role specialisation to
 /// the base harness prompt. Keeping the base intact preserves the identity
 /// guard, workspace root, tool conventions, skills, and project rules — the
