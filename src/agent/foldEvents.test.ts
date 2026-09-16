@@ -265,6 +265,36 @@ describe("foldAgentEvents", () => {
       });
     });
 
+    it("writes the worker the card decided onto the spawn call, over the one Kit named", () => {
+      // Kit named Claude Code; the user picked OpenRouter on the card. The
+      // event carries the decision; the call must say what really happened.
+      const rows = foldAgentEvents([
+        userMessage("test time.ts"),
+        assistantMessage("delegating", { toolCalls: [{ toolCallId: "c1", name: "spawn_subagent", input: { subagent: "tester", task: "Test time.ts", worker: "claude-code" } }] }),
+        toolStarted("c1", "spawn_subagent", { subagent: "tester", task: "Test time.ts", worker: "claude-code" }),
+        { type: "subagent_requested", runId: RUN, requestId: `sub_${RUN}_c1`, subagent: "tester", task: "Test time.ts", worker: "openrouter", branch: "klide/worker-test-time-ts-abc", model: "z-ai/glm-5.2", ts: at() },
+      ]);
+      const assistant = rows[1];
+      if (assistant.kind !== "assistant") throw new Error("expected assistant");
+      expect(assistant.toolCalls[0].input).toMatchObject({
+        subagent: "tester",
+        worker: "openrouter",
+        model: "z-ai/glm-5.2",
+        branch: "klide/worker-test-time-ts-abc",
+      });
+    });
+
+    it("leaves a spawn call alone when the child ran on the parent's own model", () => {
+      const rows = foldAgentEvents([
+        userMessage("map it"),
+        assistantMessage("delegating", { toolCalls: [{ toolCallId: "c2", name: "spawn_subagent", input: { subagent: "explorer", task: "Map the repo" } }] }),
+        { type: "subagent_requested", runId: RUN, requestId: `sub_${RUN}_c2`, subagent: "explorer", task: "Map the repo", ts: at() },
+      ]);
+      const assistant = rows[1];
+      if (assistant.kind !== "assistant") throw new Error("expected assistant");
+      expect(assistant.toolCalls[0].input).toEqual({ subagent: "explorer", task: "Map the repo" });
+    });
+
     it("attaches a result to a NON-final assistant row", () => {
       // The reason findTool walks every assistant row rather than just the last:
       // a tool result can land after the model has already produced more text.
