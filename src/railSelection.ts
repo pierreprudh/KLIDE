@@ -13,6 +13,12 @@
 // on the canvas, whatever the panels still hold) and the apology row for a
 // conversation that is no longer in local history. Both show the picked row
 // and only that.
+//
+// A full-window overlay can have a subject of its own: Mission Control's
+// detail pane shows one Run, and a Run's id *is* its conversation's id. While
+// that overlay is up, the row you are reading about is where you are — not
+// the panel underneath it — so the overlay's subject wins outright, and the
+// bindings take over again the moment the overlay closes.
 
 export type RailSelectionInput = {
   /** The Focus shell (true) or the workbench (false). */
@@ -27,10 +33,14 @@ export type RailSelectionInput = {
   boundActive: string | null;
   /** Every conversation some panel is bound to. */
   boundIds: readonly string[];
+  /** What a full-window overlay is showing, if it has a subject (Mission
+   *  Control's selected Run). Null when no overlay is up or it has none. */
+  overlaySubject?: string | null;
 };
 
 export function railSelectedConversation(input: RailSelectionInput): string | null {
-  const { focus, chatActive, convoError, picked, boundActive, boundIds } = input;
+  const { focus, chatActive, convoError, picked, boundActive, boundIds, overlaySubject } = input;
+  if (overlaySubject) return overlaySubject;
   const pending = picked && !boundIds.includes(picked) ? picked : null;
   if (!focus) return pending ?? boundActive;
   if (!chatActive || convoError) return picked;

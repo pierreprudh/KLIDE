@@ -212,6 +212,9 @@ function App() {
   // The workbench's counterpart: the row last clicked in the rail, lit until
   // the panel bindings catch up with it (see `railSelection.ts`).
   const [workbenchPickedConvoId, setWorkbenchPickedConvoId] = useState<string | null>(null);
+  // The Run Mission Control's detail pane is showing. While that overlay is
+  // up, its row is "you are here" in the rail (see `railSelection.ts`).
+  const [missionSelectedRunId, setMissionSelectedRunId] = useState<string | null>(null);
   const [focusConvoError, setFocusConvoError] = useState<{ title: string } | null>(null);
   const [focusInitialMessage, setFocusInitialMessage] = useState<string | null>(null);
   // Photos/documents staged on the start stage, travelling with that first
@@ -593,6 +596,7 @@ function App() {
     picked: focusBase ? focusSelectedConvoId : workbenchPickedConvoId,
     boundActive: railActiveConversationId,
     boundIds: openConversations.map((c) => c.convoId),
+    overlaySubject: overlay === "runs" ? missionSelectedRunId : null,
   });
   const railSelectedConversationIds =
     raceWatchConversationIds.length > 0
@@ -604,17 +608,19 @@ function App() {
      nothing is open, whatever the panels still hold, and during a race watch
      the racers are the only thing on the canvas. The workbench keeps its
      panels and adds the racers to them. */
-  const railOpenConversationIds =
-    focusBase && !focusChatActive
-      ? []
-      : focusBase && raceWatchConversationIds.length > 0
-        ? raceWatchConversationIds
-        : [
-            ...new Set([
-              ...openConversations.map((c) => c.convoId),
-              ...raceWatchConversationIds,
-            ]),
-          ];
+  const railOpenConversationIds = [
+    ...new Set([
+      ...(focusBase && !focusChatActive
+        ? []
+        : focusBase && raceWatchConversationIds.length > 0
+          ? raceWatchConversationIds
+          : [...openConversations.map((c) => c.convoId), ...raceWatchConversationIds]),
+      // The rail pins every open row into a collapsed group's window, the
+      // selected one included — so Mission Control's subject must count as
+      // open too, or its row can sit behind "More" while it is highlighted.
+      ...railSelectedConversationIds,
+    ]),
+  ];
 
   const [skills, setSkills] = useState<Skill[]>(() => loadSkills());
 
@@ -3257,6 +3263,7 @@ function App() {
                 <MissionControl
                   workspaceRoot={workspaceRoot}
                   theme={theme}
+                  onSelectedRunChange={setMissionSelectedRunId}
                   onResumeKlideRun={resumeKlideRun}
                   onOpenInAiPanel={openRunInAiPanel}
                   onReattachLiveSession={reattachLiveSession}

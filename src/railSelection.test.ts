@@ -41,6 +41,20 @@ describe("the rail's selected conversation", () => {
     ).toBeNull();
   });
 
+  it("follows Mission Control's selected run while that overlay is up", () => {
+    // Whatever the panel underneath holds, the row you are reading about wins.
+    expect(
+      railSelectedConversation({ focus: true, chatActive: true, convoError: false, picked: "a", ...bound("b", "a"), overlaySubject: "run-9" }),
+    ).toBe("run-9");
+    expect(
+      railSelectedConversation({ focus: false, chatActive: false, convoError: false, picked: null, ...bound("b"), overlaySubject: "run-9" }),
+    ).toBe("run-9");
+    // Overlay closed: back to the bindings.
+    expect(
+      railSelectedConversation({ focus: false, chatActive: false, convoError: false, picked: null, ...bound("b"), overlaySubject: null }),
+    ).toBe("b");
+  });
+
   it("shows only the picked row on the Focus start stage and apology", () => {
     // Start stage: the panel still holds "x" but the canvas shows nothing.
     expect(
