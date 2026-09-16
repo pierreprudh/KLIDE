@@ -1097,12 +1097,7 @@ fn reconstruct_structured_messages(
 /// private type. Cheap (four `Option<u64>`s); done on every turn.
 fn agent_usage_from(usage: Option<AiUsage>, model: &str) -> Option<AgentUsage> {
     let u = usage?;
-    let is_empty = u.prompt_tokens.is_none()
-        && u.completion_tokens.is_none()
-        && u.eval_duration_ms.is_none()
-        && u.prompt_eval_duration_ms.is_none()
-        && u.cost_usd.is_none();
-    if is_empty {
+    if u.is_empty() {
         return None;
     }
     // Cost, in priority order: the provider's real charged amount
@@ -1121,6 +1116,7 @@ fn agent_usage_from(usage: Option<AiUsage>, model: &str) -> Option<AgentUsage> {
         eval_duration_ms: u.eval_duration_ms,
         prompt_eval_duration_ms: u.prompt_eval_duration_ms,
         cost_usd,
+        context_window: u.context_window,
     })
 }
 

@@ -8,7 +8,13 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
   modelReflectionLevels as queryModelReflectionLevels,
+  readProviderContextWindow,
 } from "../ipc/aiProviders";
+import {
+  contextCapOptions,
+  contextSizeLabel,
+  providerHasContextWindowSetting,
+} from "./ai/contextWindow";
 import { sortReflectionLevels } from "../reflectionLevels";
 import { THEMES } from "../theme";
 import { ProviderLogo } from "./ai/icons";
@@ -423,6 +429,9 @@ export function SettingsPanel({
   // than from a fixed list that would offer levels the CLI rejects.
   const [reflectionLevels, setReflectionLevels] = useState<string[]>([]);
   const modelSupportsReflection = reflectionLevels.length > 0;
+  // The window this model is trained to — bounds the Ollama cap picker, and
+  // is the read-only fact shown for every other provider. 0 until detected.
+  const [detectedWindow, setDetectedWindow] = useState(0);
 
   const subscriptionProviderEntries = useMemo(
     () => [
@@ -452,6 +461,14 @@ export function SettingsPanel({
       }
     }
     void checkReflectionSupport();
+    setDetectedWindow(0);
+    readProviderContextWindow(settingsProvider, aiModel)
+      .then((window) => {
+        if (!cancelled && Number.isFinite(window) && window > 0) setDetectedWindow(window);
+      })
+      .catch(() => {
+        /* unreachable model: the row says so */
+      });
     return () => {
       cancelled = true;
     };
@@ -1313,30 +1330,50 @@ export function SettingsPanel({
               </SettingBlock>
               <SettingBlock title="Inference">
                 <Panel>
-                  <Row
-                    title="Context window"
-                    description={`How much room ${aiModel} gets for the active conversation. Auto lets Klide choose a stable working window up to the model's detected limit; choose a smaller cap when memory matters. Ollama only.`}
-                    control={
-                      <Segmented
-                        label="Context window"
-                        value={harnessSettings?.contextWindows?.[aiModel]}
-                        options={[
-                          { label: "Auto", value: undefined },
-                          { label: "8K", value: 8192 },
-                          { label: "16K", value: 16384 },
-                          { label: "32K", value: 32768 },
-                          { label: "64K", value: 65536 },
-                          { label: "128K", value: 131072 },
-                        ]}
-                        onChange={(v) => {
-                          const next = { ...(harnessSettings?.contextWindows ?? {}) };
-                          if (v === undefined) delete next[aiModel];
-                          else next[aiModel] = Number(v);
-                          onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
-                        }}
-                      />
-                    }
-                  />
+                  {providerHasContextWindowSetting(settingsProvider) ? (
+                    <Row
+                      title="Context window"
+                      description={
+                        detectedWindow > 0
+                          ? `${aiModel} is trained to ${contextSizeLabel(detectedWindow)}. Auto starts at a ${contextSizeLabel(Math.min(32_768, detectedWindow))} working window and grows with the conversation up to that; a cap holds it lower when memory matters. Sent to Ollama as num_ctx.`
+                          : `How much room ${aiModel} gets for a conversation. Auto starts at a 32K working window and grows with the conversation up to the model's trained limit; a cap holds it lower when memory matters.`
+                      }
+                      control={
+                        <Segmented
+                          label="Context window"
+                          value={harnessSettings?.contextWindows?.[aiModel]}
+                          options={contextCapOptions(detectedWindow).map(({ label, value }) => ({ label, value }))}
+                          onChange={(v) => {
+                            const next = { ...(harnessSettings?.contextWindows ?? {}) };
+                            if (v === undefined) delete next[aiModel];
+                            else next[aiModel] = Number(v);
+                            onHarnessSettingsChange?.({ ...harnessSettings, contextWindows: next });
+                          }}
+                        />
+                      }
+                    />
+                  ) : (
+                    <Row
+                      title="Context window"
+                      description={
+                        detectedWindow > 0
+                          ? `${aiModel}'s window is a property of the model, not a setting: the provider serves ${contextSizeLabel(detectedWindow)} and no request can ask for less. Klide tracks usage against it.`
+                          : `A hosted or self-hosted model's window is set by the provider, not by Klide. Klide tracks usage against the advertised size once the model is reachable.`
+                      }
+                      control={
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 12,
+                            color: "var(--fg-subtle)",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          {detectedWindow > 0 ? contextSizeLabel(detectedWindow) : "—"}
+                        </span>
+                      }
+                    />
+                  )}
                   <Row
                     title="Effort"
                     description={`How much reply budget ${aiModel} gets per turn. Higher effort gives the model more room to reason and explain, but it can be slower and uses more of the window. Ollama only.`}

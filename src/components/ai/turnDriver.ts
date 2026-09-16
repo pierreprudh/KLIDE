@@ -35,6 +35,9 @@ export type TurnDriverOptions = {
   /** Context-gauge feedback from a finalized assistant message. */
   onMeasuredPromptTokens?: (tokens: number) => void;
   onMeasuredUsage?: (usage: { prompt: number; completion: number }) => void;
+  /** The window the turn actually ran in, when the provider sizes one per
+   *  request (Ollama). The gauge divides by it. */
+  onMeasuredContextWindow?: (tokens: number) => void;
   /** The run's region was edited from outside and the transcript stopped
    *  writing — see `RunTranscript.isDetached`. Everything after this point
    *  reaches disk and not the screen. */
@@ -221,6 +224,9 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
           const completion = usage.completionTokens ?? step.finalizedMeta?.tokens ?? 0;
           opts.onMeasuredPromptTokens?.(usage.promptTokens + completion);
           opts.onMeasuredUsage?.({ prompt: usage.promptTokens, completion });
+        }
+        if (usage?.contextWindow !== undefined && usage.contextWindow > 0) {
+          opts.onMeasuredContextWindow?.(usage.contextWindow);
         }
         projectCommit();
         return true;

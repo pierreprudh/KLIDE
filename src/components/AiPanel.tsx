@@ -169,6 +169,12 @@ import {
   COMPACT_PROMPT_RATIO,
   conversationTokenEstimate,
 } from "./ai/contextBudget";
+import {
+  contextCeiling,
+  contextSizeLabel,
+  providerHasContextWindowSetting,
+  resolveGaugeWindow,
+} from "./ai/contextWindow";
 import { Z } from "../zLayers";
 import { notify } from "../toast";
 import { delegateSessionId, stopDelegatePty, writeDelegatePty } from "../ipc/delegatePty";
@@ -987,6 +993,11 @@ export function AiPanel({
   // fall back to a char-length estimate then.
   const [measuredPromptTokens, setMeasuredPromptTokens] = useState<number | null>(null);
   const [measuredUsageTokens, setMeasuredUsageTokens] = useState<{ prompt: number; completion: number } | null>(null);
+  // The window the last settled turn actually ran in (Ollama's sized
+  // `num_ctx`, reported on the final frame). `null` until a turn reports one;
+  // the gauge then divides by the expected working window instead.
+  const [reportedContextWindow, setReportedContextWindow] = useState<number | null>(null);
+  const [toolSchemaTokens, setToolSchemaTokens] = useState(0);
   // Per-model list price (USD / million in+out tokens), or null for local /
   // subscription / unknown models. Fetched per model; drives per-message and
   // per-conversation cost from each turn's token usage.
@@ -1672,17 +1683,30 @@ export function AiPanel({
   // (review / auto-accept / full auto) lives in the foot bar, not here.
   const goalDisabled = !modelSupportsTools && !providerDelegatesWork;
   const goalPolicy = goalPolicyOf(requireDiffReview, autoApproveCommands);
-  // Effective window: a per-model override (Settings → Harness, Ollama only)
-  // genuinely caps the runtime window, so the gauge must measure against it —
-  // otherwise a dialed-down model reads near-empty when it's actually full.
-  // Everyone else measures against the model's detected trained window.
+  // The gauge's denominator is the window the turn *runs in*, not the model's
+  // trained max. For Ollama that is the `num_ctx` Rust sizes per request — a
+  // flat working window that grows with the conversation up to the trained
+  // window or the user's cap — so a 30k conversation in a 32k window reads as
+  // nearly full, not as 23% of 128k. The last settled turn reports the real
+  // number; before that the expectation mirrors the Rust rule. Everyone else
+  // measures against the model's detected window, which no request can change.
   const ctxOverride = harnessSettings?.contextWindows?.[model];
-  const effectiveContextLimit =
-    provider === "ollama" && ctxOverride && ctxOverride > 0 ? ctxOverride : contextLimit;
-  const contextLimitNote = provider === "ollama"
+  const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
+  const effectiveContextLimit = resolveGaugeWindow({
+    provider,
+    detected: contextLimit,
+    override: ctxOverride,
+    reported: reportedContextWindow,
+    estimatedPromptTokens: measuredPromptTokens ?? messageTokens + toolSchemaTokens,
+  });
+  // A different model, or a different cap, sizes its own window.
+  useEffect(() => setReportedContextWindow(null), [provider, model, ctxOverride]);
+  const contextLimitNote = providerHasContextWindowSetting(provider)
     ? ctxOverride && ctxOverride > 0
-      ? "Ollama override active: Klide sends this window as num_ctx."
-      : "Ollama auto: Klide chooses a stable working window up to the detected model limit."
+      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. The model is trained to ${contextSizeLabel(contextLimit)}.`
+      : reportedContextWindow !== null
+        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
+        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
     : isCustomProvider(provider)
       ? "Self-hosted endpoint: Klide cannot set context here. Configure the server/model window upstream."
       : isLocalProvider
@@ -1724,7 +1748,6 @@ export function AiPanel({
     } catch {}
     closeReflectionMenu();
   }
-  const [toolSchemaTokens, setToolSchemaTokens] = useState(0);
   const toolsAvailableForDraft =
     !providerDelegatesWork && modelSupportsTools && effectiveMode !== "chat";
   const systemPromptForDraft = useMemo(() => {
@@ -1803,7 +1826,6 @@ This user request requires workspace inspection. Before answering, you MUST call
   const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
   useEffect(() => setArtifactOutput(null), [currentId]);
   const skillsPrompt = useMemo(() => enabledSkillsPrompt(skills), [skills]);
-  const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
   const budget = useMemo(
     () =>
       computeContextBudget({
@@ -1900,6 +1922,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       // smaller) estimate until the next turn re-measures.
       setMeasuredPromptTokens(null);
       setMeasuredUsageTokens(null);
+      setReportedContextWindow(null);
       return true;
     } catch (e) {
       setCompactError(String(e));
@@ -2365,6 +2388,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     transitionConversation({ type: "fresh-started", conversationId: nid, branch: workspaceBranch });
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
+    setReportedContextWindow(null);
     setCompactError(null);
     queueRef.current = [];
     queueGenerationRef.current += 1;
@@ -2590,6 +2614,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // No usage stored with history → estimate until this chat's next turn.
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
+    setReportedContextWindow(null);
     setCompactError(null);
     queueRef.current = [];
     queueGenerationRef.current += 1;
@@ -2639,6 +2664,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     transitionConversation({ type: "fresh-started", conversationId: nid, branch: workspaceBranch });
     setMeasuredPromptTokens(null);
     setMeasuredUsageTokens(null);
+    setReportedContextWindow(null);
   };
   useEffect(() => {
     const onDeleted = (event: Event) => {
@@ -3216,6 +3242,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       commit,
       onMeasuredPromptTokens: setMeasuredPromptTokens,
       onMeasuredUsage: setMeasuredUsageTokens,
+      onMeasuredContextWindow: setReportedContextWindow,
       onDetached: () => {
         viewBehind.reason = "region-detached";
       },
@@ -3376,18 +3403,11 @@ Important: do not output JSON, structured plans, or fake tool-call blocks. Just 
 This user request requires workspace inspection. Before answering, you MUST call list_dir with path "." (or the requested relative directory) and wait for its tool result. Do not answer from memory, do not infer from prior conversation, and do not say you used list_dir unless an actual list_dir tool result appears in this turn. For folder questions, answer only from the tool result's Folders section.`;
       }
       // Context window: num_ctx only matters for Ollama (other adapters
-      // ignore it). Prefer an explicit per-model override from settings,
-      // else the model's detected trained window (contextLimit), so each
-      // model runs at its real size instead of a hardcoded floor.
-      const ctxOverride = harnessSettings?.contextWindows?.[turn.model];
-      const numCtx =
-        turn.provider === "ollama"
-          ? ctxOverride && ctxOverride > 0
-            ? ctxOverride
-            : contextLimit > 0
-              ? contextLimit
-              : undefined
-          : undefined;
+      // ignore it). This is the *ceiling* — the user's cap, else the model's
+      // trained window — and Rust sizes the working window under it.
+      const numCtx = providerHasContextWindowSetting(turn.provider)
+        ? contextCeiling(contextLimit, harnessSettings?.contextWindows?.[turn.model])
+        : undefined;
       const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
       const numPredict =
         turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
@@ -3721,10 +3741,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     // its older turns only now — after an actual message was submitted, and
     // before that message is appended or dispatched. On failure keep the draft
     // intact so retry cannot accidentally send an overflowing context.
-    const contextLimitForTurn =
-      provider === "ollama" && ctxOverride && ctxOverride > 0
-        ? ctxOverride
-        : modelInspection.contextLimit;
+    const contextLimitForTurn = providerHasContextWindowSetting(provider)
+      ? contextCeiling(modelInspection.contextLimit, ctxOverride)
+      : modelInspection.contextLimit;
     const ratioAfterSend = contextLimitForTurn > 0 ? budget.used / contextLimitForTurn : 0;
     if (shouldAutoCompact({ trigger: "send", canCompact, ratioAfterSend })) {
       if (!(await compactConversation("agent", contextLimitForTurn))) return;
