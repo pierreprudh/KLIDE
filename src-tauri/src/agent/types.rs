@@ -732,6 +732,15 @@ pub enum AgentEvent {
         request_id: String,
         subagent: String,
         task: String,
+        /// The Delegate CLI the task was handed to, when the call named a
+        /// `worker`. Absent for a child on the parent's own model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker: Option<String>,
+        /// The branch a worker's worktree was created on. Absent for an
+        /// in-model child, and for a worker in a folder that is not a Git
+        /// repository (it then edits the project folder directly).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
         ts: i64,
     },
     SubagentResolved {

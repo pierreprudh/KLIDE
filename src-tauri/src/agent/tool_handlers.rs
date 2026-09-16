@@ -146,6 +146,18 @@ where
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let worker_arg = call
+        .input
+        .get("worker")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|w| !w.is_empty());
+    let model_arg = call
+        .input
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
 
     // An unknown role is a model mistake, not a run failure: name the ones that
     // exist and let it try again.
@@ -154,57 +166,196 @@ where
             ok: false,
             content: format!(
                 "Unknown subagent \"{subagent}\". Available subagents: {}.",
-                subagents::model_selectable_ids().join(", ")
+                subagents::worker_selectable_ids().join(", ")
             ),
             metadata: None,
         }));
     };
-    // The tool promises the delegate cannot edit. Until now only the schema's
-    // `enum` held that line, so a model that named an editing role anyway got
-    // one. Refuse here too: a contract worth stating is worth enforcing.
-    if !subagents::is_model_selectable(def) {
+    // A worker is a Delegate CLI, named by its provider id. Same rule: an
+    // unknown one is answered with the list, never with a dead parent run.
+    let worker = match worker_arg {
+        None => None,
+        Some(id) => match subagents::resolve_worker(id) {
+            Some(worker) => Some(worker),
+            None => {
+                return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!(
+                        "Unknown worker \"{id}\". Workers are the CLI agents Klide can run: {}.",
+                        subagents::worker_ids().join(", ")
+                    ),
+                    metadata: None,
+                }));
+            }
+        },
+    };
+    // Without a worker the tool promises the child cannot edit. Until now only
+    // the schema's `enum` held that line, so a model that named an editing role
+    // anyway got one. Refuse here too: a contract worth stating is worth
+    // enforcing — and say what *would* work, which is naming a worker.
+    if worker.is_none() && !subagents::is_model_selectable(def) {
         return Ok(ToolOutcome::Produced(ToolResult {
             ok: false,
             content: format!(
-                "Subagent \"{}\" makes edits and cannot be delegated to from a run. \
-                 Read-only subagents: {}.",
+                "Subagent \"{}\" makes edits and cannot run on this conversation's own model. \
+                 Pick a read-only subagent ({}) or name a `worker` ({}) to hand the task to a CLI \
+                 agent in its own worktree.",
                 def.id,
-                subagents::model_selectable_ids().join(", ")
+                subagents::model_selectable_ids().join(", "),
+                subagents::worker_ids().join(", ")
             ),
             metadata: None,
         }));
     }
 
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
+
+    // A worker is dispatched, not spawned: the user approves it first, and it
+    // gets a worktree of its own. Both happen here, before anything starts.
+    let mut branch: Option<String> = None;
+    let mut child_root = ctx.request.workspace_root.clone();
+    let mut worktree_path: Option<String> = None;
+    let worker_label = worker.map(|w| worker_label(w.id()));
+    if let Some(worker) = worker {
+        let label = worker_label.clone().unwrap_or_default();
+        let Some(root) = ctx.request.workspace_root.clone() else {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: format!(
+                    "{label} needs an open project to work in, and this conversation has none."
+                ),
+                metadata: None,
+            }));
+        };
+        let planned_branch = subagents::worker_branch(&task, &request_id);
+        let probe_root = root.clone();
+        let is_repo = crate::blocking::run_infallible(move || is_git_repository(&probe_root)).await;
+        let where_it_works = if is_repo {
+            format!("in a new worktree on branch `{planned_branch}`")
+        } else {
+            "directly in the project folder (not a Git repository, so no worktree can isolate it)"
+                .to_string()
+        };
+
+        // The gate. Always asked, never remembered: the full-auto rung excludes
+        // subagents by design, and a dispatch approved once says nothing about
+        // the next task the model wants to hand off. The card's `input` carries
+        // the worker so the frontend can draw it as a dispatch, not a command.
+        let perm = PermissionRequest {
+            id: permission::request_id(ctx, call),
+            run_id: ctx.id.to_string(),
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            input: serde_json::json!({
+                "worker": worker.id(),
+                "workerLabel": label,
+                "subagent": def.id,
+                "task": task,
+                "branch": is_repo.then(|| planned_branch.clone()),
+                "cwd": root,
+                "model": model_arg,
+            }),
+            summary: format!("Dispatch {label} as {} {where_it_works}", def.id),
+            reason: format!(
+                "{label} runs as its own Run with its own tools and auto-accepted edits; nothing it \
+                 writes passes through this conversation's diff review. Its work lands on that \
+                 branch for you to review and merge. Dispatch approvals are never remembered."
+            ),
+            options: worker_gate_options(),
+        };
+        match permission::run_gate(ctx, call, perm, emit).await? {
+            permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
+            permission::GateDecision::Rejected => {
+                return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!(
+                        "The user declined to dispatch {label}. Do the task another way, or ask \
+                         them how they would like it done."
+                    ),
+                    metadata: None,
+                }));
+            }
+            permission::GateDecision::Approved { .. } => {}
+        }
+
+        if is_repo {
+            // The same door the AI panel and Mission Control use for an isolated
+            // Run, minus the setup-script review dialog — a Run has no window to
+            // put a native prompt in, so the recipe's script simply does not run
+            // for a worker. A failure here is the tool's failure, not the run's.
+            let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
+            match crate::git::worktree_add_core(root.clone(), planned_branch.clone(), None, None, quiet).await {
+                Ok(info) => {
+                    branch = Some(info.branch.clone());
+                    child_root = Some(info.path.clone());
+                    worktree_path = Some(info.path);
+                }
+                Err(err) => {
+                    return Ok(ToolOutcome::Produced(ToolResult {
+                        ok: false,
+                        content: format!("Could not create a worktree for {label}: {err}"),
+                        metadata: None,
+                    }));
+                }
+            }
+        }
+    }
+
     emit(AgentEvent::SubagentRequested {
         run_id: ctx.id.to_string(),
         request_id: request_id.clone(),
         subagent: def.id.to_string(),
         task: task.clone(),
+        worker: worker.map(|w| w.id().to_string()),
+        branch: branch.clone(),
         ts: now_ms(),
     })?;
 
-    let spec = subagents::SubagentRunSpec {
-        run_id: request_id.clone(),
-        parent_id: ctx.id.to_string(),
-        workspace_root: ctx.request.workspace_root.clone(),
-        mode: def.mode.clone(),
-        provider: ctx.request.provider.clone(),
-        // The role may pin a cheaper model; otherwise the child inherits the
-        // parent's, so a subagent never silently escalates cost.
-        model: def
-            .model
-            .map(|m| m.to_string())
-            .unwrap_or_else(|| ctx.request.model.clone()),
-        task: task.clone(),
-        system_prompt: subagents::build_system_prompt(def, &base_system_prompt(ctx.request)),
-        max_turns: ctx.request.max_turns,
-        require_diff_review: ctx.request.require_diff_review,
+    let spec = match worker {
+        // A worker is the Delegate running as itself: its own provider, the
+        // model the call asked for or the CLI's own default, and a prompt that
+        // is about the role and the report — not Kit's persona. Diff review is
+        // moot; the worktree is the review boundary.
+        Some(worker) => subagents::SubagentRunSpec {
+            run_id: request_id.clone(),
+            parent_id: ctx.id.to_string(),
+            workspace_root: child_root,
+            mode: def.mode.clone(),
+            provider: worker.id().to_string(),
+            model: model_arg
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::delegate::CLI_DEFAULT_MODEL.to_string()),
+            task: task.clone(),
+            system_prompt: subagents::build_worker_prompt(
+                def,
+                worker_label.as_deref().unwrap_or(worker.id()),
+                branch.as_deref(),
+            ),
+            max_turns: ctx.request.max_turns,
+            require_diff_review: Some(false),
+        },
+        None => subagents::SubagentRunSpec {
+            run_id: request_id.clone(),
+            parent_id: ctx.id.to_string(),
+            workspace_root: ctx.request.workspace_root.clone(),
+            mode: def.mode.clone(),
+            provider: ctx.request.provider.clone(),
+            // The role may pin a cheaper model; otherwise the child inherits the
+            // parent's, so a subagent never silently escalates cost.
+            model: def
+                .model
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| ctx.request.model.clone()),
+            task: task.clone(),
+            system_prompt: subagents::build_system_prompt(def, &base_system_prompt(ctx.request)),
+            max_turns: ctx.request.max_turns,
+            require_diff_review: ctx.request.require_diff_review,
+        },
     };
 
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Paused);
     let child = ctx.sup.spawn_subagent(spec);
-    let report = tokio::select! {
+    let mut report = tokio::select! {
         // Cancelling the parent must not leave the child running headless.
         _ = ctx.cancel.cancelled() => {
             ctx.sup.with_handle(&request_id, &mut |handle| handle.cancel.cancel());
@@ -220,6 +371,22 @@ where
     };
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
 
+    // Where a worker's edits are is part of the report: the parent cannot see
+    // the worktree, and the user reads this to know which branch to open.
+    if let Some(label) = worker_label.as_deref() {
+        report.push_str("\n\n— ");
+        match (branch.as_deref(), worktree_path.as_deref()) {
+            (Some(branch), Some(path)) => report.push_str(&format!(
+                "{label} worked in the worktree `{path}` on branch `{branch}`; its edits are \
+                 committed there. Review and merge that branch. Nothing in this checkout changed."
+            )),
+            _ => report.push_str(&format!(
+                "{label} worked directly in the project folder (not a Git repository), so there is \
+                 no branch to review; check the files it names."
+            )),
+        }
+    }
+
     emit(AgentEvent::SubagentResolved {
         run_id: ctx.id.to_string(),
         request_id,
@@ -230,8 +397,42 @@ where
     Ok(ToolOutcome::Produced(ToolResult {
         ok: true,
         content: report,
-        metadata: Some(serde_json::json!({ "subagent": def.id })),
+        metadata: Some(serde_json::json!({
+            "subagent": def.id,
+            "worker": worker.map(|w| w.id()),
+            "branch": branch,
+            "cwd": worktree_path,
+        })),
     }))
+}
+
+/// A worker's human name — "Claude Code", not "claude-code" — from the
+/// provider registry's subscription row, falling back to the id.
+fn worker_label(id: &str) -> String {
+    crate::providers::lookup(id)
+        .and_then(|p| p.subscription)
+        .map(|s| s.label.to_string())
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Whether `root` is inside a Git working tree — the one question that decides
+/// whether a worker gets a worktree or the folder itself.
+fn is_git_repository(root: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["-C", root, "rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false)
+}
+
+/// The choices on a dispatch gate: this once, or not at all. No run or project
+/// scope — approving one hand-off says nothing about the next task the model
+/// wants to delegate, so there is nothing sound to remember.
+pub(super) fn worker_gate_options() -> Vec<PermissionOption> {
+    standard_gate_options("", "")
+        .into_iter()
+        .filter(|option| option.option_id == "allow_once" || option.option_id == "deny")
+        .collect()
 }
 
 fn coordination_tool_error(message: impl Into<String>) -> ToolOutcome {
