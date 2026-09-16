@@ -15,9 +15,21 @@ Notable changes per milestone. Dates are completion dates.
 - **An Anthropic reply cut off at the output cap says so.** The cap was 4096
   tokens, the API's example value; a worker writing a test file hit it in the
   middle of its `write_file` JSON, the call never closed, and it vanished —
-  the run ended "done" with nothing. The cap is now 16k, and a call cut off by
-  `max_tokens` is dropped out loud: the reply says which call, at how many
-  tokens, and to work in smaller pieces.
+  the run ended "done" with nothing. Klide no longer caps the reply below the
+  model: it asks for the largest budget any Claude model accepts and, when a
+  model states a lower limit in its refusal, asks once more at exactly that.
+  A call still cut off by `max_tokens` is dropped out loud: the reply says
+  which call, at how many tokens, and to work in smaller pieces.
+- **An API worker runs its commands without asking.** A headless child has
+  no card to show, so the first `run_command` it reached parked it — and its
+  parent — for good. The dispatch card the operator approves now says
+  "commands run without asking", and the child runs that way, as a Delegate
+  CLI does with its own policy. A plain subagent on the parent's model is
+  unchanged and never runs commands unasked.
+- **A capped Anthropic reply with nothing readable says so.** 16k tokens into
+  a block the adapter does not parse ended a worker "done" with an empty
+  message; the reply now says the budget was spent with nothing usable, and
+  the unread block type is logged.
 - **A worker that never spoke reports why.** A child run that ended on an
   error came back to the parent as "(subagent produced no output)"; it now
   comes back as the error itself, so Kit reacts to the cause.

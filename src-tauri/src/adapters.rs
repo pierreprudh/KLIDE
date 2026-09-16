@@ -1028,13 +1028,35 @@ struct AnthropicAdapter {
     /// is the one that matters: a tool call cut off mid-JSON must not be
     /// dropped in silence.
     stop_reason: Option<String>,
+    /// The reply budget sent as `max_tokens`. Starts at the ceiling below; a
+    /// model whose own limit is lower says so in a 400, and one retry sends
+    /// exactly that.
+    max_output_tokens: usize,
 }
 
-/// The reply budget. 4096 was the API's own example value and it cut a
-/// `write_file` of a test file in half — the model produced exactly 4096
-/// tokens of tool JSON, the JSON never closed, and the call vanished. Current
-/// Claude models accept far more; this is enough to write a whole file.
-const ANTHROPIC_MAX_OUTPUT_TOKENS: usize = 16_384;
+/// The reply budget to ask for. The API requires a number; nothing in Klide
+/// wants to cap a worker below what its model can do, so this is the largest
+/// limit any current Claude model accepts, and a model with a lower ceiling
+/// is asked again at its own — see [`anthropic_allowed_output_tokens`]. 4096
+/// was the API's example value and cut a test file in half; 16k cut the next
+/// one.
+const ANTHROPIC_MAX_OUTPUT_TOKENS: usize = 128_000;
+
+/// The limit a model states when asked for more than it allows: Anthropic
+/// answers "max_tokens: 128000 > 64000, which is the maximum allowed number
+/// of output tokens for claude-…". `None` for any other error.
+fn anthropic_allowed_output_tokens(error: &str) -> Option<usize> {
+    let at = error.find("max_tokens")?;
+    let rest = &error[at..];
+    let gt = rest.find('>')?;
+    let digits: String = rest[gt + 1..]
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let allowed: usize = digits.parse().ok()?;
+    (allowed > 0).then_some(allowed)
+}
 
 impl StreamingProvider for AnthropicAdapter {
     type ToolAccumulator = Vec<AnthropicToolAcc>;
@@ -1047,16 +1069,18 @@ impl StreamingProvider for AnthropicAdapter {
         let (system, msgs) = anthropic_messages(self.messages.clone());
         let mut body = serde_json::json!({
             "model": self.model,
-            "max_tokens": ANTHROPIC_MAX_OUTPUT_TOKENS,
+            "max_tokens": self.max_output_tokens,
             "stream": true,
             "messages": msgs,
         });
         if let Some(budget) = self.thinking_budget {
+            // Thinking spends from the same budget and must leave room for the
+            // answer: the budget is clamped under the ceiling, never added to it.
+            let budget = budget.min(self.max_output_tokens.saturating_sub(1024)).max(1024);
             body["thinking"] = serde_json::json!({
                 "type": "enabled",
                 "budget_tokens": budget,
             });
-            body["max_tokens"] = serde_json::json!(budget.saturating_add(ANTHROPIC_MAX_OUTPUT_TOKENS));
         }
         if !system.trim().is_empty() {
             body["system"] = serde_json::Value::String(system);
@@ -1140,7 +1164,15 @@ impl StreamingProvider for AnthropicAdapter {
                     tools.push(AnthropicToolAcc::default());
                 }
                 if let Some(cb) = value.get("content_block") {
-                    if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    let kind = cb.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                    // A block the adapter does not read would otherwise vanish
+                    // with everything streamed into it. Name it in the dev log,
+                    // so a reply that spends its whole budget on one leaves a
+                    // trace of what it was.
+                    if !matches!(kind, "text" | "tool_use" | "thinking") {
+                        eprintln!("anthropic: unread content block type `{kind}` at index {index}");
+                    }
+                    if kind == "tool_use" {
                         let acc = &mut tools[index];
                         acc.id = cb
                             .get("id")
@@ -1236,16 +1268,25 @@ impl StreamingProvider for AnthropicAdapter {
                 })
             })
             .collect();
+        let spent = self.usage.completion_tokens.unwrap_or(ANTHROPIC_MAX_OUTPUT_TOKENS as u64);
         if !truncated.is_empty() {
             if !content.trim().is_empty() {
                 content.push_str("\n\n");
             }
             content.push_str(&format!(
-                "The reply hit the output limit ({} tokens) in the middle of a `{}` call, so that \
+                "The reply hit the output limit ({spent} tokens) in the middle of a `{}` call, so that \
                  call was not made and nothing was changed. Do it in smaller pieces: write the \
                  file in parts, or make one focused edit at a time.",
-                self.usage.completion_tokens.unwrap_or(ANTHROPIC_MAX_OUTPUT_TOKENS as u64),
                 truncated.join("`, `")
+            ));
+        } else if cut_off && content.trim().is_empty() && tool_calls.is_empty() {
+            // The whole budget went somewhere the adapter could not read — a
+            // block type it does not parse, or a loop of nothing. Silence here
+            // ended a worker "done" with an empty message; say what happened.
+            content.push_str(&format!(
+                "The reply hit the output limit ({spent} tokens) without any readable text or a \
+                 usable tool call, so nothing was done. Try the task in smaller steps, or on \
+                 another model."
             ));
         }
         AiChatResponse {
@@ -1261,9 +1302,9 @@ impl StreamingProvider for AnthropicAdapter {
             } else {
                 Some(self.usage)
             },
-            // Anthropic reports stop_reason too, but this field drives the
-            // Ollama-specific num_ctx-truncation warning. Left None for now.
-            stop_reason: None,
+            // `length` is the loop's word for "the provider hit its cap";
+            // reported so its own cut-off handling applies here too.
+            stop_reason: cut_off.then(|| "length".to_string()),
         }
     }
 }
@@ -1278,15 +1319,36 @@ pub(crate) async fn anthropic_chat(
 ) -> Result<AiChatResponse, String> {
     let thinking_budget = reflection_level_to_anthropic_budget(reflection_level.as_deref());
     let adapter = AnthropicAdapter {
-        model,
-        messages,
-        tools,
-        key,
+        model: model.clone(),
+        messages: messages.clone(),
+        tools: tools.clone(),
+        key: key.clone(),
         thinking_budget,
         usage: AiUsage::default(),
         stop_reason: None,
+        max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
     };
-    stream_provider(adapter, on_chunk).await
+    match stream_provider(adapter, on_chunk).await {
+        // Asked for more than this model allows: it said how much. Ask again
+        // at exactly that — the one retry, and only for this reason.
+        Err(error) => match anthropic_allowed_output_tokens(&error) {
+            Some(allowed) if allowed < ANTHROPIC_MAX_OUTPUT_TOKENS => {
+                let adapter = AnthropicAdapter {
+                    model,
+                    messages,
+                    tools,
+                    key,
+                    thinking_budget,
+                    usage: AiUsage::default(),
+                    stop_reason: None,
+                    max_output_tokens: allowed,
+                };
+                stream_provider(adapter, on_chunk).await
+            }
+            _ => Err(error),
+        },
+        ok => ok,
+    }
 }
 
 #[cfg(test)]
@@ -1994,6 +2056,7 @@ mod tests {
             thinking_budget: None,
             usage: AiUsage::default(),
             stop_reason: None,
+            max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -2042,6 +2105,7 @@ mod tests {
             thinking_budget: Some(4096),
             usage: AiUsage::default(),
             stop_reason: None,
+            max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
         };
         let request = adapter
             .build_request(&reqwest::Client::new())
@@ -2052,7 +2116,17 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(body).unwrap();
         assert_eq!(value["thinking"]["type"], "enabled");
         assert_eq!(value["thinking"]["budget_tokens"], 4096);
-        assert_eq!(value["max_tokens"], 4096 + ANTHROPIC_MAX_OUTPUT_TOKENS);
+        assert_eq!(value["max_tokens"], ANTHROPIC_MAX_OUTPUT_TOKENS, "thinking spends from the budget, it is not added to it");
+    }
+
+    #[test]
+    fn anthropic_reads_the_limit_a_model_states() {
+        assert_eq!(
+            anthropic_allowed_output_tokens(r#"Anthropic returned 400 Bad Request: {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 128000 > 64000, which is the maximum allowed number of output tokens for claude-sonnet-4-5"}}"#),
+            Some(64_000)
+        );
+        assert_eq!(anthropic_allowed_output_tokens("Anthropic returned 429 Too Many Requests"), None);
+        assert_eq!(anthropic_allowed_output_tokens("max_tokens: something else entirely"), None);
     }
 
     #[test]
@@ -2070,6 +2144,20 @@ mod tests {
         assert!(content.contains("output limit"), "{content}");
         assert!(content.contains("write_file"), "{content}");
         assert!(content.contains("4096"), "{content}");
+    }
+
+    #[test]
+    fn anthropic_capped_reply_with_nothing_readable_says_so() {
+        // 16k tokens streamed into a block the adapter does not read, then
+        // max_tokens. The old result was an empty message and a "done" run.
+        let lines = [
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"mystery_block"}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":16384}}"#,
+        ];
+        let (content, tools, _chunks) = run_anthropic(&lines);
+        assert!(tools.is_empty());
+        assert!(content.contains("output limit") && content.contains("16384"), "{content}");
+        assert!(content.contains("nothing was done"), "{content}");
     }
 
     #[test]
@@ -2136,6 +2224,7 @@ mod tests {
             thinking_budget: None,
             usage: AiUsage::default(),
             stop_reason: None,
+            max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -2165,6 +2254,7 @@ mod tests {
             thinking_budget: None,
             usage: AiUsage::default(),
             stop_reason: None,
+            max_output_tokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
         };
         let content = String::new();
         let thinking = String::new();

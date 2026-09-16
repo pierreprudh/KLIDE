@@ -624,10 +624,12 @@ async fn run_subagent_to_completion(
         test_after_edit_command: None,
         command_allowlist: vec![],
         require_diff_review: spec.require_diff_review,
-        // A headless child never inherits the full-auto command rung: the
-        // parent conversation's operator opted in for that surface, not for
-        // runs it spawns.
-        auto_approve_commands: None,
+        // Never inherited from the parent: the parent conversation's operator
+        // opted into full auto for that surface, not for runs it spawns. Set
+        // only where the spec says so — an API worker the operator dispatched,
+        // which has no card to ask on and would otherwise park on its first
+        // command, and its parent with it.
+        auto_approve_commands: spec.auto_approve_commands,
         parent_id: Some(spec.parent_id.clone()),
         mission_id: None,
         mission_task_id: None,
@@ -6956,6 +6958,8 @@ mod worker_dispatch_tests {
         assert_eq!(spec.model, "claude-sonnet-4-6");
         assert_eq!(spec.mode, AgentMode::Goal);
         assert_eq!(spec.require_diff_review, Some(false), "edits apply inside the worktree");
+        assert_eq!(spec.auto_approve_commands, Some(true), "a headless child has no card to ask on");
+        assert!(prompt.reason.contains("commands run without asking"), "{}", prompt.reason);
         assert!(spec.workspace_root.as_deref().unwrap().contains("-worktrees/klide-worker-add-slugify-"));
         assert!(spec.system_prompt.contains("Implementer"), "the role rides along");
         assert!(spec.system_prompt.contains("klide/worker-add-slugify-"), "and so does the branch");
@@ -7002,6 +7006,7 @@ mod worker_dispatch_tests {
         let spawned = sup.spawned.lock().unwrap();
         assert_eq!(spawned.len(), 1);
         assert_eq!(spawned[0].provider, request.provider, "inherits the parent's provider");
+        assert_eq!(spawned[0].auto_approve_commands, None, "a plain subagent never runs commands unasked");
         assert_eq!(spawned[0].model, request.model);
         assert_eq!(spawned[0].workspace_root.as_deref(), Some(root.as_str()));
         assert_eq!(requested_children(&events), vec![("explorer".to_string(), None, None)]);
@@ -7066,6 +7071,7 @@ mod worker_dispatch_tests {
         assert_eq!(spawned.len(), 1);
         let spec = &spawned[0];
         assert_eq!(spec.provider, "claude-code", "the worker is the child's provider");
+        assert_eq!(spec.auto_approve_commands, None, "a CLI has its own policy; Klide's rung stays off");
         assert_eq!(spec.model, crate::delegate::CLI_DEFAULT_MODEL, "no model asked for → the CLI's own default");
         assert_eq!(spec.mode, AgentMode::Goal);
         assert_eq!(spec.require_diff_review, Some(false));

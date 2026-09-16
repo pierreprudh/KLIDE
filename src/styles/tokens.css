@@ -8689,3 +8689,8 @@ button:focus-visible .menu-leadout {
 
 /* The row the call pre-selected is named, not painted: "Kit's pick" beside it,
    and the same hover soft-fill as every other row — nothing lateral, no spine. */
+
+/* Metrics span the line — first flush left, last flush right, the rest
+   spread between — instead of bunching at the left edge. */
+.ai-agent-stats-line[data-metrics="1"] { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ai-agent-stats-line[data-metrics="1"] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

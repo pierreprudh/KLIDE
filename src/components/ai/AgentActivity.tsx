@@ -11,11 +11,18 @@ import { createPortal } from "react-dom";
 import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { ProviderLogo } from "./icons";
 import { AgentMark } from "../fileMarks";
+import { StepMark } from "../TodoStrip";
 import { loadConversations } from "./storedConversations";
-import { participantStats } from "./participantStats";
+import { METRIC_GAP, participantStats, workerRunStats } from "./participantStats";
+import { fetchAgentRunsCached, type Run } from "../../runs";
 
-function Participant({ name, mark, status, stats, children }: {
-  name: string; mark: ReactNode; status: string; stats: () => string; children?: ReactNode;
+function Participant({ name, mark, status, outcome, stats, children }: {
+  name: string; mark: ReactNode; status: string;
+  /** How the run ended, said by a mark at the end of the metrics line — the
+   *  plan's own filled check for done, a muted cross for failed — never a
+   *  word, never a colour on the card. Absent while it is live or for a peer. */
+  outcome?: "done" | "failed";
+  stats: () => string; children?: ReactNode;
 }) {
   const menu = usePortalMenu({ closeOnOutsideClick: true, computePos: (rect) => ({
     left: Math.max(12, Math.min(rect.right - 380, window.innerWidth - 392)),
@@ -32,15 +39,31 @@ function Participant({ name, mark, status, stats, children }: {
     <button ref={menu.triggerRef} type="button" className="ai-agent-avatar" title={name}
       aria-label={`${name} — show stats`} aria-expanded={menu.open}
       onClick={() => { if (menu.open) menu.close(); else { setLine(stats()); menu.openMenu(); } }}>{mark}</button>
-    {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" style={menu.pos} role="dialog" aria-label={`${name} stats`}>
+    {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" style={menu.pos} role="dialog" aria-label={`${name} stats${outcome ? `, ${outcome}` : ""}`}>
       <div className="ai-agent-stats-heading"><span className="ai-agent-activity-name">{mark}<strong>{name}</strong></span><span>{status}</span>{children}</div>
-      <div className="ai-agent-stats-line" title={line}>{line}</div>
+      <div className="ai-agent-stats-line" data-metrics="1" title={line.split(METRIC_GAP).join("  ")}>
+        {line.split(METRIC_GAP).map((part, i) => <span key={i}>{part}</span>)}
+        {outcome === "done" && <span aria-label="done" style={{ flexShrink: 0, display: "grid", placeItems: "center" }}><StepMark index={0} state="done" /></span>}
+        {outcome === "failed" && (
+          <span aria-label="failed" style={{ flexShrink: 0, width: 14, height: 14, borderRadius: "50%", border: "1px solid var(--border-strong)", display: "grid", placeItems: "center", color: "var(--fg-dim)", fontSize: 9, lineHeight: 1 }}>×</span>
+        )}
+      </div>
     </div>, document.body)}
   </>;
 }
 
-export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink> & { msgs: Msg[] }) {
+export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<typeof PeerLink> & {
+  msgs: Msg[];
+  /** Where a worker child opens: its row in Mission Control. A child is a Run
+   *  with a transcript, not a conversation with a panel, so the arrow leads
+   *  to the board; peers that are conversations keep `onOpen`. */
+  onOpenRun?: (runId: string) => void;
+}) {
   const { workspaceRoot, selfId } = props;
+  // The children's run records, for the stats line: a worker has no stored
+  // conversation, so its duration, messages, tokens and cost come from the
+  // run ledger instead. Refreshed with the journal.
+  const [runRecords, setRunRecords] = useState<Map<string, Run>>(() => new Map());
   const [children, setChildren] = useState<{ key: string; runs: CoordinationRunSnapshot[] }>({ key: "", runs: [] });
   const key = `${workspaceRoot}\0${selfId}`;
   useEffect(() => {
@@ -53,6 +76,10 @@ export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink
         const snapshot = await readCoordinationSnapshot(workspaceRoot);
         if (!disposed && request === revision) setChildren({ key, runs: snapshot.runs.filter((r) => r.registration.parentRunId === selfId) });
       } catch { if (!disposed && request === revision) setChildren({ key, runs: [] }); }
+      try {
+        const recent = await fetchAgentRunsCached(60, 0, { force: true });
+        if (!disposed && request === revision) setRunRecords(new Map(recent.map((run) => [run.id, run])));
+      } catch { /* the ledger is a nicety here; the strip stands without it */ }
     };
     void refresh();
     const scope = createListenerScope();
@@ -73,12 +100,24 @@ export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink
   }
   if (!peers.length && !shellAgents.length) return null;
   return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">
-    {peers.map((id) => <Participant key={id} name={peerName(id, index)}
-      mark={conversationMark(index.get(id)?.model, index.get(id)?.provider, 16)?.node ?? <AgentMark size={16} />}
-      status={[runs.find((r) => r.registration.runId === id)?.state ?? "Message peer", index.get(id)?.model].filter(Boolean).join(" · ")}
-      stats={() => participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === id)?.msgs ?? [])}>
-      <button type="button" className="ai-agent-open" disabled={!props.onOpen} onClick={() => props.onOpen?.(id)} aria-label={`Open ${peerName(id, index)}`} title="Open conversation">↗</button>
-    </Participant>)}
+    {peers.map((id) => {
+      const child = runs.some((r) => r.registration.runId === id);
+      const open = child && onOpenRun ? () => onOpenRun(id) : props.onOpen ? () => props.onOpen?.(id) : undefined;
+      return <Participant key={id} name={peerName(id, index)}
+        mark={conversationMark(index.get(id)?.model, index.get(id)?.provider, 16)?.node ?? <AgentMark size={16} />}
+        status={[child ? undefined : "Message peer", index.get(id)?.model].filter(Boolean).join(" ")}
+        outcome={(() => {
+          const state = runs.find((r) => r.registration.runId === id)?.state;
+          return state === "done" ? "done" : state === "failed" || state === "cancelled" ? "failed" : undefined;
+        })()}
+        stats={() => {
+          const record = child ? runRecords.get(id) : undefined;
+          if (record) return workerRunStats(record);
+          return participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === id)?.msgs ?? []);
+        }}>
+        <button type="button" className="ai-agent-open" disabled={!open} onClick={open} aria-label={`Open ${peerName(id, index)}`} title={child && onOpenRun ? "Open in Mission Control" : "Open conversation"}>↗</button>
+      </Participant>;
+    })}
     {shellAgents.map((name) => <Participant key={name} name={name}
       mark={<ProviderLogo id={name === "Codex" ? "codex" : "claude-code"} size={16} />}
       status="via shell" stats={() => {
