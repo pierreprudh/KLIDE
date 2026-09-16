@@ -1140,7 +1140,15 @@ impl StreamingProvider for AnthropicAdapter {
                     tools.push(AnthropicToolAcc::default());
                 }
                 if let Some(cb) = value.get("content_block") {
-                    if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    let kind = cb.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                    // A block the adapter does not read would otherwise vanish
+                    // with everything streamed into it. Name it in the dev log,
+                    // so a reply that spends its whole budget on one leaves a
+                    // trace of what it was.
+                    if !matches!(kind, "text" | "tool_use" | "thinking") {
+                        eprintln!("anthropic: unread content block type `{kind}` at index {index}");
+                    }
+                    if kind == "tool_use" {
                         let acc = &mut tools[index];
                         acc.id = cb
                             .get("id")
@@ -1236,16 +1244,25 @@ impl StreamingProvider for AnthropicAdapter {
                 })
             })
             .collect();
+        let spent = self.usage.completion_tokens.unwrap_or(ANTHROPIC_MAX_OUTPUT_TOKENS as u64);
         if !truncated.is_empty() {
             if !content.trim().is_empty() {
                 content.push_str("\n\n");
             }
             content.push_str(&format!(
-                "The reply hit the output limit ({} tokens) in the middle of a `{}` call, so that \
+                "The reply hit the output limit ({spent} tokens) in the middle of a `{}` call, so that \
                  call was not made and nothing was changed. Do it in smaller pieces: write the \
                  file in parts, or make one focused edit at a time.",
-                self.usage.completion_tokens.unwrap_or(ANTHROPIC_MAX_OUTPUT_TOKENS as u64),
                 truncated.join("`, `")
+            ));
+        } else if cut_off && content.trim().is_empty() && tool_calls.is_empty() {
+            // The whole budget went somewhere the adapter could not read — a
+            // block type it does not parse, or a loop of nothing. Silence here
+            // ended a worker "done" with an empty message; say what happened.
+            content.push_str(&format!(
+                "The reply hit the output limit ({spent} tokens) without any readable text or a \
+                 usable tool call, so nothing was done. Try the task in smaller steps, or on \
+                 another model."
             ));
         }
         AiChatResponse {
@@ -1261,9 +1278,9 @@ impl StreamingProvider for AnthropicAdapter {
             } else {
                 Some(self.usage)
             },
-            // Anthropic reports stop_reason too, but this field drives the
-            // Ollama-specific num_ctx-truncation warning. Left None for now.
-            stop_reason: None,
+            // `length` is the loop's word for "the provider hit its cap";
+            // reported so its own cut-off handling applies here too.
+            stop_reason: cut_off.then(|| "length".to_string()),
         }
     }
 }
@@ -2070,6 +2087,20 @@ mod tests {
         assert!(content.contains("output limit"), "{content}");
         assert!(content.contains("write_file"), "{content}");
         assert!(content.contains("4096"), "{content}");
+    }
+
+    #[test]
+    fn anthropic_capped_reply_with_nothing_readable_says_so() {
+        // 16k tokens streamed into a block the adapter does not read, then
+        // max_tokens. The old result was an empty message and a "done" run.
+        let lines = [
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"mystery_block"}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":16384}}"#,
+        ];
+        let (content, tools, _chunks) = run_anthropic(&lines);
+        assert!(tools.is_empty());
+        assert!(content.contains("output limit") && content.contains("16384"), "{content}");
+        assert!(content.contains("nothing was done"), "{content}");
     }
 
     #[test]
