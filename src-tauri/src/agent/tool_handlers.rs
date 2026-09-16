@@ -427,6 +427,7 @@ where
         task: task.clone(),
         worker: worker.map(|w| w.id().to_string()),
         branch: branch.clone(),
+        model: worker.and(model_arg).map(str::to_string),
         ts: now_ms(),
     })?;
 

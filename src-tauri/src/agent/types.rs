@@ -768,6 +768,10 @@ pub enum AgentEvent {
         /// repository (it then edits the project folder directly).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
+        /// The model the worker was started on, once the card decided it.
+        /// Absent for an in-model child, and for a CLI on its own default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
         ts: i64,
     },
     SubagentResolved {

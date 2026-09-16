@@ -158,6 +158,9 @@ function SubagentCallRow({ args }: { args: unknown }) {
   const o = (args ?? {}) as Record<string, unknown>;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
   const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
+  // The model the worker was started on, once the card decided it — the
+  // fold writes it onto the call. A CLI on its own default carries none.
+  const workerModel = worker && typeof o.model === "string" && o.model.trim() && o.model !== "default" ? o.model.trim() : null;
   const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
   const long = task.length > 96;
   const short = long ? task.slice(0, 95) + "…" : task;
@@ -170,6 +173,7 @@ function SubagentCallRow({ args }: { args: unknown }) {
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, fontSize: 12, color: "var(--fg-strong)" }}>
             <ProviderLogo id={worker} size={13} />
             <span>{providerName(worker)}</span>
+            {workerModel && <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{workerModel}</span>}
           </span>
         )}
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 500, color: "var(--accent)", flexShrink: 0 }}>{worker ? subagent : `@${subagent}`}</span>
