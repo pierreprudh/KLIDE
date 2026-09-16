@@ -15,9 +15,11 @@ Notable changes per milestone. Dates are completion dates.
 - **An Anthropic reply cut off at the output cap says so.** The cap was 4096
   tokens, the API's example value; a worker writing a test file hit it in the
   middle of its `write_file` JSON, the call never closed, and it vanished —
-  the run ended "done" with nothing. The cap is now 16k, and a call cut off by
-  `max_tokens` is dropped out loud: the reply says which call, at how many
-  tokens, and to work in smaller pieces.
+  the run ended "done" with nothing. Klide no longer caps the reply below the
+  model: it asks for the largest budget any Claude model accepts and, when a
+  model states a lower limit in its refusal, asks once more at exactly that.
+  A call still cut off by `max_tokens` is dropped out loud: the reply says
+  which call, at how many tokens, and to work in smaller pieces.
 - **An API worker runs its commands without asking.** A headless child has
   no card to show, so the first `run_command` it reached parked it — and its
   parent — for good. The dispatch card the operator approves now says
