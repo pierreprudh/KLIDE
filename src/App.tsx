@@ -96,6 +96,7 @@ import {
   showsRail,
   showsStatusBar,
 } from "./hooks/useSurface";
+import { railSelectedConversation } from "./railSelection";
 import { useAiPanelFleet } from "./hooks/useAiPanelFleet";
 import { useArtifactInspector } from "./hooks/useArtifactInspector";
 import { listCheckpoints, readAgentRunEvents } from "./agent/client";
@@ -208,6 +209,9 @@ function App() {
   // sets cannot sit inside one of the shells. `focusConvoError` is the
   // "conversation unavailable" apology Focus draws on its canvas.
   const [focusSelectedConvoId, setFocusSelectedConvoId] = useState<string | null>(null);
+  // The workbench's counterpart: the row last clicked in the rail, lit until
+  // the panel bindings catch up with it (see `railSelection.ts`).
+  const [workbenchPickedConvoId, setWorkbenchPickedConvoId] = useState<string | null>(null);
   const [focusConvoError, setFocusConvoError] = useState<{ title: string } | null>(null);
   const [focusInitialMessage, setFocusInitialMessage] = useState<string | null>(null);
   // Photos/documents staged on the start stage, travelling with that first
@@ -580,11 +584,16 @@ function App() {
   // conversation id — the watch panels reattach to it — so this is right from
   // the moment the tabs exist, without waiting on a panel binding.
   const raceWatchConversationIds = raceWatchTabs.map((tab) => tab.runId);
-  const railSelectedConversationId = focusBase
-    ? focusChatActive && !focusConvoError
-      ? railActiveConversationId ?? focusSelectedConvoId
-      : focusSelectedConvoId
-    : railActiveConversationId;
+  // The row a person just clicked wins until the bindings know it; then the
+  // bindings rule. `railSelection.ts` owns that order.
+  const railSelectedConversationId = railSelectedConversation({
+    focus: focusBase,
+    chatActive: focusChatActive,
+    convoError: focusConvoError !== null,
+    picked: focusBase ? focusSelectedConvoId : workbenchPickedConvoId,
+    boundActive: railActiveConversationId,
+    boundIds: openConversations.map((c) => c.convoId),
+  });
   const railSelectedConversationIds =
     raceWatchConversationIds.length > 0
       ? raceWatchConversationIds
@@ -845,6 +854,7 @@ function App() {
    *  conversation that may still be running. Over a canvas of floating panels
    *  a second panel *is* the new task. */
   function startWorkbenchTask() {
+    setWorkbenchPickedConvoId(null);
     if (!openConversations.some((c) => c.panelId === primaryPanelId)) {
       revealAiPanel(primaryPanelId);
       return;
@@ -890,6 +900,7 @@ function App() {
     const panelId = bound?.panelId ?? primaryPanelId;
     setAiPanelCwd(panelId, legacyWorkspace ? undefined : convo.cwd ?? undefined);
     if (!bound) targetResume(panelId, resumed);
+    setWorkbenchPickedConvoId(convo.id);
     revealAiPanel(panelId);
     offerRaceSplit(convo.id);
   }
@@ -3160,6 +3171,7 @@ function App() {
                   setFocusConvoError({ title: convo.title || "Untitled conversation" });
                   return;
                 }
+                setWorkbenchPickedConvoId((current) => (current === convo.id ? null : current));
                 notify(
                   `"${convo.title || "That conversation"}" is no longer in local history.`,
                   { tone: "warn" },
