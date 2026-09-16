@@ -30,21 +30,21 @@ pub fn tool() -> Value {
         "name": "mission_orchestrate",
         "description": "Coordinate approved Mission tasks. list discovers tasks and exact attempt Run ids. dispatch starts an unattempted ready task using its approved provider/model; repeating dispatch returns the existing attempt, never retries failed work. inspect reads or waits up to 120 seconds for that exact attempt's settlement and validation. Use agent_send for reviewed follow-ups. Only the operator can approve a plan, retry a task, accept Delegate work or integrate changes. Tasks currently share the Mission checkout; checkout evidence is not proof of exclusive ownership.",
         "outputSchema": serde_json::from_str::<Value>(include_str!("../../../schemas/klide-mission-orchestration.schema.json")).expect("valid Mission receipt schema"),
+        // No `oneOf` at the top level: Anthropic's API refuses a tool whose
+        // input schema unions there, and one refused tool fails the whole
+        // request — every Goal run on a direct Anthropic key died on this.
+        // The per-action shape is stated in the descriptions and enforced by
+        // `Request`'s deserialization, which is where it was enforced anyway.
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type":"string", "enum":["list", "dispatch", "inspect"]},
-                "missionId": {"type":"string", "minLength":1},
-                "taskId": {"type":"string", "minLength":1},
-                "runId": {"type":"string", "minLength":1},
-                "timeoutSeconds": {"type":"integer", "minimum":0, "maximum":120}
+                "action": {"type":"string", "enum":["list", "dispatch", "inspect"], "description":"list takes nothing else; dispatch needs missionId and taskId; inspect needs missionId, taskId and runId."},
+                "missionId": {"type":"string", "minLength":1, "description":"Required for dispatch and inspect."},
+                "taskId": {"type":"string", "minLength":1, "description":"Required for dispatch and inspect."},
+                "runId": {"type":"string", "minLength":1, "description":"Required for inspect: the exact attempt to read."},
+                "timeoutSeconds": {"type":"integer", "minimum":0, "maximum":120, "description":"inspect only: how long to wait for the attempt to settle."}
             },
             "required":["action"],
-            "oneOf": [
-                {"properties":{"action":{"const":"list"}},"required":["action"],"maxProperties":1},
-                {"properties":{"action":{"const":"dispatch"}},"required":["action","missionId","taskId"],"maxProperties":3},
-                {"properties":{"action":{"const":"inspect"}},"required":["action","missionId","taskId","runId"]}
-            ],
             "additionalProperties":false
         }
     })
