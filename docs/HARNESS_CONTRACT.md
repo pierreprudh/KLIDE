@@ -131,7 +131,10 @@ whose writes never pass this Run's Diff review — so the Harness isolates it in
 worktree on a `klide/worker-…` branch and asks the operator before starting it.
 The dispatch approval offers only "this once" and "reject": it is never
 remembered per run or per project, and the full-auto policy does not silence
-it. A project that is not a Git repository is named as such on the card, and
+it. A dispatch that names no model first puts a question to the operator
+through the ordinary question pause, with the CLI's default and the catalogue
+as choices; the answer is the worker's model, and skipping leaves the CLI its
+own default. A project that is not a Git repository is named as such on the card, and
 the worker then edits the folder directly. The child's report names the
 worktree and branch; the operator reviews and merges that branch, and nothing
 in the parent's checkout changes.

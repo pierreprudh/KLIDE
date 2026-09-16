@@ -1,6 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AskIcon, SendIcon } from "../../icons";
+import type { QuestionChoices } from "../../agent/types";
+import { providerName } from "../../agent/providers";
+import { listProviderModels } from "../../ipc/aiProviders";
+import { ModelPicker } from "./ModelPicker";
 
 /** Where the card is drawn. `island` is the Focus canvas' right column, under
  *  the plan island; `inline` is the strip above the composer everywhere else,
@@ -9,12 +13,117 @@ export type QuestionCardVariant = "inline" | "island";
 
 type Props = {
   question: string;
+  /** When set, the card is a short list to pick from — drawn as numbered rows
+   *  like the plan's steps — instead of a box to type in. `1`…`4` pick by
+   *  position (by key code, so an AZERTY top row works too). */
+  choices?: QuestionChoices;
   answer: string;
   onAnswerChange: (next: string) => void;
   onSubmit: () => void;
+  /** A clicked row answers with its text at once. */
+  onChoose?: (answer: string) => void;
   onSkip: () => void;
   variant?: QuestionCardVariant;
 };
+
+/** What a choice row says. The CLI's `default` sentinel is the one option
+ *  that is not a model name, so it gets a sentence. */
+export function choiceLabel(option: string, choices: QuestionChoices): { label: string; note?: string } {
+  if (option === "default" && choices.moreModelsFrom) {
+    return { label: `Let ${providerName(choices.moreModelsFrom)} choose`, note: "default" };
+  }
+  return { label: option };
+}
+
+const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
+
+function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean }) {
+  const [models, setModels] = useState<string[]>([]);
+  const provider = choices.moreModelsFrom;
+  useEffect(() => {
+    if (!provider) return;
+    let cancelled = false;
+    listProviderModels(provider)
+      .then((list) => { if (!cancelled) setModels(list); })
+      .catch(() => { if (!cancelled) setModels([]); });
+    return () => { cancelled = true; };
+  }, [provider]);
+  const rowPad = island ? "7px 16px 7px 14px" : "6px 14px 6px 12px";
+  return (
+    <div
+      role="listbox"
+      aria-label="Answers"
+      tabIndex={-1}
+      autoFocus
+      onKeyDown={(e) => {
+        const at = DIGIT_CODES.indexOf(e.code);
+        if (at >= 0 && at < choices.options.length) {
+          e.preventDefault();
+          onChoose(choices.options[at]);
+        }
+      }}
+      style={{ display: "grid", padding: island ? "6px 0 4px" : "4px 0 2px", outline: "none" }}
+    >
+      {choices.options.map((option, index) => {
+        const { label, note } = choiceLabel(option, choices);
+        return (
+          <button
+            key={option}
+            type="button"
+            role="option"
+            aria-selected={false}
+            className="klide-choice-row"
+            onClick={() => onChoose(option)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: rowPad,
+              border: "none",
+              background: "transparent",
+              color: "var(--fg-strong)",
+              font: "inherit",
+              fontSize: island ? 12.5 : 13,
+              textAlign: "left",
+              cursor: "pointer",
+              minWidth: 0,
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 16,
+                height: 16,
+                flexShrink: 0,
+                borderRadius: "50%",
+                border: "1px solid var(--border-strong)",
+                display: "grid",
+                placeItems: "center",
+                fontFamily: "var(--font-mono)",
+                fontSize: 9,
+                color: "var(--fg-dim)",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {index + 1}
+            </span>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: note ? undefined : "var(--font-mono)", fontSize: note ? undefined : 12 }}>{label}</span>
+            {note && <span style={{ color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{note}</span>}
+          </button>
+        );
+      })}
+      {provider && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: rowPad, minWidth: 0 }}>
+          <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, borderRadius: "50%", border: "1px dashed var(--border-strong)" }} />
+          <span style={{ color: "var(--fg-subtle)", fontSize: island ? 12.5 : 13, flexShrink: 0 }}>Another model</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Kit asked something and the run is parked until it hears back.
  *
@@ -28,15 +137,18 @@ type Props = {
  *  surfaces, the same way the plan is one TodoStrip in two placements. */
 export function QuestionCard({
   question,
+  choices,
   answer,
   onAnswerChange,
   onSubmit,
+  onChoose,
   onSkip,
   variant = "inline",
 }: Props) {
   const island = variant === "island";
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const canSend = answer.trim().length > 0;
+  const picking = !!choices && choices.options.length > 0 && !!onChoose;
 
   // The answer box grows with its text the way the composer does, with the
   // same guards: an empty box falls back to its one-row min-height, and a box
@@ -124,7 +236,8 @@ export function QuestionCard({
           style={{ display: "block", height: 1, margin: "10px 0 0", background: "color-mix(in srgb, var(--border) 55%, transparent)" }}
         />
       )}
-      <textarea
+      {picking && <ChoiceRows choices={choices!} onChoose={onChoose!} island={island} />}
+      {!picking && <textarea
         ref={answerRef}
         className="klide-composer-textarea"
         autoFocus
@@ -157,7 +270,7 @@ export function QuestionCard({
           outline: "none",
           display: "block",
         }}
-      />
+      />}
       <div
         style={{
           display: "flex",
@@ -189,7 +302,7 @@ export function QuestionCard({
         >
           Skip
         </button>
-        <button
+        {!picking && <button
           type="button"
           onClick={onSubmit}
           disabled={!canSend}
@@ -212,7 +325,7 @@ export function QuestionCard({
           onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
         >
           <SendIcon size={14} />
-        </button>
+        </button>}
       </div>
     </section>
   );

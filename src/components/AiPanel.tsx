@@ -84,6 +84,7 @@ import type {
   AgentEvent,
   AgentMode,
   ProviderId,
+  QuestionChoices,
   DiffProposal,
   PermissionRequest,
 } from "../agent/types";
@@ -2980,6 +2981,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     runId: string;
     requestId: string;
     question: string;
+    /** Short answers to draw as rows, and a provider whose models the card
+     *  may also offer — a "which model" question carries both. */
+    choices?: QuestionChoices;
   } | null>(null);
   const [questionAnswer, setQuestionAnswer] = useState("");
 
@@ -3304,7 +3308,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           break;
         }
         case "user_question_requested": {
-          setPendingQuestion({ runId: event.runId, requestId: event.requestId, question: event.question });
+          setPendingQuestion({ runId: event.runId, requestId: event.requestId, question: event.question, choices: event.choices });
           setQuestionAnswer("");
           break;
         }
@@ -3891,14 +3895,17 @@ This user request requires workspace inspection. Before answering, you MUST call
   // user_question_resolved event clear the card. The Rust side replaces
   // the literal "(skipped)" with a friendlier marker before returning it
   // to the model — we send the sentinel ourselves for Skip.
-  async function submitQuestion() {
+  // `picked` is a clicked choice: it answers at once, without touching the
+  // typed draft.
+  async function submitQuestion(picked?: string) {
     if (!pendingQuestion) return;
     const snapshot = pendingQuestion;
+    const answer = picked ?? questionAnswer;
     setPendingQuestion(null);
     setPendingPermission(null);
     setQuestionAnswer("");
     try {
-      await resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: questionAnswer });
+      await resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer });
     } catch (err) {
       console.error("Failed to submit answer:", err);
       notify(`Couldn't send your answer: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
@@ -4936,9 +4943,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             <QuestionCard
               variant="island"
               question={pendingQuestion.question}
+              choices={pendingQuestion.choices}
               answer={questionAnswer}
               onAnswerChange={setQuestionAnswer}
               onSubmit={() => void submitQuestion()}
+              onChoose={(picked) => void submitQuestion(picked)}
               onSkip={skipQuestion}
             />
           )}
@@ -4995,9 +5004,11 @@ This user request requires workspace inspection. Before answering, you MUST call
         {pendingQuestion && variant !== "focus" && (
           <QuestionCard
             question={pendingQuestion.question}
+            choices={pendingQuestion.choices}
             answer={questionAnswer}
             onAnswerChange={setQuestionAnswer}
             onSubmit={() => void submitQuestion()}
+            onChoose={(picked) => void submitQuestion(picked)}
             onSkip={skipQuestion}
           />
         )}

@@ -19,6 +19,12 @@ Notable changes per milestone. Dates are completion dates.
   gets the report plus the branch to review; nothing in its checkout changes.
   With a worker the editing roles `implementer` and `tester` are allowed;
   without one the tool stays read-only on the parent's model, as before.
+- **A worker with no model named asks which one.** Before the dispatch card,
+  the question card offers the CLI's own default first, the next two models
+  its cache lists, and the whole catalogue behind the model picker — drawn as
+  numbered rows like the plan, picked with a click or `1`…`4`. Skipping is the
+  CLI's default; a model the call named is not re-asked. The same rows serve
+  `userAnswerQuestion`, which gains an optional `choices` list.
 
 ### Agent coordination
 

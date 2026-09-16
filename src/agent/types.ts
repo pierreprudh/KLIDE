@@ -121,6 +121,11 @@ export type PermissionOption = {
   scope?: "once" | "run" | "project" | "user";
 };
 
+export type QuestionChoices = {
+  options: string[];
+  moreModelsFrom?: ProviderId;
+};
+
 export type PermissionRequest = {
   id: string;
   runId: string;
@@ -265,7 +270,10 @@ export type AgentEvent =
   | { type: "artifact_produced"; runId: string; path: string; bytes: number; created: boolean; ts: number }
   | { type: "run_result"; runId: string; result: AgentRunResult; ts: number }
   | { type: "run_error"; runId: string; error: AgentError; ts: number }
-  | { type: "user_question_requested"; runId: string; requestId: string; question: string; ts: number }
+  /** `choices`, when present, are short answers the card draws as rows; a click
+   *  answers with the row's text. `moreModelsFrom` names a provider whose whole
+   *  catalogue the card also offers through the model picker. */
+  | { type: "user_question_requested"; runId: string; requestId: string; question: string; choices?: QuestionChoices; ts: number }
   | { type: "user_question_resolved"; runId: string; requestId: string; answer: string; ts: number }
   /** `worker` and `branch` are set when the call handed the task to a Delegate
    *  CLI: the worker id, and the worktree branch it edits on (absent when the

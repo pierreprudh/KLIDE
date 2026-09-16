@@ -8448,3 +8448,15 @@ button:focus-visible .menu-leadout {
 
 .ai-agent-open { border: 0; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 2px 4px; }
 .ai-agent-open:disabled { display: none; }
+
+/* Question card choice rows — a picked answer is one click; hover is the
+   soft-fill every list row in the app wears, no border, no chip. */
+.klide-choice-row {
+  border-radius: var(--radius-sm);
+  transition: background var(--motion-fast) var(--ease-out);
+}
+.klide-choice-row:hover,
+.klide-choice-row:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
