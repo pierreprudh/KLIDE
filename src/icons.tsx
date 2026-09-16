@@ -24,6 +24,8 @@ import type { CSSProperties } from "react";
 import type { Icon as PhosphorGlyph } from "@phosphor-icons/react";
 
 import { Code } from "@phosphor-icons/react/dist/csr/Code";
+import { DotsThree } from "@phosphor-icons/react/dist/csr/DotsThree";
+import { PushPinSimple } from "@phosphor-icons/react/dist/csr/PushPinSimple";
 import { Copy } from "@phosphor-icons/react/dist/csr/Copy";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
 import { ArrowsOut } from "@phosphor-icons/react/dist/csr/ArrowsOut";
@@ -198,6 +200,16 @@ export function CloseIcon(p: GlyphProps) {
  *  row it sits on does not come back. */
 export function DeleteIcon(p: GlyphProps) {
   return <Icon as={Trash} {...p} />;
+}
+
+/** "More" — the rest of a row's actions, folded behind three dots. */
+export function MoreIcon(p: GlyphProps) {
+  return <Icon as={DotsThree} {...p} />;
+}
+
+/** A conversation the person keeps at the top of its group. */
+export function PinIcon(p: GlyphProps) {
+  return <Icon as={PushPinSimple} {...p} />;
 }
 
 /** Attaching a photo or a document to a turn. */

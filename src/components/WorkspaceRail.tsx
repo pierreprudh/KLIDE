@@ -40,7 +40,15 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { CloseIcon, DeleteIcon, FolderIcon, MissionIcon, SearchIcon, SidebarIcon } from "../icons";
+import { CloseIcon, FolderIcon, MoreIcon, PinIcon, SearchIcon, SidebarIcon } from "../icons";
+import { ContextMenu, type MenuItem } from "./ContextMenu";
+import {
+  forgetPinnedConversation,
+  orderPinnedFirst,
+  pinnedConversationIds,
+  subscribePinnedConversations,
+  togglePinnedConversation,
+} from "../pinnedConversations";
 import { Z } from "../zLayers";
 import { beginDragSession } from "../dragSession";
 import { SETTINGS, getSetting, useSetting } from "../settingsStore";
@@ -442,6 +450,8 @@ function ConvoRow({
   onOpen,
   onInspect,
   onDelete,
+  pinned = false,
+  onTogglePin,
   indent = false,
   selected = false,
   selectedEnd = false,
@@ -451,12 +461,14 @@ function ConvoRow({
 }: {
   convo: Conversation;
   onOpen: () => void;
-  /** Remove this conversation from local history. Revealed on hover in the
-   *  trailing slot, where the timestamp was — the row keeps one trailing mark. */
+  /** Remove this conversation from local history. Offered, with the other
+   *  actions, behind the row's ⋯ menu — the row keeps one trailing mark. */
   onDelete?: () => void;
-  /** Open this conversation in Mission Control rather than a panel. Shares
-   *  the hover-revealed trailing slot with delete, one step inward. */
+  /** Open this conversation in Mission Control rather than a panel. */
   onInspect?: () => void;
+  /** Kept at the top of its group. Shown as a pin where the timestamp was. */
+  pinned?: boolean;
+  onTogglePin?: () => void;
   indent?: boolean;
   selected?: boolean;
   /** The last selected row in this group — where the active route peels into
@@ -484,6 +496,17 @@ function ConvoRow({
   // Captured once: see `useEntranceValue`. Recomputing this from the row's
   // current index is what made the tree replay on every list update.
   const entranceDelay = useEntranceValue(revealDelay);
+  // Where the ⋯ menu is open, if it is. Anchored under the button it came
+  // from, or at the pointer for a right-click on the row.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const menuItems: MenuItem[] = [];
+  if (onTogglePin) menuItems.push({ type: "item", label: pinned ? "Unpin" : "Pin", onSelect: onTogglePin });
+  if (onInspect) menuItems.push({ type: "item", label: "Open in Mission Control", onSelect: onInspect });
+  if (onDelete) {
+    if (menuItems.length > 0) menuItems.push({ type: "separator" });
+    menuItems.push({ type: "item", label: "Delete", danger: true, onSelect: onDelete });
+  }
+  const hasMenu = menuItems.length > 0 && !running;
 
   return (
     /* The row is a plain box around two buttons, because a button cannot hold
@@ -497,8 +520,17 @@ function ConvoRow({
       data-selected-end={selectedEnd || undefined}
       data-open={(open && !selected) || undefined}
       data-selected-path={onSelectedPath || undefined}
+      data-menu-open={menuAt ? true : undefined}
       /* How the slide finds this row again after the list re-sorts. */
       data-convo-id={convo.id}
+      onContextMenu={
+        hasMenu
+          ? (e) => {
+              e.preventDefault();
+              setMenuAt({ x: e.clientX, y: e.clientY });
+            }
+          : undefined
+      }
       style={
         entranceDelay ? ({ "--rail-reveal-delay": entranceDelay } as CSSProperties) : undefined
       }
@@ -546,44 +578,38 @@ function ConvoRow({
             <span className="klide-focus-convo-live">
               <DotGridLoader size={11} color="var(--accent)" label="Running" />
             </span>
+          ) : pinned ? (
+            <span className="klide-focus-convo-time klide-focus-convo-pinned" title="Pinned" aria-label="Pinned">
+              <PinIcon size={11} />
+            </span>
           ) : (
             <span className="klide-focus-convo-time">{relativeTime(convo.updatedAt)}</span>
           )}
         </span>
       </button>
-      {/* Same slot, on hover: the timestamp steps aside and the actions take
-          its place — inspect one step inward, delete at the edge, so the
-          destructive one is never the first thing the pointer meets. Neither
-          is offered while the run is live: its snapshot is still being
-          written, and the loader already owns the slot. */}
-      {onInspect && !running ? (
+      {/* Same slot, on hover: the timestamp steps aside and one ⋯ takes its
+          place, holding the rest — pin, inspect, delete — so the row itself
+          never grows a second or third mark. Not offered while the run is
+          live: its snapshot is still being written, and the loader already
+          owns the slot. */}
+      {hasMenu ? (
         <button
           type="button"
-          className="klide-focus-convo-inspect"
-          title="Open in Mission Control"
-          aria-label={`Open “${convo.title || "Untitled"}” in Mission Control`}
+          className="klide-focus-convo-more"
+          title="More"
+          aria-label={`More actions for “${convo.title || "Untitled"}”`}
+          aria-haspopup="menu"
+          aria-expanded={menuAt ? true : undefined}
           onClick={(e) => {
             e.stopPropagation();
-            onInspect();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setMenuAt({ x: rect.right - 190, y: rect.bottom + 4 });
           }}
         >
-          <MissionIcon size={13} />
+          <MoreIcon size={15} />
         </button>
       ) : null}
-      {onDelete && !running ? (
-        <button
-          type="button"
-          className="klide-focus-convo-delete"
-          title="Delete conversation"
-          aria-label={`Delete conversation “${convo.title || "Untitled"}”`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-        >
-          <DeleteIcon size={13} />
-        </button>
-      ) : null}
+      {menuAt ? <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onClose={() => setMenuAt(null)} /> : null}
     </div>
   );
 }
@@ -772,6 +798,8 @@ function ProviderHistoryGroup({
   onOpen,
   onInspect,
   onDelete,
+  pinnedConversationIds: pinnedIds,
+  onTogglePin,
 }: {
   group: ProviderHistory;
   expanded: boolean;
@@ -789,8 +817,16 @@ function ProviderHistoryGroup({
   onOpen: (conversation: Conversation) => void;
   onInspect?: (conversation: Conversation) => void;
   onDelete: (conversation: Conversation) => void;
+  /** Kept at the top of the group, and always inside its collapsed window. */
+  pinnedConversationIds: ReadonlySet<string>;
+  onTogglePin: (conversation: Conversation) => void;
 }) {
   const [showAllConversations, setShowAllConversations] = useState(false);
+  // Pinned rows lead; recency orders the rest, held by `keepOrder` upstream.
+  const orderedConversations = useMemo(
+    () => orderPinnedFirst(group.conversations, pinnedIds),
+    [group.conversations, pinnedIds],
+  );
   const conversationListRef = useRef<HTMLDivElement>(null);
   const groupEntranceDelay = useEntranceValue(
     revealDelay(revealIndex, PROVIDER_REVEAL_STEP_MS),
@@ -799,7 +835,7 @@ function ProviderHistoryGroup({
   // A re-sort moves rows; this carries them there. The order string is the
   // whole point — the effect must run when the sequence changes, not when a
   // title or a timestamp does.
-  useRowSlide(conversationListRef, group.conversations.map((c) => c.id).join());
+  useRowSlide(conversationListRef, orderedConversations.map((c) => c.id).join());
   const disclosureStartHeightRef = useRef<number | null>(null);
   const disclosureAnimationRef = useRef<Animation | null>(null);
   // "Read only" used to mean "a delegate provider", because Focus could not run
@@ -818,9 +854,9 @@ function ProviderHistoryGroup({
   // Everything loaded in a panel is pinned into the collapsed window — the
   // selected one included, since the host always reports it as open too.
   const visibleConversations = visibleProviderConversations(
-    group.conversations,
+    orderedConversations,
     showAllConversations,
-    openConversationIds,
+    new Set([...openConversationIds, ...pinnedIds]),
   );
   // The active route runs from the group's junction down to the *last*
   // selected row. Taking the last rather than the first is what lets two
@@ -962,6 +998,8 @@ function ProviderHistoryGroup({
                   onOpen={() => onOpen(conversation)}
                   onInspect={onInspect ? () => onInspect(conversation) : undefined}
                   onDelete={() => onDelete(conversation)}
+                  pinned={pinnedIds.has(conversation.id)}
+                  onTogglePin={() => onTogglePin(conversation)}
                 />
               );
             })}
@@ -1126,6 +1164,14 @@ export function WorkspaceRail({
   const [convos, setConvos] = useState<Conversation[]>(
     () => loadConversations<Conversation>(),
   );
+  const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(() => pinnedConversationIds());
+  useEffect(
+    () => subscribePinnedConversations(() => setPinnedIds(pinnedConversationIds())),
+    [],
+  );
+  function togglePin(conversation: Conversation) {
+    togglePinnedConversation(conversation.id);
+  }
 
   // Same-window localStorage writes do not emit the browser's `storage`
   // event. AiPanel publishes this focused index event after the first durable
@@ -1257,6 +1303,7 @@ export function WorkspaceRail({
    *  it publishes the deletion, so any panel showing the thread drops it
    *  before its next persist could write it back. */
   function deleteHistoryConversation(conversation: Conversation) {
+    forgetPinnedConversation(conversation.id);
     forgetStoredConversation(conversation.id);
     deleteKlideConvo(conversation.id);
     setConvos(loadConversations<Conversation>());
@@ -1494,6 +1541,8 @@ export function WorkspaceRail({
                             : undefined
                         }
                         onDelete={() => deleteHistoryConversation(c)}
+                        pinned={pinnedIds.has(c.id)}
+                        onTogglePin={() => togglePin(c)}
                       />
                     ))}
                   </div>
@@ -1572,6 +1621,8 @@ export function WorkspaceRail({
                                   onOpen={openHistoryConversation}
                                   onInspect={onOpenConversationInMissionControl}
                                   onDelete={deleteHistoryConversation}
+                                  pinnedConversationIds={pinnedIds}
+                                  onTogglePin={togglePin}
                                 />
                               );
                             })}
