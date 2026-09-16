@@ -63,6 +63,7 @@ export type SettingsSectionId =
   | "ai"
   | "local-ai"
   | "api"
+  | "connectors"
   | "subscription"
   | "editor"
   | "terminal"
