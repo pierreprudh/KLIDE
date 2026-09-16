@@ -109,6 +109,25 @@ function stringArg(args: unknown, key: string): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/** The Delegate each worker child of this conversation runs as, by child Run
+ *  id. A `spawn_subagent` call that named a `worker` becomes a child whose id
+ *  is `sub_<parent>_<call id>` — the Rust handler's rule — and the journal
+ *  registration that lists the child carries no provider, so this is where
+ *  the participants strip learns to draw Claude Code's mark rather than a
+ *  generic one. */
+export function workerChildrenOf(msgs: Msg[], selfId: string): Map<string, string> {
+  const workers = new Map<string, string>();
+  for (const m of msgs) {
+    if (m.role !== "assistant") continue;
+    for (const call of m.toolCalls ?? []) {
+      if (call.name !== "spawn_subagent") continue;
+      const worker = stringArg(call.args, "worker");
+      if (worker && call.id) workers.set(`sub_${selfId}_${call.id}`, worker);
+    }
+  }
+  return workers;
+}
+
 /** Distinct Run ids this conversation has exchanged messages with, in first-
  *  contact order — the sender side from its own `agent_*` calls, the receiver
  *  side from delivery markers. The operator is not a peer. */

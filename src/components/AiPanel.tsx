@@ -3124,6 +3124,8 @@ This user request requires workspace inspection. Before answering, you MUST call
      *  envelope — so the pre-turn card for the same message is not drawn twice.
      *  For a worker dispatch: who is being sent and as what. */
     peer?: string;
+    /** For a worker dispatch: the Delegate's provider id, for its mark. */
+    worker?: ProviderId;
     envelopeId?: string;
     summary: string;
     reason: string;
@@ -3172,6 +3174,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       peer: isMessage ? peerName(input.fromRunId!, peerIndex)
         : isWorker ? `${input.workerLabel ?? input.worker} · ${input.subagent ?? "worker"}`
           : undefined,
+      worker: isWorker ? (input.worker as ProviderId) : undefined,
       envelopeId: isMessage ? input.envelopeId : undefined,
       summary: req.summary ?? command,
       reason: req.reason ?? "",
@@ -4978,6 +4981,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onReject={rejectCommand}
             onApproveOnce={() => approveCommand("once")}
             peer={pendingPermission.peer}
+            worker={pendingPermission.worker}
             onApproveForRun={pendingPermission.kind === "worker" ? undefined : () => approveCommand("run")}
             onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}

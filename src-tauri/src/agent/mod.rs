@@ -747,9 +747,20 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
         return;
     }
     let subject = format!("klide: {}", title_from_text(&summary.title));
+    // A Delegate worker on the CLI's own default model records "default" as
+    // its model; the co-author line should name who wrote the code, so fall
+    // back to the provider's label ("Claude Code"), then to the provider id.
+    let author = if summary.model.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL) {
+        crate::providers::lookup(&summary.provider)
+            .and_then(|p| p.subscription)
+            .map(|s| s.label.to_string())
+            .unwrap_or_else(|| summary.provider.clone())
+    } else {
+        summary.model.clone()
+    };
     let message = format!(
-        "{subject}\n\nKlide agent run {}\nCo-Authored-By: {} <noreply@klide.local>",
-        summary.id, summary.model
+        "{subject}\n\nKlide agent run {}\nCo-Authored-By: {author} <noreply@klide.local>",
+        summary.id
     );
     if std::process::Command::new("git")
         .args(["-C", cwd, "add", "-A"])

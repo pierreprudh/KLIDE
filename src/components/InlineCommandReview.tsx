@@ -1,4 +1,6 @@
 import { type ReactNode } from "react";
+import type { ProviderId } from "../agent/types";
+import { ProviderLogo } from "./ai/icons";
 
 type Props = {
   command: string;
@@ -6,6 +8,9 @@ type Props = {
   /** For a message: the peer it goes to, by thread title. For a worker
    *  dispatch: who is being sent and as what — "Claude Code · implementer". */
   peer?: string;
+  /** For a worker dispatch: the Delegate's provider id, so the card wears its
+   *  mark in front of the name — the same logo the picker and the rail use. */
+  worker?: ProviderId;
   detail?: string;
   externalPaths?: string[];
   onReject: () => void;
@@ -70,6 +75,7 @@ export function InlineCommandReview({
   command,
   kind = "command",
   peer,
+  worker,
   detail,
   externalPaths = [],
   onReject,
@@ -126,7 +132,12 @@ export function InlineCommandReview({
         >
           {kind === "command" && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
           {kind === "message" && peer && <span style={{ color: "var(--accent)", fontWeight: 500 }}>@{peer} </span>}
-          {kind === "worker" && peer && <span style={{ color: "var(--accent)", fontWeight: 500 }}>{peer} → </span>}
+          {kind === "worker" && peer && (
+            <span style={{ color: "var(--accent)", fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "bottom" }}>
+              {worker && <ProviderLogo id={worker} size={14} />}
+              <span>{peer} →</span>
+            </span>
+          )}{kind === "worker" && peer && " "}
           {command}
         </span>
         {(detail || externalPaths.length > 0) && (
