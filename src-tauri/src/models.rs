@@ -487,7 +487,7 @@ pub(crate) async fn resolve_context_window(provider: &str, model: &str) -> usize
     fallback_context_window(provider, model)
 }
 
-fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<Vec<String>, String> {
+pub(crate) fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<Vec<String>, String> {
     // Confirm the CLI is reachable before returning any model list.
     // Without this guard, a "Check the Claude Code install" UI
     // (or the AiPanel's provider chip) would happily display a stale

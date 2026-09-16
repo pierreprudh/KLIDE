@@ -8,6 +8,7 @@
 //! memory.
 
 use super::*;
+use super::types::QuestionChoices;
 
 /// Pause tool (`userAnswerQuestion`): ask the user a typed question and feed
 /// their verbatim answer back to the model. "(skipped)" is the sentinel the
@@ -80,6 +81,27 @@ where
         .and_then(|v| v.as_str())
         .unwrap_or("(empty question)")
         .to_string();
+    // Up to four short answers, drawn as rows. More than that is a menu, not
+    // a question, and the card has no room for one.
+    let options: Vec<String> = call
+        .input
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .take(4)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let choices = (!options.is_empty()).then(|| QuestionChoices {
+        options,
+        more_models_from: None,
+    });
     let Some(answer) = run_pause_tool(
         ctx,
         call,
@@ -90,6 +112,7 @@ where
             run_id: ctx.id.to_string(),
             request_id: request_id.to_string(),
             question: question.clone(),
+            choices: choices.clone(),
             ts: now_ms(),
         },
         |request_id, answer| AgentEvent::UserQuestionResolved {
@@ -209,6 +232,64 @@ where
     }
 
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
+
+    // A worker with no model named is a question for the user, not a default
+    // to assume: "default" hands the choice to the CLI, and the user may want
+    // the strong model for this task or the cheap one. Asked through the same
+    // question pause Kit uses, with the CLI's own default first, the two next
+    // models its cache lists, and the whole catalogue behind the card's picker.
+    // Skipping is the CLI's default. A model named by the call is not re-asked.
+    let mut chosen_model: Option<String> = model_arg.map(str::to_string);
+    if let (Some(worker), None) = (worker, chosen_model.as_deref()) {
+        let label = worker_label(worker.id());
+        let spec = crate::providers::lookup(worker.id()).and_then(|p| p.subscription);
+        let listed: Vec<String> = match spec {
+            Some(spec) => crate::blocking::run(move || crate::models::subscription_models(&spec))
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut options = vec![crate::delegate::CLI_DEFAULT_MODEL.to_string()];
+        options.extend(
+            listed
+                .into_iter()
+                .filter(|m| !m.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+                .take(2),
+        );
+        let Some(answer) = run_pause_tool(
+            ctx,
+            call,
+            emit,
+            "q",
+            crate::delegate::CLI_DEFAULT_MODEL,
+            |request_id| AgentEvent::UserQuestionRequested {
+                run_id: ctx.id.to_string(),
+                request_id: request_id.to_string(),
+                question: format!("Which model should {label} use for this task?"),
+                choices: Some(QuestionChoices {
+                    options: options.clone(),
+                    more_models_from: Some(worker.id().to_string()),
+                }),
+                ts: now_ms(),
+            },
+            |request_id, answer| AgentEvent::UserQuestionResolved {
+                run_id: ctx.id.to_string(),
+                request_id: request_id.to_string(),
+                answer: answer.to_string(),
+                ts: now_ms(),
+            },
+        )
+        .await?
+        else {
+            return Ok(ToolOutcome::Cancelled);
+        };
+        let answer = answer.trim();
+        chosen_model = (!answer.is_empty()
+            && answer != "(skipped)"
+            && !answer.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+        .then(|| answer.to_string());
+    }
+    let model_arg: Option<&str> = chosen_model.as_deref();
 
     // A worker is dispatched, not spawned: the user approves it first, and it
     // gets a worktree of its own. Both happen here, before anything starts.

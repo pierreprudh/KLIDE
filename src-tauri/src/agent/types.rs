@@ -356,6 +356,18 @@ pub struct AgentTurnTiming {
 
 /// One button on a permission card. `option_id` goes out as `optionId` — the
 /// name the frontend mirror got wrong for as long as this was an untyped
+/// The short list a question may put to the user beside free text. `options`
+/// are drawn as rows and clicked; `more_models_from` names a provider whose
+/// whole catalogue the card should also offer through the model picker, for a
+/// question that is really "which model".
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionChoices {
+    pub options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more_models_from: Option<String>,
+}
+
 /// `serde_json::Value` and nothing read the field.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -713,6 +725,11 @@ pub enum AgentEvent {
         run_id: String,
         request_id: String,
         question: String,
+        /// Answers the card offers as rows, when the question has a short
+        /// list of right answers — which model a worker should use, say. A
+        /// click answers with the row's text; free text stays possible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        choices: Option<QuestionChoices>,
         ts: i64,
     },
     UserQuestionResolved {

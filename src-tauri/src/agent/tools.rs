@@ -1014,7 +1014,8 @@ fn registry() -> Vec<ToolEntry> {
             kind: ToolKind::Pause,
             schema: schema("userAnswerQuestion", "Pause the run and ask the user a single free-form question. The user's typed answer is returned as the tool result. Use this to capture tribal knowledge — design decisions, naming rationale, project history — that isn't in the code or README. One question at a time; the harness queues follow-ups on the next turn.",
                 serde_json::json!({
-                    "question": { "type": "string", "description": "The question to ask. One sentence, focused on something only the user can answer." }
+                    "question": { "type": "string", "description": "The question to ask. One sentence, focused on something only the user can answer." },
+                    "choices": { "type": "array", "items": { "type": "string" }, "description": "Optional. Up to four short answers the user can pick with one click instead of typing. The picked text comes back as the answer; the user may still type something else." }
                 }),
                 &["question"]),
             run_read: None,
