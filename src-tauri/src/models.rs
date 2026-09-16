@@ -755,13 +755,21 @@ pub(crate) fn codex_cached_models() -> Option<Vec<String>> {
 }
 
 fn codex_cached_models_in(home: &std::path::Path) -> Option<Vec<String>> {
-    let mut models: Vec<String> = codex_manifest_models_in(home)?
+    // In the CLI's own order — the manifest's `priority`, its default first —
+    // not alphabetical: a card that shows the first few rows should show the
+    // ones Codex itself would lead with, and the manifest says nothing about
+    // which a given plan may run, so the CLI's ranking is the best signal.
+    let mut ranked: Vec<(u64, String)> = codex_manifest_models_in(home)?
         .iter()
         .filter(|model| model.get("visibility").and_then(|v| v.as_str()) != Some("hide"))
-        .filter_map(|model| model.get("slug").and_then(|slug| slug.as_str()))
-        .map(str::to_string)
+        .filter_map(|model| {
+            let slug = model.get("slug").and_then(|slug| slug.as_str())?;
+            let priority = model.get("priority").and_then(|p| p.as_u64()).unwrap_or(u64::MAX);
+            Some((priority, slug.to_string()))
+        })
         .collect();
-    models.sort();
+    ranked.sort();
+    let mut models: Vec<String> = ranked.into_iter().map(|(_, slug)| slug).collect();
     models.dedup();
     if models.is_empty() {
         None
@@ -1610,7 +1618,8 @@ mod tests {
         // A model that isn't in the manifest at all is unknown, not empty.
         assert!(codex_reasoning_levels_in(&home, "gpt-9-imaginary").is_none());
 
-        // The picker lists what the CLI would show: hidden rows stay hidden.
+        // The picker lists what the CLI would show, in the CLI's order: hidden
+        // rows stay hidden, a ranked row leads an unranked one.
         assert_eq!(
             codex_cached_models_in(&home).unwrap(),
             vec!["gpt-6-astra", "gpt-plain"]

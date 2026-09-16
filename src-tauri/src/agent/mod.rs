@@ -7193,7 +7193,7 @@ mod worker_dispatch_tests {
         let asked = questions(&events);
         assert_eq!(asked.len(), 1, "every dispatch is put to the user");
         let (question, choices) = &asked[0];
-        assert!(question.contains("Codex") && question.contains("gpt-5.4"), "asks to confirm what Kit named: {question}");
+        assert!(question.contains("Codex") && question.starts_with("Which model"), "a which-question, with Kit's pick current: {question}");
         let choices = choices.clone().unwrap();
         assert_eq!(choices.preselected.as_deref(), Some("codex"));
         assert_eq!(choices.preselected_model.as_deref(), Some("gpt-5.4"));

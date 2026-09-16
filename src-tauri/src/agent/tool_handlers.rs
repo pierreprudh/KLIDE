@@ -242,10 +242,11 @@ where
                 options.insert(0, named);
             }
         }
-        let question = match (worker, chosen_model.as_deref()) {
-            (Some(worker), Some(model)) => format!("Send {} on {model} as {}?", worker.label(), def.id),
-            (Some(worker), None) => format!("Which model should {} use for this task?", worker.label()),
-            (None, _) => format!("Which agent should take this as {}, and on which model?", def.id),
+        // A card of rows is a which-question, never a yes/no: with Kit's
+        // pick current, "which model" still reads right and "send X?" does not.
+        let question = match worker {
+            Some(worker) => format!("Which model should {} use as {}?", worker.label(), def.id),
+            None => format!("Which agent should take this as {}, and on which model?", def.id),
         };
         let Some(answer) = run_pause_tool(
             ctx,
