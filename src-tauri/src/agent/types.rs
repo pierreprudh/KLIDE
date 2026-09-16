@@ -330,6 +330,11 @@ pub struct AgentUsage {
     /// conversations and Mission Control show the same cost the live panel did.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cost_usd: Option<f64>,
+    /// The context window this turn ran in (Ollama's sized `num_ctx`). The
+    /// gauge's denominator, when present; absent for hosted providers whose
+    /// window is a fixed property of the model.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_window: Option<u64>,
 }
 
 /// Wall-clock timing for one provider turn, measured in the harness around the
@@ -789,10 +794,12 @@ mod tests {
             eval_duration_ms: Some(450),
             prompt_eval_duration_ms: None,
             cost_usd: None,
+            context_window: Some(32_768),
         };
         let v = serde_json::to_value(&u).expect("serialize");
         assert_eq!(v["promptTokens"], 120);
         assert_eq!(v["evalDurationMs"], 450);
+        assert_eq!(v["contextWindow"], 32_768);
         // None fields must not appear on the wire — keeps the channel
         // shape stable for older frontend builds that ignore unknown
         // keys but log warnings on unexpected ones.
@@ -828,6 +835,7 @@ mod tests {
                 eval_duration_ms: Some(200),
                 prompt_eval_duration_ms: None,
                 cost_usd: None,
+                context_window: None,
             }),
             timing: None,
             ts: 1_700_000_000,

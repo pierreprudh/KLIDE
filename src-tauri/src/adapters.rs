@@ -302,6 +302,8 @@ impl StreamingProvider for OllamaAdapter {
                 prompt_eval_duration_ms: count("prompt_eval_duration").map(|ns| ns / 1_000_000),
                 // Local models are free — no billed cost to report.
                 cost_usd: None,
+                // The window this request ran in — what `build_request` sent.
+                context_window: self.num_ctx.map(|n| n as u64),
             };
             self.stop_reason = value
                 .get("done_reason")
@@ -601,6 +603,8 @@ impl StreamingProvider for OpenAiAdapter {
                     // OpenRouter reports the real charged cost here; other
                     // OpenAI-wire providers omit it (priced from the table).
                     cost_usd: usage.get("cost").and_then(|v| v.as_f64()),
+                    // A hosted window is the model's, not the request's.
+                    context_window: None,
                 };
             }
         }
@@ -1336,6 +1340,38 @@ mod tests {
         );
         // No hint → None, so the caller uses exponential backoff.
         assert_eq!(retry_after_from_body("some other error"), None);
+    }
+
+    #[test]
+    fn ollama_final_frame_reports_the_window_the_request_ran_in() {
+        // The gauge divides by this number. It must be the `num_ctx` that
+        // `build_request` sent — the sized working window — not the model's
+        // trained max the frontend detected.
+        let mut adapter = OllamaAdapter {
+            model: "llama3.1:8b".into(),
+            messages: vec![],
+            tools: None,
+            num_ctx: Some(32_768),
+            num_predict: None,
+            think: None,
+            usage: AiUsage::default(),
+            stop_reason: None,
+        };
+        let mut content = String::new();
+        let mut thinking = String::new();
+        let mut tools = Vec::new();
+        adapter
+            .parse_line(
+                r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":900,"eval_count":40}"#,
+                &mut content,
+                &mut thinking,
+                &mut tools,
+                &|_| {},
+            )
+            .expect("final frame parses");
+        let usage = adapter.finalize_response(content, thinking, tools).usage.expect("usage");
+        assert_eq!(usage.context_window, Some(32_768));
+        assert_eq!(usage.prompt_tokens, Some(900));
     }
 
     #[test]

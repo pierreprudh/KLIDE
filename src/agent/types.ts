@@ -92,6 +92,10 @@ export type AgentUsage = {
    *  sends the real charged amount), else estimated from the pricing table.
    *  Absent for local / subscription / unknown-price models. */
   costUsd?: number;
+  /** The context window this turn ran in — Ollama's sized `num_ctx`. The
+   *  gauge's denominator when present. Absent for hosted providers, whose
+   *  window is a fixed property of the model. */
+  contextWindow?: number;
 };
 
 /** Provider-turn timing measured by the Rust harness around the provider call

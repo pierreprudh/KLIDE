@@ -937,6 +937,15 @@ pub(crate) struct AiUsage {
     /// priced from the local table instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cost_usd: Option<f64>,
+    /// The context window this turn actually ran in, in tokens. Ollama sizes
+    /// `num_ctx` per request (`adapters::working_num_ctx`): a flat working
+    /// window that grows with the conversation up to the model's trained max
+    /// or the user's cap. The gauge must divide by *this*, not by the trained
+    /// max — a 30k conversation in a 32k window is nearly full, not 23% of
+    /// 128k. `None` for hosted providers, whose window is fixed per model and
+    /// not something a request can set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) context_window: Option<u64>,
 }
 
 impl AiUsage {
@@ -946,6 +955,7 @@ impl AiUsage {
             && self.eval_duration_ms.is_none()
             && self.prompt_eval_duration_ms.is_none()
             && self.cost_usd.is_none()
+            && self.context_window.is_none()
     }
 }
 

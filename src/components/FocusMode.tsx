@@ -28,9 +28,15 @@ import {
   modelSupportsTools as queryModelSupportsTools,
   modelSupportsVision as queryModelSupportsVision,
   readLocalProviderStatus,
+  readProviderContextWindow,
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
+import {
+  contextCapOptions,
+  contextControlLabel,
+  providerHasContextWindowSetting,
+} from "./ai/contextWindow";
 import {
   reflectionBarLevel,
   reflectionCaption,
@@ -957,20 +963,6 @@ function effortOptionsFor(levels: readonly string[]): MenuOption[] {
   ];
 }
 
-const CONTEXT_OPTIONS: MenuOption[] = [
-  { label: "Auto", value: undefined, caption: "Detected from the model" },
-  { label: "8K", value: 8192 },
-  { label: "16K", value: 16384 },
-  { label: "32K", value: 32768 },
-  { label: "64K", value: 65536 },
-  { label: "128K", value: 131072 },
-];
-
-function contextLabel(window: number | undefined): string {
-  if (window === undefined) return "auto ctx";
-  return `${Math.round(window / 1024)}K ctx`;
-}
-
 /* ------------------------------------------------------------------- home */
 
 type StarterKind = "explore" | "build" | "review" | "fix" | "resume";
@@ -1451,6 +1443,11 @@ function FocusComposer({
   // opencode / omp), and the control stays off the composer entirely rather
   // than offering a knob nothing reads.
   const [effortLevels, setEffortLevels] = useState<string[]>([]);
+  // The window this model is trained to. For Ollama it bounds the cap picker;
+  // for everyone else it is the whole story, shown and not picked — a hosted
+  // API has no request field for a smaller window, and a self-hosted server
+  // owns its own. 0 until detected.
+  const [detectedWindow, setDetectedWindow] = useState(0);
   const taRef = useRef<HTMLTextAreaElement>(null);
   // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
   const [slash, setSlash] = useState<{ query: string } | null>(null);
@@ -1529,6 +1526,21 @@ function FocusComposer({
       })
       .catch(() => {
         if (!cancelled) setSupportsTools(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, model]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDetectedWindow(0);
+    readProviderContextWindow(provider, model)
+      .then((window) => {
+        if (!cancelled && Number.isFinite(window) && window > 0) setDetectedWindow(window);
+      })
+      .catch(() => {
+        /* the label reads "auto ctx" until the model is reachable */
       });
     return () => {
       cancelled = true;
@@ -1864,25 +1876,44 @@ function FocusComposer({
                 onSelect={(v) => onEffortChange(v === undefined ? undefined : String(v))}
               />
             )}
-            <InlineMenu
-              label="Context window"
-              display={contextLabel(contextWindow)}
-              header={{
-                icon: <ContextGaugeIcon />,
-                title: "Context window",
-                // Klide can't set the window on a self-hosted OpenAI-wire
-                // endpoint — the server owns it (num_ctx in a Modelfile, and
-                // so on). Say so here rather than let the override read as
-                // if it reached the server. Same signal the AI panel gives.
-                caption: isCustomProvider(provider)
-                  ? "Set server-side for a self-hosted endpoint"
-                  : "Override the auto-detected window",
-              }}
-              width={200}
-              options={CONTEXT_OPTIONS}
-              selected={contextWindow}
-              onSelect={(v) => onContextWindowChange(typeof v === "number" ? v : undefined)}
-            />
+            {providerHasContextWindowSetting(provider) ? (
+              <InlineMenu
+                label="Context window"
+                display={contextControlLabel(contextWindow, detectedWindow)}
+                header={{
+                  icon: <ContextGaugeIcon />,
+                  title: "Context window",
+                  caption: "Cap the working window Klide asks Ollama for",
+                }}
+                width={236}
+                options={contextCapOptions(detectedWindow)}
+                selected={contextWindow}
+                onSelect={(v) => onContextWindowChange(typeof v === "number" ? v : undefined)}
+              />
+            ) : (
+              // Not a control: a hosted model's window is fixed by the
+              // provider, and a self-hosted server sets its own. Picking a
+              // size here used to change the label and nothing else.
+              <span
+                title={
+                  isCustomProvider(provider)
+                    ? "Context window — set on the server for a self-hosted endpoint"
+                    : "Context window — fixed by the provider for this model"
+                }
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  height: 24,
+                  padding: "0 5px",
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: "var(--fg-dim)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {contextControlLabel(undefined, detectedWindow)}
+              </span>
+            )}
             <button
               type="button"
               onClick={submit}
