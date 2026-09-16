@@ -248,7 +248,7 @@ Klide/
 │       ├── capacityPlanner.ts   Concurrency slots per run kind — admit, queue, defer
 │       ├── validationContracts.ts Validation contract model — checks, reviewers, status
 │       ├── advisor.ts           Advisor escalation config (advisorConsult.ts: nested one-shot run)
-│       ├── subagents.ts         Subagent @mention menu (roles mirror Rust agent::subagents)
+│       ├── subagents.ts         Subagent @mention menu (roles mirror Rust agent::subagents; workers are the Delegate ids)
 │       └── tools.ts             Frontend tool list fetcher (fetches from Rust)
 └── src-tauri/                 Rust backend
     ├── Cargo.toml
@@ -307,7 +307,7 @@ Klide/
     │       ├── network_allowlist.rs Per-project network target approvals
     │       ├── failure_budget.rs  Crash-loop quarantine for repeatedly failing runs
     │       ├── steering.rs        Repeated/failing tool-call detection → steering nudges
-    │       ├── subagents.rs       Subagent roles + nested-run spec — the source of truth
+    │       ├── subagents.rs       Subagent roles, workers (a Delegate as the child), worker branch + prompt — the source of truth
     │       ├── evidence.rs        Run summary + transcript → Markdown evidence
     │       ├── eval.rs            Test-only golden scenarios over the real tool path
     │       ├── todo.rs            On-disk agent TODO list + mutation events

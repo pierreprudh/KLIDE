@@ -2,8 +2,9 @@ import { type ReactNode } from "react";
 
 type Props = {
   command: string;
-  kind?: "command" | "network" | "message";
-  /** For a message: the peer it goes to, by thread title. */
+  kind?: "command" | "network" | "message" | "worker";
+  /** For a message: the peer it goes to, by thread title. For a worker
+   *  dispatch: who is being sent and as what — "Claude Code · implementer". */
   peer?: string;
   detail?: string;
   externalPaths?: string[];
@@ -83,6 +84,7 @@ export function InlineCommandReview({
     kind === "network" ? "Approve target for this run"
       : kind === "message" ? "Approve messages from this agent for this run"
         : "Approve for this run";
+  const approveOnceLabel = kind === "worker" ? "Dispatch" : "Approve";
   const approveProjectLabel = kind === "network" ? "Approve target for this project" : "Approve for this project";
   return (
     <div
@@ -124,6 +126,7 @@ export function InlineCommandReview({
         >
           {kind === "command" && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
           {kind === "message" && peer && <span style={{ color: "var(--accent)", fontWeight: 500 }}>@{peer} </span>}
+          {kind === "worker" && peer && <span style={{ color: "var(--accent)", fontWeight: 500 }}>{peer} → </span>}
           {command}
         </span>
         {(detail || externalPaths.length > 0) && (
@@ -173,7 +176,7 @@ export function InlineCommandReview({
             </svg>
           </BareAction>
         )}
-        <BareAction label="Approve" tone="accent" onClick={onApproveOnce}>
+        <BareAction label={approveOnceLabel} tone="accent" onClick={onApproveOnce}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 6 9 17l-5-5" />
           </svg>

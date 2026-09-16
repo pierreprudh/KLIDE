@@ -4,6 +4,22 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Workers (a subagent that is another CLI agent)
+
+- **`spawn_subagent` can name a `worker`.** Asked to "have Claude implement
+  this, then have Codex test it", a Harness Run had no door but the shell: it
+  ran `claude -p` and `codex exec` through `run_command`, six approval prompts
+  and no Run of its own for either agent. A call that names a worker — any
+  Delegate id, `claude-code`, `codex`, `opencode`, `omp` — now hands the task
+  to that CLI as a nested Run of its own: the operator approves the dispatch
+  on an inline card (this once or not at all, never remembered, never silenced
+  by full auto), the worker gets an isolated worktree on a `klide/worker-…`
+  branch, runs as itself with the role's instructions rather than Kit's
+  persona, and its edits are committed to that branch on settle. The parent
+  gets the report plus the branch to review; nothing in its checkout changes.
+  With a worker the editing roles `implementer` and `tester` are allowed;
+  without one the tool stays read-only on the parent's model, as before.
+
 ### Agent coordination
 
 - **A send receipt reports the journal, not an assumption.** `agent_send` used
