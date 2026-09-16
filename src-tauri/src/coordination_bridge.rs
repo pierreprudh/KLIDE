@@ -763,35 +763,64 @@ pub fn register_delegate(
     bridge: &CoordinationBridgeState,
     reg: DelegateRegistration<'_>,
 ) -> Result<(), String> {
-    apply(
-        store,
-        hooks,
-        reg.workspace_root,
-        CoordinationCommand::RegisterRun {
-            registration: CoordinationRunRegistration {
-                run_id: reg.run_id.to_string(),
-                worker_kind: CoordinationWorkerKind::Delegate,
-                parent_run_id: reg.parent_run_id.map(str::to_string),
-                mission_id: reg.mission_id.map(str::to_string),
-                mission_task_id: reg.mission_task_id.map(str::to_string),
-                label: reg.task.and_then(coordination::label_from_text),
+    // A PTY may open a Run the Harness already registered — a worker child
+    // (`spawn_subagent worker=…`) reopened as a live Claude Code or Codex
+    // session, or a Focus thread on a Delegate resumed in a terminal. That Run
+    // exists with the Harness's metadata (a parent, a label), so registering
+    // it again with the PTY's would be refused as "different metadata" and the
+    // session would start without its tools. The Run is the identity; the
+    // session is just another door onto it. Keep the existing registration,
+    // and only move a Run that is still live back to working — a finished
+    // worker stays finished on the board even while its transcript is reopened.
+    let existing = coordination::read_snapshot(store, reg.workspace_root)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .runs
+                .into_iter()
+                .find(|run| run.registration.run_id == reg.run_id)
+        });
+    let terminal = existing.as_ref().is_some_and(|run| {
+        matches!(
+            run.state,
+            CoordinationRunState::Done
+                | CoordinationRunState::Failed
+                | CoordinationRunState::Cancelled
+        )
+    });
+    if existing.is_none() {
+        apply(
+            store,
+            hooks,
+            reg.workspace_root,
+            CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: reg.run_id.to_string(),
+                    worker_kind: CoordinationWorkerKind::Delegate,
+                    parent_run_id: reg.parent_run_id.map(str::to_string),
+                    mission_id: reg.mission_id.map(str::to_string),
+                    mission_task_id: reg.mission_task_id.map(str::to_string),
+                    label: reg.task.and_then(coordination::label_from_text),
+                },
+                initial_state: Some(CoordinationRunState::Working),
             },
-            initial_state: Some(CoordinationRunState::Working),
-        },
-    )?;
-    apply(
-        store,
-        hooks,
-        reg.workspace_root,
-        CoordinationCommand::SetRunState {
-            actor: CoordinationActor::Run {
+        )?;
+    }
+    if !terminal {
+        apply(
+            store,
+            hooks,
+            reg.workspace_root,
+            CoordinationCommand::SetRunState {
+                actor: CoordinationActor::Run {
+                    run_id: reg.run_id.to_string(),
+                },
                 run_id: reg.run_id.to_string(),
+                state: CoordinationRunState::Working,
+                reason: Some("delegate session started".to_string()),
             },
-            run_id: reg.run_id.to_string(),
-            state: CoordinationRunState::Working,
-            reason: Some("delegate session started".to_string()),
-        },
-    )?;
+        )?;
+    }
     bridge.bind_session(
         reg.session_id,
         BridgeSession {
