@@ -25,6 +25,14 @@ Notable changes per milestone. Dates are completion dates.
   numbered rows like the plan, picked with a click or `1`…`4`. Skipping is the
   CLI's default; a model the call named is not re-asked. The same rows serve
   `userAnswerQuestion`, which gains an optional `choices` list.
+- **An editing role with no worker asks which agent should take it**, on the
+  same card, with each row wearing its agent's mark: the Delegates installed
+  here and the API providers with a key. Skipping is the user's no.
+- **API providers are workers too.** `worker: "anthropic"` (or any hosted
+  provider with a key) runs Klide's own Harness on a model of that house as a
+  nested Run in its own worktree, edits applied without review there; the
+  dispatch card names it with its model. Rows on the question card wear the
+  model's maker or the worker's logo in place of a number.
 
 ### Agent coordination
 

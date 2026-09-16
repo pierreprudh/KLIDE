@@ -125,10 +125,15 @@ targets, headless Mission attempts, or spawned subagent runs.
 
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the
-parent's provider under the parent's tool rules. With a `worker`, any role is
-allowed, because the child is a Delegate CLI whose edit policy is its own and
-whose writes never pass this Run's Diff review — so the Harness isolates it in a
-worktree on a `klide/worker-…` branch and asks the operator before starting it.
+parent's provider under the parent's tool rules; an editing role with no worker
+puts "which agent should take this?" to the operator through the question
+pause, offering the Delegates installed here and the API providers with a key,
+and a skipped answer is the operator's no. With a `worker`, any role is
+allowed. A worker is either a Delegate CLI, running as itself with its own
+tools and edit policy, or a hosted API provider, running Klide's own Harness on
+a model of that house with edits applied without review. Either way its writes
+never pass this Run's Diff review — so the Harness isolates it in a worktree on
+a `klide/worker-…` branch and asks the operator before starting it.
 The dispatch approval offers only "this once" and "reject": it is never
 remembered per run or per project, and the full-auto policy does not silence
 it. A dispatch that names no model first puts a question to the operator

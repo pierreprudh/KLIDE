@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { AskIcon, SendIcon } from "../../icons";
 import type { QuestionChoices } from "../../agent/types";
-import { providerName } from "../../agent/providers";
+import { isKnownProvider, providerName } from "../../agent/providers";
 import { listProviderModels } from "../../ipc/aiProviders";
+import { makerMark } from "../../modelIdentity";
+import { ProviderLogo } from "./icons";
 import { ModelPicker } from "./ModelPicker";
 
 /** Where the card is drawn. `island` is the Focus canvas' right column, under
@@ -26,13 +28,43 @@ type Props = {
   variant?: QuestionCardVariant;
 };
 
-/** What a choice row says. The CLI's `default` sentinel is the one option
- *  that is not a model name, so it gets a sentence. */
+/** What a choice row says. A provider id reads as its name; the CLI's
+ *  `default` sentinel is the one model option that is not a model name, so it
+ *  gets a sentence. */
 export function choiceLabel(option: string, choices: QuestionChoices): { label: string; note?: string } {
   if (option === "default" && choices.moreModelsFrom) {
     return { label: `Let ${providerName(choices.moreModelsFrom)} choose`, note: "default" };
   }
+  if (isKnownProvider(option)) return { label: providerName(option) };
   return { label: option };
+}
+
+/** The mark a row wears in place of a number: a worker's own logo when the
+ *  option is a provider, the model's maker when it is a model, the Delegate's
+ *  house for `default`. Falls back to the row's index when nothing is known. */
+function ChoiceMark({ option, index, choices }: { option: string; index: number; choices: QuestionChoices }) {
+  if (isKnownProvider(option)) return <ProviderLogo id={option} size={14} />;
+  const mark = makerMark(option, choices.moreModelsFrom, 14);
+  if (mark) return mark;
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 16,
+        height: 16,
+        borderRadius: "50%",
+        border: "1px solid var(--border-strong)",
+        display: "grid",
+        placeItems: "center",
+        fontFamily: "var(--font-mono)",
+        fontSize: 9,
+        color: "var(--fg-dim)",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {index + 1}
+    </span>
+  );
 }
 
 const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
@@ -89,25 +121,10 @@ function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; o
               minWidth: 0,
             }}
           >
-            <span
-              aria-hidden
-              style={{
-                width: 16,
-                height: 16,
-                flexShrink: 0,
-                borderRadius: "50%",
-                border: "1px solid var(--border-strong)",
-                display: "grid",
-                placeItems: "center",
-                fontFamily: "var(--font-mono)",
-                fontSize: 9,
-                color: "var(--fg-dim)",
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {index + 1}
+            <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, display: "grid", placeItems: "center" }}>
+              <ChoiceMark option={option} index={index} choices={choices} />
             </span>
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: note ? undefined : "var(--font-mono)", fontSize: note ? undefined : 12 }}>{label}</span>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: note || isKnownProvider(option) ? undefined : "var(--font-mono)", fontSize: note || isKnownProvider(option) ? undefined : 12 }}>{label}</span>
             {note && <span style={{ color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{note}</span>}
           </button>
         );
