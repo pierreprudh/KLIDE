@@ -6864,13 +6864,14 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "anthropic", "model": "claude-sonnet-4-6" }));
-        let (outcome, _) = tokio::join!(
+        let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "(skipped)"),
             answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
         );
         let result = produced(outcome);
         assert!(result.ok, "{}", result.content);
-        assert!(questions(&events).is_empty(), "worker and model both named: nothing to ask");
+        assert_eq!(questions(&events).len(), 1, "confirmed on the card, then gated");
         let prompt = &permission_requests(&events)[0];
         assert!(prompt.summary.contains("Anthropic (claude-sonnet-4-6)"), "an API worker is named with its model: {}", prompt.summary);
         assert!(prompt.reason.contains("Klide's own tools"), "{}", prompt.reason);
@@ -7026,8 +7027,9 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "tester", "task": "Test slugify", "worker": "codex", "model": "gpt-5.5-codex" }));
-        let (outcome, _) = tokio::join!(
+        let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "(skipped)"),
             answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
         );
         let result = produced(outcome);
@@ -7113,7 +7115,7 @@ mod worker_dispatch_tests {
     }
 
     #[tokio::test]
-    async fn a_worker_with_a_model_named_is_not_asked_again() {
+    async fn a_worker_and_model_kit_named_are_still_put_to_the_user_as_a_preselection() {
         let root = plain_folder("named-model");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -7123,12 +7125,20 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex", "model": "gpt-5.4" }));
-        let (outcome, _) = tokio::join!(
+        // The user skips: Kit's pre-selection stands.
+        let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", "(skipped)"),
             answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
         );
         assert!(produced(outcome).ok);
-        assert!(questions(&events).is_empty(), "a named model is the caller's decision");
-        assert_eq!(sup.spawned.lock().unwrap()[0].model, "gpt-5.4");
+        let asked = questions(&events);
+        assert_eq!(asked.len(), 1, "every dispatch is put to the user");
+        let (question, choices) = &asked[0];
+        assert!(question.contains("Codex") && question.contains("gpt-5.4"), "asks to confirm what Kit named: {question}");
+        let choices = choices.clone().unwrap();
+        assert_eq!(choices.preselected.as_deref(), Some("codex"));
+        assert_eq!(choices.preselected_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(sup.spawned.lock().unwrap()[0].model, "gpt-5.4", "skipping keeps Kit's pick");
     }
 }

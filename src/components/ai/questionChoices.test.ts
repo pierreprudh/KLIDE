@@ -7,6 +7,11 @@ describe("dispatchModelRows", () => {
     expect(dispatchModelRows("claude-code", [])).toEqual(["default"]);
   });
 
+  it("leads with the model the call named when the list does not already hold it", () => {
+    expect(dispatchModelRows("codex", ["gpt-5.4", "gpt-5.5-codex"], "o5-pro")).toEqual(["o5-pro", "default", "gpt-5.4", "gpt-5.5-codex"]);
+    expect(dispatchModelRows("codex", ["gpt-5.4", "gpt-5.5-codex"], "gpt-5.4")).toEqual(["default", "gpt-5.4", "gpt-5.5-codex"]);
+  });
+
   it("gives an API provider its first three, with no default to fall back on", () => {
     expect(dispatchModelRows("anthropic", ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5", "x"])).toEqual([
       "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5",
