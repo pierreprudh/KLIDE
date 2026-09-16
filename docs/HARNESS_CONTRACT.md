@@ -74,7 +74,7 @@ Every Tool has one capability:
 | `ReadProjectMemory` | `ProjectMemory` | May run in `plan` and `goal`. Reads reviewed entries under `.klide/memory/`; normal recall excludes stale and superseded entries. |
 | `WriteWorkspace` | `Write` | Goal-only. Produces a Diff proposal and waits for Diff review before writing. |
 | `RunCommand` | `Command` | Goal-only. Produces a permission request and runs only after approval. |
-| `PauseForUser` | `Pause` | Goal-only. Pauses the Run and resumes on an outside answer — typed user input (`userAnswerQuestion`), a nested subagent Run (`spawn_subagent`), or an advisor model (`consult_advisor`). |
+| `PauseForUser` | `Pause` | Goal-only. Pauses the Run and resumes on an outside answer — typed user input (`userAnswerQuestion`), a nested subagent Run (`spawn_subagent`), or an advisor model (`consult_advisor`). A `spawn_subagent` call that names a `worker` (a Delegate id) is a **dispatch**: it first produces a permission request of its own, and on approval the child runs as that Delegate in an isolated worktree. |
 | `Network` | `Network` | Goal-only. Produces a permission request and reads from the network only after approval. |
 | `UpdatePlanState` | `PlanState` | May run in `plan` and `goal`. Mutates Klide's own planning metadata (the TODO store), never Workspace files, so it needs no Diff review. |
 
@@ -122,6 +122,19 @@ silences the command gate for that Run: commands execute as if allowlisted,
 including over a remembered rejection — escalating the policy is the override.
 It is chosen per conversation, never persisted, and does not extend to network
 targets, headless Mission attempts, or spawned subagent runs.
+
+A worker dispatch has its own gate and its own rule. Without a `worker`,
+`spawn_subagent` may name only read-only roles and the child runs on the
+parent's provider under the parent's tool rules. With a `worker`, any role is
+allowed, because the child is a Delegate CLI whose edit policy is its own and
+whose writes never pass this Run's Diff review — so the Harness isolates it in a
+worktree on a `klide/worker-…` branch and asks the operator before starting it.
+The dispatch approval offers only "this once" and "reject": it is never
+remembered per run or per project, and the full-auto policy does not silence
+it. A project that is not a Git repository is named as such on the card, and
+the worker then edits the folder directly. The child's report names the
+worktree and branch; the operator reviews and merges that branch, and nothing
+in the parent's checkout changes.
 
 The project allowlist remains backward-compatible with `commands: string[]` and
 also accepts `rules: [{ "pattern": "cargo test *" }]`. Wildcard rules do not

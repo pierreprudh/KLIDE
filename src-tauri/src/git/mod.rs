@@ -1141,7 +1141,7 @@ pub(crate) struct WorktreeInfo {
 /// outcome, reported once it finishes (or is killed at the recipe timeout).
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WorktreeSetupDone {
+pub(crate) struct WorktreeSetupDone {
     path: String,
     branch: String,
     ok: bool,
@@ -1175,7 +1175,7 @@ fn worktree_dir_name(branch: &str) -> String {
 /// How the background setup script reports its outcome. Production emits the
 /// `worktree-setup:done` event; tests pass a sink — the seam that keeps the
 /// worktree core drivable without a Tauri app.
-type SetupNotify = std::sync::Arc<dyn Fn(WorktreeSetupDone) + Send + Sync>;
+pub(crate) type SetupNotify = std::sync::Arc<dyn Fn(WorktreeSetupDone) + Send + Sync>;
 
 /// Apply the workspace's worktree-setup recipe to a (new or reused) checkout:
 /// copy env files, link dependency dirs, derive the port, and start the setup
@@ -1315,7 +1315,7 @@ pub(crate) async fn git_worktree_add(
 
 /// The command's body behind the notify seam, so tests can drive it against a
 /// real temp repo without a Tauri app.
-async fn worktree_add_core(
+pub(crate) async fn worktree_add_core(
     workspace_root: String,
     branch: String,
     copy_files: Option<Vec<String>>,

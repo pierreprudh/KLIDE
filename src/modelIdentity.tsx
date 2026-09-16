@@ -201,6 +201,26 @@ const DELEGATE_HOUSE: Partial<Record<ProviderId, ProviderId>> = {
 };
 
 /**
+ * The maker's mark for a run, from what is known: the model id when it names
+ * a maker, else the Delegate's house when the CLI runs one house only. `null`
+ * when nothing true can be drawn — a runtime on an unrecognised model, or
+ * OpenCode on `default`. Mission Control's subtitle uses this so a Claude Code
+ * worker on its default model wears Anthropic's mark beside the provider's
+ * name, the way an OpenRouter row wears DeepSeek's, instead of repeating the
+ * avatar's product mark.
+ */
+export function makerMark(
+  model: string | null | undefined,
+  provider: ProviderId | null | undefined,
+  size = 14,
+): ReactElement | null {
+  const fromModel = resolveModelLogo(model, size);
+  if (fromModel) return fromModel;
+  const house = provider ? DELEGATE_HOUSE[provider] : undefined;
+  return house ? <ProviderLogo id={house} size={size} /> : null;
+}
+
+/**
  * The one mark to draw when the pair doesn't fit — or when there is no maker to
  * pair with.
  *

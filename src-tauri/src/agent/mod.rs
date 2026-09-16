@@ -747,9 +747,20 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
         return;
     }
     let subject = format!("klide: {}", title_from_text(&summary.title));
+    // A Delegate worker on the CLI's own default model records "default" as
+    // its model; the co-author line should name who wrote the code, so fall
+    // back to the provider's label ("Claude Code"), then to the provider id.
+    let author = if summary.model.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL) {
+        crate::providers::lookup(&summary.provider)
+            .and_then(|p| p.subscription)
+            .map(|s| s.label.to_string())
+            .unwrap_or_else(|| summary.provider.clone())
+    } else {
+        summary.model.clone()
+    };
     let message = format!(
-        "{subject}\n\nKlide agent run {}\nCo-Authored-By: {} <noreply@klide.local>",
-        summary.id, summary.model
+        "{subject}\n\nKlide agent run {}\nCo-Authored-By: {author} <noreply@klide.local>",
+        summary.id
     );
     if std::process::Command::new("git")
         .args(["-C", cwd, "add", "-A"])
@@ -4292,6 +4303,10 @@ mod test_support {
     pub(super) struct FakeSupervisor {
         pub(super) runs: Mutex<HashMap<String, AgentRunHandle>>,
         coordination: CoordinationStoreState,
+        /// Every child this supervisor was asked to start, in order. The fake
+        /// answers each with a canned report, so a handler test can assert on
+        /// the spec — provider, model, root, prompt — without a real child.
+        pub(super) spawned: Mutex<Vec<subagents::SubagentRunSpec>>,
     }
 
     impl FakeSupervisor {
@@ -4301,11 +4316,21 @@ mod test_support {
             Self {
                 runs: Mutex::new(runs),
                 coordination: CoordinationStoreState::default(),
+                spawned: Mutex::new(Vec::new()),
             }
         }
     }
 
     impl RunSupervisor for FakeSupervisor {
+        fn spawn_subagent(
+            &self,
+            spec: subagents::SubagentRunSpec,
+        ) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
+            self.spawned.lock().unwrap().push(spec);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let _ = tx.send(Ok("fake child report".to_string()));
+            rx
+        }
         fn set_status(&self, run_id: &str, status: AgentRunStatus) {
             if let Ok(mut runs) = self.runs.lock() {
                 if let Some(handle) = runs.get_mut(run_id) {
@@ -6629,5 +6654,281 @@ mod checkpoint_tests {
         // got far enough to consume it, so the user can try again after
         // fixing the workspace path.
         assert!(checkpoint_file(&runs, run, "edit_evil").exists());
+    }
+}
+
+#[cfg(test)]
+mod worker_dispatch_tests {
+    //! `spawn_subagent` with and without a `worker`, driven through the real
+    //! handler against the fake supervisor: the read-only promise the bare tool
+    //! makes, the list a wrong name gets back, the gate a dispatch always goes
+    //! through, and what the child that finally starts looks like — a Delegate
+    //! running as itself, in a worktree of its own.
+    use super::test_support::*;
+    use super::*;
+    use std::process::Command;
+
+    fn plain_folder(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-worker-{name}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().to_string()
+    }
+
+    fn git_repo(name: &str) -> String {
+        let dir = plain_folder(name);
+        Command::new("git").args(["init", "-q"]).current_dir(&dir).status().unwrap();
+        Command::new("git")
+            .args([
+                "-c", "user.name=Klide", "-c", "user.email=test@klide.local",
+                "commit", "--allow-empty", "-qm", "initial",
+            ])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        dir
+    }
+
+    fn runs_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-worker-runs-{name}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn subagent_call(id: &str, input: serde_json::Value) -> NormalizedToolCall {
+        NormalizedToolCall {
+            id: id.to_string(),
+            name: "spawn_subagent".to_string(),
+            input,
+        }
+    }
+
+    type EventLog = Arc<Mutex<Vec<AgentEvent>>>;
+
+    fn event_log() -> (EventLog, impl FnMut(AgentEvent) -> Result<(), String>) {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let emit = move |e: AgentEvent| -> Result<(), String> {
+            sink.lock().unwrap().push(e);
+            Ok(())
+        };
+        (events, emit)
+    }
+
+    fn produced(outcome: Result<ToolOutcome, String>) -> ToolResult {
+        match outcome.expect("handler returns ok") {
+            ToolOutcome::Produced(result) => result,
+            ToolOutcome::Cancelled => panic!("handler unexpectedly reported cancellation"),
+        }
+    }
+
+    fn permission_requests(events: &EventLog) -> Vec<PermissionRequest> {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::PermissionRequested { request, .. } => Some(request.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn requested_children(events: &EventLog) -> Vec<(String, Option<String>, Option<String>)> {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::SubagentRequested { subagent, worker, branch, .. } => {
+                    Some((subagent.clone(), worker.clone(), branch.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_editing_role_without_a_worker_is_refused_and_points_at_workers() {
+        let root = plain_folder("no-worker");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("no-worker");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify" }));
+        let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+
+        assert!(!result.ok);
+        assert!(result.content.contains("worker"), "{}", result.content);
+        assert!(result.content.contains("claude-code"), "names the workers: {}", result.content);
+        assert!(permission_requests(&events).is_empty(), "a refusal never prompts");
+        assert!(sup.spawned.lock().unwrap().is_empty(), "nothing was started");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_worker_is_answered_with_the_delegate_list() {
+        let root = plain_folder("unknown-worker");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("unknown-worker");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "gemini-cli" }));
+        let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+
+        assert!(!result.ok);
+        assert!(result.content.contains("Unknown worker"), "{}", result.content);
+        for id in subagents::worker_ids() {
+            assert!(result.content.contains(id), "lists {id}: {}", result.content);
+        }
+        assert!(permission_requests(&events).is_empty());
+        assert!(sup.spawned.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_read_only_role_without_a_worker_runs_on_the_parents_model_unprompted() {
+        let root = plain_folder("explorer");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("explorer");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "explorer", "task": "Map the git module" }));
+        let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+
+        assert!(result.ok, "{}", result.content);
+        assert!(permission_requests(&events).is_empty(), "an in-model child is not gated");
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(spawned[0].provider, request.provider, "inherits the parent's provider");
+        assert_eq!(spawned[0].model, request.model);
+        assert_eq!(spawned[0].workspace_root.as_deref(), Some(root.as_str()));
+        assert_eq!(requested_children(&events), vec![("explorer".to_string(), None, None)]);
+    }
+
+    #[tokio::test]
+    async fn a_worker_dispatch_asks_first_and_a_rejection_spawns_nothing() {
+        let root = git_repo("rejected");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("rejected");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"deny"}"#),
+        );
+        let result = produced(outcome);
+
+        assert!(!result.ok);
+        assert!(result.content.contains("declined"), "{}", result.content);
+        let prompts = permission_requests(&events);
+        assert_eq!(prompts.len(), 1);
+        let prompt = &prompts[0];
+        assert_eq!(prompt.tool_name, "spawn_subagent");
+        assert_eq!(prompt.input["worker"], "codex");
+        assert_eq!(prompt.input["subagent"], "implementer");
+        assert!(prompt.summary.contains("Codex"), "human name on the card: {}", prompt.summary);
+        assert!(prompt.summary.contains("klide/worker-add-slugify-"), "names the branch: {}", prompt.summary);
+        let option_ids: Vec<&str> = prompt.options.iter().map(|o| o.option_id.as_str()).collect();
+        assert_eq!(option_ids, vec!["allow_once", "deny"], "a dispatch is never remembered");
+        assert!(sup.spawned.lock().unwrap().is_empty(), "a rejected dispatch starts nothing");
+        assert!(requested_children(&events).is_empty(), "and records no child");
+        let worktrees = Command::new("git").args(["-C", &root, "worktree", "list"]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&worktrees.stdout).lines().count(), 1, "no worktree was created");
+    }
+
+    #[tokio::test]
+    async fn an_approved_worker_runs_the_delegate_as_itself_in_a_worktree() {
+        let root = git_repo("approved");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("approved");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Implement slugify", "worker": "claude-code" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 1);
+        let spec = &spawned[0];
+        assert_eq!(spec.provider, "claude-code", "the worker is the child's provider");
+        assert_eq!(spec.model, crate::delegate::CLI_DEFAULT_MODEL, "no model asked for → the CLI's own default");
+        assert_eq!(spec.mode, AgentMode::Goal);
+        assert_eq!(spec.require_diff_review, Some(false));
+        let child_root = spec.workspace_root.clone().expect("child has a root");
+        assert_ne!(child_root, root, "the worker does not edit the user's checkout");
+        assert!(child_root.contains("-worktrees/klide-worker-implement-slugify-"), "isolated worktree: {child_root}");
+        assert!(std::path::Path::new(&child_root).join(".git").exists(), "the worktree is a real checkout");
+        assert!(!spec.system_prompt.contains("Kit"), "a worker is not Kit");
+        assert!(spec.system_prompt.contains("Claude Code"), "{}", spec.system_prompt);
+        assert!(spec.system_prompt.contains("klide/worker-implement-slugify-"), "the prompt names the branch");
+        assert!(spec.system_prompt.contains("Implementer"), "and carries the role");
+
+        let children = requested_children(&events);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].0, "implementer");
+        assert_eq!(children[0].1.as_deref(), Some("claude-code"));
+        let branch = children[0].2.clone().expect("branch recorded on the event");
+        assert!(branch.starts_with("klide/worker-implement-slugify-"), "{branch}");
+
+        assert!(result.content.contains("fake child report"), "the child's words come back");
+        assert!(result.content.contains(&branch), "and the branch to review: {}", result.content);
+        assert_eq!(result.metadata.as_ref().unwrap()["worker"], "claude-code");
+        assert_eq!(result.metadata.as_ref().unwrap()["branch"], branch);
+    }
+
+    #[tokio::test]
+    async fn a_worker_in_a_plain_folder_works_there_and_the_gate_says_so() {
+        let root = plain_folder("not-a-repo");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("not-a-repo");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (events, mut emit) = event_log();
+
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "tester", "task": "Test slugify", "worker": "codex", "model": "gpt-5.5-codex" }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+
+        let prompts = permission_requests(&events);
+        assert!(prompts[0].summary.contains("not a Git repository"), "{}", prompts[0].summary);
+        assert!(prompts[0].input["branch"].is_null());
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned[0].workspace_root.as_deref(), Some(root.as_str()), "works in the folder itself");
+        assert_eq!(spawned[0].model, "gpt-5.5-codex", "the model asked for reaches the worker");
+        assert!(spawned[0].system_prompt.contains("not a Git repository"));
+        assert_eq!(requested_children(&events)[0].2, None, "no branch to record");
+        assert!(result.content.contains("no branch to review"), "{}", result.content);
     }
 }

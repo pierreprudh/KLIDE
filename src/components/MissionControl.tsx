@@ -146,7 +146,7 @@ import { ModelPicker } from "./ai/ModelPicker";
 import { dispatchRace, PartialRaceError, type RaceAgentPick } from "../agent/race";
 import { listRaces, raceForRun, subscribeRaces, type RaceGroup, type RaceMember } from "../races";
 import { refreshCustomCli } from "../customCli";
-import { ProviderModelMark, resolveModelLogo } from "../modelIdentity";
+import { ProviderModelMark, makerMark, resolveModelLogo } from "../modelIdentity";
 import { renderMarkdown } from "./markdown";
 import { buildRunHandoff } from "../agentHandoff";
 import { notify } from "../toast";
@@ -378,6 +378,13 @@ function RunSubtitleMark({ run, compact }: { run: RunLedgerEntry; compact?: bool
     if (RUNTIME_MODEL_PROVIDERS.has(run.provider) && run.model) {
       const modelLogo = resolveModelLogo(run.model, 11);
       if (modelLogo) return modelLogo;
+    }
+    // A Delegate worker on `default` names no model, but Claude Code runs one
+    // house and Codex another — so the maker is known from the provider alone,
+    // and the subtitle need not repeat the avatar's product mark.
+    if (isDelegateId(run.provider)) {
+      const maker = makerMark(run.model, run.provider as ProviderId, 11);
+      if (maker) return maker;
     }
     return providerMark(run.provider, 11);
   }
@@ -3477,7 +3484,7 @@ function RunDetail({
               {/* Klide rows show the model's own provider logo; external
                   product runs (claude-code/codex) keep their product mark. */}
               {run.source === "klide" && run.provider
-                ? providerMark(run.provider, 13)
+                ? (isDelegateId(run.provider) ? makerMark(run.model, run.provider as ProviderId, 13) : null) ?? providerMark(run.provider, 13)
                 : run.source === "klide"
                 ? resolveModelLogo(run.model, 13) ?? <ProviderLogo id={run.source as any} size={13} />
                 : <ProviderLogo id={run.source as any} size={13} />}

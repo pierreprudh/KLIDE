@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { conversationMark, modelIdentity } from "./modelIdentity";
+import {
+  makerMark, conversationMark, modelIdentity } from "./modelIdentity";
 import type { ProviderId } from "./agent/types";
 
 /** What a mark actually draws, as markup — the only way to tell a mark that
@@ -153,5 +154,24 @@ describe("a single slot, at rail size", () => {
     const pair = drawn("kimi-k2", "opencode", 24);
     expect(pair).toContain(OPENCODE_MARK);
     expect(pair).toContain("kimi-logo-light.svg");
+  });
+});
+
+describe("makerMark", () => {
+  it("names the house from the Delegate alone when the model is the CLI's default", () => {
+    // Claude Code runs one house, Codex another — `default` names no model,
+    // but the maker is still a fact worth drawing.
+    expect(makerMark("default", "claude-code")).not.toBeNull();
+    expect(makerMark("default", "codex")).not.toBeNull();
+  });
+
+  it("draws nothing for a Delegate that runs other makers' models on default", () => {
+    expect(makerMark("default", "opencode")).toBeNull();
+    expect(makerMark("default", "omp")).toBeNull();
+  });
+
+  it("prefers the model's own maker when the id names one", () => {
+    expect(makerMark("deepseek/deepseek-v4.1-flash", "openrouter")).not.toBeNull();
+    expect(makerMark("mystery-model-9", "openrouter")).toBeNull();
   });
 });

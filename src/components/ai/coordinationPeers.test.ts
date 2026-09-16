@@ -9,7 +9,34 @@ import {
   peerName,
   pendingInboxFor,
   shortRunId,
+  workerChildrenOf,
 } from "./coordinationPeers";
+
+describe("workerChildrenOf", () => {
+  it("maps each worker child's Run id to the Delegate the spawn call named", () => {
+    const msgs: Msg[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "call_1", name: "spawn_subagent", args: { subagent: "implementer", worker: "claude-code", task: "Add slugify" } },
+          { id: "call_2", name: "spawn_subagent", args: { subagent: "explorer", task: "Map the repo" } },
+          { id: "call_3", name: "run_command", args: { command: "claude -p hi" } },
+        ],
+      } as Msg,
+      { role: "assistant", content: "", toolCalls: [{ id: "call_4", name: "spawn_subagent", args: { subagent: "tester", worker: "codex", task: "Test it" } }] } as Msg,
+    ];
+    const workers = workerChildrenOf(msgs, "run_kit");
+    expect([...workers.entries()]).toEqual([
+      ["sub_run_kit_call_1", "claude-code"],
+      ["sub_run_kit_call_4", "codex"],
+    ]);
+  });
+
+  it("knows nothing about a conversation that never dispatched a worker", () => {
+    expect(workerChildrenOf([{ role: "user", content: "hi" } as Msg], "run_kit").size).toBe(0);
+  });
+});
 
 describe("parseDeliveryReason", () => {
   it("reads the harness's one-line delivery record, singular and plural", () => {

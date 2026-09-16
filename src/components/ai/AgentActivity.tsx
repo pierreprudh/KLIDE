@@ -3,9 +3,10 @@ import { onCoordinationChanged, readCoordinationSnapshot, type CoordinationRunSn
 import { createListenerScope } from "../../tauriEvents";
 import { conversationMark } from "../../modelIdentity";
 import type { PeerLink } from "./PeerLink";
-import { peerName } from "./coordinationPeers";
+import { peerName, workerChildrenOf } from "./coordinationPeers";
 import { shellAgentsOf } from "./shellAgentEvidence";
 import type { Conversation, Msg } from "./types";
+import type { ProviderId } from "../../agent/types";
 import { createPortal } from "react-dom";
 import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { ProviderLogo } from "./icons";
@@ -62,7 +63,11 @@ export function AgentActivity({ msgs, ...props }: ComponentProps<typeof PeerLink
   const peers = [...new Set([...props.peers, ...runs.map((r) => r.registration.runId)])].filter((id) => id !== selfId);
   const shellAgents = useMemo(() => shellAgentsOf(msgs), [msgs]);
   const index = new Map(props.index);
-  for (const run of runs) if (!index.has(run.registration.runId)) index.set(run.registration.runId, { title: run.registration.label ?? run.registration.runId, provider: null, model: null });
+  // A worker child has no stored conversation of its own, so the index knows
+  // nothing about it; the spawn call in this transcript says which Delegate
+  // it ran as, and that is the mark it should wear.
+  const workers = useMemo(() => workerChildrenOf(msgs, selfId), [msgs, selfId]);
+  for (const run of runs) if (!index.has(run.registration.runId)) index.set(run.registration.runId, { title: run.registration.label ?? run.registration.runId, provider: (workers.get(run.registration.runId) as ProviderId | undefined) ?? null, model: null });
   if (!peers.length && !shellAgents.length) return null;
   return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">
     {peers.map((id) => <Participant key={id} name={peerName(id, index)}

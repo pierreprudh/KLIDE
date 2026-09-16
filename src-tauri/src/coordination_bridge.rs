@@ -763,35 +763,64 @@ pub fn register_delegate(
     bridge: &CoordinationBridgeState,
     reg: DelegateRegistration<'_>,
 ) -> Result<(), String> {
-    apply(
-        store,
-        hooks,
-        reg.workspace_root,
-        CoordinationCommand::RegisterRun {
-            registration: CoordinationRunRegistration {
-                run_id: reg.run_id.to_string(),
-                worker_kind: CoordinationWorkerKind::Delegate,
-                parent_run_id: reg.parent_run_id.map(str::to_string),
-                mission_id: reg.mission_id.map(str::to_string),
-                mission_task_id: reg.mission_task_id.map(str::to_string),
-                label: reg.task.and_then(coordination::label_from_text),
+    // A PTY may open a Run the Harness already registered — a worker child
+    // (`spawn_subagent worker=…`) reopened as a live Claude Code or Codex
+    // session, or a Focus thread on a Delegate resumed in a terminal. That Run
+    // exists with the Harness's metadata (a parent, a label), so registering
+    // it again with the PTY's would be refused as "different metadata" and the
+    // session would start without its tools. The Run is the identity; the
+    // session is just another door onto it. Keep the existing registration,
+    // and only move a Run that is still live back to working — a finished
+    // worker stays finished on the board even while its transcript is reopened.
+    let existing = coordination::read_snapshot(store, reg.workspace_root)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .runs
+                .into_iter()
+                .find(|run| run.registration.run_id == reg.run_id)
+        });
+    let terminal = existing.as_ref().is_some_and(|run| {
+        matches!(
+            run.state,
+            CoordinationRunState::Done
+                | CoordinationRunState::Failed
+                | CoordinationRunState::Cancelled
+        )
+    });
+    if existing.is_none() {
+        apply(
+            store,
+            hooks,
+            reg.workspace_root,
+            CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: reg.run_id.to_string(),
+                    worker_kind: CoordinationWorkerKind::Delegate,
+                    parent_run_id: reg.parent_run_id.map(str::to_string),
+                    mission_id: reg.mission_id.map(str::to_string),
+                    mission_task_id: reg.mission_task_id.map(str::to_string),
+                    label: reg.task.and_then(coordination::label_from_text),
+                },
+                initial_state: Some(CoordinationRunState::Working),
             },
-            initial_state: Some(CoordinationRunState::Working),
-        },
-    )?;
-    apply(
-        store,
-        hooks,
-        reg.workspace_root,
-        CoordinationCommand::SetRunState {
-            actor: CoordinationActor::Run {
+        )?;
+    }
+    if !terminal {
+        apply(
+            store,
+            hooks,
+            reg.workspace_root,
+            CoordinationCommand::SetRunState {
+                actor: CoordinationActor::Run {
+                    run_id: reg.run_id.to_string(),
+                },
                 run_id: reg.run_id.to_string(),
+                state: CoordinationRunState::Working,
+                reason: Some("delegate session started".to_string()),
             },
-            run_id: reg.run_id.to_string(),
-            state: CoordinationRunState::Working,
-            reason: Some("delegate session started".to_string()),
-        },
-    )?;
+        )?;
+    }
     bridge.bind_session(
         reg.session_id,
         BridgeSession {
@@ -949,6 +978,119 @@ mod tests {
         assert_eq!(me.registration.worker_kind, CoordinationWorkerKind::Delegate);
         assert_eq!(me.state, CoordinationRunState::Working);
         assert_eq!(me.registration.label.as_deref(), Some("refactor the pty host"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Harness registers a worker child with its parent and its label;
+    /// opening that child later as a live Claude Code session must not refuse
+    /// the Run as "different metadata" and start the CLI without its tools.
+    #[test]
+    fn a_pty_reopening_a_harness_registered_run_keeps_it_and_binds_the_session() {
+        let (dir, root) = sandbox("reopen");
+        let store = CoordinationStoreState::default();
+        let bridge = CoordinationBridgeState::default();
+        harness_peer(&store, &root, "run_kit");
+        // A finished worker child, as the Harness left it.
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: "sub_run_kit_call_1".to_string(),
+                    worker_kind: CoordinationWorkerKind::Delegate,
+                    parent_run_id: Some("run_kit".to_string()),
+                    mission_id: None,
+                    mission_task_id: None,
+                    label: Some("Add slugify".to_string()),
+                },
+                initial_state: Some(CoordinationRunState::Working),
+            },
+        )
+        .unwrap();
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::SetRunState {
+                actor: CoordinationActor::Run { run_id: "sub_run_kit_call_1".to_string() },
+                run_id: "sub_run_kit_call_1".to_string(),
+                state: CoordinationRunState::Done,
+                reason: None,
+            },
+        )
+        .unwrap();
+
+        register_delegate(
+            &store,
+            &BridgeHooks::silent(),
+            &bridge,
+            DelegateRegistration {
+                session_id: "sub_run_kit_call_1:claude-code",
+                run_id: "sub_run_kit_call_1",
+                workspace_root: &root,
+                task: None,
+                parent_run_id: None,
+                mission_id: None,
+                mission_task_id: None,
+            },
+        )
+        .expect("reopening an existing Run is not an error");
+
+        let session = bridge.session("sub_run_kit_call_1:claude-code").expect("session bound");
+        assert_eq!(session.run_id, "sub_run_kit_call_1");
+        let snapshot = coordination::read_snapshot(&store, &root).unwrap();
+        let child = snapshot
+            .runs
+            .iter()
+            .find(|r| r.registration.run_id == "sub_run_kit_call_1")
+            .unwrap();
+        assert_eq!(child.registration.parent_run_id.as_deref(), Some("run_kit"), "the Harness's registration stands");
+        assert_eq!(child.registration.label.as_deref(), Some("Add slugify"));
+        assert_eq!(child.state, CoordinationRunState::Done, "a finished worker stays finished");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pty_reopening_a_live_run_moves_it_back_to_working() {
+        let (dir, root) = sandbox("reopen-live");
+        let store = CoordinationStoreState::default();
+        let bridge = CoordinationBridgeState::default();
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: "convo-9".to_string(),
+                    worker_kind: CoordinationWorkerKind::Harness,
+                    parent_run_id: None,
+                    mission_id: None,
+                    mission_task_id: None,
+                    label: Some("Focus thread".to_string()),
+                },
+                initial_state: Some(CoordinationRunState::Waiting),
+            },
+        )
+        .unwrap();
+        register_delegate(
+            &store,
+            &BridgeHooks::silent(),
+            &bridge,
+            DelegateRegistration {
+                session_id: "convo-9:codex",
+                run_id: "convo-9",
+                workspace_root: &root,
+                task: Some("something else"),
+                parent_run_id: None,
+                mission_id: None,
+                mission_task_id: None,
+            },
+        )
+        .unwrap();
+        assert!(bridge.is_bound_run("convo-9"));
+        let snapshot = coordination::read_snapshot(&store, &root).unwrap();
+        let run = snapshot.runs.iter().find(|r| r.registration.run_id == "convo-9").unwrap();
+        assert_eq!(run.state, CoordinationRunState::Working);
+        assert_eq!(run.registration.worker_kind, CoordinationWorkerKind::Harness, "identity is not rewritten");
+        assert_eq!(run.registration.label.as_deref(), Some("Focus thread"), "the first label wins");
         let _ = std::fs::remove_dir_all(dir);
     }
 
