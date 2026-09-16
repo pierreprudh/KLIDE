@@ -89,6 +89,7 @@ Klide/
 │   ├── recentFolders.ts         Recent-folder ordering (remember on open, promote on work)
 │   ├── focusHistory.ts          Focus rail history expand/collapse rules
 │   ├── railSelection.ts         Which rail row is 'you are here' — the click wins until the panel binding knows it
+│   ├── pinnedConversations.ts   Rail pins — a persisted id list, pinned rows lead their provider group
 │   ├── railDestinations.tsx     Foot-of-rail destinations shared by both rails
 │   ├── modelIdentity.tsx        Model → display name + logo (modelBrand.tsx: maker mark + link)
 │   ├── favModels.ts             Shared starred-model list

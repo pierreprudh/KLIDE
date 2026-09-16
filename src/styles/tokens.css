@@ -5364,16 +5364,15 @@ button:focus-visible .menu-leadout {
     transform var(--motion-slow) var(--ease-soft);
 }
 
-/* Delete lives in the trailing slot too, over the timestamp: the row keeps one
-   trailing mark, and it says the thing you can do right now. Hidden until the
+/* The row's ⋯ lives in the trailing slot too, over the timestamp: the row
+   keeps one trailing mark, and it says the thing you can do right now. Hidden until the
    row is hovered or holds focus, when it drifts in from the right as the
    timestamp drifts out — one crossfade, on the Git island's easing. Quiet ink
    until you reach it, then the full text colour — near-black on a light theme,
    near-white on a dark one. No box of its own, ever: the row's fill is already
    under it, and a second shape inside a rail row is exactly the chrome this
    rail refuses. The glyph alone changes, and it dips slightly on click. */
-.klide-focus-convo-delete,
-.klide-focus-convo-inspect {
+.klide-focus-convo-more {
   position: absolute;
   top: 50%;
   right: var(--rail-row-pad);
@@ -5391,38 +5390,42 @@ button:focus-visible .menu-leadout {
     opacity var(--motion-slow) var(--ease-soft),
     transform var(--motion-slow) var(--ease-soft);
 }
-/* One step inward from the delete: 18px target plus a 4px gap. */
-.klide-focus-convo-inspect {
-  right: calc(var(--rail-row-pad) + 22px);
-}
 
 .klide-focus-convo-row:hover .klide-focus-convo-time,
-.klide-focus-convo-row:focus-within .klide-focus-convo-time {
+.klide-focus-convo-row:focus-within .klide-focus-convo-time,
+.klide-focus-convo-row[data-menu-open] .klide-focus-convo-time {
   opacity: 0;
   transform: translateX(-3px);
 }
 
-.klide-focus-convo-row:hover .klide-focus-convo-delete,
-.klide-focus-convo-row:focus-within .klide-focus-convo-delete,
-.klide-focus-convo-row:hover .klide-focus-convo-inspect,
-.klide-focus-convo-row:focus-within .klide-focus-convo-inspect {
+.klide-focus-convo-row:hover .klide-focus-convo-more,
+.klide-focus-convo-row:focus-within .klide-focus-convo-more,
+.klide-focus-convo-row[data-menu-open] .klide-focus-convo-more {
   opacity: 0.55;
   transform: translate(0, -50%);
   pointer-events: auto;
 }
 
-.klide-focus-convo-row .klide-focus-convo-delete:hover,
-.klide-focus-convo-row .klide-focus-convo-delete:focus-visible,
-.klide-focus-convo-row .klide-focus-convo-inspect:hover,
-.klide-focus-convo-row .klide-focus-convo-inspect:focus-visible {
+.klide-focus-convo-row .klide-focus-convo-more:hover,
+.klide-focus-convo-row .klide-focus-convo-more:focus-visible,
+.klide-focus-convo-row[data-menu-open] .klide-focus-convo-more {
   opacity: 1;
   background: none;
 }
 
-.klide-focus-convo-row .klide-focus-convo-delete:active,
-.klide-focus-convo-row .klide-focus-convo-inspect:active {
+.klide-focus-convo-row .klide-focus-convo-more:active {
   transform: translate(0, -50%) scale(0.92);
   transition-duration: 80ms;
+}
+
+/* A pinned row wears a pin where its timestamp would be — the same slot, the
+   same quiet ink, the same drift-out on hover. Where it sits says what it is;
+   no second mark is added. */
+.klide-focus-convo-pinned {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
 }
 
 /* The running slot takes the timestamp's place at the row's trailing edge. It
@@ -7587,8 +7590,7 @@ button:focus-visible .menu-leadout {
   .klide-focus-nav-row,
   .klide-focus-convo-content,
   .klide-focus-convo-time,
-  .klide-focus-convo-delete,
-  .klide-focus-convo-inspect,
+  .klide-focus-convo-more,
   .klide-focus-provider-history-content,
   .klide-focus-more-projects,
   .klide-focus-more-conversations,
