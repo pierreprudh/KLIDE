@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 import { Z } from "../zLayers";
 import { notify } from "../toast";
+import { listConnectors, type Connector } from "../ipc/connectors";
+import { canOpenSettings, openSettingsSection } from "../settingsNavigation";
 import {
   type Skill,
   genSkillId,
@@ -324,6 +326,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
   const [installError, setInstallError] = useState<string | null>(null);
   const [installOk, setInstallOk] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolEntry[]>(SKILL_TOOLS);
+  const [connectors, setConnectors] = useState<Connector[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -333,6 +336,10 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
       if (cancelled) return;
       setTools(live);
       setSelectedTool((prev) => (live.some((t) => t.id === prev) ? prev : (live[0]?.id ?? "")));
+      // The inventory answers "what can an agent reach?", and a connector is
+      // part of that answer even before its tools are callable.
+      const added = await listConnectors().catch(() => []);
+      if (!cancelled) setConnectors(added);
     })();
     return () => { cancelled = true; };
   }, [open]);
@@ -571,7 +578,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                 }}
               />
             ) : (
-              <ToolsView skills={skills} selectedTool={selectedTool} setSelectedTool={setSelectedTool} tools={tools} />
+              <ToolsView skills={skills} selectedTool={selectedTool} setSelectedTool={setSelectedTool} tools={tools} connectors={connectors} />
             )}
           </main>
         </div>
@@ -974,12 +981,16 @@ function SkillForm({
 const WRITE_TOOL_IDS = new Set(["write_file", "create_file", "create_skill"]);
 
 function ToolsView({
-  skills, selectedTool, setSelectedTool, tools,
+  skills, selectedTool, setSelectedTool, tools, connectors,
 }: {
   skills: Skill[];
   selectedTool: string;
   setSelectedTool: (id: string) => void;
   tools: ToolEntry[];
+  /** MCP servers the user has added (Settings → Connectors). Listed beside the
+   *  built-ins because that is the inventory question this pane answers — their
+   *  tools join the list once the harness can call them. */
+  connectors: Connector[];
 }) {
   const tool = tools.find((t) => t.id === selectedTool) ?? tools[0];
   const usedBy = tool ? skills.filter((s) => s.tools.includes(tool.id)) : [];
@@ -1005,10 +1016,28 @@ function ToolsView({
           </div>
           {write.map((t) => toolButton(t, selectedTool, setSelectedTool))}
           <div style={{ padding: "16px 6px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
-            MCP servers
+            Connectors · {connectors.length}
           </div>
           <div style={{ padding: "4px 6px 8px", fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.55 }}>
-            None connected yet.
+            {connectors.length === 0 ? (
+              <>None yet.</>
+            ) : (
+              connectors.map((c) => (
+                <div key={c.id} style={{ opacity: c.enabled ? 1 : 0.5 }}>{c.label}</div>
+              ))
+            )}
+            {canOpenSettings() && (
+              <button
+                type="button"
+                onClick={() => openSettingsSection("connectors")}
+                style={{
+                  marginTop: 6, padding: 0, border: "none", background: "none",
+                  color: "var(--accent)", fontSize: 12, cursor: "pointer", font: "inherit",
+                }}
+              >
+                Manage connectors
+              </button>
+            )}
           </div>
         </div>
       </aside>
@@ -1052,7 +1081,8 @@ function ToolsView({
               </div>
             </div>
             <div style={{ marginTop: 18, fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.6 }}>
-              MCP server support is planned — once connected, their tools will appear here alongside the built-ins.
+              Connector tools are not callable yet — a connector's tools are listed in
+              Settings → Connectors, and join this inventory once the harness can run them.
             </div>
           </div>
         ) : (

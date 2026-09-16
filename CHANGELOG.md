@@ -55,6 +55,20 @@ Notable changes per milestone. Dates are completion dates.
   dispatch card names it with its model. Rows on the question card wear the
   model's maker or the worker's logo in place of a number.
 
+### Connectors (MCP servers Klide connects to)
+
+- **Settings › Connectors.** A connector is one named stdio MCP server plus the
+  decision to use it, stored in `~/.klide/connectors.json`. The page reads the
+  MCP config the user already has — Claude Code's `~/.claude.json` and the
+  project's `.mcp.json`, Codex's `~/.codex/config.toml`, OpenCode's
+  `opencode.json` — and offers each entry for import; Klide never edits another
+  tool's file, and its own `klide mcp coordination` entry is never offered.
+  **Check** starts the server, completes the MCP handshake, lists its tools and
+  kills it, with every read bounded by a deadline. The Skills modal's tool
+  inventory lists added connectors beside the built-ins. Connector tools are
+  not callable from the Harness yet; that is the next slice.
+
+
 ### Agent coordination
 
 - **A send receipt reports the journal, not an assumption.** `agent_send` used
