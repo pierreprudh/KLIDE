@@ -1560,6 +1560,12 @@ function App() {
    *  were. Two conversations side by side are allowed to come from two
    *  projects. */
   function openFocusConversation(convo: Conversation, target: "primary" | "split") {
+    // The rail stands beside the full-window overlays (Mission Control, Git,
+    // Settings), so a conversation can be clicked while one covers the canvas.
+    // The thread is loaded *under* the overlay, which then has to go — the
+    // same reveal ritual `revealAiPanel` performs for the workbench and the
+    // fleet performs for every Mission Control admission.
+    back();
     endFocusRaceWatch();
     // Legacy ordinary conversations were auto-isolated before that policy was
     // removed. Reopen those on the Workspace; intentional worktree
