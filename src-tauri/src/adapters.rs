@@ -1024,7 +1024,17 @@ struct AnthropicAdapter {
     key: String,
     thinking_budget: Option<usize>,
     usage: AiUsage,
+    /// Why the model stopped, from the closing `message_delta`. `max_tokens`
+    /// is the one that matters: a tool call cut off mid-JSON must not be
+    /// dropped in silence.
+    stop_reason: Option<String>,
 }
+
+/// The reply budget. 4096 was the API's own example value and it cut a
+/// `write_file` of a test file in half — the model produced exactly 4096
+/// tokens of tool JSON, the JSON never closed, and the call vanished. Current
+/// Claude models accept far more; this is enough to write a whole file.
+const ANTHROPIC_MAX_OUTPUT_TOKENS: usize = 16_384;
 
 impl StreamingProvider for AnthropicAdapter {
     type ToolAccumulator = Vec<AnthropicToolAcc>;
@@ -1037,7 +1047,7 @@ impl StreamingProvider for AnthropicAdapter {
         let (system, msgs) = anthropic_messages(self.messages.clone());
         let mut body = serde_json::json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": ANTHROPIC_MAX_OUTPUT_TOKENS,
             "stream": true,
             "messages": msgs,
         });
@@ -1046,7 +1056,7 @@ impl StreamingProvider for AnthropicAdapter {
                 "type": "enabled",
                 "budget_tokens": budget,
             });
-            body["max_tokens"] = serde_json::json!(budget.saturating_add(4096));
+            body["max_tokens"] = serde_json::json!(budget.saturating_add(ANTHROPIC_MAX_OUTPUT_TOKENS));
         }
         if !system.trim().is_empty() {
             body["system"] = serde_json::Value::String(system);
@@ -1102,6 +1112,18 @@ impl StreamingProvider for AnthropicAdapter {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
         {
+            // The closing delta says why the model stopped. Recorded so a
+            // reply cut off at the output cap can be told apart from one that
+            // ended on its own.
+            "message_delta" => {
+                if let Some(reason) = value
+                    .get("delta")
+                    .and_then(|d| d.get("stop_reason"))
+                    .and_then(|v| v.as_str())
+                {
+                    self.stop_reason = Some(reason.to_string());
+                }
+            }
             // Anthropic delivers mid-stream failures as `error` events over
             // HTTP 200 — they must fail the request, not vanish.
             "error" => {
@@ -1182,13 +1204,28 @@ impl StreamingProvider for AnthropicAdapter {
 
     fn finalize_response(
         self,
-        content: String,
+        mut content: String,
         thinking: String,
         tools: Self::ToolAccumulator,
     ) -> AiChatResponse {
+        // A reply that hit the output cap mid-tool-call leaves JSON that never
+        // closed. Passing it on would fail as a malformed call; dropping it in
+        // silence left a worker "done" with nothing to show and no reason why.
+        // So: drop it, and say so in the reply, where the model reads it next
+        // turn and the parent reads it as the report.
+        let cut_off = self.stop_reason.as_deref() == Some("max_tokens");
+        let mut truncated: Vec<String> = Vec::new();
         let tool_calls: Vec<serde_json::Value> = tools
             .into_iter()
             .filter(|b| !b.name.is_empty())
+            .filter(|b| {
+                let whole = b.args.is_empty()
+                    || serde_json::from_str::<serde_json::Value>(&b.args).is_ok();
+                if !whole && cut_off {
+                    truncated.push(b.name.clone());
+                }
+                whole || !cut_off
+            })
             .map(|b| {
                 serde_json::json!({
                     "id": b.id, "type": "function",
@@ -1199,6 +1236,18 @@ impl StreamingProvider for AnthropicAdapter {
                 })
             })
             .collect();
+        if !truncated.is_empty() {
+            if !content.trim().is_empty() {
+                content.push_str("\n\n");
+            }
+            content.push_str(&format!(
+                "The reply hit the output limit ({} tokens) in the middle of a `{}` call, so that \
+                 call was not made and nothing was changed. Do it in smaller pieces: write the \
+                 file in parts, or make one focused edit at a time.",
+                self.usage.completion_tokens.unwrap_or(ANTHROPIC_MAX_OUTPUT_TOKENS as u64),
+                truncated.join("`, `")
+            ));
+        }
         AiChatResponse {
             content,
             thinking: if thinking.trim().is_empty() {
@@ -1235,6 +1284,7 @@ pub(crate) async fn anthropic_chat(
         key,
         thinking_budget,
         usage: AiUsage::default(),
+        stop_reason: None,
     };
     stream_provider(adapter, on_chunk).await
 }
@@ -1943,6 +1993,7 @@ mod tests {
             key: "sk-ant-test".to_string(),
             thinking_budget: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -1990,6 +2041,7 @@ mod tests {
             key: "sk-ant-test".to_string(),
             thinking_budget: Some(4096),
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let request = adapter
             .build_request(&reqwest::Client::new())
@@ -2000,7 +2052,38 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(body).unwrap();
         assert_eq!(value["thinking"]["type"], "enabled");
         assert_eq!(value["thinking"]["budget_tokens"], 4096);
-        assert_eq!(value["max_tokens"], 8192);
+        assert_eq!(value["max_tokens"], 4096 + ANTHROPIC_MAX_OUTPUT_TOKENS);
+    }
+
+    #[test]
+    fn anthropic_tool_call_cut_off_at_the_output_cap_is_dropped_out_loud() {
+        // The JSON never closes; the closing delta says max_tokens. Passing the
+        // half-call on would fail as malformed; dropping it silently left a
+        // worker "done" with nothing. The reply must say what happened.
+        let lines = [
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"write_file"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"src/time.test.ts\",\"content\":\"import { describe"}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4096}}"#,
+        ];
+        let (content, tools, _chunks) = run_anthropic(&lines);
+        assert!(tools.is_empty(), "a half call is not a call");
+        assert!(content.contains("output limit"), "{content}");
+        assert!(content.contains("write_file"), "{content}");
+        assert!(content.contains("4096"), "{content}");
+    }
+
+    #[test]
+    fn anthropic_whole_tool_call_survives_a_max_tokens_stop() {
+        // Cut off *after* the call closed — the call is real, only the prose
+        // after it is missing.
+        let lines = [
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a.rs\"}"}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4096}}"#,
+        ];
+        let (content, tools, _chunks) = run_anthropic(&lines);
+        assert_eq!(tools.len(), 1);
+        assert!(content.is_empty(), "{content}");
     }
 
     #[test]
@@ -2052,6 +2135,7 @@ mod tests {
             key: "k".to_string(),
             thinking_budget: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let mut content = String::new();
         let mut thinking = String::new();
@@ -2080,6 +2164,7 @@ mod tests {
             key: "k".to_string(),
             thinking_budget: None,
             usage: AiUsage::default(),
+            stop_reason: None,
         };
         let content = String::new();
         let thinking = String::new();

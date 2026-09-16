@@ -12,6 +12,12 @@ Notable changes per milestone. Dates are completion dates.
   on Anthropic died with a 400 before the model saw a word. Found by the first
   Anthropic worker dispatch. The per-action shape now lives in the field
   descriptions and in the request parser, where it was enforced anyway.
+- **An Anthropic reply cut off at the output cap says so.** The cap was 4096
+  tokens, the API's example value; a worker writing a test file hit it in the
+  middle of its `write_file` JSON, the call never closed, and it vanished —
+  the run ended "done" with nothing. The cap is now 16k, and a call cut off by
+  `max_tokens` is dropped out loud: the reply says which call, at how many
+  tokens, and to work in smaller pieces.
 - **A worker that never spoke reports why.** A child run that ended on an
   error came back to the parent as "(subagent produced no output)"; it now
   comes back as the error itself, so Kit reacts to the cause.
