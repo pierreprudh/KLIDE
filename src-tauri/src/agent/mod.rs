@@ -643,8 +643,25 @@ async fn run_subagent_to_completion(
         Ok(Err(err)) => return Err(err),
         Err(_) => return Err("The subagent run ended without settling.".to_string()),
     }
-    Ok(last_assistant_text(&runs_dir, &spec.run_id)
-        .unwrap_or_else(|| "(subagent produced no output)".to_string()))
+    // A child that never spoke usually failed before it could: say why, so the
+    // parent can react to the cause rather than to silence.
+    if let Some(text) = last_assistant_text(&runs_dir, &spec.run_id) {
+        return Ok(text);
+    }
+    Err(last_run_error(&runs_dir, &spec.run_id)
+        .unwrap_or_else(|| "the subagent produced no output".to_string()))
+}
+
+/// The message of the child's last `RunError`, when it ended on one.
+fn last_run_error(runs_dir: &Path, run_id: &str) -> Option<String> {
+    read_events(runs_dir, run_id)
+        .ok()?
+        .into_iter()
+        .rev()
+        .find_map(|event| match event {
+            AgentEvent::RunError { error, .. } => Some(error.message),
+            _ => None,
+        })
 }
 
 /// The child's answer: the text of the last `AssistantMessage` on its
