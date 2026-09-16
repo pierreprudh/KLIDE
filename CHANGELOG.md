@@ -4,6 +4,20 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Fixes
+
+- **Goal runs on a direct Anthropic key work again.** The `mission_orchestrate`
+  tool's input schema carried a top-level `oneOf`, which Anthropic's API
+  refuses — and one refused tool fails the whole request, so every Goal turn
+  on Anthropic died with a 400 before the model saw a word. Found by the first
+  Anthropic worker dispatch. The per-action shape now lives in the field
+  descriptions and in the request parser, where it was enforced anyway.
+- **A worker that never spoke reports why.** A child run that ended on an
+  error came back to the parent as "(subagent produced no output)"; it now
+  comes back as the error itself, so Kit reacts to the cause.
+- **The live "Delegated to" row shows the worker the card decided.** The
+  dispatch event reaches the live fold, not only the reload.
+
 ### Workers (a subagent that is another CLI agent)
 
 - **`spawn_subagent` can name a `worker`.** Asked to "have Claude implement
