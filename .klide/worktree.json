@@ -1,0 +1,4 @@
+{
+  "copyFiles": [".env"],
+  "linkDirs": ["node_modules"]
+}
