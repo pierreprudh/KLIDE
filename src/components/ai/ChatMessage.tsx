@@ -9,7 +9,7 @@ import {
   type DeliveredEnvelopeRef,
 } from "./coordinationPeers";
 import { readCoordinationSnapshot, type CoordinationEnvelope, type CoordinationEnvelopeSnapshot } from "../../agent/coordination";
-import { DotGridLoader, ToolIcon } from "./icons";
+import { DotGridLoader, ProviderLogo, ToolIcon } from "./icons";
 import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
@@ -152,9 +152,12 @@ function summarizeArgs(args: unknown): string {
 // `spawn_subagent` reads as a delegation, not a tool call: a middot, the
 // @role it handed to, and the task in plain prose — expandable to the full task
 // when it's long. No JSON, no "spawn_subagent(...)" — the report follows below.
+// A call that named a worker wears that Delegate's mark and name in front of
+// the role, the same way the dispatch card does: "Claude Code implementer".
 function SubagentCallRow({ args }: { args: unknown }) {
   const o = (args ?? {}) as Record<string, unknown>;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
+  const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
   const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
   const long = task.length > 96;
   const short = long ? task.slice(0, 95) + "…" : task;
@@ -163,7 +166,13 @@ function SubagentCallRow({ args }: { args: unknown }) {
       <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
         <span aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0 }}>·</span>
         <span style={{ fontSize: 12, color: "var(--fg-subtle)", flexShrink: 0 }}>Delegated to</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 500, color: "var(--accent)", flexShrink: 0 }}>@{subagent}</span>
+        {worker && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, fontSize: 12, color: "var(--fg-strong)" }}>
+            <ProviderLogo id={worker} size={13} />
+            <span>{providerName(worker)}</span>
+          </span>
+        )}
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 500, color: "var(--accent)", flexShrink: 0 }}>{worker ? subagent : `@${subagent}`}</span>
         {short && (
           <span style={{ fontSize: 12, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>· {short}</span>
         )}
