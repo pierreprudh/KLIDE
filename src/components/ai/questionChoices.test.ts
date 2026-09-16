@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { choiceLabel } from "./QuestionCard";
+import { choiceLabel, dispatchAnswer, dispatchModelRows } from "./QuestionCard";
+
+describe("dispatchModelRows", () => {
+  it("leads a Delegate with its own default and two of its models", () => {
+    expect(dispatchModelRows("codex", ["gpt-5.4", "gpt-5.5-codex", "o5"])).toEqual(["default", "gpt-5.4", "gpt-5.5-codex"]);
+    expect(dispatchModelRows("claude-code", [])).toEqual(["default"]);
+  });
+
+  it("gives an API provider its first three, with no default to fall back on", () => {
+    expect(dispatchModelRows("anthropic", ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5", "x"])).toEqual([
+      "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5",
+    ]);
+  });
+});
+
+describe("dispatchAnswer", () => {
+  it("sends the agent and the model as one object the harness reads back", () => {
+    expect(JSON.parse(dispatchAnswer("codex", "default"))).toEqual({ worker: "codex", model: "default" });
+  });
+});
 
 describe("choiceLabel", () => {
   it("gives the CLI's default sentinel a sentence when the question is which model", () => {

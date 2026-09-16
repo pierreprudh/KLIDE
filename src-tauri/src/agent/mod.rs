@@ -6785,13 +6785,15 @@ mod worker_dispatch_tests {
         for option in &choices.options {
             assert!(subagents::resolve_worker(option).is_some(), "{option} is a worker");
         }
-        assert!(choices.more_models_from.is_none(), "a which-worker question has no model picker");
+        assert_eq!(choices.kind.as_deref(), Some("dispatch"), "the card walks agent, then model");
+        assert!(choices.preselected.is_none(), "no agent was named, so the card opens on the agent step");
+        assert!(choices.more_models_from.is_none());
         assert!(permission_requests(&events).is_empty(), "no dispatch was proposed");
         assert!(sup.spawned.lock().unwrap().is_empty(), "nothing was started");
     }
 
     #[tokio::test]
-    async fn picking_a_worker_on_the_card_carries_on_to_the_model_question_and_the_gate() {
+    async fn picking_an_agent_and_a_model_on_the_one_card_carries_on_to_the_gate() {
         let root = plain_folder("pick-worker");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -6801,24 +6803,54 @@ mod worker_dispatch_tests {
         let (events, mut emit) = event_log();
 
         let call = subagent_call("c1", serde_json::json!({ "subagent": "tester", "task": "Test slugify" }));
-        // Two questions in a row — which worker, then which model — each on its
-        // own request id, so one poller answers the first and a second the next.
-        let answers = async {
-            answer_question(&sup, "run", "codex").await;
-            answer_question(&sup, "run", "(skipped)").await;
-        };
+        // One question, one card: the agent step and the model step answer
+        // together, as the object the card sends.
         let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
-            answers,
+            answer_question(&sup, "run", r#"{"worker":"codex","model":"default"}"#),
             answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
         );
         assert!(produced(outcome).ok);
         let asked = questions(&events);
-        assert_eq!(asked.len(), 2, "which worker, then which model");
-        assert!(asked[1].0.contains("Codex"), "the model question names the picked worker: {}", asked[1].0);
+        assert_eq!(asked.len(), 1, "agent and model are one question");
+        assert!(asked[0].0.contains("which model"), "{}", asked[0].0);
         let spawned = sup.spawned.lock().unwrap();
         assert_eq!(spawned[0].provider, "codex");
         assert_eq!(spawned[0].model, crate::delegate::CLI_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn the_card_answer_is_an_object_a_word_or_nothing() {
+        assert_eq!(
+            super::tool_handlers::parse_dispatch_answer(r#"{"worker":"codex","model":"gpt-5.4"}"#),
+            (Some("codex".into()), Some("gpt-5.4".into()))
+        );
+        assert_eq!(super::tool_handlers::parse_dispatch_answer(r#"{"model":"claude-opus-4-6"}"#), (None, Some("claude-opus-4-6".into())));
+        assert_eq!(super::tool_handlers::parse_dispatch_answer("  anthropic "), (Some("anthropic".into()), None), "a typed word is a worker");
+        assert_eq!(super::tool_handlers::parse_dispatch_answer("(skipped)"), (None, None));
+        assert_eq!(super::tool_handlers::parse_dispatch_answer(""), (None, None));
+    }
+
+    #[tokio::test]
+    async fn the_user_may_change_the_agent_kit_named_from_the_model_step() {
+        let root = plain_folder("change-agent");
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("change-agent");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: runs.as_path() };
+        let (_events, mut emit) = event_log();
+
+        // Kit named Codex; the user went one step back and picked Claude Code.
+        let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex" }));
+        let (outcome, _, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_question(&sup, "run", r#"{"worker":"claude-code","model":"default"}"#),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        assert!(produced(outcome).ok);
+        let spawned = sup.spawned.lock().unwrap();
+        assert_eq!(spawned[0].provider, "claude-code", "the operator's pick wins over the call's");
     }
 
     #[tokio::test]
@@ -7025,7 +7057,7 @@ mod worker_dispatch_tests {
     }
 
     #[tokio::test]
-    async fn a_worker_with_no_model_asks_which_one_with_the_default_first_and_the_catalogue_behind() {
+    async fn a_worker_with_no_model_opens_the_card_on_its_model_step() {
         let root = plain_folder("ask-model");
         let sup = FakeSupervisor::with_run("run");
         let cancel = CancellationToken::new();
@@ -7037,7 +7069,7 @@ mod worker_dispatch_tests {
         let call = subagent_call("c1", serde_json::json!({ "subagent": "implementer", "task": "Add slugify", "worker": "codex" }));
         let (outcome, _, _) = tokio::join!(
             process_subagent_tool(&ctx, &call, &mut emit),
-            answer_question(&sup, "run", "gpt-5.5-codex"),
+            answer_question(&sup, "run", r#"{"worker":"codex","model":"gpt-5.5-codex"}"#),
             answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
         );
         let result = produced(outcome);
@@ -7047,10 +7079,11 @@ mod worker_dispatch_tests {
         assert_eq!(asked.len(), 1, "one question, before the gate");
         let (question, choices) = &asked[0];
         assert!(question.contains("Codex"), "names the worker: {question}");
-        let choices = choices.clone().expect("a which-model question carries choices");
-        assert_eq!(choices.options.first().map(String::as_str), Some("default"), "the CLI's own default leads");
-        assert!(choices.options.len() <= 3, "at most the default and two more: {:?}", choices.options);
-        assert_eq!(choices.more_models_from.as_deref(), Some("codex"), "the picker offers the worker's catalogue");
+        let choices = choices.clone().expect("a dispatch question carries choices");
+        assert_eq!(choices.kind.as_deref(), Some("dispatch"));
+        assert_eq!(choices.preselected.as_deref(), Some("codex"), "the named agent is preselected");
+        assert_eq!(choices.more_models_from.as_deref(), Some("codex"), "and its catalogue is the model step");
+        assert!(choices.options.iter().any(|o| o == "codex"), "the named agent is among the rows so the user can change it");
 
         // The gate came after the question and already knew the answer.
         let prompt = &permission_requests(&events)[0];
