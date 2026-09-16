@@ -8689,3 +8689,8 @@ button:focus-visible .menu-leadout {
 
 /* The row the call pre-selected is named, not painted: "Kit's pick" beside it,
    and the same hover soft-fill as every other row — nothing lateral, no spine. */
+
+/* A worker's outcome is the card's border, not a word: green when it finished,
+   red when it failed or was cancelled, the plain hairline while it runs. */
+.ai-agent-stats-card[data-outcome="done"] { border-color: var(--success); }
+.ai-agent-stats-card[data-outcome="failed"] { border-color: var(--danger); }

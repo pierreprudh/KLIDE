@@ -1474,6 +1474,12 @@ function App() {
         workspaceRoot={root}
         worktreeName={worktreeName}
         workspaceBranch={!worktreeName && root === workspaceRoot ? gitStatus?.branch ?? null : null}
+        onOpenRunInMissionControl={(runId) => {
+          // A worker child's arrow: the same door the rail's "Open in Mission
+          // Control" uses, addressed by the run rather than a conversation.
+          setMissionOpenRequest(runId);
+          openOverlay("runs");
+        }}
         onOpenPeerConversation={(conversationId) => {
           // The peer link's card names another thread; land it exactly where a
           // click in the rail's tree would — raised if it is already open.

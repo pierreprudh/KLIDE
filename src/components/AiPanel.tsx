@@ -375,6 +375,9 @@ type Props = {
    *  peer link's card offers the peer thread as a link. Same landing as a
    *  click in the rail's conversation tree. */
   onOpenPeerConversation?: (conversationId: string) => void;
+  /** A worker child is a Run, not a conversation: its arrow opens Mission
+   *  Control on that row. */
+  onOpenRunInMissionControl?: (runId: string) => void;
   /** The host's Provider for this panel. Live, like `model` — surfaces outside
    *  the panel (the Focus hero) edit the pair, and the two must move together
    *  or a run goes out with a model the Provider doesn't serve. Absent means
@@ -689,6 +692,7 @@ export function AiPanel({
   onDuplicate,
   onForkConversationInWorktree,
   onOpenPeerConversation,
+  onOpenRunInMissionControl,
   provider: hostProvider,
   onProviderChange,
   onOpenSettingsSection,
@@ -5519,6 +5523,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             model={model}
             active={streaming}
             onOpen={onOpenPeerConversation}
+            onOpenRun={onOpenRunInMissionControl}
           />
         </div>
       </div>
