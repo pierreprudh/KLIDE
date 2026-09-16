@@ -8690,30 +8690,7 @@ button:focus-visible .menu-leadout {
 /* The row the call pre-selected is named, not painted: "Kit's pick" beside it,
    and the same hover soft-fill as every other row — nothing lateral, no spine. */
 
-/* A worker's outcome is the card's colour, not a word — and the colour is
-   folded into the surface rather than painted on it: the hairline leans a
-   little toward green or red, the ground takes a few percent of the same
-   hue, and a soft halo of it sits outside the edge. No saturated stroke, no
-   chip; the plain hairline while it runs. Eased, so a card that settles
-   while open drifts to its colour rather than snapping. */
-.ai-agent-stats-card {
-  transition:
-    border-color var(--motion-med) var(--ease-out),
-    background var(--motion-med) var(--ease-out),
-    box-shadow var(--motion-med) var(--ease-out);
-}
-.ai-agent-stats-card[data-outcome="done"] {
-  border-color: color-mix(in srgb, var(--success) 22%, var(--border-strong));
-  background: color-mix(in srgb, var(--success) 2.5%, var(--bg));
-  box-shadow: 0 8px 30px #0002, 0 0 0 3px color-mix(in srgb, var(--success) 4%, transparent);
-}
-.ai-agent-stats-card[data-outcome="failed"] {
-  border-color: color-mix(in srgb, var(--danger) 22%, var(--border-strong));
-  background: color-mix(in srgb, var(--danger) 2.5%, var(--bg));
-  box-shadow: 0 8px 30px #0002, 0 0 0 3px color-mix(in srgb, var(--danger) 4%, transparent);
-}
-
 /* Metrics span the line — first flush left, last flush right, the rest
    spread between — instead of bunching at the left edge. */
-.ai-agent-stats-line[data-metrics="1"] { display: flex; justify-content: space-between; gap: 12px; }
+.ai-agent-stats-line[data-metrics="1"] { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ai-agent-stats-line[data-metrics="1"] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

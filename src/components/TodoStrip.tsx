@@ -231,7 +231,7 @@ export type TodoStripSlot = "card" | "mark" | "none";
  *  left while the island is up (AiPanel), so the two never overlap. */
 export const ISLAND_WIDTH = 320;
 
-function StepMark({ index, state }: { index: number; state: "todo" | "active" | "done" }) {
+export function StepMark({ index, state }: { index: number; state: "todo" | "active" | "done" }) {
   const r = (MARK - 1.5) / 2;
   const c = 2 * Math.PI * r;
   return (

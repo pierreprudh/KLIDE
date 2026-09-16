@@ -11,14 +11,16 @@ import { createPortal } from "react-dom";
 import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { ProviderLogo } from "./icons";
 import { AgentMark } from "../fileMarks";
+import { StepMark } from "../TodoStrip";
 import { loadConversations } from "./storedConversations";
 import { METRIC_GAP, participantStats, workerRunStats } from "./participantStats";
 import { fetchAgentRunsCached, type Run } from "../../runs";
 
 function Participant({ name, mark, status, outcome, stats, children }: {
   name: string; mark: ReactNode; status: string;
-  /** How the run ended, said by the card's border — green done, red failed —
-   *  rather than by a word. Absent while it is live or for a plain peer. */
+  /** How the run ended, said by a mark at the end of the metrics line — the
+   *  plan's own filled check for done, a muted cross for failed — never a
+   *  word, never a colour on the card. Absent while it is live or for a peer. */
   outcome?: "done" | "failed";
   stats: () => string; children?: ReactNode;
 }) {
@@ -37,11 +39,15 @@ function Participant({ name, mark, status, outcome, stats, children }: {
     <button ref={menu.triggerRef} type="button" className="ai-agent-avatar" title={name}
       aria-label={`${name} — show stats`} aria-expanded={menu.open}
       onClick={() => { if (menu.open) menu.close(); else { setLine(stats()); menu.openMenu(); } }}>{mark}</button>
-    {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" data-outcome={outcome} style={menu.pos} role="dialog" aria-label={`${name} stats${outcome ? `, ${outcome}` : ""}`}>
+    {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" style={menu.pos} role="dialog" aria-label={`${name} stats${outcome ? `, ${outcome}` : ""}`}>
       <div className="ai-agent-stats-heading"><span className="ai-agent-activity-name">{mark}<strong>{name}</strong></span><span>{status}</span>{children}</div>
-      {line.includes(METRIC_GAP)
-        ? <div className="ai-agent-stats-line" data-metrics="1" title={line.split(METRIC_GAP).join("  ")}>{line.split(METRIC_GAP).map((part, i) => <span key={i}>{part}</span>)}</div>
-        : <div className="ai-agent-stats-line" title={line}>{line}</div>}
+      <div className="ai-agent-stats-line" data-metrics="1" title={line.split(METRIC_GAP).join("  ")}>
+        {line.split(METRIC_GAP).map((part, i) => <span key={i}>{part}</span>)}
+        {outcome === "done" && <span aria-label="done" style={{ flexShrink: 0, display: "grid", placeItems: "center" }}><StepMark index={0} state="done" /></span>}
+        {outcome === "failed" && (
+          <span aria-label="failed" style={{ flexShrink: 0, width: 14, height: 14, borderRadius: "50%", border: "1px solid var(--border-strong)", display: "grid", placeItems: "center", color: "var(--fg-dim)", fontSize: 9, lineHeight: 1 }}>×</span>
+        )}
+      </div>
     </div>, document.body)}
   </>;
 }
