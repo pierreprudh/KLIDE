@@ -12,7 +12,7 @@ import { usePortalMenu } from "../../hooks/usePortalMenu";
 import { ProviderLogo } from "./icons";
 import { AgentMark } from "../fileMarks";
 import { loadConversations } from "./storedConversations";
-import { participantStats, workerRunStats } from "./participantStats";
+import { METRIC_GAP, participantStats, workerRunStats } from "./participantStats";
 import { fetchAgentRunsCached, type Run } from "../../runs";
 
 function Participant({ name, mark, status, outcome, stats, children }: {
@@ -39,7 +39,9 @@ function Participant({ name, mark, status, outcome, stats, children }: {
       onClick={() => { if (menu.open) menu.close(); else { setLine(stats()); menu.openMenu(); } }}>{mark}</button>
     {menu.open && menu.pos && createPortal(<div ref={menu.menuRef} className="ai-agent-stats-card" data-outcome={outcome} style={menu.pos} role="dialog" aria-label={`${name} stats${outcome ? `, ${outcome}` : ""}`}>
       <div className="ai-agent-stats-heading"><span className="ai-agent-activity-name">{mark}<strong>{name}</strong></span><span>{status}</span>{children}</div>
-      <div className="ai-agent-stats-line" title={line}>{line}</div>
+      {line.includes(METRIC_GAP)
+        ? <div className="ai-agent-stats-line" data-metrics="1" title={line.split(METRIC_GAP).join("  ")}>{line.split(METRIC_GAP).map((part, i) => <span key={i}>{part}</span>)}</div>
+        : <div className="ai-agent-stats-line" title={line}>{line}</div>}
     </div>, document.body)}
   </>;
 }

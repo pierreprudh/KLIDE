@@ -8703,12 +8703,17 @@ button:focus-visible .menu-leadout {
     box-shadow var(--motion-med) var(--ease-out);
 }
 .ai-agent-stats-card[data-outcome="done"] {
-  border-color: color-mix(in srgb, var(--success) 38%, var(--border-strong));
-  background: color-mix(in srgb, var(--success) 4%, var(--bg));
-  box-shadow: 0 8px 30px #0002, 0 0 0 4px color-mix(in srgb, var(--success) 7%, transparent);
+  border-color: color-mix(in srgb, var(--success) 22%, var(--border-strong));
+  background: color-mix(in srgb, var(--success) 2.5%, var(--bg));
+  box-shadow: 0 8px 30px #0002, 0 0 0 3px color-mix(in srgb, var(--success) 4%, transparent);
 }
 .ai-agent-stats-card[data-outcome="failed"] {
-  border-color: color-mix(in srgb, var(--danger) 38%, var(--border-strong));
-  background: color-mix(in srgb, var(--danger) 4%, var(--bg));
-  box-shadow: 0 8px 30px #0002, 0 0 0 4px color-mix(in srgb, var(--danger) 7%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 22%, var(--border-strong));
+  background: color-mix(in srgb, var(--danger) 2.5%, var(--bg));
+  box-shadow: 0 8px 30px #0002, 0 0 0 3px color-mix(in srgb, var(--danger) 4%, transparent);
 }
+
+/* Metrics span the line — first flush left, last flush right, the rest
+   spread between — instead of bunching at the left edge. */
+.ai-agent-stats-line[data-metrics="1"] { display: flex; justify-content: space-between; gap: 12px; }
+.ai-agent-stats-line[data-metrics="1"] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
