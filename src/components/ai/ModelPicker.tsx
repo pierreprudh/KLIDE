@@ -53,6 +53,8 @@ type Props = {
   fluid?: boolean;
   /** Keep hover feedback to the label/chevron instead of drawing a surface. */
   bareHover?: boolean;
+  /** What the trigger says while `model` is empty. */
+  placeholder?: string;
 };
 
 /** Merged list: available models first, the current model pinned at the top
@@ -136,6 +138,7 @@ export function ModelPicker({
   direction = "up",
   fluid = false,
   bareHover = false,
+  placeholder = "Select model",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -395,7 +398,7 @@ export function ModelPicker({
           {model ? (
             modelLabel(model)
           ) : (
-            <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}>Select model</span>
+            <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}>{placeholder}</span>
           )}
         </span>
         <Chevron rotated={open} />

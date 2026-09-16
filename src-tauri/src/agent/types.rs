@@ -356,6 +356,32 @@ pub struct AgentTurnTiming {
 
 /// One button on a permission card. `option_id` goes out as `optionId` — the
 /// name the frontend mirror got wrong for as long as this was an untyped
+/// The short list a question may put to the user beside free text. `options`
+/// are drawn as rows and clicked; `more_models_from` names a provider whose
+/// whole catalogue the card should also offer through the model picker, for a
+/// question that is really "which model".
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionChoices {
+    pub options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more_models_from: Option<String>,
+    /// `dispatch`: the options are workers, and the card walks two steps —
+    /// which agent, then which of its models — answering with both as one
+    /// JSON object, `{"worker":"codex","model":"default"}`. Absent for a
+    /// plain list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// For a dispatch: the worker the call already named, so the card opens
+    /// on the model step with the agent step one link back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preselected: Option<String>,
+    /// For a dispatch: the model the call already named, drawn as the current
+    /// row on the model step — one click confirms it, another changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preselected_model: Option<String>,
+}
+
 /// `serde_json::Value` and nothing read the field.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -713,6 +739,11 @@ pub enum AgentEvent {
         run_id: String,
         request_id: String,
         question: String,
+        /// Answers the card offers as rows, when the question has a short
+        /// list of right answers — which model a worker should use, say. A
+        /// click answers with the row's text; free text stays possible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        choices: Option<QuestionChoices>,
         ts: i64,
     },
     UserQuestionResolved {
@@ -741,6 +772,10 @@ pub enum AgentEvent {
         /// repository (it then edits the project folder directly).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
+        /// The model the worker was started on, once the card decided it.
+        /// Absent for an in-model child, and for a CLI on its own default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
         ts: i64,
     },
     SubagentResolved {

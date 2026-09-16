@@ -4,6 +4,26 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Fixes
+
+- **Goal runs on a direct Anthropic key work again.** The `mission_orchestrate`
+  tool's input schema carried a top-level `oneOf`, which Anthropic's API
+  refuses — and one refused tool fails the whole request, so every Goal turn
+  on Anthropic died with a 400 before the model saw a word. Found by the first
+  Anthropic worker dispatch. The per-action shape now lives in the field
+  descriptions and in the request parser, where it was enforced anyway.
+- **An Anthropic reply cut off at the output cap says so.** The cap was 4096
+  tokens, the API's example value; a worker writing a test file hit it in the
+  middle of its `write_file` JSON, the call never closed, and it vanished —
+  the run ended "done" with nothing. The cap is now 16k, and a call cut off by
+  `max_tokens` is dropped out loud: the reply says which call, at how many
+  tokens, and to work in smaller pieces.
+- **A worker that never spoke reports why.** A child run that ended on an
+  error came back to the parent as "(subagent produced no output)"; it now
+  comes back as the error itself, so Kit reacts to the cause.
+- **The live "Delegated to" row shows the worker the card decided.** The
+  dispatch event reaches the live fold, not only the reload.
+
 ### Workers (a subagent that is another CLI agent)
 
 - **`spawn_subagent` can name a `worker`.** Asked to "have Claude implement
@@ -19,6 +39,27 @@ Notable changes per milestone. Dates are completion dates.
   gets the report plus the branch to review; nothing in its checkout changes.
   With a worker the editing roles `implementer` and `tester` are allowed;
   without one the tool stays read-only on the parent's model, as before.
+- **A worker with no model named asks which one.** Before the dispatch card,
+  the question card offers the CLI's own default first, the next two models
+  its cache lists, and the whole catalogue behind the model picker — drawn as
+  numbered rows like the plan, picked with a click or `1`…`4`. Skipping is the
+  CLI's default; a model the call named is not re-asked. The same rows serve
+  `userAnswerQuestion`, which gains an optional `choices` list.
+- **An editing role with no worker asks which agent should take it**, and
+  which model, on one card in two steps: the agents usable here — Delegates
+  installed, API providers with a key — each wearing its mark, then the picked
+  agent's models, with the agent's name one link back to change it. Every
+  dispatch Kit decided is put to the user this way: what Kit named only
+  pre-selects rows — one click confirms, another changes — and skipping keeps
+  Kit's pick, or is the user's no when Kit named nothing. A dispatch the user
+  spelled out themselves — "have Codex on gpt-5.4 do it", or a CLI named
+  alone, which means its default — asks nothing and goes straight to the
+  dispatch approval.
+- **API providers are workers too.** `worker: "anthropic"` (or any hosted
+  provider with a key) runs Klide's own Harness on a model of that house as a
+  nested Run in its own worktree, edits applied without review there; the
+  dispatch card names it with its model. Rows on the question card wear the
+  model's maker or the worker's logo in place of a number.
 
 ### Connectors (MCP servers Klide connects to)
 

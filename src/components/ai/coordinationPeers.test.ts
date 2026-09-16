@@ -28,9 +28,21 @@ describe("workerChildrenOf", () => {
     ];
     const workers = workerChildrenOf(msgs, "run_kit");
     expect([...workers.entries()]).toEqual([
-      ["sub_run_kit_call_1", "claude-code"],
-      ["sub_run_kit_call_4", "codex"],
+      ["sub_run_kit_call_1", { provider: "claude-code", model: null }],
+      ["sub_run_kit_call_4", { provider: "codex", model: null }],
     ]);
+  });
+
+  it("carries the model the card decided, and treats a CLI's default as none", () => {
+    const msgs: Msg[] = [
+      { role: "assistant", content: "", toolCalls: [
+        { id: "c1", name: "spawn_subagent", args: { subagent: "tester", worker: "anthropic", model: "claude-sonnet-5" } },
+        { id: "c2", name: "spawn_subagent", args: { subagent: "tester", worker: "codex", model: "default" } },
+      ] } as Msg,
+    ];
+    const workers = workerChildrenOf(msgs, "run_kit");
+    expect(workers.get("sub_run_kit_c1")).toEqual({ provider: "anthropic", model: "claude-sonnet-5" });
+    expect(workers.get("sub_run_kit_c2")).toEqual({ provider: "codex", model: null });
   });
 
   it("knows nothing about a conversation that never dispatched a worker", () => {

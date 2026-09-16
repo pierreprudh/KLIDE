@@ -1,6 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AskIcon, SendIcon } from "../../icons";
+import type { QuestionChoices } from "../../agent/types";
+import { isDelegateProvider, isKnownProvider, providerName } from "../../agent/providers";
+import type { ProviderId } from "../../agent/types";
+import { listProviderModels } from "../../ipc/aiProviders";
+import { makerMark } from "../../modelIdentity";
+import { ProviderLogo } from "./icons";
+import { ModelPicker } from "./ModelPicker";
 
 /** Where the card is drawn. `island` is the Focus canvas' right column, under
  *  the plan island; `inline` is the strip above the composer everywhere else,
@@ -9,12 +16,210 @@ export type QuestionCardVariant = "inline" | "island";
 
 type Props = {
   question: string;
+  /** When set, the card is a short list to pick from — drawn as numbered rows
+   *  like the plan's steps — instead of a box to type in. `1`…`4` pick by
+   *  position (by key code, so an AZERTY top row works too). */
+  choices?: QuestionChoices;
   answer: string;
   onAnswerChange: (next: string) => void;
   onSubmit: () => void;
+  /** A clicked row answers with its text at once. */
+  onChoose?: (answer: string) => void;
   onSkip: () => void;
   variant?: QuestionCardVariant;
 };
+
+/** What a choice row says. A provider id reads as its name; the CLI's
+ *  `default` sentinel is the one model option that is not a model name, so it
+ *  gets a sentence. */
+export function choiceLabel(option: string, choices: QuestionChoices): { label: string; note?: string } {
+  if (option === "default" && choices.moreModelsFrom) {
+    return { label: `Let ${providerName(choices.moreModelsFrom)} choose`, note: "default" };
+  }
+  if (isKnownProvider(option)) return { label: providerName(option) };
+  return { label: option };
+}
+
+/** The mark a row wears in place of a number: a worker's own logo when the
+ *  option is a provider, the model's maker when it is a model, the Delegate's
+ *  house for `default`. Falls back to the row's index when nothing is known. */
+function ChoiceMark({ option, index, choices }: { option: string; index: number; choices: QuestionChoices }) {
+  if (isKnownProvider(option)) return <ProviderLogo id={option} size={14} />;
+  const mark = makerMark(option, choices.moreModelsFrom, 14);
+  if (mark) return mark;
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 16,
+        height: 16,
+        borderRadius: "50%",
+        border: "1px solid var(--border-strong)",
+        display: "grid",
+        placeItems: "center",
+        fontFamily: "var(--font-mono)",
+        fontSize: 9,
+        color: "var(--fg-dim)",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {index + 1}
+    </span>
+  );
+}
+
+const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
+
+/** The rows of a dispatch's model step: a Delegate leads with its own
+ *  default and two more from its list; an API provider has no default, so
+ *  its first three. The picker behind them offers the rest. */
+export function dispatchModelRows(worker: ProviderId, models: string[], current?: string): string[] {
+  const named = models.filter((m) => m && m !== "default");
+  const rows = isDelegateProvider(worker) ? ["default", ...named.slice(0, 2)] : named.slice(0, 3);
+  // The model the call named leads when it is not already among the rows, so
+  // confirming Kit's choice is the first click, not a hunt through the picker.
+  if (current && !rows.includes(current)) rows.unshift(current);
+  return rows;
+}
+
+/** What a dispatch card sends back: the agent and the model as one object,
+ *  which the harness reads on the other side. */
+export function dispatchAnswer(worker: ProviderId, model: string): string {
+  return JSON.stringify({ worker, model });
+}
+
+/** Which agent, then which model — one card, two steps, a way back. The
+ *  agent step is the plain rows; the model step is the same rows for the
+ *  picked agent's models, headed by the agent's name as a link back to change
+ *  it. Picking a model answers. Opens on the model step when the call already
+ *  named the agent, so the common case is one click. */
+function DispatchPicker({ choices, onChoose, island }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean }) {
+  const [worker, setWorker] = useState<ProviderId | null>(choices.preselected ?? null);
+  const [models, setModels] = useState<string[]>([]);
+  useEffect(() => {
+    if (!worker) return;
+    let cancelled = false;
+    setModels([]);
+    listProviderModels(worker)
+      .then((list) => { if (!cancelled) setModels(list); })
+      .catch(() => { if (!cancelled) setModels([]); });
+    return () => { cancelled = true; };
+  }, [worker]);
+  if (!worker) {
+    return (
+      <ChoiceRows
+        choices={{ options: choices.options }}
+        onChoose={(picked) => { if (isKnownProvider(picked)) setWorker(picked); }}
+        island={island}
+      />
+    );
+  }
+  const current = worker === choices.preselected ? choices.preselectedModel : undefined;
+  const rows = dispatchModelRows(worker, models, current);
+  const rowPad = island ? "6px 16px 2px 14px" : "5px 14px 2px 12px";
+  return (
+    <div style={{ display: "grid" }}>
+      <button
+        type="button"
+        className="klide-choice-row"
+        onClick={() => setWorker(null)}
+        title="Change agent"
+        aria-label={`Change agent (currently ${providerName(worker)})`}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: rowPad, border: "none", background: "transparent", color: "var(--fg-subtle)", font: "inherit", fontSize: island ? 12 : 12.5, textAlign: "left", cursor: "pointer", minWidth: 0 }}
+      >
+        <span aria-hidden style={{ fontFamily: "var(--font-mono)" }}>‹</span>
+        <ProviderLogo id={worker} size={13} />
+        <span style={{ color: "var(--fg-strong)" }}>{providerName(worker)}</span>
+        <span>· change</span>
+      </button>
+      <ChoiceRows
+        key={worker}
+        choices={{ options: rows, moreModelsFrom: worker }}
+        current={current}
+        onChoose={(model) => onChoose(dispatchAnswer(worker, model))}
+        island={island}
+      />
+    </div>
+  );
+}
+
+function ChoiceRows({ choices, onChoose, island, current }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean; current?: string }) {
+  const [models, setModels] = useState<string[]>([]);
+  const provider = choices.moreModelsFrom;
+  useEffect(() => {
+    if (!provider) return;
+    let cancelled = false;
+    listProviderModels(provider)
+      .then((list) => { if (!cancelled) setModels(list); })
+      .catch(() => { if (!cancelled) setModels([]); });
+    return () => { cancelled = true; };
+  }, [provider]);
+  const rowPad = island ? "7px 16px 7px 14px" : "6px 14px 6px 12px";
+  return (
+    <div
+      role="listbox"
+      aria-label="Answers"
+      tabIndex={-1}
+      autoFocus
+      onKeyDown={(e) => {
+        const at = DIGIT_CODES.indexOf(e.code);
+        if (at >= 0 && at < choices.options.length) {
+          e.preventDefault();
+          onChoose(choices.options[at]);
+        }
+      }}
+      style={{ display: "grid", padding: island ? "6px 0 4px" : "4px 0 2px", outline: "none" }}
+    >
+      {choices.options.map((option, index) => {
+        const { label, note } = choiceLabel(option, choices);
+        return (
+          <button
+            key={option}
+            type="button"
+            role="option"
+            aria-selected={option === current}
+            data-current={option === current ? "1" : undefined}
+            className="klide-choice-row"
+            onClick={() => onChoose(option)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: rowPad,
+              border: "none",
+              background: "transparent",
+              color: "var(--fg-strong)",
+              font: "inherit",
+              fontSize: island ? 12.5 : 13,
+              textAlign: "left",
+              cursor: "pointer",
+              minWidth: 0,
+            }}
+          >
+            <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, display: "grid", placeItems: "center" }}>
+              <ChoiceMark option={option} index={index} choices={choices} />
+            </span>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: note || isKnownProvider(option) ? undefined : "var(--font-mono)", fontSize: note || isKnownProvider(option) ? undefined : 12 }}>{label}</span>
+            {note && <span style={{ color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{note}</span>}
+            {option === current && <span style={{ marginLeft: "auto", color: "var(--fg-dim)", fontSize: 11, flexShrink: 0 }}>Kit's pick</span>}
+          </button>
+        );
+      })}
+      {provider && (
+        // The picker is the whole last row, not a control beside a label: the
+        // same mark column as the rows above, then its trigger stretched to
+        // the row's width with the row's words as its placeholder, so the
+        // menu opens from where the eye already is.
+        <div className="klide-choice-picker" style={{ display: "flex", alignItems: "center", gap: 10, padding: rowPad, minWidth: 0 }}>
+          <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, borderRadius: "50%", border: "1px dashed var(--border-strong)" }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover placeholder="Another model…" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Kit asked something and the run is parked until it hears back.
  *
@@ -28,15 +233,19 @@ type Props = {
  *  surfaces, the same way the plan is one TodoStrip in two placements. */
 export function QuestionCard({
   question,
+  choices,
   answer,
   onAnswerChange,
   onSubmit,
+  onChoose,
   onSkip,
   variant = "inline",
 }: Props) {
   const island = variant === "island";
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const canSend = answer.trim().length > 0;
+  const picking = !!choices && choices.options.length > 0 && !!onChoose;
+  const dispatching = picking && choices!.kind === "dispatch";
 
   // The answer box grows with its text the way the composer does, with the
   // same guards: an empty box falls back to its one-row min-height, and a box
@@ -124,7 +333,9 @@ export function QuestionCard({
           style={{ display: "block", height: 1, margin: "10px 0 0", background: "color-mix(in srgb, var(--border) 55%, transparent)" }}
         />
       )}
-      <textarea
+      {dispatching && <DispatchPicker choices={choices!} onChoose={onChoose!} island={island} />}
+      {picking && !dispatching && <ChoiceRows choices={choices!} onChoose={onChoose!} island={island} />}
+      {!picking && <textarea
         ref={answerRef}
         className="klide-composer-textarea"
         autoFocus
@@ -157,7 +368,7 @@ export function QuestionCard({
           outline: "none",
           display: "block",
         }}
-      />
+      />}
       <div
         style={{
           display: "flex",
@@ -189,7 +400,7 @@ export function QuestionCard({
         >
           Skip
         </button>
-        <button
+        {!picking && <button
           type="button"
           onClick={onSubmit}
           disabled={!canSend}
@@ -212,7 +423,7 @@ export function QuestionCard({
           onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
         >
           <SendIcon size={14} />
-        </button>
+        </button>}
       </div>
     </section>
   );

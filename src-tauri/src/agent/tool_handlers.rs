@@ -8,6 +8,7 @@
 //! memory.
 
 use super::*;
+use super::types::QuestionChoices;
 
 /// Pause tool (`userAnswerQuestion`): ask the user a typed question and feed
 /// their verbatim answer back to the model. "(skipped)" is the sentinel the
@@ -80,6 +81,30 @@ where
         .and_then(|v| v.as_str())
         .unwrap_or("(empty question)")
         .to_string();
+    // Up to four short answers, drawn as rows. More than that is a menu, not
+    // a question, and the card has no room for one.
+    let options: Vec<String> = call
+        .input
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .take(4)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let choices = (!options.is_empty()).then(|| QuestionChoices {
+        options,
+        more_models_from: None,
+        kind: None,
+        preselected: None,
+        preselected_model: None,
+    });
     let Some(answer) = run_pause_tool(
         ctx,
         call,
@@ -90,6 +115,7 @@ where
             run_id: ctx.id.to_string(),
             request_id: request_id.to_string(),
             question: question.clone(),
+            choices: choices.clone(),
             ts: now_ms(),
         },
         |request_id, answer| AgentEvent::UserQuestionResolved {
@@ -171,9 +197,10 @@ where
             metadata: None,
         }));
     };
-    // A worker is a Delegate CLI, named by its provider id. Same rule: an
-    // unknown one is answered with the list, never with a dead parent run.
-    let worker = match worker_arg {
+    // A worker is a Delegate CLI or a hosted API provider, named by its id.
+    // Same rule as roles: an unknown one is answered with the list, never with
+    // a dead parent run.
+    let mut worker: Option<subagents::Worker> = match worker_arg {
         None => None,
         Some(id) => match subagents::resolve_worker(id) {
             Some(worker) => Some(worker),
@@ -181,7 +208,7 @@ where
                 return Ok(ToolOutcome::Produced(ToolResult {
                     ok: false,
                     content: format!(
-                        "Unknown worker \"{id}\". Workers are the CLI agents Klide can run: {}.",
+                        "Unknown worker \"{id}\". Workers are the CLI agents and API providers Klide can run: {}.",
                         subagents::worker_ids().join(", ")
                     ),
                     metadata: None,
@@ -189,33 +216,122 @@ where
             }
         },
     };
-    // Without a worker the tool promises the child cannot edit. Until now only
-    // the schema's `enum` held that line, so a model that named an editing role
-    // anyway got one. Refuse here too: a contract worth stating is worth
-    // enforcing — and say what *would* work, which is naming a worker.
-    if worker.is_none() && !subagents::is_model_selectable(def) {
-        return Ok(ToolOutcome::Produced(ToolResult {
-            ok: false,
-            content: format!(
-                "Subagent \"{}\" makes edits and cannot run on this conversation's own model. \
-                 Pick a read-only subagent ({}) or name a `worker` ({}) to hand the task to a CLI \
-                 agent in its own worktree.",
-                def.id,
-                subagents::model_selectable_ids().join(", "),
-                subagents::worker_ids().join(", ")
-            ),
-            metadata: None,
-        }));
+    // Without a worker the tool promises the child cannot edit, so an editing
+    // role with no worker is a question, not a refusal — and every dispatch is
+    // a question: which agent should take this, and on which of its models.
+    // The card walks the two steps itself, with a way back from the model step
+    // to change the agent, and answers with both at once. What the call named
+    // is only a pre-selection: the card opens on the model step with that
+    // agent and that model current, so one click confirms Kit's choice and
+    // another changes it. The operator always sees who is about to be sent.
+    let mut chosen_model: Option<String> = model_arg.map(str::to_string);
+    let needs_worker = worker.is_none() && !subagents::is_model_selectable(def);
+    // The one case with nothing to ask: the user already said it. When the
+    // user's own words name the agent — and the model, or it is a CLI that
+    // has its own default — Kit passing them on is not a decision to confirm.
+    let settled_by_user = worker.is_some_and(|w| {
+        user_named_dispatch(&ctx.request.initial_text, w, chosen_model.as_deref())
+    });
+    if (needs_worker || worker.is_some()) && !settled_by_user {
+        let mut options = available_worker_ids().await;
+        if options.is_empty() {
+            options = subagents::worker_ids().into_iter().map(str::to_string).collect();
+        }
+        if let Some(named) = worker.map(|w| w.id().to_string()) {
+            if !options.contains(&named) {
+                options.insert(0, named);
+            }
+        }
+        // A card of rows is a which-question, never a yes/no: with Kit's
+        // pick current, "which model" still reads right and "send X?" does not.
+        let question = match worker {
+            Some(worker) => format!("Which model should {} use as {}?", worker.label(), def.id),
+            None => format!("Which agent should take this as {}, and on which model?", def.id),
+        };
+        let Some(answer) = run_pause_tool(
+            ctx,
+            call,
+            emit,
+            "q",
+            "(skipped)",
+            |request_id| AgentEvent::UserQuestionRequested {
+                run_id: ctx.id.to_string(),
+                request_id: request_id.to_string(),
+                question,
+                choices: Some(QuestionChoices {
+                    options: options.clone(),
+                    more_models_from: worker.map(|w| w.id().to_string()),
+                    kind: Some("dispatch".to_string()),
+                    preselected: worker.map(|w| w.id().to_string()),
+                    preselected_model: chosen_model.clone(),
+                }),
+                ts: now_ms(),
+            },
+            |request_id, answer| AgentEvent::UserQuestionResolved {
+                run_id: ctx.id.to_string(),
+                request_id: request_id.to_string(),
+                answer: answer.to_string(),
+                ts: now_ms(),
+            },
+        )
+        .await?
+        else {
+            return Ok(ToolOutcome::Cancelled);
+        };
+        let (picked_worker, picked_model) = parse_dispatch_answer(&answer);
+        match picked_worker.as_deref().and_then(subagents::resolve_worker) {
+            Some(picked) => worker = Some(picked),
+            None if worker.is_some() => {}
+            None => {
+                return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!(
+                        "The user did not pick a worker for \"{}\". Pick a read-only subagent ({}) \
+                         instead, or ask them how they would like it done.",
+                        def.id,
+                        subagents::model_selectable_ids().join(", ")
+                    ),
+                    metadata: None,
+                }));
+            }
+        }
+        // A picked model replaces the call's; picking a CLI's "default" clears
+        // it; no pick (skipped) keeps whatever the call named.
+        if let Some(picked) = picked_model {
+            chosen_model = (!picked.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL))
+                .then_some(picked);
+        }
     }
-
+    // An API worker has no default to fall back on: with no model picked,
+    // take the first the provider lists, and say so when it lists none.
+    if let (Some(subagents::Worker::Api(entry)), None) = (worker, chosen_model.as_deref()) {
+        let listed = crate::models::ai_provider_models(entry.id.to_string())
+            .await
+            .unwrap_or_default();
+        match listed.into_iter().next() {
+            Some(first) => chosen_model = Some(first),
+            None => {
+                return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!(
+                        "{} lists no models here, so the worker has nothing to run on. Name one \
+                         with `model`, or pick another worker.",
+                        subagents::api_provider_label(entry.id)
+                    ),
+                    metadata: None,
+                }));
+            }
+        }
+    }
     let request_id = format!("sub_{}_{}", ctx.id, call.id);
+    let model_arg: Option<&str> = chosen_model.as_deref();
 
     // A worker is dispatched, not spawned: the user approves it first, and it
     // gets a worktree of its own. Both happen here, before anything starts.
     let mut branch: Option<String> = None;
     let mut child_root = ctx.request.workspace_root.clone();
     let mut worktree_path: Option<String> = None;
-    let worker_label = worker.map(|w| worker_label(w.id()));
+    let worker_label = worker.map(|w| w.label());
     if let Some(worker) = worker {
         let label = worker_label.clone().unwrap_or_default();
         let Some(root) = ctx.request.workspace_root.clone() else {
@@ -236,6 +352,23 @@ where
             "directly in the project folder (not a Git repository, so no worktree can isolate it)"
                 .to_string()
         };
+        // An API worker is named with its model — the model is the whole
+        // difference between one Anthropic dispatch and another.
+        let who = match (worker.is_delegate(), model_arg) {
+            (false, Some(model)) => format!("{label} ({model})"),
+            _ => label.clone(),
+        };
+        let how_it_edits = if worker.is_delegate() {
+            format!(
+                "{label} runs as its own Run with its own tools and auto-accepted edits; nothing it \
+                 writes passes through this conversation's diff review."
+            )
+        } else {
+            format!(
+                "{label} runs Klide's own tools as its own Run, with edits applied without review; \
+                 nothing it writes passes through this conversation's diff review."
+            )
+        };
 
         // The gate. Always asked, never remembered: the full-auto rung excludes
         // subagents by design, and a dispatch approved once says nothing about
@@ -255,11 +388,10 @@ where
                 "cwd": root,
                 "model": model_arg,
             }),
-            summary: format!("Dispatch {label} as {} {where_it_works}", def.id),
+            summary: format!("Dispatch {who} as {} {where_it_works}", def.id),
             reason: format!(
-                "{label} runs as its own Run with its own tools and auto-accepted edits; nothing it \
-                 writes passes through this conversation's diff review. Its work lands on that \
-                 branch for you to review and merge. Dispatch approvals are never remembered."
+                "{how_it_edits} Its work lands on that branch for you to review and merge. \
+                 Dispatch approvals are never remembered."
             ),
             options: worker_gate_options(),
         };
@@ -308,27 +440,47 @@ where
         task: task.clone(),
         worker: worker.map(|w| w.id().to_string()),
         branch: branch.clone(),
+        model: worker.and(model_arg).map(str::to_string),
         ts: now_ms(),
     })?;
 
     let spec = match worker {
-        // A worker is the Delegate running as itself: its own provider, the
+        // A Delegate worker is the CLI running as itself: its own provider, the
         // model the call asked for or the CLI's own default, and a prompt that
         // is about the role and the report — not Kit's persona. Diff review is
         // moot; the worktree is the review boundary.
-        Some(worker) => subagents::SubagentRunSpec {
+        Some(subagents::Worker::Delegate(delegate)) => subagents::SubagentRunSpec {
             run_id: request_id.clone(),
             parent_id: ctx.id.to_string(),
             workspace_root: child_root,
             mode: def.mode.clone(),
-            provider: worker.id().to_string(),
+            provider: delegate.id().to_string(),
             model: model_arg
                 .map(str::to_string)
                 .unwrap_or_else(|| crate::delegate::CLI_DEFAULT_MODEL.to_string()),
             task: task.clone(),
             system_prompt: subagents::build_worker_prompt(
                 def,
-                worker_label.as_deref().unwrap_or(worker.id()),
+                worker_label.as_deref().unwrap_or(delegate.id()),
+                branch.as_deref(),
+            ),
+            max_turns: ctx.request.max_turns,
+            require_diff_review: Some(false),
+        },
+        // An API worker is Klide's own Harness on another house's model: Kit's
+        // tools and conventions, the role appended, edits applied without
+        // review inside the worktree that isolates it.
+        Some(subagents::Worker::Api(entry)) => subagents::SubagentRunSpec {
+            run_id: request_id.clone(),
+            parent_id: ctx.id.to_string(),
+            workspace_root: child_root,
+            mode: def.mode.clone(),
+            provider: entry.id.to_string(),
+            model: model_arg.map(str::to_string).unwrap_or_default(),
+            task: task.clone(),
+            system_prompt: subagents::build_api_worker_prompt(
+                def,
+                &base_system_prompt(ctx.request),
                 branch.as_deref(),
             ),
             max_turns: ctx.request.max_turns,
@@ -406,13 +558,75 @@ where
     }))
 }
 
-/// A worker's human name — "Claude Code", not "claude-code" — from the
-/// provider registry's subscription row, falling back to the id.
-fn worker_label(id: &str) -> String {
-    crate::providers::lookup(id)
-        .and_then(|p| p.subscription)
-        .map(|s| s.label.to_string())
-        .unwrap_or_else(|| id.to_string())
+/// Whether the user's own message already names this dispatch: the agent by
+/// its name or id, and the model by its id — or no model at all for a CLI,
+/// whose own default is then what "Claude Code" plainly means. Matching is on
+/// words the user typed, case-insensitive, so "have claude code test it" and
+/// "send it to codex on gpt-5.4" both count and "the best agent for this"
+/// does not.
+pub(super) fn user_named_dispatch(user_text: &str, worker: subagents::Worker, model: Option<&str>) -> bool {
+    let text = user_text.to_lowercase();
+    let id = worker.id().to_lowercase();
+    let label = worker.label().to_lowercase();
+    let names_agent = text.contains(&id)
+        || text.contains(&label)
+        || text.contains(&id.replace('-', " "))
+        || text.contains(&id.replace('-', ""));
+    if !names_agent {
+        return false;
+    }
+    match model {
+        Some(model) => text.contains(&model.to_lowercase()),
+        None => worker.is_delegate(),
+    }
+}
+
+/// The card answers a dispatch question with `{"worker":"…","model":"…"}`;
+/// a bare word is read as a worker id, so a typed answer still works, and
+/// "(skipped)" is neither.
+pub(super) fn parse_dispatch_answer(answer: &str) -> (Option<String>, Option<String>) {
+    let answer = answer.trim();
+    if answer.is_empty() || answer == "(skipped)" {
+        return (None, None);
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(answer) {
+        if value.is_object() {
+            let field = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            return (field("worker"), field("model"));
+        }
+    }
+    (Some(answer.to_string()), None)
+}
+
+/// The workers that can actually take a task on this machine: Delegates whose
+/// CLI resolves, and API providers with a key. Probed off the async runtime —
+/// a login-shell PATH walk and a keychain read both block.
+async fn available_worker_ids() -> Vec<String> {
+    crate::blocking::run_infallible(|| {
+        let mut ids = Vec::new();
+        for id in subagents::delegate_worker_ids() {
+            let installed = crate::providers::lookup(id)
+                .and_then(|p| p.subscription)
+                .is_some_and(|spec| crate::models::subscription_models(&spec).is_ok());
+            if installed {
+                ids.push(id.to_string());
+            }
+        }
+        for id in subagents::api_worker_ids() {
+            if crate::providers::key_status(id).is_ok_and(|k| k.has_key) {
+                ids.push(id.to_string());
+            }
+        }
+        ids
+    })
+    .await
 }
 
 /// Whether `root` is inside a Git working tree — the one question that decides

@@ -125,13 +125,25 @@ targets, headless Mission attempts, or spawned subagent runs.
 
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the
-parent's provider under the parent's tool rules. With a `worker`, any role is
-allowed, because the child is a Delegate CLI whose edit policy is its own and
-whose writes never pass this Run's Diff review — so the Harness isolates it in a
-worktree on a `klide/worker-…` branch and asks the operator before starting it.
+parent's provider under the parent's tool rules; an editing role with no worker
+puts "which agent should take this?" to the operator through the question
+pause, offering the Delegates installed here and the API providers with a key,
+and a skipped answer is the operator's no. With a `worker`, any role is
+allowed. A worker is either a Delegate CLI, running as itself with its own
+tools and edit policy, or a hosted API provider, running Klide's own Harness on
+a model of that house with edits applied without review. Either way its writes
+never pass this Run's Diff review — so the Harness isolates it in a worktree on
+a `klide/worker-…` branch and asks the operator before starting it.
 The dispatch approval offers only "this once" and "reject": it is never
 remembered per run or per project, and the full-auto policy does not silence
-it. A project that is not a Git repository is named as such on the card, and
+it. Every dispatch the model decided first puts one question to the operator
+through the ordinary question pause: which agent, and which of its models.
+What the call named is a pre-selection the operator confirms or changes;
+skipping keeps it, or is the operator's no when the call named no agent. The
+exception is a dispatch the operator's own message already names — the agent
+by name, and the model by id or a CLI left on its default — which asks nothing
+and goes straight to the dispatch approval. The answer is the worker and its
+model; a CLI with no model picked keeps its own default. A project that is not a Git repository is named as such on the card, and
 the worker then edits the folder directly. The child's report names the
 worktree and branch; the operator reviews and merges that branch, and nothing
 in the parent's checkout changes.

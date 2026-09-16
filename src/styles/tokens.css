@@ -8665,3 +8665,27 @@ button:focus-visible .menu-leadout {
 
 .ai-agent-open { border: 0; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 2px 4px; }
 .ai-agent-open:disabled { display: none; }
+
+/* Question card choice rows — a picked answer is one click; hover is the
+   soft-fill every list row in the app wears, no border, no chip. */
+.klide-choice-row {
+  border-radius: var(--radius-sm);
+  transition: background var(--motion-fast) var(--ease-out);
+}
+.klide-choice-row:hover,
+.klide-choice-row:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+/* The question card's last row is the model picker itself: its trigger takes
+   the rows' type size and height so the list reads as one column. */
+.klide-choice-picker button[aria-haspopup="listbox"] {
+  height: 22px;
+  font-size: 12.5px;
+  font-weight: 400;
+  padding-left: 0;
+}
+
+/* The row the call pre-selected is named, not painted: "Kit's pick" beside it,
+   and the same hover soft-fill as every other row — nothing lateral, no spine. */

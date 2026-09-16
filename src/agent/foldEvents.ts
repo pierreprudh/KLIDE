@@ -427,6 +427,26 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
       return { changed: [idx] };
     }
 
+    // The worker a dispatch actually went to is decided on the card, not in
+    // the call: Kit may name Claude Code and the user pick OpenRouter. The
+    // event carries what was decided — worker, branch, model — so it is
+    // written onto the call's own input, and every row that reads the call
+    // (the delegated-to line, the participants strip) says who really took it.
+    if (event.type === "subagent_requested") {
+      const prefix = `sub_${event.runId}_`;
+      if (!event.worker || !event.requestId.startsWith(prefix)) return { changed: [] };
+      const idx = upsertTool(event.requestId.slice(prefix.length), (t) => {
+        const input = t.input && typeof t.input === "object" && !Array.isArray(t.input)
+          ? { ...(t.input as Record<string, unknown>) }
+          : {};
+        input.worker = event.worker;
+        if (event.branch) input.branch = event.branch;
+        if (event.model) input.model = event.model;
+        t.input = input;
+      });
+      return { changed: [idx] };
+    }
+
     // Work a delegate CLI did on its own. Same row shape as a dispatched call
     // so the conversation reads consistently, tagged with who ran it so nothing
     // downstream can claim Klide gated it.

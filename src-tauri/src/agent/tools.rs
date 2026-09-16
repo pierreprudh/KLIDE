@@ -1014,7 +1014,8 @@ fn registry() -> Vec<ToolEntry> {
             kind: ToolKind::Pause,
             schema: schema("userAnswerQuestion", "Pause the run and ask the user a single free-form question. The user's typed answer is returned as the tool result. Use this to capture tribal knowledge — design decisions, naming rationale, project history — that isn't in the code or README. One question at a time; the harness queues follow-ups on the next turn.",
                 serde_json::json!({
-                    "question": { "type": "string", "description": "The question to ask. One sentence, focused on something only the user can answer." }
+                    "question": { "type": "string", "description": "The question to ask. One sentence, focused on something only the user can answer." },
+                    "choices": { "type": "array", "items": { "type": "string" }, "description": "Optional. Up to four short answers the user can pick with one click instead of typing. The picked text comes back as the answer; the user may still type something else." }
                 }),
                 &["question"]),
             run_read: None,
@@ -1030,12 +1031,12 @@ fn registry() -> Vec<ToolEntry> {
         // themselves, which is also what bounds subagent recursion.
         ToolEntry {
             kind: ToolKind::Pause,
-            schema: schema("spawn_subagent", "Delegate one focused task to a subagent and get its report back as the tool result. Without a `worker`, the subagent runs on your own model, read-only: use 'explorer' to map a subsystem or 'reviewer' to critique a file without spending your own context. Name a `worker` — a CLI agent installed on this machine, such as claude-code or codex — to hand the task to that agent as a Run of its own; then the editing roles 'implementer' and 'tester' are allowed too. A worker edits inside an isolated Git worktree on its own branch, the user approves the dispatch first, and the report tells you the branch to look at. Prefer this over running `claude` or `codex` yourself in the shell.",
+            schema: schema("spawn_subagent", "Delegate one focused task to a subagent and get its report back as the tool result. Without a `worker`, the subagent runs on your own model, read-only: use 'explorer' to map a subsystem or 'reviewer' to critique a file without spending your own context. Name a `worker` — a CLI agent installed on this machine (claude-code, codex, opencode, omp) or a hosted API provider with a key (anthropic, openai, openrouter, …) — to hand the task to it as a Run of its own; then the editing roles 'implementer' and 'tester' are allowed too. The user is asked on a card which agent and model to send, and their pick wins — unless their own message already named the agent (and the model, or the agent is a CLI with its own default), in which case pass those on as `worker` and `model` and nothing is asked. Leave them out otherwise: a worker or model you chose yourself only pre-selects rows on the card. A worker edits inside an isolated Git worktree on its own branch, the user approves the dispatch first, and the report tells you the branch to look at. Prefer this over running `claude` or `codex` yourself in the shell.",
                 serde_json::json!({
                     "subagent": { "type": "string", "enum": crate::agent::subagents::worker_selectable_ids(), "description": "The role: 'explorer' locates and maps code; 'reviewer' critiques code for bugs and clarity; 'implementer' makes the change; 'tester' writes and runs tests. 'implementer' and 'tester' require a `worker`." },
                     "task": { "type": "string", "description": "The focused task for the subagent, with enough context for it to act standalone." },
-                    "worker": { "type": "string", "enum": crate::agent::subagents::worker_ids(), "description": "Optional. The CLI agent to hand this task to, as its own Run in an isolated worktree." },
-                    "model": { "type": "string", "description": "Optional, only with a `worker`: the model the worker CLI should use. Omit to let the CLI use its own default." }
+                    "worker": { "type": "string", "enum": crate::agent::subagents::worker_ids(), "description": "Optional, and best left out: the user picks the agent on a card. Set it only when the user named one — it then pre-selects that agent, and the user may still change it." },
+                    "model": { "type": "string", "description": "Optional, and best left out: the user picks the model on the same card. Set it only when the user named one." }
                 }),
                 &["subagent", "task"]),
             run_read: None,

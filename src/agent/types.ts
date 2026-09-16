@@ -121,6 +121,21 @@ export type PermissionOption = {
   scope?: "once" | "run" | "project" | "user";
 };
 
+export type QuestionChoices = {
+  options: string[];
+  moreModelsFrom?: ProviderId;
+  /** `dispatch`: the options are workers and the card walks two steps — which
+   *  agent, then which of its models — answering with both as one JSON object,
+   *  `{"worker":"codex","model":"default"}`. Absent for a plain list. */
+  kind?: "dispatch";
+  /** For a dispatch: the agent the call already named; the card opens on the
+   *  model step with the agent step one link back. */
+  preselected?: ProviderId;
+  /** For a dispatch: the model the call already named, drawn as the current
+   *  row — one click confirms it, another changes it. */
+  preselectedModel?: string;
+};
+
 export type PermissionRequest = {
   id: string;
   runId: string;
@@ -265,12 +280,15 @@ export type AgentEvent =
   | { type: "artifact_produced"; runId: string; path: string; bytes: number; created: boolean; ts: number }
   | { type: "run_result"; runId: string; result: AgentRunResult; ts: number }
   | { type: "run_error"; runId: string; error: AgentError; ts: number }
-  | { type: "user_question_requested"; runId: string; requestId: string; question: string; ts: number }
+  /** `choices`, when present, are short answers the card draws as rows; a click
+   *  answers with the row's text. `moreModelsFrom` names a provider whose whole
+   *  catalogue the card also offers through the model picker. */
+  | { type: "user_question_requested"; runId: string; requestId: string; question: string; choices?: QuestionChoices; ts: number }
   | { type: "user_question_resolved"; runId: string; requestId: string; answer: string; ts: number }
   /** `worker` and `branch` are set when the call handed the task to a Delegate
    *  CLI: the worker id, and the worktree branch it edits on (absent when the
    *  project is not a Git repository and it works in the folder directly). */
-  | { type: "subagent_requested"; runId: string; requestId: string; subagent: string; task: string; worker?: string; branch?: string; ts: number }
+  | { type: "subagent_requested"; runId: string; requestId: string; subagent: string; task: string; worker?: string; branch?: string; model?: string; ts: number }
   | { type: "subagent_resolved"; runId: string; requestId: string; result: string; ts: number }
   | { type: "advisor_requested"; runId: string; requestId: string; question: string; ts: number }
   | { type: "advisor_resolved"; runId: string; requestId: string; advice: string; ts: number }

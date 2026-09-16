@@ -115,14 +115,18 @@ function stringArg(args: unknown, key: string): string | null {
  *  registration that lists the child carries no provider, so this is where
  *  the participants strip learns to draw Claude Code's mark rather than a
  *  generic one. */
-export function workerChildrenOf(msgs: Msg[], selfId: string): Map<string, string> {
-  const workers = new Map<string, string>();
+export function workerChildrenOf(msgs: Msg[], selfId: string): Map<string, { provider: string; model: string | null }> {
+  const workers = new Map<string, { provider: string; model: string | null }>();
   for (const m of msgs) {
     if (m.role !== "assistant") continue;
     for (const call of m.toolCalls ?? []) {
       if (call.name !== "spawn_subagent") continue;
       const worker = stringArg(call.args, "worker");
-      if (worker && call.id) workers.set(`sub_${selfId}_${call.id}`, worker);
+      if (!worker || !call.id) continue;
+      // The model the card decided, once the fold wrote it onto the call; a
+      // CLI on its own default carries none.
+      const model = stringArg(call.args, "model");
+      workers.set(`sub_${selfId}_${call.id}`, { provider: worker, model: model && model !== "default" ? model : null });
     }
   }
   return workers;

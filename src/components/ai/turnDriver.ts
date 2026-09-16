@@ -246,6 +246,10 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
         projectCommit();
         return true;
       }
+      // The dispatch the card decided — worker, branch, model — lands on the
+      // spawn call's own row; without this the live "Delegated to" line shows
+      // whatever Kit first wrote and only the reload gets it right.
+      case "subagent_requested":
       case "observed_tool_result":
       case "tool_call_started":
       case "tool_call_finished":
