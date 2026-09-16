@@ -198,11 +198,14 @@ function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; o
         );
       })}
       {provider && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: rowPad, minWidth: 0 }}>
+        // The picker is the whole last row, not a control beside a label: the
+        // same mark column as the rows above, then its trigger stretched to
+        // the row's width with the row's words as its placeholder, so the
+        // menu opens from where the eye already is.
+        <div className="klide-choice-picker" style={{ display: "flex", alignItems: "center", gap: 10, padding: rowPad, minWidth: 0 }}>
           <span aria-hidden style={{ width: 16, height: 16, flexShrink: 0, borderRadius: "50%", border: "1px dashed var(--border-strong)" }} />
-          <span style={{ color: "var(--fg-subtle)", fontSize: island ? 12.5 : 13, flexShrink: 0 }}>Another model</span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover />
+            <ModelPicker provider={provider} model="" availableModels={models} onChange={onChoose} direction="up" fluid bareHover placeholder="Another model…" />
           </div>
         </div>
       )}
