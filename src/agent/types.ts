@@ -124,6 +124,13 @@ export type PermissionOption = {
 export type QuestionChoices = {
   options: string[];
   moreModelsFrom?: ProviderId;
+  /** `dispatch`: the options are workers and the card walks two steps — which
+   *  agent, then which of its models — answering with both as one JSON object,
+   *  `{"worker":"codex","model":"default"}`. Absent for a plain list. */
+  kind?: "dispatch";
+  /** For a dispatch: the agent the call already named; the card opens on the
+   *  model step with the agent step one link back. */
+  preselected?: ProviderId;
 };
 
 export type PermissionRequest = {

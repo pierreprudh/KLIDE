@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { AskIcon, SendIcon } from "../../icons";
 import type { QuestionChoices } from "../../agent/types";
-import { isKnownProvider, providerName } from "../../agent/providers";
+import { isDelegateProvider, isKnownProvider, providerName } from "../../agent/providers";
+import type { ProviderId } from "../../agent/types";
 import { listProviderModels } from "../../ipc/aiProviders";
 import { makerMark } from "../../modelIdentity";
 import { ProviderLogo } from "./icons";
@@ -68,6 +69,73 @@ function ChoiceMark({ option, index, choices }: { option: string; index: number;
 }
 
 const DIGIT_CODES = ["Digit1", "Digit2", "Digit3", "Digit4"];
+
+/** The rows of a dispatch's model step: a Delegate leads with its own
+ *  default and two more from its list; an API provider has no default, so
+ *  its first three. The picker behind them offers the rest. */
+export function dispatchModelRows(worker: ProviderId, models: string[]): string[] {
+  const named = models.filter((m) => m && m !== "default");
+  return isDelegateProvider(worker) ? ["default", ...named.slice(0, 2)] : named.slice(0, 3);
+}
+
+/** What a dispatch card sends back: the agent and the model as one object,
+ *  which the harness reads on the other side. */
+export function dispatchAnswer(worker: ProviderId, model: string): string {
+  return JSON.stringify({ worker, model });
+}
+
+/** Which agent, then which model — one card, two steps, a way back. The
+ *  agent step is the plain rows; the model step is the same rows for the
+ *  picked agent's models, headed by the agent's name as a link back to change
+ *  it. Picking a model answers. Opens on the model step when the call already
+ *  named the agent, so the common case is one click. */
+function DispatchPicker({ choices, onChoose, island }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean }) {
+  const [worker, setWorker] = useState<ProviderId | null>(choices.preselected ?? null);
+  const [models, setModels] = useState<string[]>([]);
+  useEffect(() => {
+    if (!worker) return;
+    let cancelled = false;
+    setModels([]);
+    listProviderModels(worker)
+      .then((list) => { if (!cancelled) setModels(list); })
+      .catch(() => { if (!cancelled) setModels([]); });
+    return () => { cancelled = true; };
+  }, [worker]);
+  if (!worker) {
+    return (
+      <ChoiceRows
+        choices={{ options: choices.options }}
+        onChoose={(picked) => { if (isKnownProvider(picked)) setWorker(picked); }}
+        island={island}
+      />
+    );
+  }
+  const rows = dispatchModelRows(worker, models);
+  const rowPad = island ? "6px 16px 2px 14px" : "5px 14px 2px 12px";
+  return (
+    <div style={{ display: "grid" }}>
+      <button
+        type="button"
+        className="klide-choice-row"
+        onClick={() => setWorker(null)}
+        title="Change agent"
+        aria-label={`Change agent (currently ${providerName(worker)})`}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: rowPad, border: "none", background: "transparent", color: "var(--fg-subtle)", font: "inherit", fontSize: island ? 12 : 12.5, textAlign: "left", cursor: "pointer", minWidth: 0 }}
+      >
+        <span aria-hidden style={{ fontFamily: "var(--font-mono)" }}>‹</span>
+        <ProviderLogo id={worker} size={13} />
+        <span style={{ color: "var(--fg-strong)" }}>{providerName(worker)}</span>
+        <span>· change</span>
+      </button>
+      <ChoiceRows
+        key={worker}
+        choices={{ options: rows, moreModelsFrom: worker }}
+        onChoose={(model) => onChoose(dispatchAnswer(worker, model))}
+        island={island}
+      />
+    </div>
+  );
+}
 
 function ChoiceRows({ choices, onChoose, island }: { choices: QuestionChoices; onChoose: (answer: string) => void; island: boolean }) {
   const [models, setModels] = useState<string[]>([]);
@@ -166,6 +234,7 @@ export function QuestionCard({
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const canSend = answer.trim().length > 0;
   const picking = !!choices && choices.options.length > 0 && !!onChoose;
+  const dispatching = picking && choices!.kind === "dispatch";
 
   // The answer box grows with its text the way the composer does, with the
   // same guards: an empty box falls back to its one-row min-height, and a box
@@ -253,7 +322,8 @@ export function QuestionCard({
           style={{ display: "block", height: 1, margin: "10px 0 0", background: "color-mix(in srgb, var(--border) 55%, transparent)" }}
         />
       )}
-      {picking && <ChoiceRows choices={choices!} onChoose={onChoose!} island={island} />}
+      {dispatching && <DispatchPicker choices={choices!} onChoose={onChoose!} island={island} />}
+      {picking && !dispatching && <ChoiceRows choices={choices!} onChoose={onChoose!} island={island} />}
       {!picking && <textarea
         ref={answerRef}
         className="klide-composer-textarea"
