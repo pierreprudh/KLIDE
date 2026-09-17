@@ -149,6 +149,10 @@ impl Delegate for Codex {
         ]
     }
 
+    fn update_args(&self) -> Option<&'static [&'static str]> {
+        Some(&["update"])
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let root = std::path::Path::new(home).join(".codex/sessions");
         let mut files = Vec::new();

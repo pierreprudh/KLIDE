@@ -69,6 +69,10 @@ impl Delegate for Omp {
         ))
     }
 
+    fn update_args(&self) -> Option<&'static [&'static str]> {
+        Some(&["update"])
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         let root = std::path::Path::new(home).join(".omp/agent/sessions");

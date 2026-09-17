@@ -267,6 +267,12 @@ impl Delegate for ClaudeCode {
         vec![format!("{home}/.local/bin/claude")]
     }
 
+    /// `claude update` checks and installs in one step, and works for both the
+    /// npm and the native install.
+    fn update_args(&self) -> Option<&'static [&'static str]> {
+        Some(&["update"])
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         let root = std::path::Path::new(home).join(".claude/projects");
