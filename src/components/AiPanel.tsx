@@ -122,6 +122,8 @@ import { buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
+import { SkillTokenLede } from "./ai/SkillTokenLede";
+import { joinSkillToken, skillTokenCaret, splitSkillToken } from "./ai/skillToken";
 import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
@@ -1585,14 +1587,20 @@ export function AiPanel({
     else if (mention !== null) setMention(null);
   }
 
+  // A wired skill typed into the composer reads as itself: the draft still
+  // holds `/visualise ` — that is what the run is sent — while the textarea
+  // shows only the text after it and the lede stands at the head of the line.
+  // Everything below that edits the composer therefore works in *body* space
+  // and rejoins on the way back into `input`.
+  const { token: skillToken, body: draftBody } = splitSkillToken(input, skills);
+
   function acceptMention(path: string) {
     const ta = taRef.current;
-    const caret = ta ? ta.selectionStart : input.length;
-    const before = input.slice(0, caret);
+    const caret = ta ? ta.selectionStart : draftBody.length;
+    const before = draftBody.slice(0, caret);
     const at = before.lastIndexOf("@");
     const newBefore = before.slice(0, at) + "@" + path + " ";
-    const next = newBefore + input.slice(caret);
-    setInput(next);
+    setInput(joinSkillToken(skillToken, newBefore + draftBody.slice(caret)));
     setMention(null);
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(newBefore.length, newBefore.length); });
   }
@@ -1601,9 +1609,9 @@ export function AiPanel({
   // text the user already typed after the `@query`.
   function acceptSubagent(label: string) {
     const ta = taRef.current;
-    const caret = ta ? ta.selectionStart : input.length;
+    const caret = ta ? ta.selectionStart : draftBody.length;
     const next = `@${label} `;
-    setInput(next + input.slice(caret));
+    setInput(joinSkillToken(skillToken, next + draftBody.slice(caret)));
     setMention(null);
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(next.length, next.length); });
   }
@@ -2093,6 +2101,11 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // The same element as taRef, in state: the skill lede reads the textarea's
+  // own metrics, and a ref doesn't re-render when it lands.
+  const [taEl, setTaEl] = useState<HTMLTextAreaElement | null>(null);
+  // Room the skill lede takes on the first line, measured by the lede itself.
+  const [ledeIndent, setLedeIndent] = useState(0);
   // ↑ / ↓ in the composer walk this conversation's own prompts (the rule lives
   // in ai/promptHistory.ts). Refs, not state: a browse must not re-render the
   // panel, and the walk reads its position inside the same keystroke that
@@ -3766,6 +3779,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (serverStarting) return;
     // An attachment-only turn (no text) is valid; a bare empty turn is not.
     if (!text.trim() && stagedFiles.length === 0) return;
+    // A skill lede on its own is not a turn either — the skill still needs
+    // something to apply itself to.
+    if (opts?.text === undefined && skillToken && !draftBody.trim() && stagedFiles.length === 0) return;
     // Delegate TUIs do not accept image-only turns.
     if (delegateSession && !text.trim()) return;
     if (delegateSession) {
@@ -4010,7 +4026,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 
   // ── RENDER ──
 
-  const canSend = !!input.trim() && !serverStarting && !compacting;
+  const canSend = !!(skillToken ? draftBody.trim() : input.trim()) && !serverStarting && !compacting;
   // Hover-revealed "Send to both" over the send button (race panels only).
   const [raceSendHover, setRaceSendHover] = useState(false);
   const acceptanceMode = modificationAcceptanceMode(
@@ -5124,9 +5140,26 @@ This user request requires workspace inspection. Before answering, you MUST call
             onRemove={(i) => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
             onOpenPhoto={(dataUri) => setLightboxImage(dataUri)}
           />
-          <textarea ref={taRef} className="klide-composer-textarea" value={input}
-            onChange={(e) => handleComposerChange(e.target.value, e.target.selectionStart)}
+          <div style={{ position: "relative" }}>
+          {skillToken && (
+            <SkillTokenLede
+              token={skillToken}
+              textarea={taEl}
+              onRemove={() => handleComposerChange(draftBody, 0)}
+              onWidth={setLedeIndent}
+            />
+          )}
+          <textarea ref={(el) => { taRef.current = el; setTaEl(el); }} className="klide-composer-textarea" value={draftBody}
+            onChange={(e) => handleComposerChange(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
             onKeyDown={(e) => {
+              // Backspace at the head of the line removes the skill, not a
+              // character: the lede stands where the command was, so that is
+              // where deleting it belongs. The text you typed stays.
+              if (skillToken && e.key === "Backspace" && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+                e.preventDefault();
+                handleComposerChange(draftBody, 0);
+                return;
+              }
               if (slash !== null && slashMatches.length > 0) {
                 const action = slashKeyAction(e.key);
                 if (action) {
@@ -5150,15 +5183,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                   direction: e.key === "ArrowUp" ? "older" : "newer",
                   entries: promptHistory,
                   index: historyIndexRef.current,
-                  value: ta.value,
-                  selectionStart: ta.selectionStart ?? 0,
-                  selectionEnd: ta.selectionEnd ?? 0,
+                  value: input,
+                  selectionStart: skillTokenCaret(skillToken, ta.selectionStart ?? 0),
+                  selectionEnd: skillTokenCaret(skillToken, ta.selectionEnd ?? 0),
                   draft: historyDraftRef.current,
                 });
                 // A null move is ordinary caret movement — the textarea keeps it.
                 if (move) {
                   e.preventDefault();
-                  if (move.stash) historyDraftRef.current = ta.value;
+                  if (move.stash) historyDraftRef.current = input;
                   historyIndexRef.current = move.index;
                   setInput(move.text);
                   setMention(null); setSlash(null);
@@ -5183,8 +5216,9 @@ This user request requires workspace inspection. Before answering, you MUST call
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
-            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block" }}
+            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
           />
+          </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: variant === "focus" ? 1 : width < 360 ? 4 : 6, minWidth: 0, flex: "0 0 auto", flexWrap: "nowrap", overflow: "hidden" }}>
               {delegateSession ? (

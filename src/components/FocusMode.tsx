@@ -65,6 +65,8 @@ import type { Skill } from "../skills";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
+import { SkillTokenLede } from "./ai/SkillTokenLede";
+import { joinSkillToken, splitSkillToken } from "./ai/skillToken";
 import {
   EXPLAIN_PREFIX,
   SLASH_DESC,
@@ -1459,6 +1461,11 @@ function FocusComposer({
   // owns its own. 0 until detected.
   const [detectedWindow, setDetectedWindow] = useState(0);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // The same element as taRef, in state: the skill lede reads the textarea's
+  // own metrics, and a ref doesn't re-render when it lands.
+  const [taEl, setTaEl] = useState<HTMLTextAreaElement | null>(null);
+  // Room the skill lede takes on the first line, measured by the lede itself.
+  const [ledeIndent, setLedeIndent] = useState(0);
   // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
   const [slash, setSlash] = useState<{ query: string } | null>(null);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -1605,10 +1612,17 @@ function FocusComposer({
   // composer applies.
   const canAttachFiles = !isDelegateProvider(provider);
 
+  // A wired skill typed into the composer reads as itself. The draft still
+  // holds `/visualise ` — that is what the model is sent — and the textarea
+  // shows only what follows it, with the lede drawn over the head of the line.
+  const { token: skillToken, body: draftBody } = splitSkillToken(draft, skills);
+
   function submit() {
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
     if (!text && attachments.length === 0) return;
+    // A lede on its own is not a task — the skill still needs something to do.
+    if (skillToken && !draftBody.trim() && attachments.length === 0) return;
     const mode = nextSendMode ?? undefined;
     setDraft("");
     setAttachments([]);
@@ -1737,7 +1751,7 @@ function FocusComposer({
     });
   }
 
-  const canSend = draft.trim().length > 0 || attachments.length > 0;
+  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -1793,14 +1807,24 @@ function FocusComposer({
             {supportsVision ? "Drop a photo or document" : "Drop a document"}
           </div>
         )}
+        <div style={{ position: "relative", zIndex: 1 }}>
+        {skillToken && (
+          <SkillTokenLede
+            token={skillToken}
+            textarea={taEl}
+            onRemove={() => changeDraft(draftBody)}
+            onWidth={setLedeIndent}
+          />
+        )}
         <textarea
-          ref={taRef}
+          ref={(el) => { taRef.current = el; setTaEl(el); }}
           className="klide-composer-textarea"
           name="task-prompt"
           aria-label={placeholder}
           autoComplete="off"
-          value={draft}
-          onChange={(e) => changeDraft(e.target.value)}
+          style={skillToken ? { textIndent: ledeIndent } : undefined}
+          value={draftBody}
+          onChange={(e) => changeDraft(joinSkillToken(skillToken, e.target.value))}
           onFocus={() => setFocused(true)}
           onBlur={() => { setFocused(false); setSlash(null); }}
           onPaste={(e) => {
@@ -1811,6 +1835,14 @@ function FocusComposer({
             }
           }}
           onKeyDown={(e) => {
+            // Backspace at the head of the line removes the skill, not a
+            // character: the lede stands where the command was, so that is
+            // where deleting it belongs. The text you typed stays.
+            if (skillToken && e.key === "Backspace" && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+              e.preventDefault();
+              changeDraft(draftBody);
+              return;
+            }
             if (slash !== null && slashMatches.length > 0) {
               const action = slashKeyAction(e.key);
               if (action) {
@@ -1830,6 +1862,7 @@ function FocusComposer({
           placeholder={placeholder}
           rows={2}
         />
+        </div>
 
         <div className="klide-focus-composer-footer">
           <div className="klide-focus-provider-control">
