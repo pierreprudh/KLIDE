@@ -4,7 +4,7 @@
 // cards, theme chips, steppers, ranges) and small text/icon helpers.
 // Extracted from SettingsPanel.tsx; purely presentational.
 
-import { type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import type { ThemeId } from "../../theme";
 import { SIZE_OPTIONS, type RegionSize } from "../../layouts";
 
@@ -110,8 +110,9 @@ export function Row({
 
 // A flat text-tab row — one-click choice across a small ladder of options,
 // the premium alternative to a free-text number field. The first option is
-// the "off / auto / default" sentinel (value `undefined`); the active option
-// carries a 2px accent underline.
+// the "off / auto / default" sentinel (value `undefined`). At rest only the
+// chosen option is drawn — the row reads as a value; the rest grow in on hover
+// (see `.klide-seg` in tokens.css).
 export function Segmented({
   options,
   value,
@@ -125,14 +126,54 @@ export function Segmented({
   label: string;
   disabled?: boolean;
 }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  // Picking a new value promotes it to the front of the ladder, and a CSS
+  // `order` swap is instant — the two words would teleport past each other.
+  // So the swap is played back: the click records where every option sat, the
+  // layout effect puts each one back there, and the next frame releases them
+  // to slide to their new places on the curve the reveal already uses.
+  // Measuring on the click (not on the previous render) is what keeps it
+  // honest: the ladder also moves when the row is hovered, and a position
+  // remembered from the closed state would fling the words across the row.
+  const beforeSwap = useRef<Map<string, number> | null>(null);
+
+  function optionElements(): HTMLElement[] {
+    const track = trackRef.current;
+    return track ? Array.from(track.querySelectorAll<HTMLElement>(".klide-seg-option")) : [];
+  }
+
+  function recordPositions() {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const left = new Map<string, number>();
+    for (const el of optionElements()) left.set(el.dataset.option ?? "", el.getBoundingClientRect().left);
+    beforeSwap.current = left;
+  }
+
+  useLayoutEffect(() => {
+    const before = beforeSwap.current;
+    beforeSwap.current = null;
+    if (!before) return;
+    for (const el of optionElements()) {
+      const from = before.get(el.dataset.option ?? "");
+      if (from === undefined) continue;
+      const dx = from - el.getBoundingClientRect().left;
+      if (Math.abs(dx) < 0.5) continue;
+      el.style.transition = "none";
+      el.style.transform = `translateX(${dx}px)`;
+      requestAnimationFrame(() => {
+        el.style.transition = "";
+        el.style.transform = "";
+      });
+    }
+  }, [value]);
+
   return (
     <div
+      ref={trackRef}
       role="radiogroup"
       aria-label={label}
-      style={{
-        display: "inline-flex",
-        gap: 2,
-      }}
+      className="klide-seg"
+      data-disabled={disabled || undefined}
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -143,37 +184,15 @@ export function Segmented({
             role="radio"
             aria-checked={active}
             disabled={disabled}
-            onClick={() => onChange(opt.value)}
-            style={{
-              height: 26,
-              minWidth: 38,
-              padding: "0 9px",
-              borderRadius: "var(--radius-sm)",
-              border: "none",
-              borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`,
-              cursor: disabled ? "not-allowed" : "pointer",
-              fontSize: 11.5,
-              fontWeight: active ? 600 : 500,
-              letterSpacing: "0.01em",
-              color: disabled ? "var(--fg-dim)" : active ? "var(--fg-strong)" : "var(--fg-subtle)",
-              background: "transparent",
-              transition:
-                "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+            onClick={() => {
+              recordPositions();
+              onChange(opt.value);
             }}
-            onMouseEnter={(e) => {
-              if (!active && !disabled) {
-                e.currentTarget.style.color = "var(--fg-strong)";
-                e.currentTarget.style.background = "var(--bg-hover)";
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!active && !disabled) {
-                e.currentTarget.style.color = "var(--fg-subtle)";
-                e.currentTarget.style.background = "transparent";
-              }
-            }}
+            className="klide-seg-option"
+            data-option={opt.label}
+            data-active={active}
           >
-            {opt.label}
+            <span className="klide-seg-label">{opt.label}</span>
           </button>
         );
       })}

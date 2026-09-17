@@ -178,6 +178,10 @@
      eye has to read the outgoing text and then the incoming one, and a faster
      swap looks like a flicker rather than a change. */
   --motion-slower: 360ms;
+  /* A settings row's alternatives opening out from the value. Longer than
+     --motion-slow because the group also slides while it grows: two movements
+     in one, and at control speed the eye reads them as a jump. */
+  --seg-open: 300ms;
   /* The Explorer's reveal — the anchored column sliding open, the free-mode
      drawer gliding out. Longer than --motion-slow on purpose: a whole column
      arriving is a bigger thing than a control, and hurrying it reads as a snap. */
@@ -810,6 +814,100 @@ textarea.klide-diff-comment-input:focus-visible {
 }
 .klide-settings-search-row:hover {
   background: var(--bg-hover);
+}
+
+/* Segmented setting — a row's value, not a widget. At rest the row reads as one
+   plain word (the current choice), with no capsule, underline or fill to mark
+   it: there is nothing to distinguish it from. The alternatives are there but
+   collapsed to zero width, and hovering the group — or tabbing into it — grows
+   them back in, so the choice is one click away and the row stays quiet until
+   you look at it. Hidden options keep their tab stop; focus-within reveals
+   them for the keyboard. */
+.klide-seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+/* Each option is its own one-column grid so the reveal can animate the track
+   from 0fr to 1fr — the element interpolates to the width of its own label,
+   where a max-width animation races to a guessed ceiling and then sits still
+   for the rest of its duration, which is what made the open read as a jerk.
+   The label clips inside that track, so nothing reflows while it opens. */
+.klide-seg-option {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    grid-template-columns var(--seg-open) var(--ease-soft),
+    padding var(--seg-open) var(--ease-soft),
+    opacity var(--motion-med) var(--ease-out),
+    transform var(--seg-open) var(--ease-soft);
+}
+.klide-seg-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* The chosen option always leads, whichever rung it is in the ladder, so the
+   value sits in the same place on every row and the alternatives always open
+   in the same direction. */
+.klide-seg-option[data-active="true"] {
+  order: -1;
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+.klide-seg-option[data-active="false"] {
+  grid-template-columns: 0fr;
+  padding-left: 0;
+  padding-right: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+/* The reveal is keyed on the whole row, not on the words themselves: hovering
+   the four-character value would slide the alternatives out from under the
+   pointer, and the next click would land on a choice nobody picked. Reaching
+   the row is enough — by the time the pointer arrives the ladder is already
+   open and still. */
+.klide-settings-row:hover .klide-seg-option[data-active="false"],
+.klide-seg:hover .klide-seg-option[data-active="false"],
+.klide-seg:focus-within .klide-seg-option[data-active="false"] {
+  grid-template-columns: 1fr;
+  padding-left: 9px;
+  padding-right: 9px;
+  opacity: 1;
+  pointer-events: auto;
+  /* Property order above: only the fade waits, until the space it lands in is
+     mostly open — text that widens while it appears reads as a stutter. On the
+     way out there is no delay, so the ladder closes as one movement. */
+  transition-delay: 0s, 0s, 0s, 70ms, 0s;
+}
+.klide-seg-option[data-active="false"]:hover {
+  color: var(--fg-strong);
+}
+/* Plain words, not a button face: the global press-scale would wobble the text
+   — and now that transform is animated here, wobble it slowly. */
+.klide-seg-option:active {
+  transform: none;
+}
+.klide-seg[data-disabled="true"] .klide-seg-option {
+  color: var(--fg-dim);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-seg-option {
+    transition: color var(--motion-fast) var(--ease-out);
+  }
 }
 
 /* Disclosure ("More details" in Mission Control) — quiet until hovered, and
