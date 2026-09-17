@@ -3096,7 +3096,9 @@ function App() {
         style={{ flex: 1, display: "flex", minHeight: 0 }}
       >
         {overlay === "settings" ? (
-          <div className="klide-shell-col" data-tauri-drag-region>
+          // Settings owns the title bar band inside its own sidebar, the way
+          // the rail does, so the sidebar surface runs to the window's top edge.
+          <div className="klide-shell-col" data-titlebar-inset="surface" data-tauri-drag-region>
           <Suspense fallback={null}>
             <SettingsPanel
               key={settingsInitial ?? "default"}

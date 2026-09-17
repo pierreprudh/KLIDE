@@ -610,10 +610,13 @@ export function SettingsPanel({
       }}
     >
       <aside
+        // The sidebar runs to the window's top edge, so its surface is what the
+        // traffic lights sit on — and it pays for that band in its own padding.
+        data-tauri-drag-region
         style={{
           borderRight: "1px solid var(--border)",
           background: "var(--bg-elevated)",
-          padding: "16px 10px",
+          padding: "calc(16px + var(--titlebar-h)) 10px 16px",
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -829,6 +832,18 @@ export function SettingsPanel({
         )}
       </aside>
 
+      <div
+        // The band is reserved outside the scroller, so sections scroll under
+        // nothing and the drag strip stays draggable.
+        data-tauri-drag-region
+        style={{
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          paddingTop: "var(--titlebar-h)",
+        }}
+      >
       <div
         style={{
           overflow: "auto", minWidth: 0,
@@ -2024,6 +2039,7 @@ export function SettingsPanel({
             </Section>
           )}
         </div>
+      </div>
       </div>
     </main>
   );
