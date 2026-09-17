@@ -61,19 +61,25 @@ import {
 import { relativeTime, isSubsequence } from "./ai/utils";
 import type { Conversation } from "./ai/types";
 import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../agent/types";
+import type { Skill } from "../skills";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
+import { SkillTokenLede } from "./ai/SkillTokenLede";
+import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
   SLASH_DESC,
+  skillSlashCommands,
   SLASH_PROMPTS,
   currentModeText,
   filterSlashCommands,
   slashKeyAction,
-  slashQueryOf,
+  slashQueryAt,
   stepSlashIndex,
   type SlashCommand,
+  type SlashQuery,
 } from "./ai/slashCommands";
 import { notify } from "../toast";
 import { GOAL_POLICIES, MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf } from "./ai/autonomyLadder";
@@ -127,6 +133,8 @@ type Props = {
    *  sends keyless providers to "api" (API keys) instead of dead-ending on a
    *  row you can't run. */
   onOpenSettingsSection: (section: string) => void;
+  /** The Skills list the panels read — the enabled ones join the `/` menu. */
+  skills: Skill[];
   renderChat: () => ReactNode;
   /** Terminal — the native shell docked under the canvas. It stands beneath the
    *  home/chat surface rather than replacing it, so the conversation keeps its
@@ -186,6 +194,7 @@ export function FocusMode({
   onClearConversationNavigation,
   onOpenPanel,
   onOpenSettingsSection,
+  skills,
   renderChat,
   renderTerminal,
   provider,
@@ -263,6 +272,7 @@ export function FocusMode({
       autoApproveCommands,
       onAutoApproveCommandsChange,
       onOpenSettingsSection,
+      skills,
     }),
     [
       workspaceRoot,
@@ -279,6 +289,7 @@ export function FocusMode({
       autoApproveCommands,
       onAutoApproveCommandsChange,
       onOpenSettingsSection,
+      skills,
     ]
   );
   /** Open a conversation from the hero's resume cards. The rail resolves its
@@ -1391,6 +1402,8 @@ export type FocusComposerControls = {
   autoApproveCommands: boolean;
   onAutoApproveCommandsChange: (enabled: boolean) => void;
   onOpenSettingsSection: (section: string) => void;
+  /** The Skills list the panels read — the enabled ones join the `/` menu. */
+  skills: Skill[];
 };
 
 /** The bottom-anchored task dock: context strip, textarea, and the provider /
@@ -1425,6 +1438,7 @@ function FocusComposer({
     autoApproveCommands,
     onAutoApproveCommandsChange,
     onOpenSettingsSection,
+    skills,
   } = controls;
   const [draft, setDraft] = useState("");
   const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
@@ -1449,8 +1463,13 @@ function FocusComposer({
   // owns its own. 0 until detected.
   const [detectedWindow, setDetectedWindow] = useState(0);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // The same element as taRef, in state: the skill lede reads the textarea's
+  // own metrics, and a ref doesn't re-render when it lands.
+  const [taEl, setTaEl] = useState<HTMLTextAreaElement | null>(null);
+  // Room the skill lede takes on the first line, measured by the lede itself.
+  const [ledeIndent, setLedeIndent] = useState(0);
   // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
-  const [slash, setSlash] = useState<{ query: string } | null>(null);
+  const [slash, setSlash] = useState<SlashQuery | null>(null);
   const [slashIdx, setSlashIdx] = useState(0);
   // A mode one command pinned to the next send (/explain reads → plan). Cleared
   // when the turn leaves or the draft is emptied, so it never outlives its
@@ -1595,10 +1614,19 @@ function FocusComposer({
   // composer applies.
   const canAttachFiles = !isDelegateProvider(provider);
 
+  // A wired skill typed into the composer reads as itself. The draft still
+  // holds `/visualise ` — that is what the model is sent — and the textarea
+  // shows only what follows it, with the lede drawn over the head of the line.
+  const skillAppearances = useSkillAppearances();
+  const ledes = useMemo(() => skillLedes(skills, skillAppearances), [skills, skillAppearances]);
+  const { token: skillToken, body: draftBody } = splitSkillToken(draft, ledes);
+
   function submit() {
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
     if (!text && attachments.length === 0) return;
+    // A lede on its own is not a task — the skill still needs something to do.
+    if (skillToken && !draftBody.trim() && attachments.length === 0) return;
     const mode = nextSendMode ?? undefined;
     setDraft("");
     setAttachments([]);
@@ -1607,12 +1635,12 @@ function FocusComposer({
     onSubmit(artifactPrompt(text, artifactOutput), attachments, artifactOutput ? { mode: "goal" } : mode ? { mode } : undefined);
   }
 
-  function changeDraft(value: string) {
+  function changeDraft(value: string, caret: number = value.length) {
     setDraft(value);
     if (value.length === 0) setNextSendMode(null);
-    const query = slashQueryOf(value);
+    const query = slashQueryAt(value, caret);
     if (query !== null) {
-      setSlash({ query });
+      setSlash(query);
       setSlashIdx(0);
     } else if (slash !== null) {
       setSlash(null);
@@ -1700,7 +1728,25 @@ function FocusComposer({
       onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
     } },
   ];
-  const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
+  // A Skill accepted mid-sentence takes the head of the draft and leaves the
+  // prose standing — see `hoistSkillCommand`.
+  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
+    const open = slash;
+    const next = open === null
+      ? { value: prefix, caret: prefix.length }
+      : hoistSkillCommand({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
+    setSlash(null);
+    setDraft(next.value);
+    // The textarea holds the body; a wired skill is drawn as a lede, so the
+    // caret lands short of the prefix that lede stands in for.
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
+  });
+  SLASH_COMMANDS.push(...SKILL_COMMANDS);
+  // Mid-sentence the built-ins stay out of the list: each of them clears the
+  // draft, so offering one under a half-written task offers to delete it.
+  const slashVocabulary = slash === null ? [] : slash.head ? SLASH_COMMANDS : SKILL_COMMANDS;
+  const slashMatches = slash !== null ? filterSlashCommands(slashVocabulary, slash.query) : [];
   function acceptSlash(idx: number) {
     const cmd = slashMatches[idx];
     setSlash(null);
@@ -1722,7 +1768,7 @@ function FocusComposer({
     });
   }
 
-  const canSend = draft.trim().length > 0 || attachments.length > 0;
+  const canSend = (skillToken ? draftBody.trim().length > 0 : draft.trim().length > 0) || attachments.length > 0;
 
   // The persistent task dock combines Codex's context ribbon with Claude's
   // bottom-anchored composer.
@@ -1745,7 +1791,7 @@ function FocusComposer({
           anchors to this wrapper and floats above the card instead. */}
       <div style={{ position: "relative" }}>
       {slash !== null && (
-        <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} />
+        <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
       )}
       <div
         className="klide-focus-composer"
@@ -1778,14 +1824,24 @@ function FocusComposer({
             {supportsVision ? "Drop a photo or document" : "Drop a document"}
           </div>
         )}
+        <div style={{ position: "relative", zIndex: 1 }}>
+        {skillToken && (
+          <SkillTokenLede
+            token={skillToken}
+            textarea={taEl}
+            onRemove={() => changeDraft(draftBody)}
+            onWidth={setLedeIndent}
+          />
+        )}
         <textarea
-          ref={taRef}
+          ref={(el) => { taRef.current = el; setTaEl(el); }}
           className="klide-composer-textarea"
           name="task-prompt"
           aria-label={placeholder}
           autoComplete="off"
-          value={draft}
-          onChange={(e) => changeDraft(e.target.value)}
+          style={skillToken ? { textIndent: ledeIndent } : undefined}
+          value={draftBody}
+          onChange={(e) => changeDraft(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
           onFocus={() => setFocused(true)}
           onBlur={() => { setFocused(false); setSlash(null); }}
           onPaste={(e) => {
@@ -1796,6 +1852,14 @@ function FocusComposer({
             }
           }}
           onKeyDown={(e) => {
+            // Backspace at the head of the line removes the skill, not a
+            // character: the lede stands where the command was, so that is
+            // where deleting it belongs. The text you typed stays.
+            if (skillToken && e.key === "Backspace" && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+              e.preventDefault();
+              changeDraft(draftBody);
+              return;
+            }
             if (slash !== null && slashMatches.length > 0) {
               const action = slashKeyAction(e.key);
               if (action) {
@@ -1815,6 +1879,7 @@ function FocusComposer({
           placeholder={placeholder}
           rows={2}
         />
+        </div>
 
         <div className="klide-focus-composer-footer">
           <div className="klide-focus-provider-control">

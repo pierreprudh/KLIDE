@@ -1,0 +1,49 @@
+/* The drawings the latest answer made, as one window in the canvas column.
+   Each is shown whole — the same sanitized markup the prose would have held,
+   laid out at its reading width and scaled down into a card, never cropped
+   and never scrolled — and the card opens it full size. No screenshot, no
+   second renderer. */
+/* Each figure is its own frame, with ground between neighbours, so two
+   drawings read as two, not as one tall one. */
+.klide-visual-island-panel { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 14px; }
+/* The window is the height of what it holds. The result card gives ground to a
+   short column and scrolls inside; a drawing is looked at, not read, so the
+   column scrolls past it instead. */
+/* The result's open entry is a flex row so its card can take the column's
+   spare height; a row also lets a card shrink to its content's width, and a
+   drawing has none of its own. So this entry stays a block: full width, its
+   own height. */
+.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] { display: block; flex: 0 0 auto; min-height: 0; }
+.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] .klide-result-island { flex: none; }
+/* A framed figure inside the island's gutters, like the rows above it: a
+   hairline frame, soft corners, and the drawing scaled to sit inside it with
+   a little ground around. The card opens the drawing full size. */
+.klide-visual-thumb { appearance: none; position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out), height 160ms var(--ease-soft); }
+.klide-visual-thumb:hover, .klide-visual-thumb:focus-visible { border-color: var(--border-strong); }
+.klide-visual-thumb:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+/* Laid out at its natural width in the card's corner, then scaled from there;
+   the card's height follows the scaled drawing (set inline). */
+.klide-visual-thumb-drawing { position: absolute; top: 0; left: 0; transform-origin: top left; pointer-events: none; }
+.klide-visual-thumb-drawing > .klide-viz { padding: 0; }
+.klide-visual-thumb-open { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-subtle); opacity: 0; transition: opacity 140ms var(--ease-soft); }
+.klide-visual-thumb:hover .klide-visual-thumb-open, .klide-visual-thumb:focus-visible .klide-visual-thumb-open { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .klide-visual-thumb { transition: border-color var(--motion-fast) var(--ease-out); } }
+/* The row's right end is one slot, not two things: the count stands there at
+   rest and the chevron takes its place on hover or once the window is open.
+   Both are laid in the same grid cell so neither moves the other, and they
+   cross downwards — the number sinks out under the arrow dropping in — which
+   is the direction the arrow itself means. One timing for the fade and the
+   travel, and the slow one: --motion-slower is the token for a glyph giving
+   way to another, and at control speed the substitution read as a flicker
+   rather than one shape becoming the next. */
+.klide-visual-island-swap { margin-left: auto; display: grid; place-items: center; width: 18px; height: 18px; }
+.klide-visual-island-count, .klide-visual-island-chevron { grid-area: 1 / 1; display: grid; place-items: center; transition: opacity var(--motion-slower) var(--ease-out), transform var(--motion-slower) var(--ease-out); }
+.klide-visual-island-count { color: var(--fg-subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
+.klide-visual-island-chevron { color: var(--fg-dim); opacity: 0; transform: translateY(-3px); }
+.klide-result-island:hover .klide-visual-island-count, .klide-result-island[data-open="1"] .klide-visual-island-count { opacity: 0; transform: translateY(3px); }
+.klide-result-island:hover .klide-visual-island-chevron, .klide-result-island[data-open="1"] .klide-visual-island-chevron { opacity: 1; transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) {
+  .klide-visual-island-count, .klide-visual-island-chevron,
+  .klide-result-island:hover .klide-visual-island-count, .klide-result-island[data-open="1"] .klide-visual-island-count,
+  .klide-result-island:hover .klide-visual-island-chevron, .klide-result-island[data-open="1"] .klide-visual-island-chevron { transition: none; transform: none; }
+}

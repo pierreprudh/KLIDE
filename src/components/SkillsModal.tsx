@@ -5,12 +5,22 @@ import { notify } from "../toast";
 import { listConnectors, type Connector } from "../ipc/connectors";
 import { canOpenSettings, openSettingsSection } from "../settingsNavigation";
 import {
+  SKILL_MARKS,
+  appearanceOf,
+  defaultLabel,
+  resetAppearance,
+  saveAppearance,
+  useSkillAppearances,
+} from "../skillAppearance";
+import { MARK_NAMES, SkillMarkGlyph } from "./ai/skillMarks";
+import {
   type Skill,
   genSkillId,
   SKILL_TOOLS,
   getAvailableTools,
   installSkill,
   uninstallSkill,
+  enabledFirst,
 } from "../skills";
 
 type Props = {
@@ -363,8 +373,9 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
   const selected = skills.find((s) => s.id === selectedId) ?? null;
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return skills;
-    return skills.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+    const ordered = enabledFirst(skills);
+    if (!q) return ordered;
+    return ordered.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
   }, [skills, query]);
 
   const enabledCount = skills.filter((s) => s.enabled).length;
@@ -790,6 +801,9 @@ function SkillDetail({
         </blockquote>
       )}
 
+      {/* How it reads once it is typed */}
+      <SkillLedeSection skill={skill} key={skill.id} />
+
       {/* Allowed tools list */}
       {skill.tools.length > 0 && (
         <section style={{ marginTop: 28 }}>
@@ -835,6 +849,134 @@ function SkillDetail({
         </div>
       </section>
     </div>
+  );
+}
+
+/* ------------------------------------------- lede (how the skill reads typed) */
+
+// A skill invocation is text: `/visualise draw the flow` goes out as typed, and
+// the composer draws that leading command as the skill instead — its name, in
+// the accent (see components/ai/skillToken.ts). Every enabled skill reads that
+// way; what it is called, whether it carries a mark, and whether it reads as a
+// skill at all are chosen here, per skill, and saved.
+//
+// The sample is the real drawing, not a picture of one: the same mark component
+// the composer uses, at the composer's type size. Writing on each keystroke
+// keeps it that way — there is no Save to forget.
+export function SkillLedeSection({ skill }: { skill: Skill }) {
+  const saved = useSkillAppearances();
+  const current = appearanceOf(skill, saved);
+  const stored = saved.some((a) => a.command === current.command);
+  if (!current.command) return null;
+
+  const write = (patch: Partial<typeof current>) =>
+    saveAppearance({ ...current, ...patch });
+
+  return (
+    <section style={{ marginTop: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <SectionLabel>In the composer</SectionLabel>
+        <div style={{ flex: 1 }} />
+        {stored && (
+          <button onClick={() => resetAppearance(current.command)} title="Forget this and use the default"
+            style={{ background: "transparent", border: 0, color: "var(--fg-dim)", font: "inherit", fontSize: 11, cursor: "pointer" }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-dim)"; }}>
+            Default
+          </button>
+        )}
+        <Toggle
+          on={current.lede}
+          onClick={() => write({ lede: !current.lede })}
+          label={`${current.lede ? "Stop drawing" : "Draw"} ${skill.name} as a lede in the composer`}
+        />
+      </div>
+
+      {/* The sample line — what the composer will draw, at its own size. */}
+      <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", padding: "13px 15px", display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, minWidth: 0 }}>
+        {current.lede ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", whiteSpace: "nowrap" }}>
+            {current.label.trim() || defaultLabel(skill.name)}
+            {current.mark && <SkillMarkGlyph mark={current.mark} size={14} />}
+          </span>
+        ) : (
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, color: "var(--fg)", whiteSpace: "nowrap" }}>/{current.command}</span>
+        )}
+        <span style={{ color: "var(--fg-subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          what you type next
+        </span>
+      </div>
+
+      {current.lede ? (
+        <div className="skills-tab-in" style={{ marginTop: 14, display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <label style={{ flex: "1 1 200px", minWidth: 180 }}>
+            <span style={labelStyle}>Name</span>
+            <input
+              value={current.label}
+              placeholder={defaultLabel(skill.name)}
+              onChange={(e) => write({ label: e.target.value })}
+              style={fieldStyle}
+            />
+          </label>
+          <div>
+            <span style={labelStyle}>Mark</span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 2, maxWidth: 260 }}>
+              {/* None first, because most skills read as their name alone. */}
+              <button
+                onClick={() => write({ mark: null })}
+                aria-label="No mark"
+                aria-pressed={current.mark === null}
+                title="No mark — the name alone"
+                style={{
+                  width: 30, height: 30, display: "grid", placeItems: "center",
+                  border: 0, borderRadius: "var(--radius-sm)", cursor: "pointer",
+                  font: "inherit", fontSize: 15, lineHeight: 1,
+                  background: current.mark === null ? "var(--bg-hover)" : "transparent",
+                  color: current.mark === null ? "var(--accent)" : "var(--fg-subtle)",
+                  transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                }}
+                onMouseEnter={(e) => { if (current.mark !== null) e.currentTarget.style.color = "var(--fg-strong)"; }}
+                onMouseLeave={(e) => { if (current.mark !== null) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+              >
+                &ndash;
+              </button>
+              {SKILL_MARKS.map((mark) => (
+                <button
+                  key={mark}
+                  onClick={() => write({ mark })}
+                  aria-label={MARK_NAMES[mark]}
+                  aria-pressed={mark === current.mark}
+                  title={MARK_NAMES[mark]}
+                  style={{
+                    width: 30, height: 30, display: "grid", placeItems: "center",
+                    border: 0, borderRadius: "var(--radius-sm)", cursor: "pointer",
+                    background: mark === current.mark ? "var(--bg-hover)" : "transparent",
+                    color: mark === current.mark ? "var(--accent)" : "var(--fg-subtle)",
+                    transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                  }}
+                  onMouseEnter={(e) => { if (mark !== current.mark) e.currentTarget.style.color = "var(--fg-strong)"; }}
+                  onMouseLeave={(e) => { if (mark !== current.mark) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+                >
+                  <SkillMarkGlyph mark={mark} size={16} />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
+          Typed plainly, as the command. Turn this on to have the composer read
+          it as {defaultLabel(skill.name)} instead{skill.enabled ? "" : " — while the skill is enabled"}.
+        </div>
+      )}
+
+      {current.lede && !skill.enabled && (
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-subtle)" }}>
+          The composer draws this once the skill is enabled — a lede for a skill
+          the run won't follow would promise what the send can't keep.
+        </div>
+      )}
+    </section>
   );
 }
 

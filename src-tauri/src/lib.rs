@@ -3,6 +3,7 @@ mod accounts;
 mod adapters;
 mod blocking;
 mod cli;
+mod cli_update;
 mod agent;
 mod coordination;
 mod connectors;
@@ -937,6 +938,10 @@ pub fn run() {
             models::ai_provider_credits,
             models::ai_provider_model_meta,
             ai_subscription_status,
+            cli_update::cli_versions,
+            cli_update::cli_version,
+            cli_update::cli_check_updates,
+            cli_update::cli_update,
             app_user_info,
             menu_sync_projects,
             models::ai_context_window,

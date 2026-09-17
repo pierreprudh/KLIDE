@@ -23,6 +23,38 @@ export type MarkdownOptions = {
   streaming?: boolean;
 };
 
+/** One visual a message holds: a closed `html` / `svg` (…) fence whose markup
+ *  survived the sanitizer. `key` is stable across re-renders of the same text
+ *  — the fence's index in the message — so a surface can key a preview on it.
+ *  The Focus canvas reads this to show the same drawings again in its island
+ *  column, beside the prose that holds them. */
+export type VisualBlockRef = { key: string; code: string; lang: string; kind: VisualHtml["kind"] };
+
+/** The visuals in a message, in order. Pure: the same split as the renderer
+ *  (bare markup fenced first, `\`\`\`` segments, odd ones are code), closed
+ *  fences only — a fence still arriving is source until it closes — and only
+ *  where something renderable is left once the allowlist has done its work. */
+export function visualBlocksOf(text: string): VisualBlockRef[] {
+  const segments = fenceBareMarkup(text).split("```");
+  const out: VisualBlockRef[] = [];
+  segments.forEach((seg, idx) => {
+    if (idx % 2 !== 1 || idx === segments.length - 1) return;
+    const nl = seg.indexOf("\n");
+    let lang = "";
+    let code = seg;
+    if (nl >= 0) {
+      const first = seg.slice(0, nl).trim();
+      if (/^[\w+#-]*$/.test(first)) { lang = first; code = seg.slice(nl + 1); }
+    }
+    if (!VISUAL_LANGS.has(lang.toLowerCase())) return;
+    code = code.replace(/\n$/, "");
+    const visual = prepareVisual(code, "kvprobe");
+    if (!/<[A-Za-z]/.test(visual.html)) return;
+    out.push({ key: `visual-${idx}`, code, lang, kind: visual.kind });
+  });
+  return out;
+}
+
 const CODE_KEYWORDS = new Set([
   "const", "let", "var", "function", "return", "if", "else", "for", "while",
   "do", "switch", "case", "break", "continue", "new", "class", "extends",
@@ -212,7 +244,7 @@ const VISUAL_LANGS = new Set(["html", "svg", "visual", "visualizer", "viz", "pre
 // what earns the block its theme, its fonts and its tokens for free — and the
 // stylesheet the model wrote is re-anchored to this one block so it cannot
 // reach the app around it. See `visualHtml.ts` for the rules.
-const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: VisualHtml; scope: string }) {
+export const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: VisualHtml; scope: string }) {
   const content = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     let active = true;
@@ -272,7 +304,9 @@ const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: V
   );
 });
 
-const VISUAL_MOTION = { duration: 280, easing: "cubic-bezier(.2,.8,.2,1)" };
+// One motion for a drawing leaving its card and coming back: long enough to
+// be seen as travel from *there*, short enough not to be waited for.
+const VISUAL_MOTION = { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" };
 
 function VisualControl({ label, children, onClick, disabled = false, className = "" }: {
   label: string; children: ReactNode; onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
@@ -281,7 +315,9 @@ function VisualControl({ label, children, onClick, disabled = false, className =
   return <button type="button" className={`visual-icon-button ${className}`.trim()} aria-label={label} data-tooltip={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 
-function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLDivElement | null }; onClose: () => void }) {
+/** `origin` is the element the drawing visibly grows out of and returns to —
+ *  the figure inline, the card in the canvas column. */
+export function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLElement | null }; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
@@ -311,7 +347,7 @@ function VisualViewer({ code, origin, onClose }: { code: string; origin: { curre
         const to = content.current!.getBoundingClientRect();
         if (from.width && from.height && to.width && to.height) {
           motion.current.push(content.current!.animate([
-            { transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${from.width / to.width}, ${from.height / to.height})`, opacity: 0.4 },
+            { transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${from.width / to.width}, ${from.height / to.height})`, opacity: 0.6 },
             { transform: "none", opacity: 1 },
           ], VISUAL_MOTION));
         }

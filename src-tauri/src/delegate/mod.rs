@@ -375,6 +375,49 @@ pub trait Delegate: Sync {
         Vec::new()
     }
 
+    // ── Version & update ────────────────────────────────────────────────
+    //
+    // Klide launches whatever binary the login shell hands it and, until now,
+    // never looked at which version that was. A stale CLI then failed as a
+    // provider error with nothing to explain it — a PATH `codex` 0.147.0 next
+    // to a 0.153.4 install answered `400: The 'gpt-6-astra' model requires a
+    // newer version of Codex`. The version is a fact about the machine, so it
+    // belongs on the row that says the CLI is installed.
+
+    /// Arguments that make this CLI print its own version, and exit.
+    /// Default: `--version`, which all four delegates answer.
+    fn version_args(&self) -> &'static [&'static str] {
+        &["--version"]
+    }
+
+    /// The CLI's own updater, as the arguments following the binary — each
+    /// spells it differently (`update` vs `upgrade`). `None` means this CLI
+    /// has no updater of its own and Klide must not invent one: an install
+    /// Klide didn't perform is not an install Klide may replace.
+    fn update_args(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
+    /// Where this CLI publishes its releases, as an npm package name.
+    ///
+    /// The updater is the authority on *installing*, but it can only answer
+    /// "is there something newer?" by doing the install — all four CLIs check
+    /// and update in one step. The registry answers the question on its own,
+    /// which is what a "check for updates" button has to do. `None` means
+    /// Klide cannot tell whether this CLI is behind, and says so rather than
+    /// guessing.
+    fn release_package(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The CLI's version line, reduced to the number. Default: the first
+    /// token that looks like one, which covers `2.1.274 (Claude Code)`,
+    /// `codex-cli 0.154.0`, `1.18.31` and `omp/15.13.3` alike. An adapter
+    /// overrides only if its CLI says something stranger.
+    fn parse_version(&self, output: &str) -> Option<String> {
+        first_version_token(output)
+    }
+
     /// Install (or refresh) this CLI's Klide status hooks — env-guarded
     /// lifecycle hooks in the CLI's own config that POST normalized state to
     /// Klide's loopback hook server (see `status.rs`). Called before every
@@ -383,6 +426,27 @@ pub trait Delegate: Sync {
     fn ensure_status_hooks(&self, _home: &str) -> Result<bool, String> {
         Ok(false)
     }
+}
+
+/// The first token in a `--version` line that reads as a version number.
+///
+/// A CLI answers in whatever shape it likes — bare (`1.18.31`), prefixed
+/// (`codex-cli 0.154.0`), slashed (`omp/15.13.3`) or suffixed
+/// (`2.1.274 (Claude Code)`). All four reduce the same way: take each
+/// whitespace-separated token, drop anything up to a `/` or a leading `v`,
+/// and accept the first that starts with a digit and carries a dot.
+pub fn first_version_token(output: &str) -> Option<String> {
+    output.split_whitespace().find_map(|token| {
+        let token = token.rsplit('/').next().unwrap_or(token);
+        let token = token.strip_prefix('v').unwrap_or(token);
+        let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        let looks_like_a_version = token.starts_with(|c: char| c.is_ascii_digit())
+            && token.contains('.')
+            && token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+');
+        looks_like_a_version.then(|| token.to_string())
+    })
 }
 
 /// Parses one delegate's run candidates into board rows. Holding this as a

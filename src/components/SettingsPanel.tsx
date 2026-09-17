@@ -66,6 +66,7 @@ import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
 import { LocalServerRow } from "./settings/localServers";
 import { AccountControl, GitHubAccountRow } from "./settings/accounts";
+import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
 import { StorageSection } from "./settings/storage";
 import {
@@ -1863,6 +1864,7 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
+              <CliVersionsBlock />
               <SettingBlock title="Connection Options">
                 <Panel>
                   {subscriptionProviderEntries.map((provider) => {

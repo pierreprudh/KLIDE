@@ -2,26 +2,49 @@ import { describe, expect, it } from "vitest";
 import {
   currentModeText,
   filterSlashCommands,
+  skillSlashCommands,
+  skillSlashName,
+  skillSlashPrefix,
   slashKeyAction,
-  slashQueryOf,
+  slashQueryAt,
   stepSlashIndex,
 } from "./slashCommands";
 
-describe("slashQueryOf", () => {
+describe("slashQueryAt", () => {
   it("opens on a lone slash and tracks the typed word", () => {
-    expect(slashQueryOf("/")).toBe("");
-    expect(slashQueryOf("/pl")).toBe("pl");
+    expect(slashQueryAt("/")).toEqual({ query: "", start: 0, head: true });
+    expect(slashQueryAt("/pl")).toEqual({ query: "pl", start: 0, head: true });
   });
 
   it("keeps the menu open across a hyphen so /auto-mode can be typed out", () => {
-    expect(slashQueryOf("/auto-")).toBe("auto-");
-    expect(slashQueryOf("/auto-mode")).toBe("auto-mode");
+    expect(slashQueryAt("/auto-")?.query).toBe("auto-");
+    expect(slashQueryAt("/auto-mode")?.query).toBe("auto-mode");
   });
 
-  it("treats a slash inside prose or a path as text", () => {
-    expect(slashQueryOf("look at src/App.tsx")).toBeNull();
-    expect(slashQueryOf("/plan the release")).toBeNull();
-    expect(slashQueryOf("")).toBeNull();
+  it("opens mid-sentence, where only the Skills are on offer", () => {
+    expect(slashQueryAt("draw the flow /")).toEqual({ query: "", start: 14, head: false });
+    expect(slashQueryAt("draw the flow /vis")).toEqual({ query: "vis", start: 14, head: false });
+  });
+
+  it("reads the word up to the caret and judges the whole of it", () => {
+    // `/vis|ualise` — filtering follows the caret, the shape does not.
+    expect(slashQueryAt("/visualise", 4)).toEqual({ query: "vis", start: 0, head: true });
+    // A command with prose after it is no longer the whole draft.
+    expect(slashQueryAt("/plan the release", 5)).toEqual({ query: "plan", start: 0, head: false });
+  });
+
+  it("refuses a path, typed out or half typed", () => {
+    expect(slashQueryAt("look at src/App.tsx")).toBeNull();
+    expect(slashQueryAt("open /Users/pierre/notes.md")).toBeNull();
+    // Half typed: the caret sits inside the first segment, the rest gives it away.
+    expect(slashQueryAt("open /Users/pierre", 8)).toBeNull();
+    expect(slashQueryAt("see /README.md", 8)).toBeNull();
+  });
+
+  it("treats a slash that starts nothing as text", () => {
+    expect(slashQueryAt("2 / 3")).toBeNull();
+    expect(slashQueryAt("")).toBeNull();
+    expect(slashQueryAt("/plan the release")).toBeNull();
   });
 });
 
@@ -60,5 +83,36 @@ describe("currentModeText", () => {
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: true, autoApproveCommands: false })).toBe("reviewing every edit");
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: false, autoApproveCommands: false })).toBe("auto-accept edits on");
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: false, autoApproveCommands: true })).toBe("full auto · commands run without asking");
+  });
+});
+
+describe("skill slash commands", () => {
+  const skill = (name: string, enabled: boolean, description = "") => ({
+    id: name, name, description, instructions: "do it", tools: [], enabled,
+  });
+
+  it("names a skill in kebab-case so the menu grammar can type it", () => {
+    expect(skillSlashName("Code Review")).toBe("code-review");
+    expect(skillSlashName("visualise")).toBe("visualise");
+    expect(skillSlashName("  Matt's  Zoom_Out! ")).toBe("matts-zoom-out");
+  });
+
+  it("lists only enabled skills, after the built-ins, and yields a taken name", () => {
+    const inserted: string[] = [];
+    const cmds = skillSlashCommands(
+      [skill("Code Review", true, "Review code."), skill("handoff", true), skill("Visualise", false)],
+      [{ name: "handoff" }],
+      (p) => inserted.push(p),
+    );
+    expect(cmds.map((c) => c.name)).toEqual(["code-review"]);
+    expect(cmds[0].desc).toBe("Review code.");
+    void cmds[0].run();
+    expect(inserted).toEqual([skillSlashPrefix({ name: "Code Review" })]);
+    expect(inserted[0]).toBe("/code-review ");
+  });
+
+  it("keeps the first of two skills that slug to the same name", () => {
+    const cmds = skillSlashCommands([skill("Zoom Out", true), skill("zoom-out", true)], [], () => {});
+    expect(cmds.map((c) => c.name)).toEqual(["zoom-out"]);
   });
 });

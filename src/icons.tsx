@@ -38,6 +38,7 @@ import { FileText } from "@phosphor-icons/react/dist/csr/FileText";
 import { ChatTeardrop } from "@phosphor-icons/react/dist/csr/ChatTeardrop";
 import { ChatTeardropDots } from "@phosphor-icons/react/dist/csr/ChatTeardropDots";
 import { FileMagnifyingGlass } from "@phosphor-icons/react/dist/csr/FileMagnifyingGlass";
+import { TreeStructure } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { CirclesThree } from "@phosphor-icons/react/dist/csr/CirclesThree";
 import { FlowArrow } from "@phosphor-icons/react/dist/csr/FlowArrow";
 import { ListChecks } from "@phosphor-icons/react/dist/csr/ListChecks";
@@ -108,6 +109,12 @@ export function AiIcon(p: GlyphProps) {
  *  plan mark, and this one means "look at what came out", not "track it". */
 export function ReviewIcon(p: GlyphProps) {
   return <Icon as={FileMagnifyingGlass} {...p} />;
+}
+
+/** A drawing a model made — a diagram, a page: boxes joined by lines, the
+ *  shape of most of what an `svg` fence holds. */
+export function DiagramIcon(p: GlyphProps) {
+  return <Icon as={TreeStructure} {...p} />;
 }
 
 /** A document a run produced — a page, not a page under a magnifier: the

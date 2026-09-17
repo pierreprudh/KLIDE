@@ -35,10 +35,39 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-export function SettingBlock({ title, children }: { title: string; children: ReactNode }) {
+// `action` puts one control on the heading line — for a block whose action is
+// about the whole block rather than any one row (re-checking every CLI, say).
+// Without it the heading keeps its exact margin, so every existing block is
+// pixel-identical.
+export function SettingBlock({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
   return (
     <section className="klide-settings-section">
-      <h2 className="klide-settings-heading">{title}</h2>
+      {action ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            margin: "0 0 10px",
+          }}
+        >
+          <h2 className="klide-settings-heading" style={{ margin: 0 }}>
+            {title}
+          </h2>
+          {action}
+        </div>
+      ) : (
+        <h2 className="klide-settings-heading">{title}</h2>
+      )}
       {children}
     </section>
   );

@@ -1,7 +1,7 @@
 // The Focus canvas' right-hand column, as a rule rather than a render.
 //
-// Three things can sit there — the plan, a run's result, a question the run is
-// parked on — and each can be a *card* (a window) or a *mark* (the pill a
+// Four things can sit there — the plan, a run's result, a question the run is
+// parked on, the visuals the latest answer drew — and each can be a *card* (a window) or a *mark* (the pill a
 // folded one leaves behind). Mixing those two up is what put a close button in
 // an empty corner and let a folded plan's mark sit over the prose: the column
 // knew whether the plan was "visible", which answers neither question.
@@ -33,6 +33,11 @@ export type ColumnInput = {
   resultUp: boolean;
   /** A question the run is parked on. */
   questionUp: boolean;
+  /** The latest answer drew something — a diagram, a page — shown here again
+   *  beside the prose that holds it. Absent in older callers: nothing drawn.
+   *  The caller gates it on `showsVisuals`: a narrow canvas keeps the drawing
+   *  in the chat alone. */
+  visualUp?: boolean;
   /** The reader closed the column. A question overrides it: that card holds
    *  the run, and hiding it strands the run with no way to answer. */
   hidden: boolean;
@@ -56,7 +61,16 @@ export type ColumnGeometry = {
   planFolded: boolean;
 };
 
-export function columnGeometry({ planSlot, resultUp, questionUp, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
+/** Whether the canvas is wide enough for the visuals to be shown again in the
+ *  column. The drawing is already in the chat; the island is a second look at
+ *  it, and a second look at a third of its size on a corner-width column is
+ *  noise. So it appears only where the column has its full width — the plan
+ *  and the result keep the corner regardless. Unmeasured (0) means roomy. */
+export function showsVisuals(canvasWidth: number): boolean {
+  return canvasWidth === 0 || canvasWidth - PROSE_MIN - COLUMN_MARGINS >= COLUMN_MAX;
+}
+
+export function columnGeometry({ planSlot, resultUp, questionUp, visualUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
   // A question is never hidden, so it also un-hides everything beside it: a
   // reader answering one should see the plan it came from.
   const closed = hidden && !questionUp;
@@ -68,8 +82,8 @@ export function columnGeometry({ planSlot, resultUp, questionUp, hidden, canvasW
   // is its mark. So the column is "open" whenever it holds anything the reader
   // has not folded away, and the corner keeps the marks either way — a
   // finished run never vanishes from the top right.
-  const cardsUp = !closed && (planSlot === "card" || questionUp || resultUp);
-  const marksUp = !cardsUp && (planSlot !== "none" || resultUp);
+  const cardsUp = !closed && (planSlot === "card" || questionUp || resultUp || visualUp);
+  const marksUp = !cardsUp && (planSlot !== "none" || resultUp || visualUp);
 
   return {
     width,
