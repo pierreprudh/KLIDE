@@ -3,7 +3,9 @@
    laid out at its reading width and scaled down into a card, never cropped
    and never scrolled — and the card opens it full size. No screenshot, no
    second renderer. */
-.klide-visual-island-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 0 0; }
+/* Each figure is its own frame: two hairlines and a band of ground between
+   neighbours, so two drawings read as two, not as one tall one. */
+.klide-visual-island-panel { display: flex; flex-direction: column; gap: 18px; padding: 12px 0 14px; }
 /* The window is the height of what it holds. The result card gives ground to a
    short column and scrolls inside; a drawing is looked at, not read, so the
    column scrolls past it instead. */
@@ -20,8 +22,6 @@
 .klide-visual-thumb { appearance: none; position: relative; display: block; width: calc(100% + 32px); margin: 0 -16px; padding: 0; overflow: hidden; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out), height 160ms var(--ease-soft); }
 .klide-visual-thumb:hover, .klide-visual-thumb:focus-visible { border-color: var(--border-strong); }
 .klide-visual-thumb:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
-/* The last card meets the island's foot. */
-.klide-visual-island-panel > :last-child > .klide-visual-thumb { border-bottom: 0; }
 /* Laid out at its natural width in the card's corner, then scaled from there;
    the card's height follows the scaled drawing (set inline). */
 .klide-visual-thumb-drawing { position: absolute; top: 0; left: 0; transform-origin: top left; pointer-events: none; }
