@@ -81,6 +81,9 @@ export function VisualIsland({ visuals, sourceKey, folded, onUnfold }: Props) {
  *  placed for that width keep their places. */
 const LAYOUT_WIDTH = 720;
 
+/** Ground between the frame and the drawing, in px, all four sides. */
+const FRAME_PAD = 10;
+
 /** The drawing's own extent inside its layout box, in unscaled px: the union
  *  of what it actually painted, not the box it was given. A fitted svg is
  *  capped at its viewBox width and a page may be narrower than the column, so
@@ -108,9 +111,9 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
   const origin = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLButtonElement>(null);
   const [expanded, setExpanded] = useState(false);
-  // The whole drawing, every time, at the card's full width: it is laid out
-  // at its reading width, its painted extent is measured, and that extent —
-  // not the layout box — is scaled to the card and shifted to its corner. Not
+  // The whole drawing, every time, filling the frame: it is laid out at its
+  // reading width, its painted extent is measured, and that extent — not the
+  // layout box — is scaled to the frame's inside and shifted to its corner. Not
   // cropped, not scrolled; the card takes the scaled height, so a tall page
   // is a tall card and a small diagram a short one. Both sides are measured,
   // because a fluid drawing decides its own size once the fonts are in.
@@ -128,9 +131,11 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
       const rects = Array.from(body?.children ?? []).map((child) => child.getBoundingClientRect());
       const extent = drawnExtent(rects, box, applied.current || 1);
       if (extent.width <= 0 || extent.height <= 0) return;
-      const scale = Math.min(1, width / extent.width);
+      const inner = width - 2 * FRAME_PAD - 2; // the frame's own hairlines
+      if (inner <= 0) return;
+      const scale = Math.min(1, inner / extent.width);
       applied.current = scale;
-      setFit({ scale, height: Math.ceil(extent.height * scale), left: extent.left, top: extent.top });
+      setFit({ scale, height: Math.ceil(extent.height * scale) + 2 * FRAME_PAD, left: extent.left, top: extent.top });
     };
     measure();
     void document.fonts.ready.then(measure);
@@ -146,7 +151,7 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
         onClick={(event) => { event.currentTarget.focus(); setExpanded(true); }}
         aria-label={`Open the ${what} fullscreen`} title="Open fullscreen">
         <div ref={origin} className="klide-visual-thumb-drawing"
-          style={{ width: LAYOUT_WIDTH, transform: `scale(${fit.scale}) translate(${-fit.left}px, ${-fit.top}px)` }}>
+          style={{ width: LAYOUT_WIDTH, transform: `translate(${FRAME_PAD}px, ${FRAME_PAD}px) scale(${fit.scale}) translate(${-fit.left}px, ${-fit.top}px)` }}>
           <VisualSurface visual={prepared} scope={scope} />
         </div>
         <span className="klide-visual-thumb-open" aria-hidden="true"><VisualExpandIcon expanded={expanded} size={13} /></span>

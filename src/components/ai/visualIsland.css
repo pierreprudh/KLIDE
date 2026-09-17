@@ -3,9 +3,9 @@
    laid out at its reading width and scaled down into a card, never cropped
    and never scrolled — and the card opens it full size. No screenshot, no
    second renderer. */
-/* Each figure is its own frame: two hairlines and a band of ground between
-   neighbours, so two drawings read as two, not as one tall one. */
-.klide-visual-island-panel { display: flex; flex-direction: column; gap: 18px; padding: 12px 0 14px; }
+/* Each figure is its own frame, with ground between neighbours, so two
+   drawings read as two, not as one tall one. */
+.klide-visual-island-panel { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 14px; }
 /* The window is the height of what it holds. The result card gives ground to a
    short column and scrolls inside; a drawing is looked at, not read, so the
    column scrolls past it instead. */
@@ -15,13 +15,12 @@
    own height. */
 .klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] { display: block; flex: 0 0 auto; min-height: 0; }
 .klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] .klide-result-island { flex: none; }
-/* Edge to edge. The card runs through the island's gutters — the drawing is
-   the widest thing in the column and reads best with the panel's whole width —
-   so it keeps no side border and no corners; a hairline above and below is
-   its frame, and the island's own edge is the drawing's. */
-.klide-visual-thumb { appearance: none; position: relative; display: block; width: calc(100% + 32px); margin: 0 -16px; padding: 0; overflow: hidden; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out), height 160ms var(--ease-soft); }
+/* A framed figure inside the island's gutters, like the rows above it: a
+   hairline frame, soft corners, and the drawing scaled to sit inside it with
+   a little ground around. The card opens the drawing full size. */
+.klide-visual-thumb { appearance: none; position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out), height 160ms var(--ease-soft); }
 .klide-visual-thumb:hover, .klide-visual-thumb:focus-visible { border-color: var(--border-strong); }
-.klide-visual-thumb:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+.klide-visual-thumb:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 /* Laid out at its natural width in the card's corner, then scaled from there;
    the card's height follows the scaled drawing (set inline). */
 .klide-visual-thumb-drawing { position: absolute; top: 0; left: 0; transform-origin: top left; pointer-events: none; }
