@@ -21,15 +21,25 @@ describe("skill appearance", () => {
     expect(mod.defaultLabel("Analytics Dashboard")).toBe("Analytics Dashboard");
   });
 
-  it("ships visualise wired and leaves every other skill off", () => {
-    expect(mod.appearanceOf(skill("visualise"), [])).toMatchObject({ label: "Visualise", mark: "diagram", lede: true });
-    expect(mod.appearanceOf(skill("Code Review"), [])).toMatchObject({ command: "code-review", label: "Code Review", lede: false });
+  it("takes a plugin skill's own half of the name", () => {
+    expect(mod.defaultLabel("ui-ux-pro-max:banner-design")).toBe("Banner design");
   });
 
-  it("wires only the enabled skills a caller asked for", () => {
+  it("draws every skill, with a mark only where one ships", () => {
+    expect(mod.appearanceOf(skill("visualise"), [])).toMatchObject({ label: "Visualise", mark: "diagram", lede: true });
+    expect(mod.appearanceOf(skill("Code Review"), [])).toMatchObject({ command: "code-review", label: "Code Review", mark: null, lede: true });
+  });
+
+  it("wires every enabled skill and no disabled one", () => {
     const ledes = mod.skillLedes([skill("visualise"), skill("Code Review")], []);
-    expect([...ledes.keys()]).toEqual(["visualise"]);
+    expect([...ledes.keys()]).toEqual(["visualise", "code-review"]);
+    expect(ledes.get("code-review")).toEqual({ label: "Code Review", mark: null });
     expect(mod.skillLedes([skill("visualise", false)], []).size).toBe(0);
+  });
+
+  it("keeps a mark cleared once you clear it", () => {
+    mod.saveAppearance({ command: "visualise", label: "Visualise", mark: null, lede: true });
+    expect(mod.skillLedes([skill("visualise")], mod.savedAppearances()).get("visualise")).toEqual({ label: "Visualise", mark: null });
   });
 
   it("takes a saved answer over the shipped default, off included", () => {
@@ -41,7 +51,7 @@ describe("skill appearance", () => {
     expect(mod.skillLedes([skill("visualise")], mod.savedAppearances()).size).toBe(0);
   });
 
-  it("wires a skill that ships with nothing, once you say so", () => {
+  it("keeps a renamed, marked skill as renamed and marked", () => {
     mod.saveAppearance({ command: "code-review", label: "Review", mark: "review", lede: true });
     const ledes = mod.skillLedes([skill("Code Review")], mod.savedAppearances());
     expect(ledes.get("code-review")).toEqual({ label: "Review", mark: "review" });
@@ -56,7 +66,7 @@ describe("skill appearance", () => {
     mod.saveAppearance({ command: "visualise", label: "Draw", mark: "plan", lede: false });
     mod.resetAppearance("visualise");
     expect(mod.savedAppearances()).toEqual([]);
-    expect(mod.appearanceOf(skill("visualise"), mod.savedAppearances()).lede).toBe(true);
+    expect(mod.appearanceOf(skill("visualise"), mod.savedAppearances())).toMatchObject({ mark: "diagram", lede: true });
   });
 
   it("survives a corrupt store", () => {

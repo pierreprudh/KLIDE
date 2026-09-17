@@ -3,8 +3,8 @@
 // It stands exactly where the `/visualise ` it replaces would have been: the
 // textarea keeps the text (see skillToken.ts), and its first line is indented
 // by this element's width, so the caret lands after the name and the prose
-// wraps under it like any other line. No pill, no frame — the accent and the
-// mark are the whole signal.
+// wraps under it like any other line. No pill, no frame — the accent is the
+// whole signal, and a mark follows the name only when one was picked.
 //
 // The geometry is read from the textarea rather than passed in, because two
 // composers with two paddings and two type sizes float this and neither should
@@ -113,7 +113,7 @@ export function SkillTokenLede({
       }}
     >
       {token.label}
-      <SkillMarkGlyph mark={token.mark} size={Math.round(geom.fontSize * 1.05)} />
+      {token.mark && <SkillMarkGlyph mark={token.mark} size={Math.round(geom.fontSize * 1.05)} />}
     </button>
   );
 }

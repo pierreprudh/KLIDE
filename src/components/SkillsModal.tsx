@@ -855,10 +855,10 @@ function SkillDetail({
 /* ------------------------------------------- lede (how the skill reads typed) */
 
 // A skill invocation is text: `/visualise draw the flow` goes out as typed, and
-// the composer can draw that leading command as the skill instead — its name in
-// the accent with a mark (see components/ai/skillToken.ts). Which skills get
-// that, what each is called and which mark it draws is taste, so it is chosen
-// here, per skill, and saved.
+// the composer draws that leading command as the skill instead — its name, in
+// the accent (see components/ai/skillToken.ts). Every enabled skill reads that
+// way; what it is called, whether it carries a mark, and whether it reads as a
+// skill at all are chosen here, per skill, and saved.
 //
 // The sample is the real drawing, not a picture of one: the same mark component
 // the composer uses, at the composer's type size. Writing on each keystroke
@@ -897,7 +897,7 @@ export function SkillLedeSection({ skill }: { skill: Skill }) {
         {current.lede ? (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", whiteSpace: "nowrap" }}>
             {current.label.trim() || defaultLabel(skill.name)}
-            <SkillMarkGlyph mark={current.mark} size={14} />
+            {current.mark && <SkillMarkGlyph mark={current.mark} size={14} />}
           </span>
         ) : (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, color: "var(--fg)", whiteSpace: "nowrap" }}>/{current.command}</span>
@@ -921,6 +921,25 @@ export function SkillLedeSection({ skill }: { skill: Skill }) {
           <div>
             <span style={labelStyle}>Mark</span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 2, maxWidth: 260 }}>
+              {/* None first, because most skills read as their name alone. */}
+              <button
+                onClick={() => write({ mark: null })}
+                aria-label="No mark"
+                aria-pressed={current.mark === null}
+                title="No mark — the name alone"
+                style={{
+                  width: 30, height: 30, display: "grid", placeItems: "center",
+                  border: 0, borderRadius: "var(--radius-sm)", cursor: "pointer",
+                  font: "inherit", fontSize: 15, lineHeight: 1,
+                  background: current.mark === null ? "var(--bg-hover)" : "transparent",
+                  color: current.mark === null ? "var(--accent)" : "var(--fg-subtle)",
+                  transition: "color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out)",
+                }}
+                onMouseEnter={(e) => { if (current.mark !== null) e.currentTarget.style.color = "var(--fg-strong)"; }}
+                onMouseLeave={(e) => { if (current.mark !== null) e.currentTarget.style.color = "var(--fg-subtle)"; }}
+              >
+                &ndash;
+              </button>
               {SKILL_MARKS.map((mark) => (
                 <button
                   key={mark}
@@ -946,8 +965,8 @@ export function SkillLedeSection({ skill }: { skill: Skill }) {
         </div>
       ) : (
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-subtle)", lineHeight: 1.55 }}>
-          Typed plainly, as the command. Turn this on to have the composer read it
-          as {defaultLabel(skill.name)} instead{skill.enabled ? "" : " — while the skill is enabled"}.
+          Typed plainly, as the command. Turn this on to have the composer read
+          it as {defaultLabel(skill.name)} instead{skill.enabled ? "" : " — while the skill is enabled"}.
         </div>
       )}
 

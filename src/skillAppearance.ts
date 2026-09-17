@@ -8,10 +8,10 @@
 //
 // Keyed by the skill's `/` command rather than its id: a filesystem skill is
 // re-read from disk on every launch, and the command is what the composer
-// matches anyway. `visualise` ships with a lede so the feature is on out of the
-// box; anything else is off until you turn it on, because a lede is a claim
-// that a run will follow the skill and only you know which of thirty installed
-// skills you actually reach for.
+// matches anyway. Every enabled skill draws its lede — the colour and the name
+// are the skill, not a per-skill opt-in — and a mark is optional: most skills
+// read as their name alone until someone picks one. Turning a skill's lede off
+// is still a real answer, and it is saved as one.
 //
 // The pure half (defaults, merge, which skills are wired) is separate from the
 // stored half so the resolution can be tested without storage, and so the two
@@ -40,26 +40,29 @@ export const SKILL_MARKS = [
 ] as const;
 export type SkillMark = typeof SKILL_MARKS[number];
 
-export const DEFAULT_MARK: SkillMark = "skills";
-
-/** What a skill's lede reads and draws. */
-export type SkillLede = { label: string; mark: SkillMark };
+/** What a skill's lede reads and draws. A mark is optional — the name in the
+ *  accent is the signal, and a glyph can be added later or never. */
+export type SkillLede = { label: string; mark: SkillMark | null };
 
 /** One skill's saved appearance. `lede: false` is a real answer — it turns a
  *  shipped default off — so an absent record and a stored `false` differ. */
 export type SkillAppearance = SkillLede & { command: string; lede: boolean };
 
-/** The skills that ship wired, and how. */
-const SHIPPED: Record<string, SkillLede> = {
-  visualise: { label: "Visualise", mark: "diagram" },
-  visualize: { label: "Visualize", mark: "diagram" },
+/** Marks that ship chosen, for skills whose drawing is obvious. Everything
+ *  else starts with none. */
+const SHIPPED_MARKS: Record<string, SkillMark> = {
+  visualise: "diagram",
+  visualize: "diagram",
 };
 
 /** A skill's name, set as a name: `visualise` → "Visualise", `code-review` →
- *  "Code review". A name that already carries capitals is left alone — the
- *  author wrote it that way. */
+ *  "Code review". A plugin skill carries its plugin in front of a colon
+ *  (`ui-ux-pro-max:banner-design`) and the lede takes the skill's own half. A
+ *  name that already carries capitals is left alone — the author wrote it that
+ *  way. */
 export function defaultLabel(name: string): string {
-  const words = name.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  const own = name.includes(":") ? name.slice(name.lastIndexOf(":") + 1) : name;
+  const words = own.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
   if (!words) return words;
   if (/[A-Z]/.test(words)) return words;
   return words[0].toUpperCase() + words.slice(1);
@@ -73,7 +76,7 @@ function isAppearance(value: unknown): value is SkillAppearance {
     v.command.length > 0 &&
     typeof v.label === "string" &&
     typeof v.lede === "boolean" &&
-    SKILL_MARKS.includes(v.mark as SkillMark)
+    (v.mark === null || SKILL_MARKS.includes(v.mark as SkillMark))
   );
 }
 
@@ -82,19 +85,18 @@ const store = createPersistedStore<SkillAppearance[]>({
   validate: (parsed) => validatedArray(parsed, isAppearance),
 });
 
-/** One skill's appearance, saved answer over shipped default over plain
- *  fallback. Always returns something drawable — `lede` says whether the
- *  composer draws it. */
+/** One skill's appearance: a saved answer, or the default — its own name, the
+ *  mark it ships with if it has one, drawn. Always returns something drawable;
+ *  `lede` says whether the composer draws it. */
 export function appearanceOf(skill: Skill, saved: readonly SkillAppearance[]): SkillAppearance {
   const command = skillSlashName(skill.name);
   const stored = saved.find((a) => a.command === command);
   if (stored) return stored;
-  const shipped = SHIPPED[command];
   return {
     command,
-    label: shipped?.label ?? defaultLabel(skill.name),
-    mark: shipped?.mark ?? DEFAULT_MARK,
-    lede: !!shipped,
+    label: defaultLabel(skill.name),
+    mark: SHIPPED_MARKS[command] ?? null,
+    lede: true,
   };
 }
 
