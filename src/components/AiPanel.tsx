@@ -97,6 +97,8 @@ import { FileTypeIcon } from "./fileMarks";
 import { DelegateTerminalSurface } from "./lazySurfaces";
 import { PendingInboxRow, renderMessageBody, extractThinking, CompactionRow, ThinkingBlock, ToolRunRow, RunInterruptedRow, WorkingSince } from "./ai/ChatMessage";
 import { CompletionCard } from "./ai/CompletionCard";
+import { VisualIsland } from "./ai/VisualIsland";
+import { visualBlocksOf } from "./markdown";
 import { completionDocuments, latestReviewCompletion, type RunCompletion } from "../agent/completion";
 import { groupToolRuns, pairToolResults, toolRunIndex, toolRunLabel } from "./ai/toolRuns";
 import type { AttachedResult } from "./ai/ChatMessage";
@@ -3085,10 +3087,27 @@ This user request requires workspace inspection. Before answering, you MUST call
   // what each slot is showing decides the column's width, whether the canvas
   // gives up a panel's width or a mark's lane, and whether there is anything
   // for the close control to close.
+  // What the latest answer drew. On the Focus canvas the drawings sit in the
+  // column, not the prose (each message renders `visualsAside`), so the
+  // column shows the newest answer that drew anything; an older drawing
+  // stays reachable from its row, which opens the viewer. A fence still
+  // streaming is not a visual yet — `visualBlocksOf` counts closed ones.
+  const latestVisuals = useMemo(() => {
+    if (variant !== "focus") return null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== "assistant" || m.delegateConsole) continue;
+      const visuals = visualBlocksOf(m.content);
+      if (visuals.length > 0) return { sourceKey: `${currentId}:${i}`, visuals };
+    }
+    return null;
+  }, [variant, msgs, currentId]);
+
   const column = columnGeometry({
     planSlot,
     resultUp: latestCompletion !== undefined,
     questionUp: pendingQuestion !== null,
+    visualUp: latestVisuals !== null,
     hidden: sidePanelHidden,
     canvasWidth,
   });
@@ -4632,7 +4651,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   ? (m.delegateHeadless
                     ? <WorkingSince since={previous?.role === "user" ? previous.ts : undefined} />
                     : <AssistantPlaceholderLoader />)
-                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
+                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults, visualsAside: variant === "focus" })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
@@ -4948,6 +4967,14 @@ This user request requires workspace inspection. Before answering, you MUST call
               onOpenArtifact={onOpenArtifact ? (path) => onOpenArtifact({ runId: latestCompletion.runId, path, documents: documentSet(latestCompletion) }) : undefined}
               onPreviewArtifact={onPreviewArtifact}
               onRequestChanges={() => requestCompletionChanges(latestCompletion)}
+            />
+          )}
+          {latestVisuals && (
+            <VisualIsland
+              visuals={latestVisuals.visuals}
+              sourceKey={latestVisuals.sourceKey}
+              folded={column.planFolded}
+              onUnfold={() => setSidePanelHidden(false)}
             />
           )}
           {pendingQuestion && (

@@ -1238,6 +1238,9 @@ type MessageBodyOptions = {
   /** This turn's tool results, by call key (`toolCallKey`) — each call row
    *  draws its own underneath. See `pairToolResults`. */
   results?: Map<string, AttachedResult>;
+  /** The message's visuals render beside the conversation, not in it — the
+   *  Focus canvas puts them in the island column. See `MarkdownOptions`. */
+  visualsAside?: boolean;
 };
 
 type MessageBodyProps = MessageBodyOptions & {
@@ -1245,7 +1248,7 @@ type MessageBodyProps = MessageBodyOptions & {
   active?: boolean;
 };
 
-function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, results }: MessageBodyProps): ReactElement {
+function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, results, visualsAside }: MessageBodyProps): ReactElement {
   if (m.role === "system" && m.steering) {
     const delivered = parseDeliveryReason(m.steering.reason);
     if (delivered) return <AgentInboxRow delivered={delivered} workspaceRoot={workspaceRoot} />;
@@ -1327,7 +1330,7 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
         )}
         {visibleContent && (
           <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 13, lineHeight: 1.58 }}>
-            {renderMarkdown(visibleContent, { streaming: active })}
+            {renderMarkdown(visibleContent, { streaming: active, visualsAside })}
           </div>
         )}
         {(() => {
@@ -1394,6 +1397,7 @@ export function renderMessageBody(m: Msg, active = false, opts?: MessageBodyOpti
       hideThinking={opts?.hideThinking}
       workspaceRoot={opts?.workspaceRoot}
       results={opts?.results}
+      visualsAside={opts?.visualsAside}
     />
   );
 }

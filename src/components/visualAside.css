@@ -1,0 +1,13 @@
+/* A visual that lives on the canvas leaves one row in the prose: a mark, a
+   word for what it is, and where it went. The row is the whole hit target and
+   opens the drawing full size; the expand glyph waits for the pointer, the way
+   the plan's chevron does. */
+.inline-visual-aside { margin: 6px 0 10px; }
+.klide-visual-row { appearance: none; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; height: 30px; padding: 0 10px 0 9px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--fg-subtle); font: inherit; font-size: 12px; cursor: pointer; transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out); }
+.klide-visual-row:hover { color: var(--fg-strong); border-color: var(--border-strong); background: var(--bg-hover); }
+.klide-visual-row:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.klide-visual-row-mark { display: grid; place-items: center; color: inherit; }
+.klide-visual-row-title { color: var(--fg-strong); }
+.klide-visual-row-meta { color: var(--fg-dim); font-size: 11px; }
+.klide-visual-row-open { display: grid; place-items: center; color: var(--fg-dim); opacity: 0; transition: opacity 140ms var(--ease-soft); }
+.klide-visual-row:hover .klide-visual-row-open, .klide-visual-row:focus-visible .klide-visual-row-open { opacity: 1; }

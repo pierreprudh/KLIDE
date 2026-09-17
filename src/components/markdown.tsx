@@ -3,7 +3,8 @@ import { prepareVisual, type VisualHtml } from "./visualHtml";
 import { typesetVisual } from "./visualTypeset";
 
 import { createPortal } from "react-dom";
-import { VisualExpandIcon, DownloadIcon, CodeIcon, CopyIcon, CheckIcon } from "../icons";
+import { VisualExpandIcon, DownloadIcon, CodeIcon, CopyIcon, CheckIcon, DiagramIcon } from "../icons";
+import "./visualAside.css";
 import { fitVisualCanvases, fitViewerCanvas } from "./visualLayout";
 import { saveVisualPng } from "./visualExport";
 
@@ -21,7 +22,43 @@ export type MarkdownOptions = {
   // screen keeps its DOM node) and each new span resolves in through
   // `.ai-word-in`. Off by default: a finished message is plain text.
   streaming?: boolean;
+  // The visuals live beside the conversation, not in it. A closed `html` /
+  // `svg` fence renders as one quiet row where the figure would have stood;
+  // the drawing itself is the caller's to place (the Focus canvas puts it in
+  // the island column — see `visualBlocksOf`). The row still opens the
+  // fullscreen viewer, so an older drawing stays one click away.
+  visualsAside?: boolean;
 };
+
+/** One visual a message holds: a closed `html` / `svg` (…) fence whose markup
+ *  survived the sanitizer. `key` is stable across re-renders of the same text
+ *  — the fence's index in the message — so a surface can key a preview on it. */
+export type VisualBlockRef = { key: string; code: string; lang: string; kind: VisualHtml["kind"] };
+
+/** The visuals in a message, in order. Pure: the same split as the renderer
+ *  (bare markup fenced first, `\`\`\`` segments, odd ones are code), closed
+ *  fences only — a fence still arriving is source until it closes — and only
+ *  where something renderable is left once the allowlist has done its work. */
+export function visualBlocksOf(text: string): VisualBlockRef[] {
+  const segments = fenceBareMarkup(text).split("```");
+  const out: VisualBlockRef[] = [];
+  segments.forEach((seg, idx) => {
+    if (idx % 2 !== 1 || idx === segments.length - 1) return;
+    const nl = seg.indexOf("\n");
+    let lang = "";
+    let code = seg;
+    if (nl >= 0) {
+      const first = seg.slice(0, nl).trim();
+      if (/^[\w+#-]*$/.test(first)) { lang = first; code = seg.slice(nl + 1); }
+    }
+    if (!VISUAL_LANGS.has(lang.toLowerCase())) return;
+    code = code.replace(/\n$/, "");
+    const visual = prepareVisual(code, "kvprobe");
+    if (!/<[A-Za-z]/.test(visual.html)) return;
+    out.push({ key: `visual-${idx}`, code, lang, kind: visual.kind });
+  });
+  return out;
+}
 
 const CODE_KEYWORDS = new Set([
   "const", "let", "var", "function", "return", "if", "else", "for", "while",
@@ -212,7 +249,7 @@ const VISUAL_LANGS = new Set(["html", "svg", "visual", "visualizer", "viz", "pre
 // what earns the block its theme, its fonts and its tokens for free — and the
 // stylesheet the model wrote is re-anchored to this one block so it cannot
 // reach the app around it. See `visualHtml.ts` for the rules.
-const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: VisualHtml; scope: string }) {
+export const VisualSurface = memo(function VisualSurface({ visual, scope }: { visual: VisualHtml; scope: string }) {
   const content = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     let active = true;
@@ -281,7 +318,7 @@ function VisualControl({ label, children, onClick, disabled = false, className =
   return <button type="button" className={`visual-icon-button ${className}`.trim()} aria-label={label} data-tooltip={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 
-function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLDivElement | null }; onClose: () => void }) {
+export function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLDivElement | null }; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
@@ -373,7 +410,7 @@ function VisualSaveButton({ content }: { content: { current: HTMLDivElement | nu
   </>;
 }
 
-function VisualBlock({ code, lang, closed }: { code: string; lang: string; closed: boolean }) {
+function VisualBlock({ code, lang, closed, aside = false }: { code: string; lang: string; closed: boolean; aside?: boolean }) {
   const content = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [copied, copy] = useCopy(code);
@@ -400,6 +437,25 @@ function VisualBlock({ code, lang, closed }: { code: string; lang: string; close
       <BlockAction label={copied ? "Copied" : "Copy"} title="Copy code" active={copied} onClick={copy} />
     </>
   );
+  if (showVisual && aside) {
+    // The drawing is on the canvas beside the conversation; here, one row
+    // marks its place and opens it full size.
+    return (
+      <figure className="inline-visual inline-visual-aside" style={{ minWidth: 0 }}>
+        {/* The row is what the viewer grows out of and shrinks back into. */}
+        <div ref={content} style={{ display: "inline-block", maxWidth: "100%" }}>
+        <button type="button" className="klide-visual-row" onClick={(event) => { event.currentTarget.focus(); setExpanded(true); }}
+          aria-label={`Open the ${visual.kind === "page" ? "page" : "diagram"} fullscreen`} title="Open fullscreen">
+          <span className="klide-visual-row-mark" aria-hidden="true"><DiagramIcon size={14} /></span>
+          <span className="klide-visual-row-title">{visual.kind === "page" ? "Page" : "Diagram"}</span>
+          <span className="klide-visual-row-meta">on the canvas</span>
+          <span className="klide-visual-row-open" aria-hidden="true"><VisualExpandIcon expanded={expanded} size={13} /></span>
+        </button>
+        </div>
+        {expanded ? <VisualViewer code={code} origin={content} onClose={() => setExpanded(false)} /> : null}
+      </figure>
+    );
+  }
   return showVisual ? (
     // A page leaves the reading column (`.inline-visual-page`, tokens.css);
     // a drawing stays in it, sized to itself by `fitVisualCanvases`.
@@ -1010,8 +1066,10 @@ export function renderMarkdown(text: string, options?: MarkdownOptions): MdNode[
   // A streaming tail changes on every tick and would only churn the cache; a
   // `renderTool` hook makes the output depend on the caller, not the text.
   const cacheable = !options?.streaming && !options?.renderTool;
+  // The aside flag changes what a fence becomes, so it is part of the key.
+  const cacheKey = options?.visualsAside ? `\u0000aside\n${text}` : text;
   if (cacheable) {
-    const hit = PARSE_CACHE.get(text);
+    const hit = PARSE_CACHE.get(cacheKey);
     if (hit) return hit;
   }
   const out = parseMarkdown(text, options);
@@ -1020,7 +1078,7 @@ export function renderMarkdown(text: string, options?: MarkdownOptions): MdNode[
       const oldest = PARSE_CACHE.keys().next().value;
       if (oldest !== undefined) PARSE_CACHE.delete(oldest);
     }
-    PARSE_CACHE.set(text, out);
+    PARSE_CACHE.set(cacheKey, out);
   }
   return out;
 }
@@ -1106,7 +1164,7 @@ function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
       const closed = idx < segments.length - 1;
       out.push(
         VISUAL_LANGS.has(lang.toLowerCase())
-          ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} />
+          ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} aside={options?.visualsAside === true} />
           : <CodeBlock key={`code-${idx}`} code={code} lang={lang} />,
       );
     } else if (seg) {

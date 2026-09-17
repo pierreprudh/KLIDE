@@ -1,0 +1,15 @@
+/* The drawings the latest answer made, as one window in the canvas column.
+   Each is shown as itself — the same sanitized markup the prose would have
+   held, fluid to the column's width — clipped to a card the reader clicks to
+   see full size. No screenshot, no second renderer. */
+.klide-visual-island-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 0 14px; }
+.klide-visual-thumb { appearance: none; position: relative; display: block; width: 100%; max-height: 220px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out); }
+.klide-visual-thumb:hover, .klide-visual-thumb:focus-visible { border-color: var(--border-strong); }
+.klide-visual-thumb:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.klide-visual-thumb > .klide-viz { padding: 10px; pointer-events: none; }
+/* Below the fold: a tall page fades out at the card's edge rather than ending
+   on a cut line. */
+.klide-visual-thumb::after { content: ""; position: absolute; inset: auto 0 0 0; height: 28px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+.klide-visual-thumb-open { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-subtle); opacity: 0; transition: opacity 140ms var(--ease-soft); }
+.klide-visual-thumb:hover .klide-visual-thumb-open, .klide-visual-thumb:focus-visible .klide-visual-thumb-open { opacity: 1; }
+.klide-visual-caption { margin: 6px 2px 0; color: var(--fg-dim); font-size: 11px; }

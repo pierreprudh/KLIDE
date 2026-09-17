@@ -82,4 +82,14 @@ describe("canvas column geometry", () => {
   it("assumes the roomy case before the canvas has been measured", () => {
     expect(columnGeometry({ ...roomy, canvasWidth: 0 }).width).toBe(COLUMN_MAX);
   });
+
+  it("holds the column open for a drawing, and keeps its mark when closed", () => {
+    const up = columnGeometry({ ...roomy, visualUp: true });
+    expect(up.cardsUp).toBe(true);
+    expect(up.inset).toBe(COLUMN_MAX + 36);
+    const closed = columnGeometry({ ...roomy, visualUp: true, hidden: true });
+    expect(closed.cardsUp).toBe(false);
+    expect(closed.marksUp).toBe(true);
+    expect(closed.inset).toBe(76);
+  });
 });
