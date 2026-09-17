@@ -11,33 +11,27 @@
 // So there is no second state to keep. The draft still holds `/visualise `;
 // the composer renders the remainder and draws the prefix as a lede. Splitting
 // and rejoining is this module's only job, which is why it is pure and
-// testable — the geometry lives in SkillToken.tsx, the wiring in the two
-// composers.
+// testable — the geometry lives in SkillTokenLede.tsx, the taste (which skills
+// are wired, what they are called, which mark they draw) in skillAppearance.ts,
+// and the wiring in the two composers.
 //
-// Only skills named here are wired, and only when the skill is actually
-// installed and enabled: a lede for a skill the run would not follow would
-// promise something the send can't keep. Everything else stays plain text.
+// Which skills are wired arrives as a map, resolved by the caller. A lede for a
+// skill the run would not follow would promise what the send can't keep, and
+// the module that knows what a run follows is not this one.
 
-import { skillSlashName, type Skill } from "../../skills";
+import type { SkillLede, SkillMark } from "../../skillAppearance";
 
-/** Which mark a wired skill draws. A key, not a glyph — this module stays
- *  free of React so it can be tested on its own. */
-export type SkillTokenIcon = "diagram";
+/** The wired skills, by `/` command. `skillLedes` builds it. */
+export type SkillLedes = ReadonlyMap<string, SkillLede>;
 
 export type SkillToken = {
   /** The `/` command, as typed: `visualise`. */
   command: string;
   /** What the lede reads: the skill's name, set as a name. */
   label: string;
-  icon: SkillTokenIcon;
+  mark: SkillMark;
   /** The exact text the lede stands in for, trailing space included. */
   prefix: string;
-};
-
-/** The wired skills. One for now — the shape is the point, not the count. */
-const WIRED: Record<string, { label: string; icon: SkillTokenIcon }> = {
-  visualise: { label: "Visualise", icon: "diagram" },
-  visualize: { label: "Visualize", icon: "diagram" },
 };
 
 /** A draft's leading skill command, or null.
@@ -46,24 +40,22 @@ const WIRED: Record<string, { label: string; icon: SkillTokenIcon }> = {
  *  being typed — the `/` menu is open on them and needs its own text visible —
  *  so a token appears only once the command is closed by a space, which is
  *  exactly what accepting the menu entry leaves behind. */
-export function skillTokenOf(value: string, skills: readonly Skill[]): SkillToken | null {
+export function skillTokenOf(value: string, ledes: SkillLedes): SkillToken | null {
   const m = value.match(/^\/([\w-]+) /);
   if (!m) return null;
   const command = m[1].toLowerCase();
-  const wired = WIRED[command];
-  if (!wired) return null;
-  const installed = skills.some((s) => s.enabled && skillSlashName(s.name) === command);
-  if (!installed) return null;
-  return { command, label: wired.label, icon: wired.icon, prefix: m[0] };
+  const lede = ledes.get(command);
+  if (!lede) return null;
+  return { command, label: lede.label, mark: lede.mark, prefix: m[0] };
 }
 
 /** The draft as the composer shows it: the lede, and the text the textarea
  *  holds. `body` is the draft verbatim when nothing is wired. */
 export function splitSkillToken(
   value: string,
-  skills: readonly Skill[],
+  ledes: SkillLedes,
 ): { token: SkillToken | null; body: string } {
-  const token = skillTokenOf(value, skills);
+  const token = skillTokenOf(value, ledes);
   return token ? { token, body: value.slice(token.prefix.length) } : { token: null, body: value };
 }
 

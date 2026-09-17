@@ -124,6 +124,7 @@ import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { joinSkillToken, skillTokenCaret, splitSkillToken } from "./ai/skillToken";
+import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
@@ -1592,7 +1593,9 @@ export function AiPanel({
   // shows only the text after it and the lede stands at the head of the line.
   // Everything below that edits the composer therefore works in *body* space
   // and rejoins on the way back into `input`.
-  const { token: skillToken, body: draftBody } = splitSkillToken(input, skills);
+  const skillAppearances = useSkillAppearances();
+  const ledes = useMemo(() => skillLedes(skills, skillAppearances), [skills, skillAppearances]);
+  const { token: skillToken, body: draftBody } = splitSkillToken(input, ledes);
 
   function acceptMention(path: string) {
     const ta = taRef.current;

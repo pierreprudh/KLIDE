@@ -67,6 +67,7 @@ import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { joinSkillToken, splitSkillToken } from "./ai/skillToken";
+import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
   SLASH_DESC,
@@ -1615,7 +1616,9 @@ function FocusComposer({
   // A wired skill typed into the composer reads as itself. The draft still
   // holds `/visualise ` — that is what the model is sent — and the textarea
   // shows only what follows it, with the lede drawn over the head of the line.
-  const { token: skillToken, body: draftBody } = splitSkillToken(draft, skills);
+  const skillAppearances = useSkillAppearances();
+  const ledes = useMemo(() => skillLedes(skills, skillAppearances), [skills, skillAppearances]);
+  const { token: skillToken, body: draftBody } = splitSkillToken(draft, ledes);
 
   function submit() {
     const text = draft.trim();

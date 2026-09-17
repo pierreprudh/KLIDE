@@ -10,13 +10,9 @@
 // composers with two paddings and two type sizes float this and neither should
 // have to restate its own metrics to keep the lede on the baseline.
 
-import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
-import { DiagramIcon, type GlyphProps } from "../../icons";
-import type { SkillToken, SkillTokenIcon } from "./skillToken";
-
-const GLYPHS: Record<SkillTokenIcon, (p: GlyphProps) => ReactElement> = {
-  diagram: DiagramIcon,
-};
+import { useLayoutEffect, useRef, useState } from "react";
+import type { SkillToken } from "./skillToken";
+import { SkillMarkGlyph } from "./skillMarks";
 
 /** Air between the name and the text that follows it. */
 const GAP = 7;
@@ -80,7 +76,6 @@ export function SkillTokenLede({
   }, [geom, token.label, onWidth]);
 
   if (!geom) return null;
-  const Glyph = GLYPHS[token.icon];
   const hidden = scrolled > geom.lineHeight * 0.6;
 
   return (
@@ -118,7 +113,7 @@ export function SkillTokenLede({
       }}
     >
       {token.label}
-      <Glyph size={Math.round(geom.fontSize * 1.05)} />
+      <SkillMarkGlyph mark={token.mark} size={Math.round(geom.fontSize * 1.05)} />
     </button>
   );
 }

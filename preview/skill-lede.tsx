@@ -18,6 +18,8 @@ import "@fontsource/monaspace-neon/700.css";
 import "../src/styles/tokens.css";
 import { SkillTokenLede } from "../src/components/ai/SkillTokenLede";
 import { joinSkillToken, splitSkillToken } from "../src/components/ai/skillToken";
+import { skillLedes, useSkillAppearances } from "../src/skillAppearance";
+import { SkillLedeSection } from "../src/components/SkillsModal";
 import type { Skill } from "../src/skills";
 import { NewTaskIcon } from "../src/icons";
 
@@ -32,7 +34,8 @@ function Composer({ variant }: { variant: "focus" | "panel" }) {
   const [draft, setDraft] = useState("/visualise ");
   const [el, setEl] = useState<HTMLTextAreaElement | null>(null);
   const [indent, setIndent] = useState(0);
-  const { token, body } = splitSkillToken(draft, SKILLS);
+  const appearances = useSkillAppearances();
+  const { token, body } = splitSkillToken(draft, skillLedes(SKILLS, appearances));
 
   const panelStyle: CSSProperties = {
     width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent",
@@ -97,6 +100,11 @@ function Page() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--fg)", font: "400 14px/1.5 var(--font-ui)", display: "flex", flexDirection: "column", gap: 56, alignItems: "center", padding: "72px 24px" }}>
       <div style={{ color: "var(--fg-dim)", fontSize: 12 }}>Type <code>/visualise </code> — the command becomes the skill. Backspace at the head of the line removes it.</div>
+      {/* The real Skills-panel section, on the real store: change the name or
+          the mark here and the two composers below redraw. */}
+      <div style={{ width: 620, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+        <SkillLedeSection skill={SKILLS[0]} />
+      </div>
       <Composer variant="focus" />
       <Composer variant="panel" />
     </div>
