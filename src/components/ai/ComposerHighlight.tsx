@@ -19,8 +19,12 @@
 // textarea keeps its own visible text and this renders nothing — the ordinary
 // case carries none of the risk.
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { SkillMarkGlyph } from "./skillMarks";
 import type { DraftSpan } from "./skillToken";
+
+/** Air between a command and its mark — the lede's own gap. */
+const GAP = 5;
 
 /** Everything that decides where a glyph lands. Colour is deliberately not
  *  here: the mirror paints, the textarea is transparent. */
@@ -51,6 +55,7 @@ export function ComposerHighlight({
   spans: readonly DraftSpan[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [fontSize, setFontSize] = useState(13.5);
 
   // Every render: the textarea may have been resized, re-themed, or had a lede
   // change its indent, and all of that has to land before the browser paints.
@@ -60,6 +65,8 @@ export function ComposerHighlight({
     const cs = getComputedStyle(textarea);
     for (const key of METRICS) el.style[key] = cs[key];
     el.scrollTop = textarea.scrollTop;
+    const size = parseFloat(cs.fontSize);
+    if (size && size !== fontSize) setFontSize(size);
   });
 
   // A long draft scrolls inside the textarea; the mirror follows it.
@@ -91,7 +98,23 @@ export function ComposerHighlight({
     >
       {spans.map((span, i) =>
         span.skill ? (
-          <span key={i} style={{ color: "var(--accent)" }}>{span.text}</span>
+          <span key={i} style={{ color: "var(--accent)" }}>
+            {span.text}
+            {/* The mark sits in a box of no width, so it can draw into the
+                empty line beside it without moving one glyph of the text the
+                textarea laid out. `draftSpans` only hands one over where that
+                room exists. */}
+            {span.mark && (
+              <span style={{ display: "inline-block", width: 0, overflow: "visible", whiteSpace: "nowrap" }}>
+                {/* Offset by position, not by margin or padding: either of
+                    those would give the box a width again. GAP matches the
+                    lede's air between a name and its mark. */}
+                <span style={{ position: "relative", left: GAP, display: "inline-flex", verticalAlign: "-0.15em" }}>
+                  <SkillMarkGlyph mark={span.mark} size={Math.round(fontSize * 1.05)} />
+                </span>
+              </span>
+            )}
+          </span>
         ) : (
           <span key={i}>{span.text}</span>
         ),

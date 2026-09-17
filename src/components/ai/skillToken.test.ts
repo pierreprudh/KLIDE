@@ -69,7 +69,7 @@ describe("draftSpans", () => {
   it("marks a wired command inside a sentence", () => {
     expect(draftSpans("use /visualise here", LEDES)).toEqual([
       { text: "use ", skill: false },
-      { text: "/visualise", skill: true },
+      { text: "/visualise", skill: true, mark: null },
       { text: " here", skill: false },
     ]);
   });
@@ -83,6 +83,14 @@ describe("draftSpans", () => {
     expect(marked("use /visu")).toEqual([]);
     expect(marked("use /visualise")).toEqual([]);
     expect(marked("use /visualise ")).toEqual(["/visualise"]);
+  });
+
+  it("carries the mark only where nothing follows the command", () => {
+    // Room to its right: the mark draws into empty line.
+    expect(draftSpans("use /visualise ", LEDES)[1]).toEqual({ text: "/visualise", skill: true, mark: "diagram" });
+    expect(draftSpans("use /visualise \n", LEDES)[1].mark).toBe("diagram");
+    // Prose after it: a glyph would push the rest of the line out of line.
+    expect(draftSpans("use /visualise on this ", LEDES)[1].mark).toBeNull();
   });
 
   it("leaves paths, prose and unwired skills plain", () => {
