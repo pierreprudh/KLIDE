@@ -6,6 +6,15 @@ Notable changes per milestone. Dates are completion dates.
 
 ### Fixes
 
+- **Full auto reaches the Run that is asking.** The rung was read once, when
+  a Run started: flipping to full auto while a conversation's Run worked left
+  it asking for every command, and a message queued behind a live turn even
+  carried the rung as it stood when the queue began. The flip now tells the
+  live Run — later commands skip the gate, a command card up at that moment is
+  answered, with the transcript recording that the policy answered rather
+  than the user — and a queued turn reads the rung at send. A dispatch card, a
+  network target or a peer's message is never swept up; stepping back down
+  makes the Run ask again.
 - **Goal runs on a direct Anthropic key work again.** The `mission_orchestrate`
   tool's input schema carried a top-level `oneOf`, which Anthropic's API
   refuses — and one refused tool fails the whole request, so every Goal turn

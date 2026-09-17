@@ -979,6 +979,7 @@ pub fn run() {
             agent::agent_start_run,
             agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
+            agent::agent_set_command_policy,
             agent::agent_resolve_diff,
             agent::agent_resolve_question,
             agent::agent_compact_context,

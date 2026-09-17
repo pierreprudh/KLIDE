@@ -44,7 +44,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
+import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
 import { serviceAdvisorConsult } from "../agent/advisorConsult";
@@ -1952,6 +1952,27 @@ This user request requires workspace inspection. Before answering, you MUST call
   const processingQueueRef = useRef(false);
   const queueGenerationRef = useRef(0);
   const activeHarnessRunRef = useRef<string | null>(null);
+  // The Goal policy the *next* request carries, read through refs at send
+  // time. The queue drain is one closure for as long as it loops, so a turn
+  // queued behind a live one would otherwise carry the rung as it was when
+  // the loop started, not as it is now.
+  const requireDiffReviewRef = useRef(requireDiffReview);
+  const autoApproveCommandsRef = useRef(autoApproveCommands);
+  useEffect(() => { requireDiffReviewRef.current = requireDiffReview; }, [requireDiffReview]);
+  useEffect(() => { autoApproveCommandsRef.current = autoApproveCommands; }, [autoApproveCommands]);
+  // The rung flipped while this conversation's Run works: tell that Run. Full
+  // auto answers a command card it has up and silences the ones to come;
+  // stepping back down makes it ask again. Nothing to tell on mount — a fresh
+  // panel has no live Run — and a Run that settled between the flip and the
+  // call is no loss: the next request carries the rung.
+  const commandsPolicyToldRef = useRef(autoApproveCommands);
+  useEffect(() => {
+    if (commandsPolicyToldRef.current === autoApproveCommands) return;
+    commandsPolicyToldRef.current = autoApproveCommands;
+    const runId = activeHarnessRunRef.current;
+    if (!runId) return;
+    void setRunCommandPolicy({ runId, autoApproveCommands }).catch(() => {});
+  }, [autoApproveCommands]);
   // Live subscription to a run that was still going when this panel mounted
   // (see the mount reconnect effect). Held so we can detach on unmount / when
   // the run settles, and so a conversation switch doesn't leave it listening.
@@ -3458,8 +3479,8 @@ This user request requires workspace inspection. Before answering, you MUST call
         maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
         commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
-        requireDiffReview,
-        autoApproveCommands: autoApproveCommands || undefined,
+        requireDiffReview: requireDiffReviewRef.current,
+        autoApproveCommands: autoApproveCommandsRef.current || undefined,
         testAfterEditCommand: testAfterEditCommand || undefined,
         // Stars are the router's strongest preference and live only in this
         // renderer's storage, so an `auto` turn carries them along.
