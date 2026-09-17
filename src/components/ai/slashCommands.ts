@@ -56,6 +56,29 @@ export function slashQueryAt(value: string, caret: number = value.length): Slash
   return { query, start, head: start === 0 && rest.trim() === "" };
 }
 
+/** Accepting a command: it lands where it was typed.
+ *
+ *  The half-typed word is replaced in place — a sentence already written is
+ *  not rearranged to make room for a command, so the caret comes back right
+ *  after the command with the rest of the line untouched. The trailing space
+ *  is the one the composer's `skillTokenOf` needs to read a command as closed;
+ *  it is dropped when the prose that follows already starts with one. */
+export function replaceSlashWord(opts: {
+  value: string;
+  /** Where the typed `/` sits in the draft. */
+  start: number;
+  /** Where the caret sits; the word may run on past it. */
+  caret: number;
+  /** What the command leaves behind, trailing space included. */
+  prefix: string;
+}): { value: string; caret: number } {
+  const { value, start, caret, prefix } = opts;
+  const end = caret + (value.slice(caret).match(/^[\w-]*/)?.[0].length ?? 0);
+  const after = value.slice(end);
+  const inserted = /^\s/.test(after) ? prefix.replace(/\s+$/, "") : prefix;
+  return { value: value.slice(0, start) + inserted + after, caret: start + inserted.length };
+}
+
 export function filterSlashCommands<T extends { name: string }>(commands: readonly T[], query: string): T[] {
   const q = query.toLowerCase();
   return commands.filter((c) => c.name.startsWith(q));

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   currentModeText,
   filterSlashCommands,
+  replaceSlashWord,
   skillSlashCommands,
   skillSlashName,
   skillSlashPrefix,
@@ -114,5 +115,35 @@ describe("skill slash commands", () => {
   it("keeps the first of two skills that slug to the same name", () => {
     const cmds = skillSlashCommands([skill("Zoom Out", true), skill("zoom-out", true)], [], () => {});
     expect(cmds.map((c) => c.name)).toEqual(["zoom-out"]);
+  });
+});
+
+describe("replaceSlashWord", () => {
+  const accept = (value: string, start: number, caret: number) =>
+    replaceSlashWord({ value, start, caret, prefix: "/visualise " });
+
+  it("completes a command that is the whole draft", () => {
+    expect(accept("/visu", 0, 5)).toEqual({ value: "/visualise ", caret: 11 });
+  });
+
+  it("leaves the sentence where it stands and lands the command in it", () => {
+    expect(accept("draw the auth flow /vis", 19, 23)).toEqual({
+      value: "draw the auth flow /visualise ",
+      caret: 30,
+    });
+  });
+
+  it("takes the whole word when the caret sits inside it", () => {
+    expect(accept("draw the flow /vis", 14, 17)).toEqual({
+      value: "draw the flow /visualise ",
+      caret: 25,
+    });
+  });
+
+  it("keeps one space when prose already follows", () => {
+    expect(accept("draw /vis the auth flow", 5, 9)).toEqual({
+      value: "draw /visualise the auth flow",
+      caret: 15,
+    });
   });
 });

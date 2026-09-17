@@ -66,7 +66,7 @@ import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
@@ -75,6 +75,7 @@ import {
   SLASH_PROMPTS,
   currentModeText,
   filterSlashCommands,
+  replaceSlashWord,
   slashKeyAction,
   slashQueryAt,
   stepSlashIndex,
@@ -1728,13 +1729,12 @@ function FocusComposer({
       onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
     } },
   ];
-  // A Skill accepted mid-sentence takes the head of the draft and leaves the
-  // prose standing — see `hoistSkillCommand`.
+  // A Skill lands where it was typed — see `replaceSlashWord`.
   const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
     const open = slash;
     const next = open === null
       ? { value: prefix, caret: prefix.length }
-      : hoistSkillCommand({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
+      : replaceSlashWord({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix });
     setSlash(null);
     setDraft(next.value);
     // The textarea holds the body; a wired skill is drawn as a lede, so the

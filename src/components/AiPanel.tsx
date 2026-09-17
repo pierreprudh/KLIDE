@@ -123,9 +123,9 @@ import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
-import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
@@ -1493,14 +1493,15 @@ export function AiPanel({
       void send({ ...SLASH_PROMPTS.interview });
     } },
   ];
-  // The enabled Skills follow the built-ins. Accepting one leaves its prefix
-  // at the head of the composer and the cursor in the prose, the way /explain
-  // does — wherever in the draft the command was actually typed.
+  // The enabled Skills follow the built-ins. Accepting one leaves its command
+  // where it was typed, with the cursor after it — at the head of the draft
+  // that is a lede, mid-sentence it is the command as text, which is what the
+  // model is sent either way.
   const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
     const open = slash;
     const next = open === null
       ? { value: prefix, caret: prefix.length }
-      : hoistSkillCommand({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
+      : replaceSlashWord({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix });
     setInput(next.value);
     setSlash(null);
     // The textarea holds the body, not the draft: a wired skill is a lede, so
