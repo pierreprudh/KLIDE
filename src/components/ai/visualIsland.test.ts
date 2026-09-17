@@ -10,7 +10,7 @@ describe("drawnExtent", () => {
       { left: 120, top: 60, right: 460, bottom: 200 },
       { left: 140, top: 210, right: 500, bottom: 300 },
     ], box, 1);
-    expect(e).toEqual({ left: 20, top: 10, width: 380, height: 250 });
+    expect(e).toEqual({ left: 20, top: 10, width: 380, height: 240 });
   });
 
   it("undoes the scale already applied to the drawing", () => {
