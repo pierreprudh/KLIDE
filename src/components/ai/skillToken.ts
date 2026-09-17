@@ -71,3 +71,29 @@ export function skillTokenCaret(token: SkillToken | null, caret: number): number
   return token ? caret + token.prefix.length : caret;
 }
 
+
+/** One run of the draft, and whether it is a skill command.
+ *  `ComposerHighlight` draws these; nothing else needs them. */
+export type DraftSpan = { text: string; skill: boolean };
+
+/** The draft cut into runs, with every wired command marked.
+ *
+ *  The same rule `skillTokenOf` applies at the head, applied everywhere: a
+ *  command starts a word, a space closes it, and only a wired skill counts.
+ *  A command still being typed — `/visu`, with the `/` menu open on it — is
+ *  not yet closed and stays plain, so the accent arrives when the command
+ *  does and nothing flickers underneath the caret. */
+export function draftSpans(value: string, ledes: SkillLedes): DraftSpan[] {
+  const spans: DraftSpan[] = [];
+  let at = 0;
+  const re = /(^|\s)\/([\w-]+)(?=\s)/g;
+  for (let m = re.exec(value); m !== null; m = re.exec(value)) {
+    if (!ledes.has(m[2].toLowerCase())) continue;
+    const start = m.index + m[1].length;
+    if (start > at) spans.push({ text: value.slice(at, start), skill: false });
+    at = start + m[2].length + 1;
+    spans.push({ text: value.slice(start, at), skill: true });
+  }
+  if (at < value.length) spans.push({ text: value.slice(at), skill: false });
+  return spans;
+}

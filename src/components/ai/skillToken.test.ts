@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SkillLede } from "../../skillAppearance";
 import {
+  draftSpans,
   joinSkillToken,
   skillTokenCaret,
   skillTokenOf,
@@ -59,5 +60,35 @@ describe("split and join", () => {
     const { token } = splitSkillToken("/visualise draw", LEDES);
     expect(skillTokenCaret(token, 0)).toBe(11);
     expect(skillTokenCaret(null, 4)).toBe(4);
+  });
+});
+
+describe("draftSpans", () => {
+  const marked = (value: string) => draftSpans(value, LEDES).filter((s) => s.skill).map((s) => s.text);
+
+  it("marks a wired command inside a sentence", () => {
+    expect(draftSpans("use /visualise here", LEDES)).toEqual([
+      { text: "use ", skill: false },
+      { text: "/visualise", skill: true },
+      { text: " here", skill: false },
+    ]);
+  });
+
+  it("marks one at the head and one at the end of the line", () => {
+    expect(marked("/visualise the flow")).toEqual(["/visualise"]);
+    expect(marked("draw the flow /visualise ")).toEqual(["/visualise"]);
+  });
+
+  it("waits for the space that closes the command, so nothing flickers while typing", () => {
+    expect(marked("use /visu")).toEqual([]);
+    expect(marked("use /visualise")).toEqual([]);
+    expect(marked("use /visualise ")).toEqual(["/visualise"]);
+  });
+
+  it("leaves paths, prose and unwired skills plain", () => {
+    expect(marked("open src/visualise now")).toEqual([]);
+    expect(marked("run /tdd first")).toEqual([]);
+    expect(draftSpans("plain text", LEDES)).toEqual([{ text: "plain text", skill: false }]);
+    expect(draftSpans("", LEDES)).toEqual([]);
   });
 });

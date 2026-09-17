@@ -123,7 +123,8 @@ import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
@@ -1610,6 +1611,10 @@ export function AiPanel({
   const skillAppearances = useSkillAppearances();
   const ledes = useMemo(() => skillLedes(skills, skillAppearances), [skills, skillAppearances]);
   const { token: skillToken, body: draftBody } = splitSkillToken(input, ledes);
+  // A command inside the sentence is drawn by the layer behind the textarea;
+  // with none in the draft there is no layer and the textarea draws itself.
+  const bodySpans = useMemo(() => draftSpans(draftBody, ledes), [draftBody, ledes]);
+  const highlighted = bodySpans.some((s) => s.skill);
 
   function acceptMention(path: string) {
     const ta = taRef.current;
@@ -5171,6 +5176,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onWidth={setLedeIndent}
             />
           )}
+          {highlighted && <ComposerHighlight textarea={taEl} spans={bodySpans} />}
           <textarea ref={(el) => { taRef.current = el; setTaEl(el); }} className="klide-composer-textarea" value={draftBody}
             onChange={(e) => handleComposerChange(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
             onKeyDown={(e) => {
@@ -5238,7 +5244,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
-            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
+            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
           />
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>
