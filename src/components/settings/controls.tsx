@@ -4,7 +4,7 @@
 // cards, theme chips, steppers, ranges) and small text/icon helpers.
 // Extracted from SettingsPanel.tsx; purely presentational.
 
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import type { ThemeId } from "../../theme";
 import { SIZE_OPTIONS, type RegionSize } from "../../layouts";
 
@@ -528,6 +528,12 @@ export function Range({
   suffix: string;
   label: string;
 }) {
+  // The browser paints the thumb but not the part of the track behind it, so
+  // where the value sits is handed to CSS as a percentage. Clamped because a
+  // stored setting can outlive the range it was written for.
+  const span = max - min;
+  const fill = span > 0 ? ((clamp(value, min, max) - min) / span) * 100 : 0;
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <input
@@ -539,9 +545,18 @@ export function Range({
         step={step}
         value={value}
         onChange={(e) => onChange(clamp(Number(e.target.value), min, max))}
-        style={{ width: 164 }}
+        style={{ width: 164, "--range-fill": `${fill}%` } as CSSProperties}
       />
-      <span style={{ minWidth: 54, color: "var(--fg-strong)", textAlign: "right" }}>
+      {/* The reading stays put while you drag — tabular figures, so a digit
+          changing width doesn't shift the number under your eye. */}
+      <span
+        style={{
+          minWidth: 54,
+          color: "var(--fg-strong)",
+          textAlign: "right",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
         {value}
         {suffix}
       </span>
