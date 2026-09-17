@@ -16,13 +16,44 @@ export type SlashCommand = {
   run: () => void | Promise<void>;
 };
 
-/** The typed prefix that opens the menu, or null when the composer is not in
- *  slash-command shape. Only a lone `/word` at the start of the draft counts —
- *  a slash anywhere else is prose (a path, a fraction). Hyphens are part of the
- *  word so `/auto-mode` keeps the menu open past the dash. */
-export function slashQueryOf(value: string): string | null {
-  const m = value.match(/^\/([\w-]*)$/);
-  return m ? m[1] : null;
+/** A `/` the composer is willing to read as a command.
+ *
+ *  A slash opens the menu wherever it is typed — at the head of the draft or
+ *  in the middle of a sentence — as long as it starts a word: something must
+ *  precede it that isn't a character, so `src/App.tsx` never counts. What
+ *  gives the remaining paths away is what *follows* the word: a second slash
+ *  or a dot means `/src/App.tsx`, not a command, and the menu stays shut even
+ *  while the path is half typed. Hyphens belong to the word, so `/auto-mode`
+ *  keeps the menu open past the dash.
+ *
+ *  `head` says the slash opens the draft and nothing follows it — the shape in
+ *  which a command may take the whole composer over (`/clear`, `/plan`).
+ *  Mid-sentence, only the Skills are on offer, because they compose with the
+ *  prose already typed and the built-ins replace it. */
+export type SlashQuery = {
+  /** The word typed so far, up to the caret: `vis` in `/vis|ualise`. */
+  query: string;
+  /** Where the `/` sits in the draft. */
+  start: number;
+  /** The slash opens the draft and nothing but space follows the word. */
+  head: boolean;
+};
+
+export function slashQueryAt(value: string, caret: number = value.length): SlashQuery | null {
+  const at = Math.max(0, Math.min(caret, value.length));
+  const before = value.slice(0, at);
+  const m = before.match(/(?:^|\s)\/([\w-]*)$/);
+  if (m === null) return null;
+  const query = m[1];
+  // The word can run on past the caret — `/vis|ualise`, or the `src` of a path
+  // whose slash happens to follow a space. Read it whole before judging it.
+  const tail = value.slice(at).match(/^[\w-]*/)![0];
+  const rest = value.slice(at + tail.length);
+  if (/^[/.]/.test(rest)) return null;
+  const start = at - query.length - 1;
+  // The tail is the same word, still being typed; only what lies beyond it
+  // makes a command stop being the whole draft.
+  return { query, start, head: start === 0 && rest.trim() === "" };
 }
 
 export function filterSlashCommands<T extends { name: string }>(commands: readonly T[], query: string): T[] {

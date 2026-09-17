@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SkillLede } from "../../skillAppearance";
 import {
+  hoistSkillCommand,
   joinSkillToken,
   skillTokenCaret,
   skillTokenOf,
@@ -59,5 +60,42 @@ describe("split and join", () => {
     const { token } = splitSkillToken("/visualise draw", LEDES);
     expect(skillTokenCaret(token, 0)).toBe(11);
     expect(skillTokenCaret(null, 4)).toBe(4);
+  });
+});
+
+describe("hoistSkillCommand", () => {
+  const accept = (value: string, start: number, caret: number, ledes: SkillLedes = LEDES) =>
+    hoistSkillCommand({ value, start, caret, prefix: "/visualise ", ledes });
+
+  it("keeps the whole-draft case as it was: the command and a cursor after it", () => {
+    expect(accept("/visu", 0, 5)).toEqual({ value: "/visualise ", caret: 11 });
+  });
+
+  it("takes the head when the command was typed at the end of a sentence", () => {
+    expect(accept("draw the auth flow /vis", 19, 23)).toEqual({
+      value: "/visualise draw the auth flow",
+      caret: 29,
+    });
+  });
+
+  it("cuts the word out of the middle and leaves the caret at the seam", () => {
+    expect(accept("draw /vis the auth flow", 5, 9)).toEqual({
+      value: "/visualise draw the auth flow",
+      caret: 15,
+    });
+  });
+
+  it("cuts the whole word when the caret sits inside it", () => {
+    expect(accept("draw the flow /vis", 14, 17)).toEqual({
+      value: "/visualise draw the flow",
+      caret: 24,
+    });
+  });
+
+  it("replaces a skill already leading — one skill leads a message", () => {
+    const ledes: SkillLedes = new Map(LEDES);
+    expect(
+      hoistSkillCommand({ value: "/visualise draw the flow /td", start: 25, caret: 28, prefix: "/tdd ", ledes }),
+    ).toEqual({ value: "/tdd draw the flow", caret: 18 });
   });
 });

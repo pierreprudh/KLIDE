@@ -123,9 +123,9 @@ import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { joinSkillToken, skillTokenCaret, splitSkillToken } from "./ai/skillToken";
+import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
-import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
@@ -1424,7 +1424,7 @@ export function AiPanel({
   }
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
 
-  const [slash, setSlash] = useState<{ query: string } | null>(null);
+  const [slash, setSlash] = useState<SlashQuery | null>(null);
   const [slashIdx, setSlashIdx] = useState(0);
   const [nextSendMode, setNextSendMode] = useState<AgentMode | null>(null);
 
@@ -1494,13 +1494,26 @@ export function AiPanel({
     } },
   ];
   // The enabled Skills follow the built-ins. Accepting one leaves its prefix
-  // in the composer and the cursor after it, the way /explain does.
-  SLASH_COMMANDS.push(...skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
-    setInput(prefix);
+  // at the head of the composer and the cursor in the prose, the way /explain
+  // does — wherever in the draft the command was actually typed.
+  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
+    const open = slash;
+    const next = open === null
+      ? { value: prefix, caret: prefix.length }
+      : hoistSkillCommand({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
+    setInput(next.value);
     setSlash(null);
-    requestAnimationFrame(() => taRef.current?.focus());
-  }));
-  const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
+    // The textarea holds the body, not the draft: a wired skill is a lede, so
+    // the caret lands short of the prefix it stands in for.
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
+  });
+  SLASH_COMMANDS.push(...SKILL_COMMANDS);
+  // Mid-sentence, only the Skills are on offer. A built-in owns the whole
+  // draft (`/clear` empties it, `/plan` flips a mode and clears), so listing
+  // one under a half-written sentence would offer to delete the sentence.
+  const slashVocabulary = slash === null ? [] : slash.head ? SLASH_COMMANDS : SKILL_COMMANDS;
+  const slashMatches = slash !== null ? filterSlashCommands(slashVocabulary, slash.query) : [];
 
   function acceptSlash(idx: number) { const cmd = slashMatches[idx]; setSlash(null); if (cmd) cmd.run(); }
 
@@ -1579,8 +1592,8 @@ export function AiPanel({
 
   function handleComposerChange(value: string, caret: number) {
     setInput(value);
-    const slashQuery = slashQueryOf(value);
-    if (slashQuery !== null) { setSlash({ query: slashQuery }); setSlashIdx(0); setMention(null); return; }
+    const slashQuery = slashQueryAt(value, caret);
+    if (slashQuery !== null) { setSlash(slashQuery); setSlashIdx(0); setMention(null); return; }
     else if (slash !== null) setSlash(null);
     const before = value.slice(0, caret);
     const m = before.match(/(?:^|\s)@([^\s@]*)$/);
@@ -1634,10 +1647,15 @@ export function AiPanel({
     handleComposerChange(next, next.length);
     requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(next.length, next.length); } });
   }
+  // Browsing the commands appends a `/` the way "Add file" appends an `@`: a
+  // draft already typed is a sentence a Skill can still lead, not something to
+  // throw away for the sake of opening a menu.
   function openCommandsMenu() {
     closeModeMenu();
-    handleComposerChange("/", 1);
-    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(1, 1); } });
+    const next = input.length === 0 ? "/" : input.endsWith(" ") ? input + "/" : input + " /";
+    handleComposerChange(next, next.length);
+    const body = next.length - (skillTokenOf(next, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
   }
 
   // Stage pasted/dropped files through the one set of attachment rules

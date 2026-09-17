@@ -66,7 +66,7 @@ import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { joinSkillToken, splitSkillToken } from "./ai/skillToken";
+import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
@@ -76,9 +76,10 @@ import {
   currentModeText,
   filterSlashCommands,
   slashKeyAction,
-  slashQueryOf,
+  slashQueryAt,
   stepSlashIndex,
   type SlashCommand,
+  type SlashQuery,
 } from "./ai/slashCommands";
 import { notify } from "../toast";
 import { GOAL_POLICIES, MODE_CHOICES, effectiveMode as effectiveModeFor, goalPolicyOf } from "./ai/autonomyLadder";
@@ -1468,7 +1469,7 @@ function FocusComposer({
   // Room the skill lede takes on the first line, measured by the lede itself.
   const [ledeIndent, setLedeIndent] = useState(0);
   // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
-  const [slash, setSlash] = useState<{ query: string } | null>(null);
+  const [slash, setSlash] = useState<SlashQuery | null>(null);
   const [slashIdx, setSlashIdx] = useState(0);
   // A mode one command pinned to the next send (/explain reads → plan). Cleared
   // when the turn leaves or the draft is emptied, so it never outlives its
@@ -1634,12 +1635,12 @@ function FocusComposer({
     onSubmit(artifactPrompt(text, artifactOutput), attachments, artifactOutput ? { mode: "goal" } : mode ? { mode } : undefined);
   }
 
-  function changeDraft(value: string) {
+  function changeDraft(value: string, caret: number = value.length) {
     setDraft(value);
     if (value.length === 0) setNextSendMode(null);
-    const query = slashQueryOf(value);
+    const query = slashQueryAt(value, caret);
     if (query !== null) {
-      setSlash({ query });
+      setSlash(query);
       setSlashIdx(0);
     } else if (slash !== null) {
       setSlash(null);
@@ -1727,12 +1728,25 @@ function FocusComposer({
       onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
     } },
   ];
-  SLASH_COMMANDS.push(...skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
+  // A Skill accepted mid-sentence takes the head of the draft and leaves the
+  // prose standing — see `hoistSkillCommand`.
+  const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
+    const open = slash;
+    const next = open === null
+      ? { value: prefix, caret: prefix.length }
+      : hoistSkillCommand({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
     setSlash(null);
-    setDraft(prefix);
-    requestAnimationFrame(() => taRef.current?.focus());
-  }));
-  const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
+    setDraft(next.value);
+    // The textarea holds the body; a wired skill is drawn as a lede, so the
+    // caret lands short of the prefix that lede stands in for.
+    const body = next.caret - (skillTokenOf(next.value, ledes)?.prefix.length ?? 0);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
+  });
+  SLASH_COMMANDS.push(...SKILL_COMMANDS);
+  // Mid-sentence the built-ins stay out of the list: each of them clears the
+  // draft, so offering one under a half-written task offers to delete it.
+  const slashVocabulary = slash === null ? [] : slash.head ? SLASH_COMMANDS : SKILL_COMMANDS;
+  const slashMatches = slash !== null ? filterSlashCommands(slashVocabulary, slash.query) : [];
   function acceptSlash(idx: number) {
     const cmd = slashMatches[idx];
     setSlash(null);
@@ -1827,7 +1841,7 @@ function FocusComposer({
           autoComplete="off"
           style={skillToken ? { textIndent: ledeIndent } : undefined}
           value={draftBody}
-          onChange={(e) => changeDraft(joinSkillToken(skillToken, e.target.value))}
+          onChange={(e) => changeDraft(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
           onFocus={() => setFocused(true)}
           onBlur={() => { setFocused(false); setSlash(null); }}
           onPaste={(e) => {
