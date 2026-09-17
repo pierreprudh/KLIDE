@@ -7,8 +7,12 @@
 /* The window is the height of what it holds. The result card gives ground to a
    short column and scrolls inside; a drawing is looked at, not read, so the
    column scrolls past it instead. */
-.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] { flex: 0 0 auto; min-height: 0; }
-.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] .klide-result-island { flex: 0 0 auto; }
+/* The result's open entry is a flex row so its card can take the column's
+   spare height; a row also lets a card shrink to its content's width, and a
+   drawing has none of its own. So this entry stays a block: full width, its
+   own height. */
+.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] { display: block; flex: 0 0 auto; min-height: 0; }
+.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] .klide-result-island { flex: none; }
 /* Edge to edge. The card runs through the island's gutters — the drawing is
    the widest thing in the column and reads best with the panel's whole width —
    so it keeps no side border and no corners; a hairline above and below is

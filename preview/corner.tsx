@@ -8,7 +8,7 @@
 //   ?theme=dark | klide-light | sage-garden | cursor-dark | …
 //
 // The cards are live: click a result to open it, type in a question.
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -16,6 +16,7 @@ import "@fontsource/monaspace-neon/400.css";
 import "@fontsource/monaspace-neon/700.css";
 import "../src/styles/tokens.css";
 import { CompletionCard, ResultEvidence } from "../src/components/ai/CompletionCard";
+import { VisualIsland } from "../src/components/ai/VisualIsland";
 import { QuestionCard } from "../src/components/ai/QuestionCard";
 import { columnGeometry } from "../src/components/ai/canvasColumn";
 import { CloseIcon, PlanIcon, ReviewIcon } from "../src/icons";
@@ -43,6 +44,57 @@ const SWATCH =
   encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#f2f1ea"/><rect x="20" y="24" width="180" height="14" fill="#c9c8bd"/><rect x="20" y="52" width="260" height="8" fill="#dddcd2"/><rect x="20" y="70" width="240" height="8" fill="#dddcd2"/><rect x="20" y="112" width="120" height="44" fill="#e6e5da"/></svg>`,
   );
+
+// Two drawings as a model writes them: a wide one at the reading width and a
+// narrow one, so the card's fit can be judged on both.
+const WIDE_SVG = `<svg viewBox="0 0 680 220" xmlns="http://www.w3.org/2000/svg" font-family="var(--font-ui)" font-size="14">
+  <rect x="10" y="20" width="200" height="70" rx="8" fill="var(--viz-surface)" stroke="var(--viz-line)"/>
+  <text x="110" y="50" text-anchor="middle" fill="var(--viz-ink)">Harness Run</text>
+  <text x="110" y="72" text-anchor="middle" font-size="12" fill="var(--viz-ink-dim)">agent_* tools</text>
+  <rect x="240" y="20" width="200" height="70" rx="8" fill="var(--viz-surface)" stroke="var(--viz-line)"/>
+  <text x="340" y="50" text-anchor="middle" fill="var(--viz-ink)">coordination.rs</text>
+  <rect x="470" y="60" width="200" height="90" rx="8" fill="var(--viz-surface)" stroke="var(--viz-line)"/>
+  <text x="570" y="100" text-anchor="middle" fill="var(--viz-ink)">one journal</text>
+  <rect x="10" y="130" width="200" height="70" rx="8" fill="var(--viz-surface)" stroke="var(--viz-line)"/>
+  <text x="110" y="160" text-anchor="middle" fill="var(--viz-ink)">Delegate CLI</text>
+  <rect x="240" y="130" width="200" height="70" rx="8" fill="var(--viz-surface)" stroke="var(--viz-line)"/>
+  <text x="340" y="160" text-anchor="middle" fill="var(--viz-ink)">the bridge</text>
+  <path d="M210 55 H240 M210 165 H240 M440 55 H470 M440 165 H470" stroke="var(--viz-line)" fill="none"/>
+</svg>`;
+const NARROW_SVG = `<svg viewBox="0 0 360 160" xmlns="http://www.w3.org/2000/svg" font-family="var(--font-ui)" font-size="14">
+  <rect x="10" y="10" width="340" height="140" rx="10" fill="var(--viz-surface)" stroke="var(--viz-line)"/>
+  <circle cx="90" cy="80" r="30" fill="none" stroke="var(--viz-line)"/>
+  <circle cx="270" cy="80" r="30" fill="none" stroke="var(--viz-line)"/>
+  <path d="M120 80 H240" stroke="var(--viz-line)"/>
+  <text x="180" y="70" text-anchor="middle" fill="var(--viz-ink)">a → b</text>
+</svg>`;
+const VISUALS = [
+  { key: "visual-1", code: WIDE_SVG, lang: "svg", kind: "drawing" as const },
+  { key: "visual-3", code: NARROW_SVG, lang: "svg", kind: "drawing" as const },
+];
+
+/** Writes the widths a screenshot cannot: island, card, drawing, per case. */
+function Measure({ id }: { id: string }) {
+  useEffect(() => {
+    const tick = () => {
+      const host = document.getElementById(id);
+      if (!host) return;
+      const rows: string[] = [];
+      const island = host.querySelector<HTMLElement>(".klide-result-island");
+      if (island) rows.push(`island ${Math.round(island.getBoundingClientRect().width)}`);
+      host.querySelectorAll<HTMLElement>(".klide-visual-thumb").forEach((card, i) => {
+        const c = card.getBoundingClientRect();
+        const svg = card.querySelector("svg")?.getBoundingClientRect();
+        rows.push(`card${i} ${Math.round(c.width)}x${Math.round(c.height)} svg ${svg ? `${Math.round(svg.width)}x${Math.round(svg.height)} @${Math.round(svg.left - c.left)},${Math.round(svg.top - c.top)}` : "none"}`);
+      });
+      const out = document.getElementById(`${id}-measure`);
+      if (out) out.textContent = rows.join(" | ");
+    };
+    const t = setInterval(tick, 300);
+    return () => clearInterval(t);
+  }, [id]);
+  return <pre id={`${id}-measure`} data-measure={id} style={{ margin: 0, fontSize: 10, color: "var(--fg-dim)" }} />;
+}
 
 const QUESTION = "The deck is built from summary.md — should the script stay in the folder so it is reproducible?";
 
@@ -145,17 +197,19 @@ function Canvas({
   question,
   hidden,
   canvasWidth = 1000,
+  visuals = false,
 }: {
   plan: "card" | "mark" | "none";
   result: "card" | "mark" | "none";
   question: boolean;
   hidden: boolean;
   canvasWidth?: number;
+  visuals?: boolean;
 }) {
   const [answer, setAnswer] = useState("");
   const [resultUp, setResultUp] = useState(result !== "none");
   const [closed, setClosed] = useState(hidden);
-  const column = columnGeometry({ planSlot: plan, resultUp, questionUp: question, hidden: closed, canvasWidth });
+  const column = columnGeometry({ planSlot: plan, resultUp, questionUp: question, visualUp: visuals, hidden: closed, canvasWidth });
   return (
     <>
       <Prose inset={column.inset} />
@@ -177,6 +231,7 @@ function Canvas({
             onUnfold={() => setClosed(false)}
           />
         )}
+        {visuals && <VisualIsland visuals={VISUALS} sourceKey="c1" folded={column.planFolded} onUnfold={() => setClosed(false)} />}
         {question && (
           <QuestionCard
             variant="island"
@@ -223,6 +278,12 @@ function Preview() {
       </Case>
       <Case title="5 · A question is parked" note="It cannot be closed away — it holds the run. Type in it; ⌘↩ sends, Esc skips." height={330}>
         <Canvas plan="card" result="mark" question hidden />
+      </Case>
+      <Case title="7 · Visuals — the drawings the answer made, shown whole at the column's width" note="A wide and a narrow drawing; both fill the card edge to edge." height={520}>
+        <div id="case7" style={{ position: "absolute", inset: 0 }}>
+          <Canvas plan="mark" result="none" question={false} hidden={false} canvasWidth={1500} visuals />
+        </div>
+        <div style={{ position: "absolute", left: 12, bottom: 8 }}><Measure id="case7" /></div>
       </Case>
       <Case title="6 · Narrow canvas (700px)" note="The column shrinks to its 232px floor, and the entries keep their words — narrow is not a third state." height={330}>
         <Canvas plan="card" result="mark" question={false} hidden={false} canvasWidth={700} />
