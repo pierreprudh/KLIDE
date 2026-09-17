@@ -72,7 +72,8 @@ function VersionLine({ row }: { row: CliVersion }) {
       {row.updateAvailable && row.latest ? (
         <>
           <span style={{ opacity: 0.55 }}> → </span>
-          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{row.latest}</span>
+          {/* Emphasis is colour, not weight — Atkinson is single-weight. */}
+          <span style={{ color: "var(--fg-strong)" }}>{row.latest}</span>
           <span style={{ fontFamily: "var(--font-ui)" }}> available</span>
         </>
       ) : row.latestError ? (
