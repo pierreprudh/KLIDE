@@ -24,7 +24,7 @@ use super::{pause_for_user, with_run_handle, PauseOutcome, ToolCtx};
 /// kinds. A message from another agent is keyed by the peer Run it comes from
 /// — the receiving side decides who may talk to it — and has no project scope,
 /// since a Run id does not outlive the conversation.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
     Command,
     Network,
@@ -63,9 +63,38 @@ pub struct TrustMemory {
     /// `require_diff_review: false`. One-way for the run's life; the surface
     /// flips its rung alongside so later turns arrive already auto-accepting.
     edits_auto_apply: std::sync::atomic::AtomicBool,
+    /// The command half of the Goal policy, changed while this run is live.
+    /// `None` keeps what the run request said; `Some(true)` is the full-auto
+    /// rung chosen mid-run, `Some(false)` is stepping back down from it. The
+    /// rung is per conversation, and a conversation's live Run is part of it —
+    /// so a flip reaches the Run that is asking, not only the next one.
+    commands_policy: std::sync::Mutex<Option<bool>>,
+    /// Which capability the stashed permission sender is waiting on, while a
+    /// card is up. A policy change answers the card it silences (a command)
+    /// and leaves every other card standing — a dispatch, a network target, a
+    /// peer's message are never swept up by the command rung.
+    pending_permission_capability: std::sync::Mutex<Option<Capability>>,
 }
 
 impl TrustMemory {
+    /// The live override of the run request's `auto_approve_commands`.
+    pub fn commands_policy(&self) -> Option<bool> {
+        *self.commands_policy.lock().unwrap()
+    }
+
+    pub fn set_commands_policy(&self, auto_approve: bool) {
+        *self.commands_policy.lock().unwrap() = Some(auto_approve);
+    }
+
+    /// Record (or clear) what the pending permission card is about.
+    pub fn note_pending_capability(&self, cap: Option<Capability>) {
+        *self.pending_permission_capability.lock().unwrap() = cap;
+    }
+
+    pub fn pending_capability(&self) -> Option<Capability> {
+        *self.pending_permission_capability.lock().unwrap()
+    }
+
     pub fn approved(&self, cap: Capability, key: &str) -> bool {
         match cap {
             Capability::Command => self.approved_commands.lock().unwrap().contains(key),
@@ -143,6 +172,39 @@ pub fn edits_auto_applied(ctx: &ToolCtx<'_>) -> bool {
 
 pub fn remember_edits_auto_apply(ctx: &ToolCtx<'_>) {
     with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_edits_auto_apply());
+}
+
+/// Is this run on the full-auto rung right now? The live override wins over
+/// what the run request said at start: a rung flipped while the Run works
+/// applies to its next command, not only to the next Run.
+pub fn full_auto(ctx: &ToolCtx<'_>) -> bool {
+    with_run_handle(ctx.sup, ctx.id, |h| h.trust.commands_policy())
+        .flatten()
+        .unwrap_or(ctx.request.auto_approve_commands == Some(true))
+}
+
+/// The decision a command card receives when the rung silences it, so the
+/// transcript says the policy answered, not the user.
+pub const FULL_AUTO_DECISION: &str = "{\"behavior\":\"allow\",\"scope\":\"once\",\"via\":\"full_auto\"}";
+
+/// Apply a rung flip to a live run: remember the command policy, and when it
+/// is full auto and a *command* card is up, answer that card. Returns whether
+/// a card was answered. Any other pending card — a dispatch, a network target,
+/// a peer's message — is left for the user, as the full-auto rung excludes
+/// them by design.
+pub fn apply_command_policy(handle: &super::AgentRunHandle, auto_approve: bool) -> bool {
+    handle.trust.set_commands_policy(auto_approve);
+    if !auto_approve || handle.trust.pending_capability() != Some(Capability::Command) {
+        return false;
+    }
+    let sender = handle.pending_permission.lock().unwrap().take();
+    match sender {
+        Some(tx) => {
+            handle.trust.note_pending_capability(None);
+            tx.send(FULL_AUTO_DECISION.to_string()).is_ok()
+        }
+        None => false,
+    }
 }
 
 /// What the pre-check concluded before any prompt is shown.
@@ -268,18 +330,21 @@ pub fn precheck(ctx: &ToolCtx<'_>, cap: Capability, run_key: &str, project_ok: b
 
 /// The pause ceremony: flip to waiting, stash the permission oneshot, emit the
 /// request, await the decision (or cancellation), emit the resolved event, and
-/// hand back the normalized verdict. Identical for both capabilities — only the
-/// `request` JSON the caller built differs.
+/// hand back the normalized verdict. Identical for every capability — only the
+/// `request` JSON the caller built differs. `cap` names what the card is about
+/// (`None` for a gate outside the capability namespaces, like a dispatch), so a
+/// rung flipped while the card is up knows whether it may answer it.
 pub async fn run_gate<E>(
     ctx: &ToolCtx<'_>,
     call: &NormalizedToolCall,
+    cap: Option<Capability>,
     request: PermissionRequest,
     emit: &mut E,
 ) -> Result<GateDecision, String>
 where
     E: FnMut(AgentEvent) -> Result<(), String>,
 {
-    let decision = match pause_for_user(
+    let outcome = pause_for_user(
         ctx.sup,
         ctx.id,
         AgentRunStatus::WaitingForPermission,
@@ -292,11 +357,14 @@ where
         ctx.cancel,
         emit,
         |handle, tx| {
+            handle.trust.note_pending_capability(cap);
             *handle.pending_permission.lock().unwrap() = Some(tx);
         },
     )
-    .await?
-    {
+    .await;
+    // The card is down whichever way the pause ended.
+    with_run_handle(ctx.sup, ctx.id, |h| h.trust.note_pending_capability(None));
+    let decision = match outcome? {
         PauseOutcome::Cancelled => return Ok(GateDecision::Cancelled),
         PauseOutcome::Resolved(decision) => decision,
     };

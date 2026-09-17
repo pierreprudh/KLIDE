@@ -395,7 +395,7 @@ where
             ),
             options: worker_gate_options(),
         };
-        match permission::run_gate(ctx, call, perm, emit).await? {
+        match permission::run_gate(ctx, call, None, perm, emit).await? {
             permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
             permission::GateDecision::Rejected => {
                 return Ok(ToolOutcome::Produced(ToolResult {
@@ -1312,7 +1312,7 @@ where
 {
     let snapshot = ctx.sup.coordination_snapshot(workspace_root)?;
     let awaiting = crate::coordination::awaiting_review_for(&snapshot, ctx.id)?;
-    let full_auto = ctx.request.auto_approve_commands == Some(true);
+    let full_auto = permission::full_auto(ctx);
     for entry in awaiting {
         let envelope = &entry.envelope;
         let peer = match &envelope.from {
@@ -1359,7 +1359,7 @@ where
                                 .to_string(),
                         options: message_gate_options(),
                     };
-                    let decision = match permission::run_gate(ctx, &call, perm, emit).await? {
+                    let decision = match permission::run_gate(ctx, &call, Some(permission::Capability::Message), perm, emit).await? {
                         permission::GateDecision::Cancelled => return Ok(true),
                         decision => decision,
                     };
@@ -1549,9 +1549,10 @@ where
         .unwrap_or(false);
     // The full-auto rung: the user chose to run this conversation's commands
     // without prompts. Same trust as a project-allowlist hit, but scoped to
-    // the run request — nothing is persisted, and a rejection remembered from
-    // before the user escalated no longer blocks (escalating IS the override).
-    let full_auto = ctx.request.auto_approve_commands == Some(true);
+    // the run — nothing is persisted, a flip while the Run works counts from
+    // its next command, and a rejection remembered from before the user
+    // escalated no longer blocks (escalating IS the override).
+    let full_auto = permission::full_auto(ctx);
 
     match permission::precheck(
         ctx,
@@ -1612,7 +1613,7 @@ where
         options: standard_gate_options("Approve for this run", "Approve for this project"),
     };
 
-    let decision = match permission::run_gate(ctx, call, perm, emit).await? {
+    let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Command), perm, emit).await? {
         permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
         decision => decision,
     };
@@ -1799,7 +1800,7 @@ where
         ),
     };
 
-    let decision = match permission::run_gate(ctx, call, perm, emit).await? {
+    let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Network), perm, emit).await? {
         permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
         decision => decision,
     };

@@ -123,6 +123,16 @@ including over a remembered rejection — escalating the policy is the override.
 It is chosen per conversation, never persisted, and does not extend to network
 targets, headless Mission attempts, or spawned subagent runs.
 
+The policy is per conversation, and a conversation's live Run is part of it.
+Flipping the rung while the Run works reaches that Run through
+`agent_set_command_policy`: its later commands follow the new policy, and a
+*command* card it has up is answered — the recorded decision carries
+`via: "full_auto"`, so the transcript names the policy rather than a click the
+user never made. Every other card standing at that moment (a dispatch, a
+network target, a peer's message) stays for the user. Stepping back down makes
+the Run ask again from its next command. The next Run needs none of this: its
+request carries the rung.
+
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the
 parent's provider under the parent's tool rules; an editing role with no worker

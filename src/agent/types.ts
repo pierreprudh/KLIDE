@@ -148,7 +148,10 @@ export type PermissionRequest = {
 };
 
 export type PermissionDecision =
-  | { behavior: "allow"; scope: "once" | "run" | "project" | "user"; pattern?: string }
+  /** `via` names a policy that answered in the user's place — the full-auto
+   *  rung flipped while the card was up — so a transcript never reads as a
+   *  click the user did not make. */
+  | { behavior: "allow"; scope: "once" | "run" | "project" | "user"; pattern?: string; via?: "full_auto" }
   | { behavior: "deny"; message?: string }
   | { behavior: "ask_later" };
 

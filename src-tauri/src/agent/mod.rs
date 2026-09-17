@@ -2714,6 +2714,30 @@ pub async fn agent_resolve_permission(
     }
 }
 
+/// The command half of the Goal policy, applied to a live Run. The rung is per
+/// conversation and the conversation's Run is already working, so flipping to
+/// full auto must reach *it*: later commands skip the gate, and a command card
+/// that is up right now is answered. Any other card stays — the rung excludes
+/// dispatches, network targets and peer mail by design. Stepping back down
+/// makes the Run ask again from its next command. Returns whether a card was
+/// answered. Errors when no such Run is live: there is nothing to apply to,
+/// and the next Run carries the rung on its request anyway.
+#[tauri::command]
+pub async fn agent_set_command_policy(
+    state: tauri::State<'_, AgentSupervisorState>,
+    run_id: String,
+    auto_approve_commands: bool,
+) -> Result<bool, String> {
+    let runs = state
+        .runs
+        .lock()
+        .map_err(|_| "Agent state is unavailable".to_string())?;
+    match runs.get(&run_id) {
+        Some(handle) => Ok(permission::apply_command_policy(handle, auto_approve_commands)),
+        None => Err(format!("No known run with id {run_id}")),
+    }
+}
+
 #[tauri::command]
 pub async fn agent_resolve_diff(
     state: tauri::State<'_, AgentSupervisorState>,
@@ -5884,6 +5908,135 @@ mod permission_gate_tests {
         assert!(result.ok, "full auto should execute: {}", result.content);
         assert!(result.content.contains("full-auto"));
         assert_eq!(prompts_shown(&events), 0, "full auto must never prompt");
+    }
+
+    /// The rung flipped while the Run works: no flag on the request, the live
+    /// policy alone lets the next command through.
+    #[tokio::test]
+    async fn full_auto_chosen_mid_run_runs_the_next_command_without_a_prompt() {
+        let root = temp_workspace("full-auto-live");
+        let sup = FakeSupervisor::with_run("full-auto-live-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        assert_ne!(request.auto_approve_commands, Some(true));
+        sup.with_handle("full-auto-live-run", &mut |h| {
+            assert!(!permission::apply_command_policy(h, true), "no card is up to answer");
+        });
+        let runs_dir = std::env::temp_dir().join(format!(
+            "klide-full-auto-live-runs-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "full-auto-live-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let result =
+            run_gate_without_prompt(&ctx, &command_call("call-1", "echo live"), &mut emit).await;
+        assert!(result.ok, "the live policy should execute: {}", result.content);
+        assert_eq!(prompts_shown(&events), 0, "a live full auto must not prompt");
+
+        // Stepping back down: the next command asks again (the card goes up
+        // and, unanswered, the timeout is what ends the wait).
+        sup.with_handle("full-auto-live-run", &mut |h| {
+            permission::apply_command_policy(h, false);
+        });
+        let (events, mut emit) = event_log();
+        let gate = tokio::time::timeout(
+            Duration::from_millis(300),
+            process_command_tool(&ctx, &command_call("call-2", "echo asks"), &mut emit),
+        )
+        .await;
+        assert!(gate.is_err(), "back on the asking rung the command must pause for a card");
+        assert_eq!(prompts_shown(&events), 1);
+    }
+
+    /// A command card is up when the user flips to full auto: the flip answers
+    /// it, the command runs, and the transcript says the policy did it.
+    #[tokio::test]
+    async fn a_pending_command_card_is_answered_when_the_run_goes_full_auto() {
+        let root = temp_workspace("full-auto-answers");
+        let sup = FakeSupervisor::with_run("full-auto-answers-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = std::env::temp_dir().join(format!(
+            "klide-full-auto-answers-runs-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "full-auto-answers-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let flip = async {
+            // Wait for the card, then flip the rung instead of answering it.
+            loop {
+                let mut answered = None;
+                sup.with_handle("full-auto-answers-run", &mut |h| {
+                    if h.pending_permission.lock().unwrap().is_some() {
+                        answered = Some(permission::apply_command_policy(h, true));
+                    }
+                });
+                if let Some(answered) = answered {
+                    return answered;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        let call = command_call("call-1", "echo answered");
+        let (outcome, answered) = tokio::join!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                process_command_tool(&ctx, &call, &mut emit),
+            ),
+            flip
+        );
+        assert!(answered, "the flip should have answered the command card");
+        let result = produced(outcome.expect("the answered gate must not hang"));
+        assert!(result.ok, "the answered command should run: {}", result.content);
+        assert!(result.content.contains("answered"));
+        let resolved = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::PermissionResolved { decision, .. } => Some(decision.clone()),
+                _ => None,
+            })
+            .expect("the gate records how the card was resolved");
+        assert_eq!(resolved["behavior"], "allow");
+        assert_eq!(resolved["via"], "full_auto", "the transcript names the policy, not the user");
+        sup.with_handle("full-auto-answers-run", &mut |h| {
+            assert_eq!(h.trust.pending_capability(), None, "the card is down");
+        });
+    }
+
+    /// Only a *command* card is the rung's to answer. A dispatch (no
+    /// capability) and a network target stay up for the user.
+    #[test]
+    fn going_full_auto_leaves_every_other_card_standing() {
+        for cap in [None, Some(permission::Capability::Network), Some(permission::Capability::Message)] {
+            let handle = make_handle();
+            let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
+            handle.trust.note_pending_capability(cap);
+            *handle.pending_permission.lock().unwrap() = Some(tx);
+            assert!(!permission::apply_command_policy(&handle, true), "{cap:?} is not the rung's card");
+            assert!(handle.pending_permission.lock().unwrap().is_some(), "{cap:?} card still up");
+            assert!(rx.try_recv().is_err(), "{cap:?} card was not answered");
+            assert_eq!(handle.trust.commands_policy(), Some(true), "the policy itself is remembered");
+        }
     }
 
     #[tokio::test]
