@@ -20,6 +20,7 @@ import { SkillTokenLede } from "../src/components/ai/SkillTokenLede";
 import { joinSkillToken, splitSkillToken } from "../src/components/ai/skillToken";
 import { skillLedes, useSkillAppearances } from "../src/skillAppearance";
 import { SkillLedeSection } from "../src/components/SkillsModal";
+import { SlashMenu } from "../src/components/ai/SlashMenu";
 import type { Skill } from "../src/skills";
 import { NewTaskIcon } from "../src/icons";
 
@@ -28,6 +29,9 @@ document.documentElement.dataset.theme = THEME;
 
 const SKILLS: Skill[] = [
   { id: "visualise", name: "visualise", description: "Render inline visuals.", instructions: "", tools: [], enabled: true },
+  // No mark of its own: a skill reads as its name in the accent, and a glyph
+  // is something you add later or never.
+  { id: "code-review", name: "Code Review", description: "Review code for bugs.", instructions: "", tools: [], enabled: true },
 ];
 
 function Composer({ variant }: { variant: "focus" | "panel" }) {
@@ -96,6 +100,26 @@ function Composer({ variant }: { variant: "focus" | "panel" }) {
   );
 }
 
+// The `/` menu, with one built-in row and the skill rows beside it.
+function Menu() {
+  const ledes = skillLedes(SKILLS, useSkillAppearances());
+  return (
+    <div style={{ width: 620, height: 130, position: "relative" }}>
+      <SlashMenu
+        matches={[
+          { name: "plan", desc: "Switch to Plan mode (read-only, proposes a plan)" },
+          { name: "visualise", desc: "Render inline interactive visuals — diagrams, widgets, charts." },
+          { name: "code-review", desc: "Review code for bugs, edge cases, and clarity." },
+        ]}
+        activeIdx={1}
+        onHover={() => {}}
+        onAccept={() => {}}
+        ledes={ledes}
+      />
+    </div>
+  );
+}
+
 function Page() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--fg)", font: "400 14px/1.5 var(--font-ui)", display: "flex", flexDirection: "column", gap: 56, alignItems: "center", padding: "72px 24px" }}>
@@ -105,6 +129,7 @@ function Page() {
       <div style={{ width: 620, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
         <SkillLedeSection skill={SKILLS[0]} />
       </div>
+      <Menu />
       <Composer variant="focus" />
       <Composer variant="panel" />
     </div>

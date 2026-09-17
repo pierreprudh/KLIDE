@@ -5107,7 +5107,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             MessageActions row (revert slot) — no standalone strip here. */}
         <div style={{ position: "relative", border: `1px solid ${composerFocused ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: "var(--radius-lg)", background: "var(--bg-elevated)", boxShadow: composerFocused ? "0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 16px rgba(38, 38, 32, 0.08)" : "0 1px 3px rgba(38, 38, 32, 0.05)", transition: "border-color var(--motion-med) var(--ease-out), box-shadow var(--motion-med) var(--ease-out)" }}>
           {slash !== null && (
-            <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} />
+            <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
           )}
           {mention !== null && mentionTotal > 0 && (
             <div role="listbox" style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 220, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "0 6px 24px rgba(38, 38, 32, 0.14)", padding: 4, zIndex: 20 }}>

@@ -1791,7 +1791,7 @@ function FocusComposer({
           anchors to this wrapper and floats above the card instead. */}
       <div style={{ position: "relative" }}>
       {slash !== null && (
-        <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} />
+        <SlashMenu matches={slashMatches} activeIdx={slashIdx} onHover={setSlashIdx} onAccept={acceptSlash} ledes={ledes} />
       )}
       <div
         className="klide-focus-composer"
