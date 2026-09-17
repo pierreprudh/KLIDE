@@ -1,15 +1,21 @@
 /* The drawings the latest answer made, as one window in the canvas column.
-   Each is shown as itself — the same sanitized markup the prose would have
-   held, fluid to the column's width — clipped to a card the reader clicks to
-   see full size. No screenshot, no second renderer. */
+   Each is shown whole — the same sanitized markup the prose would have held,
+   laid out at its reading width and scaled down into a card, never cropped
+   and never scrolled — and the card opens it full size. No screenshot, no
+   second renderer. */
 .klide-visual-island-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 0 14px; }
-.klide-visual-thumb { appearance: none; position: relative; display: block; width: 100%; max-height: 220px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out); }
+/* The window is the height of what it holds. The result card gives ground to a
+   short column and scrolls inside; a drawing is looked at, not read, so the
+   column scrolls past it instead. */
+.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] { flex: 0 0 auto; min-height: 0; }
+.klide-result-entry[data-variant="island"][data-kind="visual"][data-open="1"] .klide-result-island { flex: 0 0 auto; }
+.klide-visual-thumb { appearance: none; position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: inherit; font: inherit; text-align: left; cursor: zoom-in; transition: border-color var(--motion-fast) var(--ease-out), height 160ms var(--ease-soft); }
 .klide-visual-thumb:hover, .klide-visual-thumb:focus-visible { border-color: var(--border-strong); }
 .klide-visual-thumb:focus-visible { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
-.klide-visual-thumb > .klide-viz { padding: 10px; pointer-events: none; }
-/* Below the fold: a tall page fades out at the card's edge rather than ending
-   on a cut line. */
-.klide-visual-thumb::after { content: ""; position: absolute; inset: auto 0 0 0; height: 28px; background: linear-gradient(to bottom, transparent, var(--bg)); pointer-events: none; }
+/* Laid out at its natural width in the card's corner, then scaled from there;
+   the card's height follows the scaled drawing (set inline). */
+.klide-visual-thumb-drawing { position: absolute; top: 0; left: 0; transform-origin: top left; pointer-events: none; }
+.klide-visual-thumb-drawing > .klide-viz { padding: 12px; }
 .klide-visual-thumb-open { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-subtle); opacity: 0; transition: opacity 140ms var(--ease-soft); }
 .klide-visual-thumb:hover .klide-visual-thumb-open, .klide-visual-thumb:focus-visible .klide-visual-thumb-open { opacity: 1; }
-.klide-visual-caption { margin: 6px 2px 0; color: var(--fg-dim); font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .klide-visual-thumb { transition: border-color var(--motion-fast) var(--ease-out); } }

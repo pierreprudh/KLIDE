@@ -7,7 +7,7 @@
 // the same surface the prose used, fluid to the column's width and clipped to
 // a card. Clicking a card opens the fullscreen viewer the inline figure has.
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronIcon, DiagramIcon, VisualExpandIcon } from "../../icons";
 import { VisualSurface, VisualViewer, type VisualBlockRef } from "../markdown";
 import { prepareVisual } from "../visualHtml";
@@ -48,7 +48,7 @@ export function VisualIsland({ visuals, sourceKey, folded, onUnfold }: Props) {
   }
 
   return (
-    <div className="klide-result-entry" data-variant="island" data-open={open ? "1" : undefined}>
+    <div className="klide-result-entry" data-variant="island" data-kind="visual" data-open={open ? "1" : undefined}>
       <section className="klide-result-island" data-open={open ? "1" : undefined} aria-label={title}>
         <div className="klide-result-island-header" role="button" tabIndex={0}
           aria-expanded={open} aria-controls={id}
@@ -76,17 +76,51 @@ export function VisualIsland({ visuals, sourceKey, folded, onUnfold }: Props) {
   );
 }
 
+/** The width a drawing is laid out at before it is scaled into the card —
+ *  the reading column it would have had in the prose, so labels the model
+ *  placed for that width keep their places. */
+const NATURAL_WIDTH = 720;
+
 function VisualThumb({ visual }: { visual: VisualBlockRef }) {
   const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const prepared = useMemo(() => prepareVisual(visual.code, scope), [visual.code, scope]);
   const origin = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLButtonElement>(null);
   const [expanded, setExpanded] = useState(false);
+  // The whole drawing, every time: it is laid out at its natural width, then
+  // scaled — not cropped, not scrolled — to the card's. The card takes the
+  // scaled height, so a tall page is a tall card and a small diagram a short
+  // one. Both sides are measured, because a fluid drawing decides its own
+  // height once the fonts are in.
+  const [fit, setFit] = useState({ scale: 1, height: 0 });
+  useLayoutEffect(() => {
+    const card = frame.current;
+    const drawing = origin.current;
+    if (!card || !drawing) return;
+    const measure = () => {
+      const width = card.clientWidth;
+      // offsetHeight is the laid-out height, before the transform.
+      const natural = drawing.offsetHeight;
+      if (width <= 0 || natural <= 0) return;
+      const scale = Math.min(1, width / NATURAL_WIDTH);
+      setFit({ scale, height: Math.ceil(natural * scale) });
+    };
+    measure();
+    void document.fonts.ready.then(measure);
+    const ro = new ResizeObserver(measure);
+    ro.observe(card);
+    ro.observe(drawing);
+    return () => ro.disconnect();
+  }, [prepared]);
   const what = visual.kind === "page" ? "page" : "diagram";
   return (
     <div>
-      <button type="button" className="klide-visual-thumb" onClick={(event) => { event.currentTarget.focus(); setExpanded(true); }}
+      <button ref={frame} type="button" className="klide-visual-thumb" style={{ height: fit.height || undefined }}
+        onClick={(event) => { event.currentTarget.focus(); setExpanded(true); }}
         aria-label={`Open the ${what} fullscreen`} title="Open fullscreen">
-        <div ref={origin}><VisualSurface visual={prepared} scope={scope} /></div>
+        <div ref={origin} className="klide-visual-thumb-drawing" style={{ width: NATURAL_WIDTH, transform: `scale(${fit.scale})` }}>
+          <VisualSurface visual={prepared} scope={scope} />
+        </div>
         <span className="klide-visual-thumb-open" aria-hidden="true"><VisualExpandIcon expanded={expanded} size={13} /></span>
       </button>
       {expanded ? <VisualViewer code={visual.code} origin={origin} onClose={() => setExpanded(false)} /> : null}
