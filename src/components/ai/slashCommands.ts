@@ -6,6 +6,7 @@
 // whose state it flips; the rest lives here so the two menus can't drift.
 
 import type { AgentMode } from "../../agent/types";
+import type { Skill } from "../../skills";
 
 export type SlashCommand = {
   name: string;
@@ -100,3 +101,51 @@ export const SLASH_PROMPTS: Record<"init" | "interview", { mode: AgentMode; text
 };
 
 export const EXPLAIN_PREFIX = "Explain what this file does and how it works: ";
+
+/** The `/` name an enabled Skill answers to: its display name in kebab-case,
+ *  so "Code Review" is `/code-review` and a `visualise` SKILL.md stays
+ *  `/visualise`. Anything that isn't a word character or a hyphen is dropped
+ *  — the menu's query grammar (`slashQueryOf`) admits nothing else. */
+export function skillSlashName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^\w-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/** What accepting a Skill's `/` entry leaves in the composer. The skill's
+ *  instructions already ride in the system prompt (it is enabled); this line
+ *  tells the model *this* turn is the one to apply them to, and leaves the
+ *  cursor where the task goes — the `/explain` shape. */
+export function skillSlashPrefix(skill: Pick<Skill, "name">): string {
+  return `Use the "${skill.name}" skill: `;
+}
+
+/** The enabled Skills as `/` commands, after the built-in vocabulary. Only
+ *  enabled skills appear — a disabled skill's instructions aren't in the
+ *  prompt, so a command for it would promise what the run can't keep. A
+ *  skill whose name collides with a built-in command (`/handoff`) yields to
+ *  it; two skills that slug to the same name keep the first. */
+export function skillSlashCommands(
+  skills: readonly Skill[],
+  taken: readonly Pick<SlashCommand, "name">[],
+  insert: (prefix: string) => void,
+): SlashCommand[] {
+  const used = new Set(taken.map((c) => c.name));
+  const out: SlashCommand[] = [];
+  for (const skill of skills) {
+    if (!skill.enabled) continue;
+    const name = skillSlashName(skill.name);
+    if (!name || used.has(name)) continue;
+    used.add(name);
+    out.push({
+      name,
+      desc: skill.description.trim() || `Apply the ${skill.name} skill to what you type next`,
+      run: () => insert(skillSlashPrefix(skill)),
+    });
+  }
+  return out;
+}

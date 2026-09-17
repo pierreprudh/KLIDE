@@ -120,7 +120,7 @@ import { buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
-import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryOf, stepSlashIndex, type SlashCommand } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
@@ -1488,6 +1488,13 @@ export function AiPanel({
       void send({ ...SLASH_PROMPTS.interview });
     } },
   ];
+  // The enabled Skills follow the built-ins. Accepting one leaves its prefix
+  // in the composer and the cursor after it, the way /explain does.
+  SLASH_COMMANDS.push(...skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
+    setInput(prefix);
+    setSlash(null);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }));
   const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
 
   function acceptSlash(idx: number) { const cmd = slashMatches[idx]; setSlash(null); if (cmd) cmd.run(); }

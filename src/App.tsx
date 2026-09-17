@@ -3347,6 +3347,7 @@ function App() {
                         .join("|")}`
                     : ""}
                   projects={recentFolders}
+                  skills={skills}
                   chatActive={focusChatActive}
                   /* The apology the canvas shows for a conversation history no
                      longer holds. The sidebar that navigates there is the

@@ -11,6 +11,7 @@ import {
   getAvailableTools,
   installSkill,
   uninstallSkill,
+  enabledFirst,
 } from "../skills";
 
 type Props = {
@@ -363,8 +364,9 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
   const selected = skills.find((s) => s.id === selectedId) ?? null;
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return skills;
-    return skills.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+    const ordered = enabledFirst(skills);
+    if (!q) return ordered;
+    return ordered.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
   }, [skills, query]);
 
   const enabledCount = skills.filter((s) => s.enabled).length;

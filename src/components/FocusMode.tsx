@@ -61,12 +61,14 @@ import {
 import { relativeTime, isSubsequence } from "./ai/utils";
 import type { Conversation } from "./ai/types";
 import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../agent/types";
+import type { Skill } from "../skills";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import {
   EXPLAIN_PREFIX,
   SLASH_DESC,
+  skillSlashCommands,
   SLASH_PROMPTS,
   currentModeText,
   filterSlashCommands,
@@ -127,6 +129,8 @@ type Props = {
    *  sends keyless providers to "api" (API keys) instead of dead-ending on a
    *  row you can't run. */
   onOpenSettingsSection: (section: string) => void;
+  /** The Skills list the panels read — the enabled ones join the `/` menu. */
+  skills: Skill[];
   renderChat: () => ReactNode;
   /** Terminal — the native shell docked under the canvas. It stands beneath the
    *  home/chat surface rather than replacing it, so the conversation keeps its
@@ -186,6 +190,7 @@ export function FocusMode({
   onClearConversationNavigation,
   onOpenPanel,
   onOpenSettingsSection,
+  skills,
   renderChat,
   renderTerminal,
   provider,
@@ -263,6 +268,7 @@ export function FocusMode({
       autoApproveCommands,
       onAutoApproveCommandsChange,
       onOpenSettingsSection,
+      skills,
     }),
     [
       workspaceRoot,
@@ -279,6 +285,7 @@ export function FocusMode({
       autoApproveCommands,
       onAutoApproveCommandsChange,
       onOpenSettingsSection,
+      skills,
     ]
   );
   /** Open a conversation from the hero's resume cards. The rail resolves its
@@ -1391,6 +1398,8 @@ export type FocusComposerControls = {
   autoApproveCommands: boolean;
   onAutoApproveCommandsChange: (enabled: boolean) => void;
   onOpenSettingsSection: (section: string) => void;
+  /** The Skills list the panels read — the enabled ones join the `/` menu. */
+  skills: Skill[];
 };
 
 /** The bottom-anchored task dock: context strip, textarea, and the provider /
@@ -1425,6 +1434,7 @@ function FocusComposer({
     autoApproveCommands,
     onAutoApproveCommandsChange,
     onOpenSettingsSection,
+    skills,
   } = controls;
   const [draft, setDraft] = useState("");
   const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
@@ -1700,6 +1710,11 @@ function FocusComposer({
       onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
     } },
   ];
+  SLASH_COMMANDS.push(...skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
+    setSlash(null);
+    setDraft(prefix);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }));
   const slashMatches = slash !== null ? filterSlashCommands(SLASH_COMMANDS, slash.query) : [];
   function acceptSlash(idx: number) {
     const cmd = slashMatches[idx];

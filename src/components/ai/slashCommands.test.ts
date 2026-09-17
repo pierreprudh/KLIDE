@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   currentModeText,
   filterSlashCommands,
+  skillSlashCommands,
+  skillSlashName,
+  skillSlashPrefix,
   slashKeyAction,
   slashQueryOf,
   stepSlashIndex,
@@ -60,5 +63,35 @@ describe("currentModeText", () => {
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: true, autoApproveCommands: false })).toBe("reviewing every edit");
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: false, autoApproveCommands: false })).toBe("auto-accept edits on");
     expect(currentModeText({ effectiveMode: "goal", requireDiffReview: false, autoApproveCommands: true })).toBe("full auto · commands run without asking");
+  });
+});
+
+describe("skill slash commands", () => {
+  const skill = (name: string, enabled: boolean, description = "") => ({
+    id: name, name, description, instructions: "do it", tools: [], enabled,
+  });
+
+  it("names a skill in kebab-case so the menu grammar can type it", () => {
+    expect(skillSlashName("Code Review")).toBe("code-review");
+    expect(skillSlashName("visualise")).toBe("visualise");
+    expect(skillSlashName("  Matt's  Zoom_Out! ")).toBe("matts-zoom-out");
+  });
+
+  it("lists only enabled skills, after the built-ins, and yields a taken name", () => {
+    const inserted: string[] = [];
+    const cmds = skillSlashCommands(
+      [skill("Code Review", true, "Review code."), skill("handoff", true), skill("Visualise", false)],
+      [{ name: "handoff" }],
+      (p) => inserted.push(p),
+    );
+    expect(cmds.map((c) => c.name)).toEqual(["code-review"]);
+    expect(cmds[0].desc).toBe("Review code.");
+    void cmds[0].run();
+    expect(inserted).toEqual([skillSlashPrefix({ name: "Code Review" })]);
+  });
+
+  it("keeps the first of two skills that slug to the same name", () => {
+    const cmds = skillSlashCommands([skill("Zoom Out", true), skill("zoom-out", true)], [], () => {});
+    expect(cmds.map((c) => c.name)).toEqual(["zoom-out"]);
   });
 });

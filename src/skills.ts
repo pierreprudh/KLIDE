@@ -276,6 +276,14 @@ export function saveSkills(list: Skill[]): void {
   }
 }
 
+/** The Skills list with the enabled ones first, each side keeping its own
+ *  order. What is on is what the next run will follow, so it reads first;
+ *  toggling a row moves it across the line rather than leaving it buried
+ *  under thirty installed-but-off skills. */
+export function enabledFirst(skills: readonly Skill[]): Skill[] {
+  return [...skills.filter((s) => s.enabled), ...skills.filter((s) => !s.enabled)];
+}
+
 /** Instructions block for the enabled skills, ready to append to a system prompt. */
 export function enabledSkillsPrompt(skills: Skill[]): string {
   const active = skills.filter((s) => s.enabled && s.instructions.trim());
