@@ -1832,6 +1832,13 @@ textarea.klide-diff-comment-input:focus-visible {
   padding-top: var(--titlebar-h);
 }
 
+/* A surface that pays for the band itself — Settings, whose own sidebar runs to
+   the window's top edge like the rail — opts out of the row's inset and insets
+   its own columns instead. */
+.klide-app-row > .klide-shell-col[data-titlebar-inset="surface"] {
+  padding-top: 0;
+}
+
 /* Focus mode: the rail is the left-most surface and owns the inset, so the row
    must not add a second one to anything. */
 .klide-app-row[data-titlebar-owner="focus"] > * {
