@@ -8762,20 +8762,33 @@ button:focus-visible .menu-leadout {
 [data-expanded="true"] .visual-expand-corner { transform: translate(2px, 2px); }
 [data-expanded="true"] .visual-expand-arm-v { transform: rotate(-45deg) scale(1.414214); }
 [data-expanded="true"] .visual-expand-arm-h { transform: rotate(45deg) scale(1.414214); }
+/* Opening is one motion in three parts, all from the figure that was clicked:
+   the ground comes up under it, the drawing grows out of its card into place
+   (the FLIP in markdown.tsx), and the toolbar arrives last, once there is a
+   window for it to belong to. Closing runs the same three in reverse. The
+   scrim lives on the dialog itself, not on ::backdrop — a backdrop cannot be
+   transitioned, and one that snaps to 88% before anything has moved is what
+   made the opening read as a cut rather than a motion. */
 .visual-viewer {
   position: fixed; inset: 0; width: 100%; height: 100%;
   max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
   background: transparent; color: var(--fg); overflow: hidden;
-  transition: background 240ms ease;
+  transition: background 320ms var(--ease-out);
 }
 .visual-viewer[data-opened="true"] { background: var(--bg); }
-.visual-viewer::backdrop { background: color-mix(in srgb, var(--bg) 88%, transparent); }
+.visual-viewer::backdrop { background: transparent; }
 .visual-viewer[open] { display: flex; flex-direction: column; }
 .visual-viewer-toolbar {
   position: absolute; top: 18px; right: 24px; margin: 0;
   background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity 200ms var(--ease-out) 200ms, transform 260ms var(--ease-out) 200ms;
 }
+.visual-viewer[data-opened="true"] .visual-viewer-toolbar { opacity: 1; transform: none; }
+/* Leaving: the toolbar goes first and at once, so nothing floats over a
+   drawing that is already on its way back to its card. */
+.visual-viewer:not([data-opened="true"]) .visual-viewer-toolbar { transition-delay: 0ms; transition-duration: 120ms; }
 .visual-viewer-toolbar .visual-icon-button::after { top: calc(100% + 8px); bottom: auto; }
 .visual-viewer-toolbar .visual-icon-button:last-child::after { left: auto; right: 0; transform: translateY(3px); }
 .visual-viewer-toolbar .visual-icon-button:last-child:hover::after,
@@ -8791,7 +8804,7 @@ button:focus-visible .menu-leadout {
   .visual-viewer-body { padding: 72px 20px 32px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .visual-icon-button, .visual-icon-button::after, .visual-viewer,
+  .visual-icon-button, .visual-icon-button::after, .visual-viewer, .visual-viewer-toolbar,
   .inline-visual-actions, .visual-toolbar-divider,
   .visual-expand-corner, .visual-expand-arm-v, .visual-expand-arm-h { transition: none; }
 }

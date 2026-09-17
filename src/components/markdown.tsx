@@ -304,7 +304,9 @@ export const VisualSurface = memo(function VisualSurface({ visual, scope }: { vi
   );
 });
 
-const VISUAL_MOTION = { duration: 280, easing: "cubic-bezier(.2,.8,.2,1)" };
+// One motion for a drawing leaving its card and coming back: long enough to
+// be seen as travel from *there*, short enough not to be waited for.
+const VISUAL_MOTION = { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" };
 
 function VisualControl({ label, children, onClick, disabled = false, className = "" }: {
   label: string; children: ReactNode; onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
@@ -313,7 +315,9 @@ function VisualControl({ label, children, onClick, disabled = false, className =
   return <button type="button" className={`visual-icon-button ${className}`.trim()} aria-label={label} data-tooltip={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 
-export function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLDivElement | null }; onClose: () => void }) {
+/** `origin` is the element the drawing visibly grows out of and returns to —
+ *  the figure inline, the card in the canvas column. */
+export function VisualViewer({ code, origin, onClose }: { code: string; origin: { current: HTMLElement | null }; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const scope = `kv${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
@@ -343,7 +347,7 @@ export function VisualViewer({ code, origin, onClose }: { code: string; origin: 
         const to = content.current!.getBoundingClientRect();
         if (from.width && from.height && to.width && to.height) {
           motion.current.push(content.current!.animate([
-            { transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${from.width / to.width}, ${from.height / to.height})`, opacity: 0.4 },
+            { transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${from.width / to.width}, ${from.height / to.height})`, opacity: 0.6 },
             { transform: "none", opacity: 1 },
           ], VISUAL_MOTION));
         }

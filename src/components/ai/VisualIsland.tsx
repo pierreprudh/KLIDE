@@ -156,7 +156,9 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
         </div>
         <span className="klide-visual-thumb-open" aria-hidden="true"><VisualExpandIcon expanded={expanded} size={13} /></span>
       </button>
-      {expanded ? <VisualViewer code={visual.code} origin={origin} onClose={() => setExpanded(false)} /> : null}
+      {/* The viewer grows out of the card the reader clicked — the visible
+          frame — not the 720px layout box scaled inside it. */}
+      {expanded ? <VisualViewer code={visual.code} origin={frame} onClose={() => setExpanded(false)} /> : null}
     </div>
   );
 }
