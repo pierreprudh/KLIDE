@@ -1759,17 +1759,28 @@ textarea.klide-diff-comment-input:focus-visible {
   }
 }
 
+/* Settings slider. A native <input type="range"> rather than a component
+   library's: one element, real keyboard and click-on-track behaviour from the
+   browser, and nothing to keep in sync. What it does not give for free is the
+   filled part of the track, so Range writes the position in as --range-fill
+   and both engines paint the same two-tone gradient. */
 .settings-range {
   appearance: none;
   -webkit-appearance: none;
   height: 16px;
   background: transparent;
+  cursor: pointer;
+  --range-fill: 0%;
 }
 
 .settings-range::-webkit-slider-runnable-track {
   height: 2px;
   border-radius: 999px;
-  background: var(--border-strong);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--range-fill),
+    var(--border-strong) var(--range-fill) 100%
+  );
 }
 
 .settings-range::-webkit-slider-thumb {
@@ -1781,13 +1792,32 @@ textarea.klide-diff-comment-input:focus-visible {
   border-radius: 50%;
   border: 1px solid var(--accent);
   background: var(--accent);
+  /* The ring is the page behind it, so the thumb reads as lifted off the track
+     without a shadow. It doubles as the grow: a wider ring, not a bigger dot,
+     so the value under the thumb never moves. */
   box-shadow: 0 0 0 3px var(--bg-elevated);
+  transition: box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.settings-range:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--bg-elevated), 0 0 0 6px var(--accent-soft);
+}
+
+.settings-range:active::-webkit-slider-thumb,
+.settings-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--bg-elevated), 0 0 0 7px var(--accent-soft);
 }
 
 .settings-range::-moz-range-track {
   height: 2px;
   border-radius: 999px;
   background: var(--border-strong);
+}
+
+.settings-range::-moz-range-progress {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent);
 }
 
 .settings-range::-moz-range-thumb {
@@ -1797,6 +1827,18 @@ textarea.klide-diff-comment-input:focus-visible {
   border: 1px solid var(--accent);
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--bg-elevated);
+  transition: box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.settings-range:hover::-moz-range-thumb {
+  box-shadow: 0 0 0 4px var(--bg-elevated), 0 0 0 6px var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-range::-webkit-slider-thumb,
+  .settings-range::-moz-range-thumb {
+    transition: none;
+  }
 }
 
 ::selection {
