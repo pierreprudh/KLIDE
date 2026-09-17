@@ -111,6 +111,16 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
   const origin = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLButtonElement>(null);
   const [expanded, setExpanded] = useState(false);
+  // How the card was opened. The viewer hands focus back to its opener when
+  // it closes, and a focus given by script shows the card's ring and its
+  // hover-only control — right for a keyboard, a stuck highlight for a
+  // pointer, which has already moved on. So a card opened by pointer gives
+  // the focus up again once the viewer is gone.
+  const viaPointer = useRef(false);
+  const closeViewer = () => {
+    setExpanded(false);
+    if (viaPointer.current) requestAnimationFrame(() => frame.current?.blur());
+  };
   // The whole drawing, every time, filling the frame: it is laid out at its
   // reading width, its painted extent is measured, and that extent — not the
   // layout box — is scaled to the frame's inside and shifted to its corner. Not
@@ -148,6 +158,8 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
   return (
     <div>
       <button ref={frame} type="button" className="klide-visual-thumb" style={{ height: fit.height || undefined }}
+        onPointerDown={() => { viaPointer.current = true; }}
+        onKeyDown={() => { viaPointer.current = false; }}
         onClick={(event) => { event.currentTarget.focus(); setExpanded(true); }}
         aria-label={`Open the ${what} fullscreen`} title="Open fullscreen">
         <div ref={origin} className="klide-visual-thumb-drawing"
@@ -158,7 +170,7 @@ function VisualThumb({ visual }: { visual: VisualBlockRef }) {
       </button>
       {/* The viewer grows out of the card the reader clicked — the visible
           frame — not the 720px layout box scaled inside it. */}
-      {expanded ? <VisualViewer code={visual.code} origin={frame} onClose={() => setExpanded(false)} /> : null}
+      {expanded ? <VisualViewer code={visual.code} origin={frame} onClose={closeViewer} /> : null}
     </div>
   );
 }
