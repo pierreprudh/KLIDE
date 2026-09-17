@@ -88,6 +88,7 @@ describe("skill slash commands", () => {
     expect(cmds[0].desc).toBe("Review code.");
     void cmds[0].run();
     expect(inserted).toEqual([skillSlashPrefix({ name: "Code Review" })]);
+    expect(inserted[0]).toBe("/code-review ");
   });
 
   it("keeps the first of two skills that slug to the same name", () => {

@@ -276,6 +276,21 @@ export function saveSkills(list: Skill[]): void {
   }
 }
 
+/** The `/` name a Skill answers to in the composer: its display name in
+ *  kebab-case, so "Code Review" is `/code-review` and a `visualise` SKILL.md
+ *  stays `/visualise`. Anything that isn't a word character or a hyphen is
+ *  dropped — the menu's query grammar admits nothing else. Lives here, not in
+ *  the menu module, because the system prompt names the same command. */
+export function skillSlashName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^\w-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 /** The Skills list with the enabled ones first, each side keeping its own
  *  order. What is on is what the next run will follow, so it reads first;
  *  toggling a row moves it across the line rather than leaving it buried
@@ -294,10 +309,12 @@ export function enabledSkillsPrompt(skills: Skill[]): string {
       const tools = s.tools.length
         ? `\nAllowed tools: ${s.tools.join(", ")}.`
         : "\nThis skill uses no tools — answer from context only.";
-      return `## Skill: ${s.name}${source}\n${s.description}${tools}\n\n${s.instructions.trim()}`;
+      const slash = skillSlashName(s.name);
+      const command = slash ? `\nCommand: /${slash}` : "";
+      return `## Skill: ${s.name}${source}${command}\n${s.description}${tools}\n\n${s.instructions.trim()}`;
     })
     .join("\n\n");
-  return `\n\nThe user has enabled the following skills. Follow their instructions whenever relevant:\n\n${blocks}`;
+  return `\n\nThe user has enabled the following skills. Follow their instructions whenever relevant. A message that begins with a skill's command (for example \`/${skillSlashName(active[0].name)} …\`) asks you to apply that skill to the rest of the message; treat the command word as the instruction, not as text to echo.\n\n${blocks}`;
 }
 
 export async function loadFilesystemSkills(workspaceRoot: string | null): Promise<Skill[]> {

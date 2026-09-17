@@ -6,7 +6,9 @@
 // whose state it flips; the rest lives here so the two menus can't drift.
 
 import type { AgentMode } from "../../agent/types";
-import type { Skill } from "../../skills";
+import { skillSlashName, type Skill } from "../../skills";
+
+export { skillSlashName };
 
 export type SlashCommand = {
   name: string;
@@ -102,26 +104,14 @@ export const SLASH_PROMPTS: Record<"init" | "interview", { mode: AgentMode; text
 
 export const EXPLAIN_PREFIX = "Explain what this file does and how it works: ";
 
-/** The `/` name an enabled Skill answers to: its display name in kebab-case,
- *  so "Code Review" is `/code-review` and a `visualise` SKILL.md stays
- *  `/visualise`. Anything that isn't a word character or a hyphen is dropped
- *  — the menu's query grammar (`slashQueryOf`) admits nothing else. */
-export function skillSlashName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^\w-]/g, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-/** What accepting a Skill's `/` entry leaves in the composer. The skill's
- *  instructions already ride in the system prompt (it is enabled); this line
- *  tells the model *this* turn is the one to apply them to, and leaves the
- *  cursor where the task goes — the `/explain` shape. */
+/** What accepting a Skill's `/` entry leaves in the composer: the command
+ *  itself and a space, cursor after it. The message goes out as typed —
+ *  `/visualise draw the flow` — and the system prompt names each enabled
+ *  skill's command (`enabledSkillsPrompt`), so the model reads the word as
+ *  the instruction. Nothing is rewritten between what you see and what is
+ *  sent. */
 export function skillSlashPrefix(skill: Pick<Skill, "name">): string {
-  return `Use the "${skill.name}" skill: `;
+  return `/${skillSlashName(skill.name)} `;
 }
 
 /** The enabled Skills as `/` commands, after the built-in vocabulary. Only
