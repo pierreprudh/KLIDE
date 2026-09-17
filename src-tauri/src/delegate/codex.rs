@@ -153,6 +153,10 @@ impl Delegate for Codex {
         Some(&["update"])
     }
 
+    fn release_package(&self) -> Option<&'static str> {
+        Some("@openai/codex")
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let root = std::path::Path::new(home).join(".codex/sessions");
         let mut files = Vec::new();

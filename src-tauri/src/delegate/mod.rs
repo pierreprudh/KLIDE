@@ -398,6 +398,18 @@ pub trait Delegate: Sync {
         None
     }
 
+    /// Where this CLI publishes its releases, as an npm package name.
+    ///
+    /// The updater is the authority on *installing*, but it can only answer
+    /// "is there something newer?" by doing the install — all four CLIs check
+    /// and update in one step. The registry answers the question on its own,
+    /// which is what a "check for updates" button has to do. `None` means
+    /// Klide cannot tell whether this CLI is behind, and says so rather than
+    /// guessing.
+    fn release_package(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The CLI's version line, reduced to the number. Default: the first
     /// token that looks like one, which covers `2.1.274 (Claude Code)`,
     /// `codex-cli 0.154.0`, `1.18.31` and `omp/15.13.3` alike. An adapter

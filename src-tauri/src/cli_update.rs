@@ -50,6 +50,15 @@ pub struct CliVersion {
     pub update_command: Option<String>,
     /// Why there is no version, when there is none.
     pub detail: Option<String>,
+    /// The newest published release, when a check asked for it. `None` on a
+    /// plain read: knowing this costs a network call, and opening Settings
+    /// must not make one.
+    pub latest: Option<String>,
+    /// True only when both versions were read *and* compared. An unknown
+    /// `latest` leaves this false — "Klide couldn't tell" is not "up to date".
+    pub update_available: bool,
+    /// Why the check couldn't answer, when it couldn't.
+    pub latest_error: Option<String>,
 }
 
 /// One chunk of an update's output, or its ending.
@@ -130,6 +139,9 @@ pub fn version_of(adapter: &'static dyn delegate::Delegate) -> CliVersion {
                 // Nothing to update: there is no install to replace.
                 update_command: None,
                 detail: Some(detail),
+                latest: None,
+                update_available: false,
+                latest_error: None,
             }
         }
     };
@@ -161,6 +173,9 @@ pub fn version_of(adapter: &'static dyn delegate::Delegate) -> CliVersion {
         command_path: Some(path),
         update_command,
         detail,
+        latest: None,
+        update_available: false,
+        latest_error: None,
     }
 }
 
@@ -184,8 +199,148 @@ pub fn versions() -> Vec<CliVersion> {
                 command_path: None,
                 update_command: None,
                 detail: Some("Version check crashed".to_string()),
+                latest: None,
+                update_available: false,
+                latest_error: None,
             })
         })
+        .collect()
+}
+
+/// The npm dist-tag Klide reads. `latest` is what every one of these updaters
+/// installs, so it is the only tag that answers the question being asked.
+const RELEASE_TAG: &str = "latest";
+
+/// How long the registry may take. A check is something the user is watching,
+/// so it fails visibly rather than hanging the button.
+const REGISTRY_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Split a version into its numeric core and whatever tail follows it.
+fn version_parts(version: &str) -> Option<(Vec<u64>, String)> {
+    let (core, tail) = match version.find(['-', '+']) {
+        Some(at) => (&version[..at], version[at..].to_string()),
+        None => (version, String::new()),
+    };
+    let numbers = core
+        .split('.')
+        .map(|part| part.parse::<u64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    (!numbers.is_empty()).then_some((numbers, tail))
+}
+
+/// Is `candidate` newer than `installed`? `None` means Klide cannot tell, and
+/// a caller must not round that up to either answer.
+///
+/// Numeric cores decide it. When the cores are equal, a release beats a
+/// prerelease and two different prereleases are simply unranked — Klide is not
+/// a semver implementation, and a published `latest` is not a prerelease.
+pub fn is_newer(candidate: &str, installed: &str) -> Option<bool> {
+    let (mut left, left_tail) = version_parts(candidate)?;
+    let (mut right, right_tail) = version_parts(installed)?;
+    let width = left.len().max(right.len());
+    left.resize(width, 0);
+    right.resize(width, 0);
+    if left != right {
+        return Some(left > right);
+    }
+    match (left_tail.is_empty(), right_tail.is_empty()) {
+        // 1.2.0 over 1.2.0-beta.1, and never the other way round.
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (true, true) => Some(false),
+        (false, false) if left_tail == right_tail => Some(false),
+        (false, false) => None,
+    }
+}
+
+/// The newest published release of one package, straight from the registry.
+fn latest_release(package: &str) -> Result<String, String> {
+    // A scoped name's slash is the only character the path needs encoded.
+    let url = format!(
+        "https://registry.npmjs.org/{}/{RELEASE_TAG}",
+        package.replace('/', "%2f")
+    );
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Klide/1.0")
+        .timeout(REGISTRY_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Unable to reach the registry: {e}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("Update check failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Registry answered {}", response.status()));
+    }
+    let body: serde_json::Value = response
+        .json()
+        .map_err(|e| format!("Registry answered something unreadable: {e}"))?;
+    body.get("version")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .ok_or_else(|| format!("{package} has no published version"))
+}
+
+/// One delegate's row with the registry's answer folded in. Never an `Err`:
+/// "couldn't reach the registry" is a state the row shows, not a failed check.
+fn with_latest(mut row: CliVersion, adapter: &'static dyn delegate::Delegate) -> CliVersion {
+    // Nothing installed means nothing to compare against, and no reason to
+    // make the call.
+    if !row.installed {
+        return row;
+    }
+    let Some(package) = adapter.release_package() else {
+        row.latest_error = Some(format!(
+            "Klide doesn't know where {} publishes its releases",
+            adapter.binary()
+        ));
+        return row;
+    };
+    match latest_release(package) {
+        Ok(latest) => {
+            match row.version.as_deref().map(|installed| is_newer(&latest, installed)) {
+                Some(Some(newer)) => row.update_available = newer,
+                // The registry answered but the two can't be ranked. Saying
+                // that is the honest report; leaving the row silent would read
+                // as "up to date".
+                Some(None) | None => {
+                    row.latest_error =
+                        Some(format!("Klide can't rank {latest} against this build"))
+                }
+            }
+            row.latest = Some(latest);
+        }
+        Err(detail) => row.latest_error = Some(detail),
+    }
+    row
+}
+
+/// Every delegate CLI's version *and* what the registry publishes — the
+/// "check for updates" answer. One network call per CLI, all at once.
+pub fn checked_versions() -> Vec<CliVersion> {
+    let handles: Vec<_> = delegate::ALL
+        .iter()
+        .map(|adapter| {
+            let adapter = *adapter;
+            std::thread::spawn(move || with_latest(version_of(adapter), adapter))
+        })
+        .collect();
+    handles
+        .into_iter()
+        .zip(delegate::ALL)
+        .map(|(handle, adapter)| handle.join().unwrap_or_else(|_| CliVersion {
+            provider: adapter.id().to_string(),
+            binary: adapter.binary(),
+            installed: false,
+            version: None,
+            raw: None,
+            command_path: None,
+            update_command: None,
+            detail: Some("Version check crashed".to_string()),
+            latest: None,
+            update_available: false,
+            latest_error: None,
+        }))
         .collect()
 }
 
@@ -270,6 +425,11 @@ pub async fn cli_version(provider: String) -> Result<CliVersion, String> {
 }
 
 #[tauri::command]
+pub async fn cli_check_updates() -> Result<Vec<CliVersion>, String> {
+    blocking::run(|| Ok(checked_versions())).await
+}
+
+#[tauri::command]
 pub async fn cli_update(
     provider: String,
     on_event: Channel<CliUpdateEvent>,
@@ -325,6 +485,43 @@ mod tests {
     }
 
     #[test]
+    fn every_delegate_says_where_it_publishes() {
+        // A CLI with no known release source can still be updated; it just
+        // can't be *checked*, and the row has to say that rather than imply
+        // it is current. Today all four are on npm.
+        for adapter in delegate::ALL {
+            assert!(
+                adapter.release_package().is_some(),
+                "{} names no release package",
+                adapter.id()
+            );
+        }
+    }
+
+    #[test]
+    fn ranks_the_versions_these_clis_actually_publish() {
+        assert_eq!(is_newer("18.2.4", "15.13.3"), Some(true));
+        assert_eq!(is_newer("0.155.0", "0.154.0"), Some(true));
+        assert_eq!(is_newer("0.154.0", "0.154.0"), Some(false));
+        assert_eq!(is_newer("2.1.9", "2.1.274"), Some(false));
+        // Not a string compare: 10 is after 9.
+        assert_eq!(is_newer("1.10.0", "1.9.0"), Some(true));
+        // A missing segment is a zero, not a mismatch.
+        assert_eq!(is_newer("1.2", "1.2.0"), Some(false));
+        assert_eq!(is_newer("1.2.1", "1.2"), Some(true));
+    }
+
+    #[test]
+    fn a_release_beats_its_own_prerelease_and_nothing_else_is_ranked() {
+        assert_eq!(is_newer("1.2.0", "1.2.0-beta.1"), Some(true));
+        assert_eq!(is_newer("1.2.0-beta.1", "1.2.0"), Some(false));
+        // Two different prereleases of one version: Klide does not rank them,
+        // and "can't tell" must never be rounded up to "up to date".
+        assert_eq!(is_newer("1.2.0-beta.2", "1.2.0-alpha.9"), None);
+        assert_eq!(is_newer("not-a-version", "1.2.0"), None);
+    }
+
+    #[test]
     fn a_wedged_command_gives_up_instead_of_hanging() {
         let started = Instant::now();
         let out = output_within("sleep", &["30"], Duration::from_millis(200));
@@ -335,6 +532,18 @@ mod tests {
     /// Not part of the suite: it runs the CLIs actually installed on this
     /// machine. `cargo test -- --ignored --nocapture cli_versions_on_this_machine`
     /// is how you check the parsing against real output.
+    /// Also not part of the suite — this one reaches the npm registry.
+    #[test]
+    #[ignore]
+    fn update_check_on_this_machine() {
+        for row in checked_versions() {
+            println!(
+                "{:<12} have={:?} latest={:?} available={} error={:?}",
+                row.provider, row.version, row.latest, row.update_available, row.latest_error
+            );
+        }
+    }
+
     #[test]
     #[ignore]
     fn cli_versions_on_this_machine() {
@@ -359,6 +568,9 @@ mod tests {
             command_path: None,
             update_command: None,
             detail: Some("not installed".into()),
+            latest: None,
+            update_available: false,
+            latest_error: None,
         };
         assert!(missing.update_command.is_none());
     }

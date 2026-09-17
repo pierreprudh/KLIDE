@@ -11,13 +11,18 @@
 // real PTY and shows its output as it arrives, because an installer that
 // prints nothing is indistinguishable from one that hung.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { cliVersions, runCliUpdate, type CliVersion } from "../../ipc/cliUpdates";
+import { useEffect, useRef, useState } from "react";
+import {
+  checkCliUpdates,
+  cliVersions,
+  runCliUpdate,
+  type CliVersion,
+} from "../../ipc/cliUpdates";
 import { ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
-import { CenteredLoader, LinkButton, Panel } from "./controls";
+import { CenteredLoader, LinkButton, Panel, SettingBlock } from "./controls";
 
 /** Title per delegate id — the same words the Connections rows use. */
 const TITLES: Record<string, string> = {
@@ -47,11 +52,36 @@ export function terminalText(raw: string): string {
     .trimEnd();
 }
 
-/** What the row says under its title once a version is known. */
-function versionLine(row: CliVersion): string {
-  if (!row.installed) return row.detail ?? `${row.binary} is not installed or not on PATH`;
-  if (row.version) return `${row.binary} ${row.version}`;
-  return row.detail ?? `${row.binary} is installed`;
+/**
+ * What the row says under its title. The installed version is the constant;
+ * what a check added — a newer release, or the reason there's no answer — is
+ * a tail on the same line, told with type weight rather than a badge.
+ */
+function VersionLine({ row }: { row: CliVersion }) {
+  if (!row.installed) {
+    return (
+      <span style={{ opacity: 0.75 }}>
+        {row.detail ?? `${row.binary} is not installed or not on PATH`}
+      </span>
+    );
+  }
+  if (!row.version) return <span>{row.detail ?? `${row.binary} is installed`}</span>;
+  return (
+    <span style={{ fontFamily: "var(--font-mono)" }}>
+      {row.binary} {row.version}
+      {row.updateAvailable && row.latest ? (
+        <>
+          <span style={{ opacity: 0.55 }}> → </span>
+          <span style={{ color: "var(--fg-strong)", fontWeight: 600 }}>{row.latest}</span>
+          <span style={{ fontFamily: "var(--font-ui)" }}> available</span>
+        </>
+      ) : row.latestError ? (
+        <span style={{ fontFamily: "var(--font-ui)", opacity: 0.8 }}> · {row.latestError}</span>
+      ) : row.latest ? (
+        <span style={{ fontFamily: "var(--font-ui)", opacity: 0.8 }}> · latest</span>
+      ) : null}
+    </span>
+  );
 }
 
 function OutputStrip({ text }: { text: string }) {
@@ -128,20 +158,18 @@ function CliRow({
           </div>
           <div style={{ minWidth: 0 }}>
             <div className="klide-row-title">{title}</div>
-            <div
-              className="klide-row-description"
-              style={{
-                fontFamily: row.version ? "var(--font-mono)" : undefined,
-                opacity: row.installed ? 1 : 0.75,
-              }}
-            >
-              {versionLine(row)}
+            <div className="klide-row-description">
+              <VersionLine row={row} />
             </div>
           </div>
         </div>
         {row.updateCommand ? (
           <LinkButton onClick={() => void update()} disabled={running}>
-            {running ? "Updating…" : "Update"}
+            {running
+              ? "Updating…"
+              : row.updateAvailable && row.latest
+              ? `Update to ${row.latest}`
+              : "Update"}
           </LinkButton>
         ) : null}
       </div>
@@ -150,36 +178,135 @@ function CliRow({
   );
 }
 
+/**
+ * Fold an update's result into the row it replaces.
+ *
+ * An updater that installed nothing leaves the earlier check standing — the
+ * comparison it made is still about this exact build. An updater that moved
+ * the version invalidates it, and the row goes back to saying only what it
+ * knows rather than carrying a stale "up to date".
+ */
+export function afterUpdate(before: CliVersion, after: CliVersion): CliVersion {
+  if (before.version && after.version === before.version) {
+    return {
+      ...after,
+      latest: before.latest,
+      updateAvailable: before.updateAvailable,
+      latestError: before.latestError,
+    };
+  }
+  return after;
+}
+
+/** A quiet circular arrow — the one place in this block an icon says something
+ *  a word would say slower. It turns while the check is running. */
+function RefreshMark({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      width={13}
+      height={13}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={spinning ? "klide-spin" : undefined}
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M20 11a8 8 0 0 0-13.7-5.3L3 9" />
+      <path d="M4 13a8 8 0 0 0 13.7 5.3L21 15" />
+      <path d="M3 4v5h5" />
+      <path d="M21 20v-5h-5" />
+    </svg>
+  );
+}
+
+/**
+ * The block. It opens with the local read — four `--version` calls, no
+ * network — and asks the registry only when the user presses the button,
+ * because opening Settings should not phone anywhere.
+ */
 export function CliVersionsBlock() {
   const [rows, setRows] = useState<CliVersion[] | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      setRows(await cliVersions());
-    } catch {
-      setRows([]);
-    }
-  }, []);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+    cliVersions().then(
+      (next) => !cancelled && setRows(next),
+      () => !cancelled && setRows([]),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  if (rows === null) return <CenteredLoader label="Reading CLI versions…" />;
+  async function check() {
+    if (checking) return;
+    setChecking(true);
+    try {
+      const next = await checkCliUpdates();
+      setRows(next);
+      const behind = next.filter((row) => row.updateAvailable);
+      notify(
+        behind.length === 0
+          ? "Every CLI is on its latest release."
+          : behind.length === 1
+          ? `${TITLES[behind[0].provider] ?? behind[0].provider} has ${behind[0].latest}.`
+          : `${behind.length} CLIs have a newer release.`,
+        { tone: behind.length === 0 ? "success" : "info" },
+      );
+    } catch (e) {
+      notify(`Update check failed: ${errMessage(e)}`, { tone: "error" });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const action = (
+    <button
+      type="button"
+      onClick={() => void check()}
+      disabled={checking || rows === null}
+      className="klide-button klide-button-secondary"
+      style={{
+        height: 26,
+        padding: "0 10px",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11.5,
+        ...(checking || rows === null ? { opacity: 0.55, cursor: "default" } : null),
+      }}
+    >
+      <RefreshMark spinning={checking} />
+      {checking ? "Checking…" : "Check for updates"}
+    </button>
+  );
 
   return (
-    <Panel>
-      {rows.map((row) => (
-        <CliRow
-          key={row.provider}
-          row={row}
-          onUpdated={(next) =>
-            setRows((current) =>
-              (current ?? []).map((r) => (r.provider === next.provider ? next : r)),
-            )
-          }
-        />
-      ))}
-    </Panel>
+    <SettingBlock title="CLI versions" action={action}>
+      {rows === null ? (
+        <CenteredLoader label="Reading CLI versions…" />
+      ) : (
+        <Panel>
+          {rows.map((row) => (
+            <CliRow
+              key={row.provider}
+              row={row}
+              onUpdated={(next) =>
+                setRows((current) =>
+                  (current ?? []).map((r) =>
+                    r.provider === next.provider ? afterUpdate(r, next) : r,
+                  ),
+                )
+              }
+            />
+          ))}
+        </Panel>
+      )}
+    </SettingBlock>
   );
 }

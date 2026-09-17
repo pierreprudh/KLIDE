@@ -8694,3 +8694,20 @@ button:focus-visible .menu-leadout {
    spread between — instead of bunching at the left edge. */
 .ai-agent-stats-line[data-metrics="1"] { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ai-agent-stats-line[data-metrics="1"] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A mark that turns while its action waits on something — the Settings › CLI
+   versions check while the registry answers. One rotation, no easing: a
+   spinner, not a flourish. */
+.klide-spin {
+  animation: klide-spin 900ms linear infinite;
+}
+@keyframes klide-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .klide-spin {
+    animation: none;
+  }
+}

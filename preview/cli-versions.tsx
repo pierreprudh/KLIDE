@@ -10,6 +10,11 @@
 //   ?theme=dark | klide-light | sage-garden | cursor-dark | …
 //   ?state=missing   →  Codex not on PATH, and an update that fails
 //   ?state=current   →  every update finds the CLI already up to date
+//   ?state=offline   →  the registry can't be reached, so no row claims to be current
+//
+// "Check for updates" is what the button really does: it re-reads the four
+// versions and asks npm what each package's latest release is. On this machine
+// omp is genuinely three majors behind, so the mark has something real to show.
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -21,7 +26,7 @@ const params = new URLSearchParams(location.search);
 document.documentElement.dataset.theme = params.get("theme") ?? "klide-light";
 const STATE = params.get("state") ?? "default";
 
-const ESC = "";
+const ESC = "\u001b";
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Row = {
@@ -33,6 +38,9 @@ type Row = {
   commandPath: string | null;
   updateCommand: string | null;
   detail: string | null;
+  latest: string | null;
+  updateAvailable: boolean;
+  latestError: string | null;
 };
 
 // What the four CLIs on this machine really said.
@@ -46,6 +54,9 @@ let rows: Row[] = [
     commandPath: "/Users/pierre/.local/bin/claude",
     updateCommand: "claude update",
     detail: null,
+    latest: null,
+    updateAvailable: false,
+    latestError: null,
   },
   {
     provider: "codex",
@@ -56,6 +67,9 @@ let rows: Row[] = [
     commandPath: "/Users/pierre/.local/bin/codex",
     updateCommand: "codex update",
     detail: null,
+    latest: null,
+    updateAvailable: false,
+    latestError: null,
   },
   {
     provider: "opencode",
@@ -66,6 +80,9 @@ let rows: Row[] = [
     commandPath: "/Users/pierre/.opencode/bin/opencode",
     updateCommand: "opencode upgrade",
     detail: null,
+    latest: null,
+    updateAvailable: false,
+    latestError: null,
   },
   {
     provider: "omp",
@@ -76,6 +93,9 @@ let rows: Row[] = [
     commandPath: "/Users/pierre/.nvm/versions/node/v24.16.0/bin/omp",
     updateCommand: "omp update",
     detail: null,
+    latest: null,
+    updateAvailable: false,
+    latestError: null,
   },
 ];
 
@@ -113,6 +133,14 @@ function script(row: Row): string[] {
   ];
 }
 
+/** What registry.npmjs.org really answered for these four on 2026-09-17. */
+const LATEST: Record<string, string> = {
+  "claude-code": "2.1.274",
+  codex: "0.154.0",
+  opencode: "1.18.31",
+  omp: "18.2.4",
+};
+
 type RawChannel = { id: (raw: { index: number; message: unknown }) => void };
 
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
@@ -127,6 +155,19 @@ type RawChannel = { id: (raw: { index: number; message: unknown }) => void };
         return rows;
       case "cli_version":
         return rows.find((r) => r.provider === args.provider);
+      case "cli_check_updates": {
+        // One network call per CLI, so the button is worth watching.
+        await wait(1100);
+        rows = rows.map((row) => {
+          if (!row.installed) return row;
+          if (STATE === "offline") {
+            return { ...row, latest: null, updateAvailable: false, latestError: "Update check failed: could not resolve registry.npmjs.org" };
+          }
+          const latest = LATEST[row.provider] ?? row.version!;
+          return { ...row, latest, updateAvailable: latest !== row.version, latestError: null };
+        });
+        return rows;
+      }
       case "cli_update": {
         const row = rows.find((r) => r.provider === args.provider)!;
         const channel = args.onEvent as RawChannel;
@@ -136,7 +177,7 @@ type RawChannel = { id: (raw: { index: number; message: unknown }) => void };
           channel.id({ index: index++, message: { kind: "output", chunk } });
         }
         await wait(300);
-        if (STATE === "missing") throw "codex update exited with 1";
+        if (STATE === "missing") throw `${row.binary} ${args.provider} update exited with 1`;
         const next =
           STATE === "current" ? row : { ...row, version: "0.155.0", raw: `${row.binary} 0.155.0` };
         rows = rows.map((r) => (r.provider === next.provider ? next : r));
@@ -164,10 +205,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     {/* The settings pane's own measure, so the rows are judged at their real width. */}
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "0 32px" }}>
       <h1 style={{ margin: "0 0 6px", fontSize: 24, color: "var(--fg-strong)", fontWeight: 600 }}>
-        CLI versions
+        Subscription
       </h1>
       <p style={{ margin: "0 0 28px", fontSize: 13.5, color: "var(--fg-subtle)", lineHeight: 1.5 }}>
-        Which build of each delegate CLI Klide launches, and the CLI's own updater.
+        The CLI logins Klide dispatches into, and the builds behind them.
       </p>
       <CliVersionsBlock />
     </div>

@@ -273,6 +273,10 @@ impl Delegate for ClaudeCode {
         Some(&["update"])
     }
 
+    fn release_package(&self) -> Option<&'static str> {
+        Some("@anthropic-ai/claude-code")
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         let root = std::path::Path::new(home).join(".claude/projects");

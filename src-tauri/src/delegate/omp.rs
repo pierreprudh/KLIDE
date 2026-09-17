@@ -73,6 +73,10 @@ impl Delegate for Omp {
         Some(&["update"])
     }
 
+    fn release_package(&self) -> Option<&'static str> {
+        Some("@oh-my-pi/pi-coding-agent")
+    }
+
     fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
         let mut out = Vec::new();
         let root = std::path::Path::new(home).join(".omp/agent/sessions");

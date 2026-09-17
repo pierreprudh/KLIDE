@@ -1849,9 +1849,7 @@ export function SettingsPanel({
                   />
                 </Panel>
               </SettingBlock>
-              <SettingBlock title="CLI versions">
-                <CliVersionsBlock />
-              </SettingBlock>
+              <CliVersionsBlock />
               <SettingBlock title="Connection Options">
                 <Panel>
                   {subscriptionProviderEntries.map((provider) => {

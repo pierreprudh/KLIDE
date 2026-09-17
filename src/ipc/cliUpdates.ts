@@ -23,12 +23,27 @@ export type CliVersion = {
   updateCommand: string | null;
   /** Why there is no version, when there is none. */
   detail: string | null;
+  /** The newest published release — only after a check asked for it. */
+  latest: string | null;
+  /** True only when both versions were read and compared. */
+  updateAvailable: boolean;
+  /** Why the check couldn't answer, when it couldn't. */
+  latestError: string | null;
 };
 
 type CliUpdateEvent = { kind: "output"; chunk: string };
 
 export function cliVersions(): Promise<CliVersion[]> {
   return invoke<CliVersion[]>("cli_versions");
+}
+
+/**
+ * The same rows, with the registry's answer folded in — what "check for
+ * updates" means. One network call per CLI, so it is something the user asks
+ * for, never something opening Settings does.
+ */
+export function checkCliUpdates(): Promise<CliVersion[]> {
+  return invoke<CliVersion[]>("cli_check_updates");
 }
 
 export function cliVersion(provider: string): Promise<CliVersion> {

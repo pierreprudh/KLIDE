@@ -940,6 +940,7 @@ pub fn run() {
             ai_subscription_status,
             cli_update::cli_versions,
             cli_update::cli_version,
+            cli_update::cli_check_updates,
             cli_update::cli_update,
             app_user_info,
             menu_sync_projects,

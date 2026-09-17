@@ -286,6 +286,10 @@ impl Delegate for OpenCode {
         Some(&["upgrade"])
     }
 
+    fn release_package(&self) -> Option<&'static str> {
+        Some("opencode-ai")
+    }
+
     /// One candidate per session row. The mtime is the session's own
     /// `time_updated` (not the DB file's mtime — they diverge while the WAL
     /// is being flushed). The key holds the session id, not a file path; the
