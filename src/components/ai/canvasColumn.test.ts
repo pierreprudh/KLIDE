@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { columnGeometry, COLUMN_MAX, COLUMN_MIN } from "./canvasColumn";
+import { columnGeometry, showsVisuals, COLUMN_MAX, COLUMN_MIN } from "./canvasColumn";
 
 const roomy = { planSlot: "none", resultUp: false, questionUp: false, hidden: false, canvasWidth: 1210 } as const;
 
@@ -91,5 +91,11 @@ describe("canvas column geometry", () => {
     expect(closed.cardsUp).toBe(false);
     expect(closed.marksUp).toBe(true);
     expect(closed.inset).toBe(76);
+  });
+
+  it("shows the visuals again only where the column has its full width", () => {
+    expect(showsVisuals(0)).toBe(true);
+    expect(showsVisuals(560 + 36 + COLUMN_MAX)).toBe(true);
+    expect(showsVisuals(560 + 36 + COLUMN_MAX - 1)).toBe(false);
   });
 });

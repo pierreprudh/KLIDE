@@ -52,7 +52,7 @@ import { toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { TodoStrip, type TodoStripSlot } from "./TodoStrip";
-import { columnGeometry } from "./ai/canvasColumn";
+import { columnGeometry, showsVisuals } from "./ai/canvasColumn";
 
 /** The documents a completion produced, as the viewer's rail wants them. */
 function documentSet(completion: RunCompletion): { path: string; bytes: number }[] {
@@ -3087,13 +3087,15 @@ This user request requires workspace inspection. Before answering, you MUST call
   // what each slot is showing decides the column's width, whether the canvas
   // gives up a panel's width or a mark's lane, and whether there is anything
   // for the close control to close.
-  // What the latest answer drew. On the Focus canvas the drawings sit in the
-  // column, not the prose (each message renders `visualsAside`), so the
-  // column shows the newest answer that drew anything; an older drawing
-  // stays reachable from its row, which opens the viewer. A fence still
-  // streaming is not a visual yet — `visualBlocksOf` counts closed ones.
+  // What the latest answer drew. The drawing is in the chat, as a figure; on
+  // a roomy Focus canvas the column shows it again beside the prose, where a
+  // reader can keep it in view while the conversation scrolls. The column
+  // shows the newest answer that drew anything, and nothing on a canvas too
+  // narrow for a full-width column — there the chat's figure is the one copy.
+  // A fence still streaming is not a visual yet — `visualBlocksOf` counts
+  // closed ones.
   const latestVisuals = useMemo(() => {
-    if (variant !== "focus") return null;
+    if (variant !== "focus" || !showsVisuals(canvasWidth)) return null;
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
       if (m.role !== "assistant" || m.delegateConsole) continue;
@@ -3101,7 +3103,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       if (visuals.length > 0) return { sourceKey: `${currentId}:${i}`, visuals };
     }
     return null;
-  }, [variant, msgs, currentId]);
+  }, [variant, msgs, currentId, canvasWidth]);
 
   const column = columnGeometry({
     planSlot,
@@ -4651,7 +4653,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                   ? (m.delegateHeadless
                     ? <WorkingSince since={previous?.role === "user" ? previous.ts : undefined} />
                     : <AssistantPlaceholderLoader />)
-                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults, visualsAside: variant === "focus" })}{isStreamingActive && <span className="ai-caret" />}</>}
+                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions
