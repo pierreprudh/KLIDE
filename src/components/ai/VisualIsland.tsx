@@ -30,7 +30,9 @@ export function VisualIsland({ visuals, sourceKey, folded, onUnfold }: Props) {
 
   if (visuals.length === 0) return null;
   const pages = visuals.filter((v) => v.kind === "page").length;
-  const title = visuals.length === 1 ? (pages === 1 ? "Page" : "Diagram") : `${visuals.length} visuals`;
+  // The header says what the window holds, not how much of it: the number is
+  // already there at the row's end, where it becomes the chevron on hover.
+  const title = visuals.length === 1 ? (pages === 1 ? "Page" : "Diagram") : "Visuals";
   const spoken = visuals.length === 1 ? title.toLowerCase() : `${visuals.length} visuals`;
   const count = visuals.length > 1 ? String(visuals.length) : null;
   const mark = <DiagramIcon size={15} />;
@@ -53,7 +55,7 @@ export function VisualIsland({ visuals, sourceKey, folded, onUnfold }: Props) {
         <div className="klide-result-island-header" role="button" tabIndex={0}
           aria-expanded={open} aria-controls={id}
           aria-label={`${open ? "Collapse" : "Expand"} ${spoken}`}
-          title={spoken}
+          title={title}
           onClick={() => setOpen(!open)}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
@@ -62,8 +64,19 @@ export function VisualIsland({ visuals, sourceKey, folded, onUnfold }: Props) {
           }}>
           {mark}
           <span className="klide-result-island-title">{title}</span>
-          {count && <span className="klide-result-meta">{count}</span>}
-          <span className="klide-result-island-chevron" aria-hidden="true"><ChevronIcon open={open} /></span>
+          {/* One slot at the row's end holds both: the count at rest, the
+              chevron once the row is hovered or the window is open. They
+              trade places where they stand — the number sinks out as the
+              arrow drops in — rather than the arrow opening room beside a
+              number that stays. */}
+          {count ? (
+            <span className="klide-visual-island-swap" aria-hidden="true">
+              <span className="klide-visual-island-count">{count}</span>
+              <span className="klide-visual-island-chevron"><ChevronIcon open={open} /></span>
+            </span>
+          ) : (
+            <span className="klide-result-island-chevron" aria-hidden="true"><ChevronIcon open={open} /></span>
+          )}
         </div>
         <div className="klide-result-island-rule" data-shown={open ? "1" : undefined} aria-hidden="true" />
         {open && (
