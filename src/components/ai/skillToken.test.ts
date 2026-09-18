@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SkillLede } from "../../skillAppearance";
 import {
-  hoistSkillCommand,
+  draftSpans,
   joinSkillToken,
   skillTokenCaret,
   skillTokenOf,
@@ -63,39 +63,40 @@ describe("split and join", () => {
   });
 });
 
-describe("hoistSkillCommand", () => {
-  const accept = (value: string, start: number, caret: number, ledes: SkillLedes = LEDES) =>
-    hoistSkillCommand({ value, start, caret, prefix: "/visualise ", ledes });
+describe("draftSpans", () => {
+  const marked = (value: string) => draftSpans(value, LEDES).filter((s) => s.skill).map((s) => s.text);
 
-  it("keeps the whole-draft case as it was: the command and a cursor after it", () => {
-    expect(accept("/visu", 0, 5)).toEqual({ value: "/visualise ", caret: 11 });
+  it("marks a wired command inside a sentence", () => {
+    expect(draftSpans("use /visualise here", LEDES)).toEqual([
+      { text: "use ", skill: false },
+      { text: "/visualise", skill: true, mark: null },
+      { text: " here", skill: false },
+    ]);
   });
 
-  it("takes the head when the command was typed at the end of a sentence", () => {
-    expect(accept("draw the auth flow /vis", 19, 23)).toEqual({
-      value: "/visualise draw the auth flow",
-      caret: 29,
-    });
+  it("marks one at the head and one at the end of the line", () => {
+    expect(marked("/visualise the flow")).toEqual(["/visualise"]);
+    expect(marked("draw the flow /visualise ")).toEqual(["/visualise"]);
   });
 
-  it("cuts the word out of the middle and leaves the caret at the seam", () => {
-    expect(accept("draw /vis the auth flow", 5, 9)).toEqual({
-      value: "/visualise draw the auth flow",
-      caret: 15,
-    });
+  it("waits for the space that closes the command, so nothing flickers while typing", () => {
+    expect(marked("use /visu")).toEqual([]);
+    expect(marked("use /visualise")).toEqual([]);
+    expect(marked("use /visualise ")).toEqual(["/visualise"]);
   });
 
-  it("cuts the whole word when the caret sits inside it", () => {
-    expect(accept("draw the flow /vis", 14, 17)).toEqual({
-      value: "/visualise draw the flow",
-      caret: 24,
-    });
+  it("carries the mark only where nothing follows the command", () => {
+    // Room to its right: the mark draws into empty line.
+    expect(draftSpans("use /visualise ", LEDES)[1]).toEqual({ text: "/visualise", skill: true, mark: "diagram" });
+    expect(draftSpans("use /visualise \n", LEDES)[1].mark).toBe("diagram");
+    // Prose after it: a glyph would push the rest of the line out of line.
+    expect(draftSpans("use /visualise on this ", LEDES)[1].mark).toBeNull();
   });
 
-  it("replaces a skill already leading — one skill leads a message", () => {
-    const ledes: SkillLedes = new Map(LEDES);
-    expect(
-      hoistSkillCommand({ value: "/visualise draw the flow /td", start: 25, caret: 28, prefix: "/tdd ", ledes }),
-    ).toEqual({ value: "/tdd draw the flow", caret: 18 });
+  it("leaves paths, prose and unwired skills plain", () => {
+    expect(marked("open src/visualise now")).toEqual([]);
+    expect(marked("run /tdd first")).toEqual([]);
+    expect(draftSpans("plain text", LEDES)).toEqual([{ text: "plain text", skill: false }]);
+    expect(draftSpans("", LEDES)).toEqual([]);
   });
 });

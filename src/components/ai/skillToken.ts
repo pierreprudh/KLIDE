@@ -71,39 +71,43 @@ export function skillTokenCaret(token: SkillToken | null, caret: number): number
   return token ? caret + token.prefix.length : caret;
 }
 
-/** Accepting a Skill's `/` entry, wherever the command was typed.
+
+/** One run of the draft, and whether it is a skill command.
+ *  `ComposerHighlight` draws these; nothing else needs them. */
+export type DraftSpan = {
+  text: string;
+  skill: boolean;
+  /** The glyph to draw after this command, when it has one and there is room
+   *  for it. Null on every other span. */
+  mark?: SkillMark | null;
+};
+
+/** The draft cut into runs, with every wired command marked.
  *
- *  A skill leads the message — `skillTokenOf` matches at the head and nowhere
- *  else — so a command typed mid-sentence is not left where it stands. The
- *  half-typed word is cut out, the command takes the head, a skill already
- *  leading yields to it (one skill leads a message), and the caret returns to
- *  the prose at the seam the cut closed. The draft still reads as what is
- *  sent: `/visualise draw the auth flow`. */
-export function hoistSkillCommand(opts: {
-  value: string;
-  /** Where the typed `/` sits in the draft. */
-  start: number;
-  /** Where the caret sits; the word may run on past it. */
-  caret: number;
-  /** What the command leaves behind, trailing space included. */
-  prefix: string;
-  ledes: SkillLedes;
-}): { value: string; caret: number } {
-  const { value, start, caret, prefix, ledes } = opts;
-  const end = caret + (value.slice(caret).match(/^[\w-]*/)?.[0].length ?? 0);
-  let before = value.slice(0, start);
-  const after = value.slice(end);
-  // The cut closes a space onto a space; one of them was the one the word sat
-  // between, and it goes with the word.
-  if (/\s$/.test(before) && (after === "" || /^\s/.test(after))) before = before.slice(0, -1);
-  let rest = before + after;
-  let cut = before.length;
-  const leading = skillTokenOf(rest, ledes);
-  if (leading) {
-    rest = rest.slice(leading.prefix.length);
-    cut = Math.max(0, cut - leading.prefix.length);
+ *  The same rule `skillTokenOf` applies at the head, applied everywhere: a
+ *  command starts a word, a space closes it, and only a wired skill counts.
+ *  A command still being typed — `/visu`, with the `/` menu open on it — is
+ *  not yet closed and stays plain, so the accent arrives when the command
+ *  does and nothing flickers underneath the caret.
+ *
+ *  A mark rides along only where nothing follows the command. The drawing
+ *  behind the textarea has to stay glyph-for-glyph with the text inside it,
+ *  and a mark is wider than the nothing the textarea laid out in its place —
+ *  drawn mid-sentence it would push the rest of the line out of line with the
+ *  real one. At the end of the draft the room to its right is empty, so it
+ *  costs nothing, which is also the moment you have just picked the skill. */
+export function draftSpans(value: string, ledes: SkillLedes): DraftSpan[] {
+  const spans: DraftSpan[] = [];
+  let at = 0;
+  const re = /(^|\s)\/([\w-]+)(?=\s)/g;
+  for (let m = re.exec(value); m !== null; m = re.exec(value)) {
+    const lede = ledes.get(m[2].toLowerCase());
+    if (!lede) continue;
+    const start = m.index + m[1].length;
+    if (start > at) spans.push({ text: value.slice(at, start), skill: false });
+    at = start + m[2].length + 1;
+    spans.push({ text: value.slice(start, at), skill: true, mark: value.slice(at).trim() === "" ? lede.mark : null });
   }
-  const trimmed = rest.replace(/^\s+/, "");
-  cut = Math.max(0, cut - (rest.length - trimmed.length));
-  return { value: prefix + trimmed, caret: prefix.length + cut };
+  if (at < value.length) spans.push({ text: value.slice(at), skill: false });
+  return spans;
 }

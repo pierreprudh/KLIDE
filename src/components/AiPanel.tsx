@@ -123,9 +123,10 @@ import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
-import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
+import { EXPLAIN_PREFIX, SLASH_DESC, SLASH_PROMPTS, currentModeText as modeText, filterSlashCommands, replaceSlashWord, skillSlashCommands, slashKeyAction, slashQueryAt, stepSlashIndex, type SlashCommand, type SlashQuery } from "./ai/slashCommands";
 import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory";
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
@@ -1493,14 +1494,15 @@ export function AiPanel({
       void send({ ...SLASH_PROMPTS.interview });
     } },
   ];
-  // The enabled Skills follow the built-ins. Accepting one leaves its prefix
-  // at the head of the composer and the cursor in the prose, the way /explain
-  // does — wherever in the draft the command was actually typed.
+  // The enabled Skills follow the built-ins. Accepting one leaves its command
+  // where it was typed, with the cursor after it — at the head of the draft
+  // that is a lede, mid-sentence it is the command as text, which is what the
+  // model is sent either way.
   const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
     const open = slash;
     const next = open === null
       ? { value: prefix, caret: prefix.length }
-      : hoistSkillCommand({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
+      : replaceSlashWord({ value: input, start: open.start, caret: open.start + 1 + open.query.length, prefix });
     setInput(next.value);
     setSlash(null);
     // The textarea holds the body, not the draft: a wired skill is a lede, so
@@ -1609,6 +1611,10 @@ export function AiPanel({
   const skillAppearances = useSkillAppearances();
   const ledes = useMemo(() => skillLedes(skills, skillAppearances), [skills, skillAppearances]);
   const { token: skillToken, body: draftBody } = splitSkillToken(input, ledes);
+  // A command inside the sentence is drawn by the layer behind the textarea;
+  // with none in the draft there is no layer and the textarea draws itself.
+  const bodySpans = useMemo(() => draftSpans(draftBody, ledes), [draftBody, ledes]);
+  const highlighted = bodySpans.some((s) => s.skill);
 
   function acceptMention(path: string) {
     const ta = taRef.current;
@@ -5191,6 +5197,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               onWidth={setLedeIndent}
             />
           )}
+          {highlighted && <ComposerHighlight textarea={taEl} spans={bodySpans} />}
           <textarea ref={(el) => { taRef.current = el; setTaEl(el); }} className="klide-composer-textarea" value={draftBody}
             onChange={(e) => handleComposerChange(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
             onKeyDown={(e) => {
@@ -5258,7 +5265,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
-            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: "var(--fg-strong)", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
+            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
           />
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>

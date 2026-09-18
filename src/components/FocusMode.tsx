@@ -66,7 +66,8 @@ import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
-import { hoistSkillCommand, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
+import { ComposerHighlight } from "./ai/ComposerHighlight";
 import { skillLedes, useSkillAppearances } from "../skillAppearance";
 import {
   EXPLAIN_PREFIX,
@@ -75,6 +76,7 @@ import {
   SLASH_PROMPTS,
   currentModeText,
   filterSlashCommands,
+  replaceSlashWord,
   slashKeyAction,
   slashQueryAt,
   stepSlashIndex,
@@ -1620,6 +1622,9 @@ function FocusComposer({
   const skillAppearances = useSkillAppearances();
   const ledes = useMemo(() => skillLedes(skills, skillAppearances), [skills, skillAppearances]);
   const { token: skillToken, body: draftBody } = splitSkillToken(draft, ledes);
+  // A command inside the sentence is drawn by the layer behind the textarea.
+  const bodySpans = useMemo(() => draftSpans(draftBody, ledes), [draftBody, ledes]);
+  const highlighted = bodySpans.some((s) => s.skill);
 
   function submit() {
     const text = draft.trim();
@@ -1728,13 +1733,12 @@ function FocusComposer({
       onSubmit(SLASH_PROMPTS.interview.text, [], { mode: SLASH_PROMPTS.interview.mode });
     } },
   ];
-  // A Skill accepted mid-sentence takes the head of the draft and leaves the
-  // prose standing — see `hoistSkillCommand`.
+  // A Skill lands where it was typed — see `replaceSlashWord`.
   const SKILL_COMMANDS = skillSlashCommands(skills, SLASH_COMMANDS, (prefix) => {
     const open = slash;
     const next = open === null
       ? { value: prefix, caret: prefix.length }
-      : hoistSkillCommand({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix, ledes });
+      : replaceSlashWord({ value: draft, start: open.start, caret: open.start + 1 + open.query.length, prefix });
     setSlash(null);
     setDraft(next.value);
     // The textarea holds the body; a wired skill is drawn as a lede, so the
@@ -1833,13 +1837,17 @@ function FocusComposer({
             onWidth={setLedeIndent}
           />
         )}
+        {highlighted && <ComposerHighlight textarea={taEl} spans={bodySpans} />}
         <textarea
           ref={(el) => { taRef.current = el; setTaEl(el); }}
           className="klide-composer-textarea"
           name="task-prompt"
           aria-label={placeholder}
           autoComplete="off"
-          style={skillToken ? { textIndent: ledeIndent } : undefined}
+          style={{
+            ...(skillToken ? { textIndent: ledeIndent } : null),
+            ...(highlighted ? { color: "transparent", caretColor: "var(--fg-strong)" } : null),
+          }}
           value={draftBody}
           onChange={(e) => changeDraft(joinSkillToken(skillToken, e.target.value), skillTokenCaret(skillToken, e.target.selectionStart ?? 0))}
           onFocus={() => setFocused(true)}
