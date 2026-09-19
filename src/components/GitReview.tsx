@@ -102,10 +102,14 @@ type OpenFile = { path: string; staged: boolean };
 
 // Sub-pane widths live in the parent state so the user can resize and
 // we keep both halves animated with the workbench resize transition.
-const LEFT_DEFAULT = 280;
-const RIGHT_DEFAULT = 460;
+// The history graph is the centre pane and takes whatever the two side
+// panes leave, so their defaults are what decides how much of it you see.
+// Both start narrow — a file list and a PR list are both narrow things —
+// and the graph keeps the rest until you drag a divider.
+const LEFT_DEFAULT = 260;
+const RIGHT_DEFAULT = 320;
 const LEFT_MIN = 220;
-const RIGHT_MIN = 280;
+const RIGHT_MIN = 260;
 const MAX_PANE = 720;
 const PANE_TRANSITION = "width var(--motion-med) var(--ease-soft)";
 const DIFF_RENDER_LIMIT = 1600;
@@ -1960,35 +1964,44 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         {/* Left: files */}
         <div style={{ width: leftWidth, transition: PANE_TRANSITION, display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--border)", position: "relative" }}>
-          <SectionHeader
-            title="Staged"
-            count={stagedFiles.length}
-            onAction={unstageAll}
-            actionLabel="Unstage all"
-            actionIcon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><path d="M5 12h14" /></svg>}
-          />
-          <div style={{ overflow: "auto", maxHeight: stagedFiles.length > 0 ? "40%" : 0, minHeight: 0 }}>
-            {stagedFiles.map((f) => (
-              <FileRow
-                key={`s-${f.path}`}
-                file={f}
-                active={open?.path === f.path && open?.staged === true}
-                loading={actionLoading !== null}
-                onOpen={(file) => setOpen({ path: file.path, staged: true })}
-                onStage={stageFile} onUnstage={unstageFile} onDiscard={discardFile}
+          {/* Staged only exists once something is staged. An empty section
+              header is a label for nothing, and its "Unstage all" action has
+              nothing to act on — so the clean tree shows neither. */}
+          {stagedFiles.length > 0 && (
+            <>
+              <SectionHeader
+                title="Staged"
+                count={stagedFiles.length}
+                onAction={unstageAll}
+                actionLabel="Unstage all"
+                actionIcon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><path d="M5 12h14" /></svg>}
               />
-            ))}
-          </div>
-          <SectionHeader
-            title="Changes"
-            count={changedFiles.length}
-            spaced
-            onAction={stageAll}
-            actionLabel="Stage all"
-            actionIcon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><path d="M12 5v14" /><path d="M5 12h14" /></svg>}
-          />
+              <div style={{ overflow: "auto", maxHeight: "40%", minHeight: 0 }}>
+                {stagedFiles.map((f) => (
+                  <FileRow
+                    key={`s-${f.path}`}
+                    file={f}
+                    active={open?.path === f.path && open?.staged === true}
+                    loading={actionLoading !== null}
+                    onOpen={(file) => setOpen({ path: file.path, staged: true })}
+                    onStage={stageFile} onUnstage={unstageFile} onDiscard={discardFile}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+          {hasWork && (
+            <SectionHeader
+              title="Changes"
+              count={changedFiles.length}
+              spaced={stagedFiles.length > 0}
+              onAction={stageAll}
+              actionLabel="Stage all"
+              actionIcon={<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden><path d="M12 5v14" /><path d="M5 12h14" /></svg>}
+            />
+          )}
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-            {changedFiles.length === 0 && stagedFiles.length === 0 ? (
+            {!hasWork ? (
               <div style={{ padding: "20px 14px", color: "var(--fg-subtle)", fontSize: 13, textAlign: "center" }}>
                 <div style={{ color: "var(--fg)", marginBottom: 4, fontWeight: 600 }}>Working tree clean</div>
                 <div>No changes to commit.</div>
