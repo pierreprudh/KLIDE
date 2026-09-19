@@ -3175,9 +3175,6 @@ button:focus-visible .menu-leadout {
   text-overflow: ellipsis;
 }
 
-.klide-quote::before { content: "\2014\00a0\00a0"; color: var(--fg-dim); }
-.klide-quote::after  { content: ""; }
-
 /* ── The visual palette (inline `html` / `svg` fences) ──────────────────────
    A drawing in a conversation has one job the app chrome doesn't: it must stay
    readable whichever theme it lands in, drawn by a model that cannot see the

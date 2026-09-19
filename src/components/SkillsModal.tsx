@@ -103,14 +103,6 @@ function TrashIcon() {
     </svg>
   );
 }
-function ChevronRight() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9 6l6 6-6 6" />
-    </svg>
-  );
-}
-
 function NavSkillsIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -496,9 +488,6 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
             </div>
             <NavRail navItems={navItems} tab={tab} onTabChange={(t) => { setTab(t); setDraft(null); }} />
             <div style={{ flex: 1 }} />
-            <div style={{ padding: "10px 14px 0", fontSize: 10.5, color: "var(--fg-dim)", lineHeight: 1.55, fontFamily: "var(--font-mono)" }}>
-              <span style={{ color: "var(--fg-subtle)" }}>⌘</span> S to save · <span style={{ color: "var(--fg-subtle)" }}>esc</span> to close
-            </div>
           </nav>
 
           {/* Main content area */}
@@ -765,13 +754,13 @@ function SkillDetail({
         </h1>
         <Toggle on={skill.enabled} onClick={onToggle} label={`${skill.enabled ? "Disable" : "Enable"} ${skill.name}`} />
         <div style={{ width: 1, height: 18, background: "var(--border)" }} />
-        <button onClick={onEdit} aria-label="Edit skill" title="Edit skill" className="klide-button klide-button-ghost" style={{ minHeight: 30, padding: "0 8px", color: "var(--fg-subtle)" }}
+        <button onClick={onEdit} aria-label="Edit skill" title="Edit skill" className="klide-button klide-button-subtle" style={{ minHeight: 30, padding: "0 8px", color: "var(--fg-subtle)" }}
           onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
           <PencilIcon />
         </button>
         {!skill.builtin && (
-          <button onClick={onDelete} aria-label="Delete skill" title="Delete skill" className="klide-button klide-button-ghost" style={{ minHeight: 30, padding: "0 8px", color: "var(--fg-subtle)" }}
+          <button onClick={onDelete} aria-label="Delete skill" title="Delete skill" className="klide-button klide-button-subtle" style={{ minHeight: 30, padding: "0 8px", color: "var(--fg-subtle)" }}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--danger)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}>
             <TrashIcon />
@@ -780,14 +769,11 @@ function SkillDetail({
       </div>
 
       {/* Meta strip */}
-      <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", fontSize: 12, color: "var(--fg-subtle)" }}>
+      <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", rowGap: 6, columnGap: 22, alignItems: "center", fontSize: 12, color: "var(--fg-subtle)" }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>{skill.builtin ? "built-in" : skill.fromFile ? "from file" : "custom"}</span>
-        <Dot />
         <span>Updated {editedDate(skill.updatedAt)}</span>
-        <Dot />
         <span>{skill.tools.length} of {tools.length} tools allowed</span>
         {skill.fromFile && (<>
-          <Dot />
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }} title={skill.fromFile}>
             {shortenPath(skill.fromFile)}
           </span>
@@ -796,7 +782,7 @@ function SkillDetail({
 
       {/* Quote */}
       {skill.description && (
-        <blockquote className="klide-quote" style={{ marginTop: 22 }}>
+        <blockquote className="klide-quote" style={{ marginTop: 20, fontSize: 13 }}>
           {skill.description}
         </blockquote>
       )}
@@ -808,12 +794,9 @@ function SkillDetail({
       {skill.tools.length > 0 && (
         <section style={{ marginTop: 28 }}>
           <SectionLabel>Allowed tools</SectionLabel>
-          <div style={{ marginTop: 10, fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--fg)", lineHeight: 1.9 }}>
-            {skill.tools.map((id, i) => (
-              <span key={id} style={{ whiteSpace: "nowrap" }}>
-                {i > 0 && <span style={{ color: "var(--fg-dim)", whiteSpace: "normal" }}>{" · "}</span>}
-                {id}
-              </span>
+          <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", rowGap: 8, columnGap: 22, fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--fg)" }}>
+            {skill.tools.map((id) => (
+              <span key={id} style={{ whiteSpace: "nowrap" }}>{id}</span>
             ))}
           </div>
         </section>
@@ -834,8 +817,7 @@ function SkillDetail({
             <span style={{ textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--fg-subtle)" }}>SKILL.md</span>
             <span style={{ flex: 1 }} />
             <span style={{ color: "var(--fg-dim)" }}>{lineCount} {lineCount === 1 ? "line" : "lines"}</span>
-            <span style={{ color: "var(--fg-dim)" }}>·</span>
-            <span style={{ color: "var(--fg-dim)" }}>{charCount} chars</span>
+            <span style={{ color: "var(--fg-dim)", marginLeft: 20 }}>{charCount} chars</span>
           </div>
           <div style={{ padding: "22px 26px" }}>
             {instr === "" ? (
@@ -982,15 +964,10 @@ export function SkillLedeSection({ skill }: { skill: Skill }) {
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <span style={{ ...labelStyle, marginBottom: 0, display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <span style={{ ...labelStyle, fontSize: 12.5, letterSpacing: "0.1em", color: "var(--fg)", marginBottom: 0, display: "inline-flex", alignItems: "center" }}>
       {children}
-      <ChevronRight />
     </span>
   );
-}
-
-function Dot() {
-  return <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--fg-dim)", display: "inline-block" }} />;
 }
 
 // Shortens a user's home path to "~" for display. The webview has no
