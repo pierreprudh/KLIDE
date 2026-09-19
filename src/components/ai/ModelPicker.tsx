@@ -163,6 +163,10 @@ export function ModelPicker({
   const menuRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // Set on open, consumed by the focused-row effect: the first paint scrolls
+  // the list to the top (where the favorites live) instead of chasing the
+  // active model down the list.
+  const openAtTopRef = useRef(false);
 
   // Per-model metadata (context window / tool support / price) for the
   // badges. Fetched once per provider; the Rust side caches the underlying
@@ -283,8 +287,11 @@ export function ModelPicker({
       return;
     }
     const t = window.setTimeout(() => filterRef.current?.focus(), 60);
-    const idx = allOptions.indexOf(model);
+    // Index in the *displayed* order — which pins favorites to the top — not
+    // in the provider's raw order, or the cursor lands on an unrelated row.
+    const idx = filtered.indexOf(model);
     setFocusIdx(idx >= 0 ? idx : 0);
+    openAtTopRef.current = true;
     return () => window.clearTimeout(t);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -327,9 +334,16 @@ export function ModelPicker({
     return () => document.removeEventListener("keydown", onKey);
   }, [open, filtered, focusIdx, onChange]);
 
-  // Keep the focused row in view when arrow-keying through a long list.
+  // Keep the focused row in view when arrow-keying through a long list — but
+  // not on the first paint after opening: the menu opens at the top of the
+  // list, on the favorites, however deep the active model sits.
   useEffect(() => {
     if (!open) return;
+    if (openAtTopRef.current) {
+      openAtTopRef.current = false;
+      if (listRef.current) listRef.current.scrollTop = 0;
+      return;
+    }
     const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${focusIdx}"]`);
     el?.scrollIntoView({ block: "nearest" });
   }, [focusIdx, open]);
