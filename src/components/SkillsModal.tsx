@@ -415,7 +415,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
       aria-modal="true"
       aria-label="Skills"
       onClick={onClose}
-      className="skills-tab-in"
+      className="klide-modal-scrim"
       style={{
         position: "fixed", inset: 0, zIndex: Z.modal,
         display: "grid", placeItems: "center",
@@ -423,164 +423,174 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
         backdropFilter: "blur(3px)",
       }}
     >
+      {/* The wrapper is what rises: the panel under it keeps its blur unanimated. */}
       <div
-        className="floating-panel"
-        onClick={(e) => e.stopPropagation()}
+        className="klide-modal-panel"
         style={{
           width: "min(1080px, calc(100vw - 80px))",
           height: "min(700px, calc(100vh - 80px))",
-          borderRadius: "var(--radius-lg)",
           display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
         }}
       >
-        {/* Top hero strip — title, subtitle, status counts, close */}
-        <header
+        <div
+          className="floating-panel"
+          onClick={(e) => e.stopPropagation()}
           style={{
-            flexShrink: 0,
-            height: 64,
-            padding: "0 18px 0 24px",
+            flex: 1,
+            minWidth: 0,
+            borderRadius: "var(--radius-lg)",
             display: "flex",
-            alignItems: "center",
-            gap: 18,
-            borderBottom: "1px solid var(--border)",
+            flexDirection: "column",
+            overflow: "hidden",
           }}
         >
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.012em" }}>
-              Skills
-            </div>
-            <div style={{ fontSize: 11.5, color: "var(--fg-subtle)", marginTop: 2, fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}>
-              {enabledCount} of {skills.length} enabled · {filesystemCount} from disk
-            </div>
-          </div>
-          <div style={{ flex: 1 }} />
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="klide-button klide-button-ghost"
-            style={{ minHeight: 30, padding: "0 10px" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
-          >
-            <CloseIcon />
-          </button>
-        </header>
-
-        {/* Body — left rail + main content */}
-        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-          {/* Vertical nav rail */}
-          <nav
-            aria-label="Sections"
+          {/* Top hero strip — title, subtitle, status counts, close */}
+          <header
             style={{
-              width: 200,
               flexShrink: 0,
-              borderRight: "1px solid var(--border)",
-              padding: "10px 0 14px",
+              height: 64,
+              padding: "0 18px 0 24px",
               display: "flex",
-              flexDirection: "column",
-              background: "color-mix(in srgb, var(--bg) 88%, var(--bg-elevated))",
+              alignItems: "center",
+              gap: 18,
+              borderBottom: "1px solid var(--border)",
             }}
           >
-            <div style={{ padding: "0 14px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
-              Sections
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.012em" }}>
+                Skills
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--fg-subtle)", marginTop: 2, fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}>
+                {enabledCount} of {skills.length} enabled · {filesystemCount} from disk
+              </div>
             </div>
-            <NavRail navItems={navItems} tab={tab} onTabChange={(t) => { setTab(t); setDraft(null); }} />
             <div style={{ flex: 1 }} />
-          </nav>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="klide-button klide-button-ghost"
+              style={{ minHeight: 30, padding: "0 10px" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--fg-strong)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-subtle)"; }}
+            >
+              <CloseIcon />
+            </button>
+          </header>
 
-          {/* Main content area */}
-          <main style={{ flex: 1, minWidth: 0, display: "flex" }} className="skills-tab-in" key={tab}>
-            {tab === "skills" ? (
-              <SkillsPane
-                skills={skills}
-                filtered={filtered}
-                selected={selected}
-                draft={draft}
-                query={query}
-                setQuery={setQuery}
-                searchOpen={query.length > 0}
-                onSelect={(id) => { setSelectedId(id); setDraft(null); setRawView(false); }}
-                onCreate={startCreate}
-                onToggleEnabled={toggleEnabled}
-                onEdit={startEdit}
-                onDelete={deleteSkill}
-                onSaveDraft={saveDraft}
-                onCancelDraft={() => setDraft(null)}
-                setDraft={setDraft}
-                rawView={rawView}
-                setRawView={setRawView}
-                tools={tools}
-              />
-            ) : tab === "install" ? (
-              <InstallView
-                skills={skills}
-                pkg={installPkg}
-                setPkg={setInstallPkg}
-                busy={installBusy}
-                error={installError}
-                ok={installOk}
-                onInstall={async () => {
-                  const trimmed = installPkg.trim();
-                  if (!trimmed || installBusy) return;
-                  // Pre-validate the format so a typo fails instantly with a
-                  // clear message instead of a cryptic shell error 20s later.
-                  const formatError = validateSkillPackage(trimmed);
-                  if (formatError) {
-                    setInstallError(formatError);
-                    return;
-                  }
-                  setInstallBusy(true);
-                  setInstallError(null);
-                  setInstallOk(null);
-                  try {
-                    const r = await installSkill(trimmed);
-                    if (!r.ok) {
-                      const msg = interpretInstallError(r.stderr || r.stdout || `Exit ${r.exitCode ?? "?"}`);
+          {/* Body — left rail + main content */}
+          <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+            {/* Vertical nav rail */}
+            <nav
+              aria-label="Sections"
+              style={{
+                width: 200,
+                flexShrink: 0,
+                borderRight: "1px solid var(--border)",
+                padding: "10px 0 14px",
+                display: "flex",
+                flexDirection: "column",
+                background: "color-mix(in srgb, var(--bg) 88%, var(--bg-elevated))",
+              }}
+            >
+              <div style={{ padding: "0 14px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
+                Sections
+              </div>
+              <NavRail navItems={navItems} tab={tab} onTabChange={(t) => { setTab(t); setDraft(null); }} />
+              <div style={{ flex: 1 }} />
+            </nav>
+
+            {/* Main content area */}
+            <main style={{ flex: 1, minWidth: 0, display: "flex" }} className="skills-tab-in" key={tab}>
+              {tab === "skills" ? (
+                <SkillsPane
+                  skills={skills}
+                  filtered={filtered}
+                  selected={selected}
+                  draft={draft}
+                  query={query}
+                  setQuery={setQuery}
+                  searchOpen={query.length > 0}
+                  onSelect={(id) => { setSelectedId(id); setDraft(null); setRawView(false); }}
+                  onCreate={startCreate}
+                  onToggleEnabled={toggleEnabled}
+                  onEdit={startEdit}
+                  onDelete={deleteSkill}
+                  onSaveDraft={saveDraft}
+                  onCancelDraft={() => setDraft(null)}
+                  setDraft={setDraft}
+                  rawView={rawView}
+                  setRawView={setRawView}
+                  tools={tools}
+                />
+              ) : tab === "install" ? (
+                <InstallView
+                  skills={skills}
+                  pkg={installPkg}
+                  setPkg={setInstallPkg}
+                  busy={installBusy}
+                  error={installError}
+                  ok={installOk}
+                  onInstall={async () => {
+                    const trimmed = installPkg.trim();
+                    if (!trimmed || installBusy) return;
+                    // Pre-validate the format so a typo fails instantly with a
+                    // clear message instead of a cryptic shell error 20s later.
+                    const formatError = validateSkillPackage(trimmed);
+                    if (formatError) {
+                      setInstallError(formatError);
+                      return;
+                    }
+                    setInstallBusy(true);
+                    setInstallError(null);
+                    setInstallOk(null);
+                    try {
+                      const r = await installSkill(trimmed);
+                      if (!r.ok) {
+                        const msg = interpretInstallError(r.stderr || r.stdout || `Exit ${r.exitCode ?? "?"}`);
+                        setInstallError(msg);
+                        notify(`Couldn't install ${trimmed}: ${msg}`, { tone: "error" });
+                      } else {
+                        setInstallOk(r.stdout.trim() || "Installed.");
+                        setInstallPkg("");
+                        await onReloadFilesystemSkills();
+                        notify(`Installed ${trimmed}`, { tone: "success" });
+                      }
+                    } catch (e) {
+                      const msg = interpretInstallError(String(e));
                       setInstallError(msg);
                       notify(`Couldn't install ${trimmed}: ${msg}`, { tone: "error" });
-                    } else {
-                      setInstallOk(r.stdout.trim() || "Installed.");
-                      setInstallPkg("");
-                      await onReloadFilesystemSkills();
-                      notify(`Installed ${trimmed}`, { tone: "success" });
+                    } finally {
+                      setInstallBusy(false);
                     }
-                  } catch (e) {
-                    const msg = interpretInstallError(String(e));
-                    setInstallError(msg);
-                    notify(`Couldn't install ${trimmed}: ${msg}`, { tone: "error" });
-                  } finally {
-                    setInstallBusy(false);
-                  }
-                }}
-                onUninstall={async (name: string) => {
-                  if (!window.confirm(`Uninstall "${name}"? This removes ~/.claude/skills/${name}.`)) return;
-                  setInstallBusy(true);
-                  setInstallError(null);
-                  setInstallOk(null);
-                  try {
-                    const r = await uninstallSkill(name);
-                    if (!r.ok) {
-                      const msg = interpretInstallError(r.stderr || r.stdout || "Uninstall failed.");
-                      setInstallError(msg);
-                      notify(`Couldn't uninstall ${name}: ${msg}`, { tone: "error" });
-                    } else {
-                      setInstallOk(r.stdout.trim() || "Uninstalled.");
-                      await onReloadFilesystemSkills();
-                      notify(`Uninstalled ${name}`, { tone: "success" });
+                  }}
+                  onUninstall={async (name: string) => {
+                    if (!window.confirm(`Uninstall "${name}"? This removes ~/.claude/skills/${name}.`)) return;
+                    setInstallBusy(true);
+                    setInstallError(null);
+                    setInstallOk(null);
+                    try {
+                      const r = await uninstallSkill(name);
+                      if (!r.ok) {
+                        const msg = interpretInstallError(r.stderr || r.stdout || "Uninstall failed.");
+                        setInstallError(msg);
+                        notify(`Couldn't uninstall ${name}: ${msg}`, { tone: "error" });
+                      } else {
+                        setInstallOk(r.stdout.trim() || "Uninstalled.");
+                        await onReloadFilesystemSkills();
+                        notify(`Uninstalled ${name}`, { tone: "success" });
+                      }
+                    } catch (e) {
+                      setInstallError(String(e));
+                    } finally {
+                      setInstallBusy(false);
                     }
-                  } catch (e) {
-                    setInstallError(String(e));
-                  } finally {
-                    setInstallBusy(false);
-                  }
-                }}
-              />
-            ) : (
-              <ToolsView skills={skills} selectedTool={selectedTool} setSelectedTool={setSelectedTool} tools={tools} connectors={connectors} />
-            )}
-          </main>
+                  }}
+                />
+              ) : (
+                <ToolsView skills={skills} selectedTool={selectedTool} setSelectedTool={setSelectedTool} tools={tools} connectors={connectors} />
+              )}
+            </main>
+          </div>
         </div>
       </div>
     </div>

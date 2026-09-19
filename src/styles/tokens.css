@@ -3387,6 +3387,36 @@ button:focus-visible .menu-leadout {
   letter-spacing: 0.04em;
 }
 
+/* Modal entrance, in two parts. The scrim carries the fade; the panel rises
+   under it. They are split because the panel is a .floating-panel — a
+   backdrop-filter surface — and fading one of those directly makes the webview
+   re-rasterise its blur every frame. So the wrapper moves and fades, and the
+   blurred surface itself is never the animated box. */
+@keyframes klide-modal-scrim-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes klide-modal-panel-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.988); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.klide-modal-scrim {
+  animation: klide-modal-scrim-in var(--motion-med) var(--ease-out) backwards;
+}
+
+.klide-modal-panel {
+  animation: klide-modal-panel-in var(--motion-slow) var(--ease-soft) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-modal-scrim,
+  .klide-modal-panel {
+    animation: none;
+  }
+}
+
 /* Modal tab transition — gentle cross-fade for content swap. */
 @keyframes skills-tab-in {
   from { opacity: 0; transform: translateY(2px); }
