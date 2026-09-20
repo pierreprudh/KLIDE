@@ -37,7 +37,19 @@ them.
   frontend coverage but no live in-app pass.
 - [ ] Dogfood the full Tauri race path: dispatch, permission pause, restart,
   evidence comparison, winner merge, and explicit worktree cleanup.
-- [ ] Publish the first signed/notarized macOS bundle.
+- [x] Decide the distribution channel: GitHub Releases only, ad-hoc signed
+  (2026-09-20). Notarization is deferred, not cancelled — the channel does not
+  change what Gatekeeper does, since the quarantine flag comes from the
+  download itself, so an ad-hoc bundle is still blocked on a machine that is
+  not the build machine. The answer while the audience is small is to document
+  the way past it (System Settings › Privacy & Security › Open Anyway, or
+  `xattr -dr com.apple.quarantine`), which the README and the release notes now
+  do.
+- [ ] Notarize the macOS bundle when Klide is handed to someone who should not
+  have to read install instructions. Needs an Apple Developer Program
+  membership and a Developer ID Application certificate, then `notarytool
+  submit` + `stapler staple` in the bundle step. Until then every release that
+  ships a bundle repeats the Open Anyway note.
 - [ ] Validate Windows and Linux. Both known compile blockers are cleared: the
   delegate PTY layer builds off unix (2026-08-04 — wire types in ungated
   `pty_wire.rs`, `pty_client` stubs "no daemon here"), and the keyring backend
