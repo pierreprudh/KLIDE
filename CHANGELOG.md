@@ -2,48 +2,24 @@
 
 Notable changes per milestone. Dates are completion dates.
 
-## Unreleased
+## v0.6.4 — Workers, Connectors, Visuals (2026-09-20)
 
-### Fixes
+Three things the v0.6 line gained after the 0.6.3 cut. A Harness Run can hand
+a task to another CLI agent as a worker — a gated dispatch, an isolated
+worktree, a Run of its own — instead of shelling out to `claude -p`. Klide
+connects to the MCP servers you already configured elsewhere. And an answer
+can draw: an `html` or `svg` fence renders as a picture in the conversation,
+themed and sanitized, with a page getting a document of its own.
 
-- **Full auto reaches the Run that is asking.** The rung was read once, when
-  a Run started: flipping to full auto while a conversation's Run worked left
-  it asking for every command, and a message queued behind a live turn even
-  carried the rung as it stood when the queue began. The flip now tells the
-  live Run — later commands skip the gate, a command card up at that moment is
-  answered, with the transcript recording that the policy answered rather
-  than the user — and a queued turn reads the rung at send. A dispatch card, a
-  network target or a peer's message is never swept up; stepping back down
-  makes the Run ask again.
-- **Goal runs on a direct Anthropic key work again.** The `mission_orchestrate`
-  tool's input schema carried a top-level `oneOf`, which Anthropic's API
-  refuses — and one refused tool fails the whole request, so every Goal turn
-  on Anthropic died with a 400 before the model saw a word. Found by the first
-  Anthropic worker dispatch. The per-action shape now lives in the field
-  descriptions and in the request parser, where it was enforced anyway.
-- **An Anthropic reply cut off at the output cap says so.** The cap was 4096
-  tokens, the API's example value; a worker writing a test file hit it in the
-  middle of its `write_file` JSON, the call never closed, and it vanished —
-  the run ended "done" with nothing. Klide no longer caps the reply below the
-  model: it asks for the largest budget any Claude model accepts and, when a
-  model states a lower limit in its refusal, asks once more at exactly that.
-  A call still cut off by `max_tokens` is dropped out loud: the reply says
-  which call, at how many tokens, and to work in smaller pieces.
-- **An API worker runs its commands without asking.** A headless child has
-  no card to show, so the first `run_command` it reached parked it — and its
-  parent — for good. The dispatch card the operator approves now says
-  "commands run without asking", and the child runs that way, as a Delegate
-  CLI does with its own policy. A plain subagent on the parent's model is
-  unchanged and never runs commands unasked.
-- **A capped Anthropic reply with nothing readable says so.** 16k tokens into
-  a block the adapter does not parse ended a worker "done" with an empty
-  message; the reply now says the budget was spent with nothing usable, and
-  the unread block type is logged.
-- **A worker that never spoke reports why.** A child run that ended on an
-  error came back to the parent as "(subagent produced no output)"; it now
-  comes back as the error itself, so Kit reacts to the cause.
-- **The live "Delegated to" row shows the worker the card decided.** The
-  dispatch event reaches the live fold, not only the reload.
+Around them, an interface pass: a skill typed into the chatbox reads as a
+skill, the Settings controls say their own value, a conversation row folds its
+actions behind one mark, and the context gauge finally measures the window the
+turn actually ran in.
+
+The v0.6 orchestration milestone is unchanged: Missions as outcomes, budgets,
+capacity, capability routing and validation contracts are still open. The macOS
+bundle is still ad-hoc signed rather than Apple-notarized. This is a patch cut
+on the v0.6 line, not that milestone.
 
 ### Workers (a subagent that is another CLI agent)
 
@@ -120,6 +96,168 @@ Notable changes per milestone. Dates are completion dates.
   answer on a Run's behalf, and a wait pinned to the sent Envelope accepts that
   answer. Enforcement happens before an event is appended, so historical
   journals keep their existing replay rules. (PR #101, 2026-09-13.)
+
+### Visuals (a drawing the answer makes)
+
+- **An `html` or `svg` fence renders as a picture in the conversation.** A
+  model that wants to show a shape, a flow or a comparison writes it in an
+  `html`, `svg` or `visualizer` fence and the block draws it in place, with the
+  source one click away; a bare `<svg>` written without a fence is drawn too.
+  The renderer is the trust boundary: an allowlist keeps the layout/SVG
+  vocabulary and drops script, iframe, form and media whole, along with every
+  `on*` handler and every URL that is not a `#` fragment, an inline image or a
+  plain web link. A drawing's `<style>` is lifted out and re-anchored under the
+  block's own scope class, ids suffixed to match, so two figures can both
+  define `#arrow`. Colour is the other half: the block carries its own palette
+  (`.klide-viz`) — Klide neutrals plus a modelled chroma — and everything the
+  model writes is mapped onto it, so one drawing stays readable in all seven
+  themes. Every pairing clears its WCAG bar on both grounds.
+- **A model that writes a page gets a document, not a column.** A page is a
+  page because its source said so — a doctype, an `<html>`/`<body>` wrapper, a
+  `:root`/`body` rule — never inferred from shape, so existing diagrams render
+  exactly as before. A page gets a frame, its own gutters back (defaults are
+  class-level, so an authored `body { … }` wins), `vw` resolved as `cqw`
+  because the block *is* the width the author meant, and a `height: 100vh`
+  dropped: a visual has no screen and no fold.
+- **The Focus canvas shows figures as an island.** Each drawing is a framed
+  card inside the island's gutters, running the island's full width and scaled
+  to the drawing's painted extent rather than its layout box, so nothing is
+  cropped. Opening the fullscreen viewer is one motion from the card — ground,
+  drawing, toolbar — and a card opened by pointer does not keep the highlight
+  once the viewer closes. The drawing stays in the chat; the column shows it
+  again only on a roomy canvas.
+
+### The composer and skills
+
+- **A skill typed into the chatbox reads as itself.** `/visualise draw the run
+  loop` still goes out verbatim — the system prompt already names each enabled
+  skill's command. What changes is what you see while typing: the command is
+  drawn as the skill's name in the accent with its mark, and the textarea holds
+  only the text after it, its first line indented by the lede's measured width
+  so the caret sits after the mark and prose wraps underneath. There is no
+  second state to keep — the draft is split and rejoined on every keystroke, and
+  the lede reads the textarea's own padding and type size, which is how one
+  component sits on the baseline in two composers with two geometries. A token
+  appears only once a space closes the command, and only for a skill that is
+  installed and enabled, because a lede for a skill the run would not follow
+  promises what the send cannot keep. Backspace at the head of the line removes
+  the skill and keeps the text.
+- **A slash mid-sentence opens the menu; a path never does.** The `/` listbox
+  is no longer tied to the head of the draft, and `src/main.tsx` is left alone.
+  An enabled skill answers to `/` in both composers and leads the list;
+  accepting one leaves its `/command` in the composer and the prompt names it.
+- **The add menu can ask for a document.** Pick a document type and the turn
+  asks the run for that file.
+- **The Skills panel reads as headings and spacing.** Each skill reads as
+  itself — the mark is the option — a selected row is a highlight rather than a
+  colour, a skill's lede is chosen in the panel instead of hard-coded, and the
+  panel opens rather than appearing.
+
+### Delegate CLIs
+
+- **A delegate CLI says which version it is, and updates itself when asked.**
+  Klide launched claude / codex / opencode / omp from the login-shell PATH and
+  never looked at which version it got. That bit: a PATH Codex at 0.147.0 while
+  the ChatGPT app had shipped 0.153.4, and the run died as `400: The
+  'gpt-6-astra' model requires a newer version of Codex` — a provider error with
+  nothing in Klide to explain it. The version now sits on the Settings row that
+  already says the CLI is installed, with the CLI's own updater beside it,
+  running in a real PTY whose output streams into the row as it arrives. Two
+  deliberate limits: Klide never updates in the background, because an update
+  mid-fleet changes what every live delegate session is running, and Klide never
+  invents an updater — an install Klide did not perform is not one it may
+  replace. The per-CLI knowledge stays behind the Delegate seam (`version_args`,
+  `update_args`, `parse_version`).
+- **A worker's worktree can run the tests.** The worktree recipe shares
+  `node_modules` and copies `.env` into every worker's checkout; without it a
+  tester could write tests it had no way to run.
+
+### Harness
+
+- **The context gauge measures the window the turn ran in.** It divided usage
+  by the model's trained window (128k for llama3.1) while Rust sized the real
+  Ollama request at a flat 32k that grows with the conversation — a 30k
+  conversation read as 23% full when its window was nearly spent. The Ollama
+  adapter now stamps the `num_ctx` it sent onto the final frame's usage, and
+  one rule module owns the denominator: the reported window after a turn, else
+  the expected working window, with hosted providers keeping the detected one.
+  The "Context window" picker is Ollama's alone, since only Ollama has a
+  request field for it, and its caps derive from the trained window — no 128K
+  offered for an 8k model. The request ceiling and the compaction bound read
+  the same value.
+- **Approved Mission orchestration is reachable from both doors.** Harness Runs
+  and MCP agents can drive an approved Mission, not just the board.
+
+### Interface
+
+- **Settings controls say their own value.** A segmented row reads as its value
+  until you reach for it, a slider shows how far along it is, and the sidebar
+  runs to the window's top edge.
+- **A conversation row folds its actions behind one mark.** Pin, inspect and
+  delete live behind a single `⋯`; a row can open in Mission Control instead of
+  a panel; the Run selected in Mission Control lights its conversation row; and
+  the row you click lights up at once rather than when the panel catches up. An
+  OpenCode row wears the model that answered it, and a worker on its default
+  model wears its maker's mark rather than the product mark twice.
+- **Git Review gives the graph the room.** The side panes are fixed and the
+  history graph took what they left, which at a 1177px window was 264px — less
+  than its own cells need, so the header read `COMMITDESCRIPTION DATE` and the
+  date clipped mid-year. Files start at 260 and pull requests at 320, leaving
+  the graph a real description column. And Staged is a section only once
+  something is staged: the header no longer stays behind on a clean tree
+  labelling an empty list with an *Unstage all* that has nothing to unstage.
+- **The model picker opens on the favorites, not mid-list.**
+- **Focus shows who is in the conversation.** Agent participants with metrics
+  scoped per participant, the Git island's header setting two facts apart by
+  space rather than a dot, and opening a conversation from the rail dismissing
+  the overlay over it.
+- **A turn that cannot stream still looks alive.** A Delegate turn that will
+  not stream wears the loader, and a turn killed with the app says so.
+
+### Fixes
+
+- **Full auto reaches the Run that is asking.** The rung was read once, when
+  a Run started: flipping to full auto while a conversation's Run worked left
+  it asking for every command, and a message queued behind a live turn even
+  carried the rung as it stood when the queue began. The flip now tells the
+  live Run — later commands skip the gate, a command card up at that moment is
+  answered, with the transcript recording that the policy answered rather
+  than the user — and a queued turn reads the rung at send. A dispatch card, a
+  network target or a peer's message is never swept up; stepping back down
+  makes the Run ask again.
+- **Goal runs on a direct Anthropic key work again.** The `mission_orchestrate`
+  tool's input schema carried a top-level `oneOf`, which Anthropic's API
+  refuses — and one refused tool fails the whole request, so every Goal turn
+  on Anthropic died with a 400 before the model saw a word. Found by the first
+  Anthropic worker dispatch. The per-action shape now lives in the field
+  descriptions and in the request parser, where it was enforced anyway.
+- **An Anthropic reply cut off at the output cap says so.** The cap was 4096
+  tokens, the API's example value; a worker writing a test file hit it in the
+  middle of its `write_file` JSON, the call never closed, and it vanished —
+  the run ended "done" with nothing. Klide no longer caps the reply below the
+  model: it asks for the largest budget any Claude model accepts and, when a
+  model states a lower limit in its refusal, asks once more at exactly that.
+  A call still cut off by `max_tokens` is dropped out loud: the reply says
+  which call, at how many tokens, and to work in smaller pieces.
+- **An API worker runs its commands without asking.** A headless child has
+  no card to show, so the first `run_command` it reached parked it — and its
+  parent — for good. The dispatch card the operator approves now says
+  "commands run without asking", and the child runs that way, as a Delegate
+  CLI does with its own policy. A plain subagent on the parent's model is
+  unchanged and never runs commands unasked.
+- **A capped Anthropic reply with nothing readable says so.** 16k tokens into
+  a block the adapter does not parse ended a worker "done" with an empty
+  message; the reply now says the budget was spent with nothing usable, and
+  the unread block type is logged.
+- **A worker that never spoke reports why.** A child run that ended on an
+  error came back to the parent as "(subagent produced no output)"; it now
+  comes back as the error itself, so Kit reacts to the cause.
+- **The live "Delegated to" row shows the worker the card decided.** The
+  dispatch event reaches the live fold, not only the reload.
+- **A reload mid-generation no longer loses the run's answer.** Observed tool
+  rows are never persisted, so replay adoption weighs the text a run produced
+  rather than the rows around it.
+- **TLS handshakes take the rustls 0.23.45 fix.**
 
 ## v0.6.3 — Coordination and Documents (2026-09-12)
 
