@@ -447,8 +447,8 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
           <header
             style={{
               flexShrink: 0,
-              height: 64,
-              padding: "0 18px 0 24px",
+              height: 50,
+              padding: "0 12px 0 16px",
               display: "flex",
               alignItems: "center",
               gap: 18,
