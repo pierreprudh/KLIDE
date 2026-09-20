@@ -3464,6 +3464,20 @@ button:focus-visible .menu-leadout {
   opacity: 0.92;
 }
 
+/* Provenance + tool count are reference, not identity: the row keeps their
+   line so nothing shifts, and the words fade in when you are on the row
+   (hovered, focused, or selected). */
+.klide-skill-meta {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.klide-skill-row:hover .klide-skill-meta,
+.klide-skill-row:focus-visible .klide-skill-meta,
+.klide-skill-row[data-active="true"] .klide-skill-meta {
+  opacity: 1;
+}
+
 /* Tool grid card — used in the skill form and detail view to pick /
    display the tools a skill can use. Sits between .klide-button-ghost
    and the inline toggle. */
@@ -3531,6 +3545,7 @@ button:focus-visible .menu-leadout {
 @media (prefers-reduced-motion: reduce) {
   .klide-nav-rail-item,
   .klide-skill-row,
+  .klide-skill-meta,
   .klide-tool-card,
   .skills-tab-in {
     animation: none;

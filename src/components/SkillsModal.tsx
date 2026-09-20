@@ -690,7 +690,7 @@ function SkillsPane({
                     {s.description}
                   </div>
                 )}
-                <div style={{ marginTop: 7, display: "flex", alignItems: "center", gap: 8 }}>
+                <div className="klide-skill-meta" style={{ marginTop: 7, display: "flex", alignItems: "center", gap: 8 }}>
                   {s.fromFile && (
                     <span style={{ fontSize: 10, color: "var(--fg-dim)", fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}>
                       {groupBadge(s)}
