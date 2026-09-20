@@ -370,7 +370,6 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
     return ordered.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
   }, [skills, query]);
 
-  const enabledCount = skills.filter((s) => s.enabled).length;
   const filesystemCount = skills.filter((s) => !!s.fromFile).length;
 
   if (!open) return null;
@@ -444,7 +443,7 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
             overflow: "hidden",
           }}
         >
-          {/* Top hero strip — title, subtitle, status counts, close */}
+          {/* Top hero strip — the title and the way out, nothing else */}
           <header
             style={{
               flexShrink: 0,
@@ -456,13 +455,10 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
               borderBottom: "1px solid var(--border)",
             }}
           >
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.012em" }}>
-                Skills
-              </div>
-              <div style={{ fontSize: 11.5, color: "var(--fg-subtle)", marginTop: 2, fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}>
-                {enabledCount} of {skills.length} enabled · {filesystemCount} from disk
-              </div>
+            {/* The dialog is already named "Skills" for a screen reader, and the
+                detail page owns the h1 — this is the printed name, not a heading. */}
+            <div aria-hidden="true" style={{ minWidth: 0, fontSize: 20, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.018em" }}>
+              Skills
             </div>
             <div style={{ flex: 1 }} />
             <button
@@ -486,15 +482,12 @@ export function SkillsModal({ open, skills, onChange, onReloadFilesystemSkills, 
                 width: 200,
                 flexShrink: 0,
                 borderRight: "1px solid var(--border)",
-                padding: "10px 0 14px",
+                padding: "12px 0 14px",
                 display: "flex",
                 flexDirection: "column",
                 background: "color-mix(in srgb, var(--bg) 88%, var(--bg-elevated))",
               }}
             >
-              <div style={{ padding: "0 14px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
-                Sections
-              </div>
               <NavRail navItems={navItems} tab={tab} onTabChange={(t) => { setTab(t); setDraft(null); }} />
               <div style={{ flex: 1 }} />
             </nav>
