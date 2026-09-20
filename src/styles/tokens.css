@@ -3465,17 +3465,33 @@ button:focus-visible .menu-leadout {
 }
 
 /* Provenance + tool count are reference, not identity: the row keeps their
-   line so nothing shifts, and the words fade in when you are on the row
-   (hovered, focused, or selected). */
+   line so nothing shifts, and the words ease in when you are on the row
+   (hovered, focused, or selected). They settle up by a pixel rather than
+   blinking on, and a short delay keeps a cursor swept down the list from
+   strobing every row it crosses. Leaving is quicker and undelayed, so the
+   list quietens the moment you go. */
 .klide-skill-meta {
   opacity: 0;
-  transition: opacity var(--motion-fast) var(--ease-out);
+  transform: translateY(2px);
+  transition:
+    opacity var(--motion-med) var(--ease-soft),
+    transform var(--motion-med) var(--ease-soft);
 }
 
 .klide-skill-row:hover .klide-skill-meta,
 .klide-skill-row:focus-visible .klide-skill-meta,
 .klide-skill-row[data-active="true"] .klide-skill-meta {
   opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--motion-slow) var(--ease-soft) 70ms,
+    transform var(--motion-slow) var(--ease-soft) 70ms;
+}
+
+/* The selected row is already there when the list renders — it should not
+   have to wait for a hover it never gets. */
+.klide-skill-row[data-active="true"] .klide-skill-meta {
+  transition-delay: 0ms;
 }
 
 /* Tool grid card — used in the skill form and detail view to pick /
