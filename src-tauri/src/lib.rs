@@ -817,6 +817,12 @@ pub fn run() {
         .manage(local_servers::LocalServerState::default())
         .manage(models::ReflectionProbeCache::default())
         .plugin(tauri_plugin_dialog::init())
+        // The crate's `open_path` / `reveal_item_in_dir` are called directly
+        // from Rust above and need no registration — but the frontend's
+        // `openUrl` is an IPC call to `plugin:opener|open_url`, and that
+        // handler only exists once the plugin is initialized here. Without
+        // this line a link in an answer answers "plugin opener not found".
+        .plugin(tauri_plugin_opener::init())
         // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
         // the frontend finishing its first page load proves the packaged
         // binary, its dylibs, the webview entitlements, and the embedded
@@ -1258,5 +1264,78 @@ and route the body through blocking::run, or add it to SYNC_COMMANDS with a reas
             .filter(|name| !found.iter().any(|(_, f)| f == **name))
             .collect();
         assert!(stale.is_empty(), "SYNC_COMMANDS lists commands that are no longer sync: {stale:?}");
+    }
+}
+
+#[cfg(test)]
+mod plugin_registration_tests {
+    //! A Tauri plugin has two halves, and using one does not register the
+    //! other. Calling `tauri_plugin_opener::open_path` from Rust is a plain
+    //! function call that works whether or not the plugin was initialized —
+    //! but the frontend's `openUrl` is an IPC call to `plugin:opener|open_url`,
+    //! and that handler exists only after `.plugin(..::init())` runs.
+    //!
+    //! So the app shipped for months able to open a *path* from Rust while
+    //! every link the frontend tried to open answered "plugin opener not
+    //! found". Nothing in the type system connects those two halves; this test
+    //! does, by reading both sides' source.
+
+    /// `@tauri-apps/plugin-<js>` on the frontend needs `tauri_plugin_<rust>`
+    /// registered in the builder. Same name in practice, listed as a pair so a
+    /// plugin whose crate is spelled differently can still be checked.
+    const JS_TO_CRATE: &[(&str, &str)] = &[("opener", "opener"), ("dialog", "dialog")];
+
+    #[test]
+    fn every_plugin_the_frontend_calls_is_registered() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lib = std::fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+
+        // Only the builder chain counts. A plugin named in a comment, or the
+        // crate called directly as a function, proves nothing about IPC.
+        let registered = |crate_name: &str| {
+            lib.contains(&format!(".plugin(tauri_plugin_{crate_name}::init())"))
+        };
+
+        // Walk the frontend for imports of each plugin's JS package. A plugin
+        // nobody imports needs no registration — this is about drift between
+        // the two halves, not a checklist of everything in Cargo.toml.
+        let src = root.join("../src");
+        let mut sources = Vec::new();
+        collect(&src, &mut sources);
+        assert!(
+            sources.len() > 50,
+            "only walked {} frontend files — the walk is wrong, not the code",
+            sources.len()
+        );
+
+        for (js, krate) in JS_TO_CRATE {
+            let needle = format!("@tauri-apps/plugin-{js}");
+            let importer = sources.iter().find(|(_, text)| text.contains(&needle));
+            let Some((path, _)) = importer else { continue };
+            assert!(
+                registered(krate),
+                "{} imports {needle}, but lib.rs never calls \
+                 .plugin(tauri_plugin_{krate}::init()) — every IPC call into \
+                 that plugin will fail at runtime with \"plugin {js} not found\"",
+                path.display(),
+            );
+        }
+    }
+
+    fn collect(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, out);
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if matches!(ext, "ts" | "tsx") {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    out.push((path, text));
+                }
+            }
+        }
     }
 }
