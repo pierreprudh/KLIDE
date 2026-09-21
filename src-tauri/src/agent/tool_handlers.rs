@@ -147,9 +147,9 @@ where
 /// The harness owns the whole exchange. It resolves the role from the Rust
 /// registry, composes the child prompt from *this* run's system prompt, and
 /// drives the child Run to completion through the supervisor seam — so the pair
-/// survives a panel unmount, a webview reload, and a reattach. It is no longer a
-/// Pause tool: nothing here waits on a human, so the parent reports `Paused`
-/// rather than borrowing the question pause's `WaitingForPermission` status.
+/// survives a panel unmount, a webview reload, and a reattach. It is not a
+/// frontend-owned exchange. Worker selection and dispatch approval wait on
+/// the operator; while the child runs, the parent reports `Paused`.
 ///
 /// Cancelling the parent cancels the child too, then bubbles up as `Cancelled`.
 pub(super) async fn process_subagent_tool<E>(
@@ -184,6 +184,17 @@ where
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|m| !m.is_empty());
+    let source_ref = match call.input.get("source_ref") {
+        None => None,
+        Some(value) => match value.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(source) => Some(source.to_string()),
+            None => return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: "source_ref must name a Git commit or branch; omit it to start from HEAD.".into(),
+                metadata: None,
+            })),
+        },
+    };
 
     // An unknown role is a model mistake, not a run failure: name the ones that
     // exist and let it try again.
@@ -226,6 +237,13 @@ where
     // another changes it. The operator always sees who is about to be sent.
     let mut chosen_model: Option<String> = model_arg.map(str::to_string);
     let needs_worker = worker.is_none() && !subagents::is_model_selectable(def);
+    if source_ref.is_some() && worker.is_none() && !needs_worker {
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: "source_ref requires a worker with its own Git worktree. Name a worker to inspect another worker's commit.".into(),
+            metadata: None,
+        }));
+    }
     // The one case with nothing to ask: the user already said it. When the
     // user's own words name the agent — and the model, or it is a CLI that
     // has its own default — Kit passing them on is not a decision to confirm.
@@ -331,6 +349,7 @@ where
     let mut branch: Option<String> = None;
     let mut child_root = ctx.request.workspace_root.clone();
     let mut worktree_path: Option<String> = None;
+    let mut source_commit: Option<String> = None;
     let worker_label = worker.map(|w| w.label());
     if let Some(worker) = worker {
         let label = worker_label.clone().unwrap_or_default();
@@ -346,8 +365,26 @@ where
         let planned_branch = subagents::worker_branch(&task, &request_id);
         let probe_root = root.clone();
         let is_repo = crate::blocking::run_infallible(move || is_git_repository(&probe_root)).await;
+        if is_repo {
+            let probe_root = root.clone();
+            let source = source_ref.clone().unwrap_or_else(|| "HEAD".to_string());
+            match crate::blocking::run(move || crate::git::resolve_worktree_source(&probe_root, &source)).await {
+                Ok(commit) => source_commit = Some(commit),
+                Err(error) => return Ok(ToolOutcome::Produced(ToolResult {
+                    ok: false,
+                    content: format!("Could not resolve worker source `{}`: {error}. No worker was started.", source_ref.as_deref().unwrap_or("HEAD")),
+                    metadata: None,
+                })),
+            }
+        } else if source_ref.is_some() {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: "source_ref requires a Git repository. No worker was started.".into(),
+                metadata: None,
+            }));
+        }
         let where_it_works = if is_repo {
-            format!("in a new worktree on branch `{planned_branch}`")
+            format!("in a new worktree on branch `{planned_branch}` from commit `{}`", source_commit.as_deref().unwrap())
         } else {
             "directly in the project folder (not a Git repository, so no worktree can isolate it)"
                 .to_string()
@@ -387,11 +424,17 @@ where
                 "branch": is_repo.then(|| planned_branch.clone()),
                 "cwd": root,
                 "model": model_arg,
+                "sourceRef": source_ref,
+                "sourceCommit": source_commit,
             }),
             summary: format!("Dispatch {who} as {} {where_it_works}", def.id),
             reason: format!(
-                "{how_it_edits} Its work lands on that branch for you to review and merge. \
-                 Dispatch approvals are never remembered."
+                "{} {how_it_edits} {} Dispatch approvals are never remembered.",
+                source_commit.as_ref().map(|commit| format!(
+                    "Starts at {commit} (committed files only)."
+                )).unwrap_or_default(),
+                if is_repo { "Review and merge its branch when ready." }
+                else { "Edits are made directly in this folder." }
             ),
             options: worker_gate_options(),
         };
@@ -416,7 +459,7 @@ where
             // put a native prompt in, so the recipe's script simply does not run
             // for a worker. A failure here is the tool's failure, not the run's.
             let quiet: crate::git::SetupNotify = std::sync::Arc::new(|_| {});
-            match crate::git::worktree_add_core(root.clone(), planned_branch.clone(), None, None, quiet).await {
+            match crate::git::worktree_add_from_commit_core(root.clone(), planned_branch.clone(), None, None, quiet, source_commit.clone()).await {
                 Ok(info) => {
                     branch = Some(info.branch.clone());
                     child_root = Some(info.path.clone());
@@ -444,7 +487,7 @@ where
         ts: now_ms(),
     })?;
 
-    let spec = match worker {
+    let mut spec = match worker {
         // A Delegate worker is the CLI running as itself: its own provider, the
         // model the call asked for or the CLI's own default, and a prompt that
         // is about the role and the report — not Kit's persona. Diff review is
@@ -509,34 +552,63 @@ where
             auto_approve_commands: None,
         },
     };
+    if let Some(commit) = source_commit.as_deref() {
+        spec.system_prompt.push_str(&format!(
+            "\n\nThis worktree starts at source commit {commit}. Work on the files already here; \
+             do not switch to the parent checkout. Your branch includes that source work."
+        ));
+    }
 
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Paused);
     let child = ctx.sup.spawn_subagent(spec);
-    let mut report = tokio::select! {
+    let (ok, mut report) = tokio::select! {
         // Cancelling the parent must not leave the child running headless.
         _ = ctx.cancel.cancelled() => {
             ctx.sup.with_handle(&request_id, &mut |handle| handle.cancel.cancel());
             return Ok(ToolOutcome::Cancelled);
         }
         result = child => match result {
-            Ok(Ok(report)) => report,
+            Ok(Ok(report)) => (true, report),
             // A child that failed is a tool result the model can react to, not a
             // dead parent run.
-            Ok(Err(err)) => format!("Subagent \"{}\" failed: {err}", def.id),
-            Err(_) => format!("Subagent \"{}\" ended without reporting.", def.id),
+            Ok(Err(err)) => (false, format!("Subagent \"{}\" failed: {err}", def.id)),
+            Err(_) => (false, format!("Subagent \"{}\" ended without reporting.", def.id)),
         },
     };
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
 
-    // Where a worker's edits are is part of the report: the parent cannot see
-    // the worktree, and the user reads this to know which branch to open.
+    // Git evidence is independent of the worker's prose and Run outcome.
+    // Auto-commit is best-effort; a clean checkout is not proof of validation.
+    let checkout = if let Some(path) = worktree_path.clone() {
+        Some(crate::blocking::run(move || subagents::worker_checkout_evidence(&path)).await)
+    } else {
+        None
+    };
     if let Some(label) = worker_label.as_deref() {
         report.push_str("\n\n— ");
         match (branch.as_deref(), worktree_path.as_deref()) {
-            (Some(branch), Some(path)) => report.push_str(&format!(
-                "{label} worked in the worktree `{path}` on branch `{branch}`; its edits are \
-                 committed there. Review and merge that branch. Nothing in this checkout changed."
-            )),
+            (Some(branch), Some(path)) => {
+                report.push_str(&format!(
+                    "{label} worked in the worktree `{path}` allocated on branch `{branch}` from source commit `{}`. ",
+                    source_commit.as_deref().unwrap_or("unknown")
+                ));
+                match checkout.as_ref().expect("worktree evidence was requested") {
+                    Ok(evidence) => {
+                        report.push_str(&evidence.description());
+                        if !evidence.has_uncommitted_changes {
+                            report.push_str(&format!(
+                                " To give another worker this committed result, pass source_ref: \"{}\" to spawn_subagent.",
+                                evidence.head_commit
+                            ));
+                        } else {
+                            report.push_str(" Do not hand off this commit as the full result: uncommitted edits are missing from it.");
+                        }
+                    }
+                    Err(error) => report.push_str(&format!(
+                        "Git state could not be verified: {error}. Inspect the worktree before merging."
+                    )),
+                }
+            }
             _ => report.push_str(&format!(
                 "{label} worked directly in the project folder (not a Git repository), so there is \
                  no branch to review; check the files it names."
@@ -546,15 +618,20 @@ where
 
     emit(AgentEvent::SubagentResolved {
         run_id: ctx.id.to_string(),
-        request_id,
+        request_id: request_id.clone(),
         result: report.clone(),
         ts: now_ms(),
     })?;
 
     Ok(ToolOutcome::Produced(ToolResult {
-        ok: true,
+        ok,
         content: report,
         metadata: Some(serde_json::json!({
+            "runId": request_id,
+            "outcome": if ok { "succeeded" } else { "failed" },
+            "sourceCommit": source_commit,
+            "checkout": checkout.as_ref().and_then(|r| r.as_ref().ok()),
+            "checkoutError": checkout.as_ref().and_then(|r| r.as_ref().err()),
             "subagent": def.id,
             "worker": worker.map(|w| w.id()),
             "branch": branch,

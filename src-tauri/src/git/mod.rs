@@ -1322,6 +1322,27 @@ pub(crate) async fn worktree_add_core(
     approved_setup_script: Option<String>,
     notify: SetupNotify,
 ) -> Result<WorktreeInfo, String> {
+    worktree_add_from_commit_core(
+        workspace_root, branch, copy_files, approved_setup_script, notify, None,
+    ).await
+}
+
+/// Resolve before approval; callers then pass the immutable commit to creation.
+pub(crate) fn resolve_worktree_source(root: &str, source: &str) -> Result<String, String> {
+    git_output(root, &["rev-parse", "--verify", "--end-of-options", &format!("{source}^{{commit}}")])
+        .map(|sha| sha.trim().to_string())
+}
+
+/// A pinned source requires a fresh branch and directory: never adopt an
+/// existing checkout whose contents may differ from what was approved.
+pub(crate) async fn worktree_add_from_commit_core(
+    workspace_root: String,
+    branch: String,
+    copy_files: Option<Vec<String>>,
+    approved_setup_script: Option<String>,
+    notify: SetupNotify,
+    source_commit: Option<String>,
+) -> Result<WorktreeInfo, String> {
     blocking(move || {
         let branch = branch.trim();
         if branch.is_empty() {
@@ -1332,6 +1353,12 @@ pub(crate) async fn worktree_add_core(
             .to_string();
         if toplevel.is_empty() {
             return Err("Not inside a git repository".to_string());
+        }
+        if let Some(commit) = source_commit.as_deref() {
+            let resolved = resolve_worktree_source(&toplevel, commit)?;
+            if resolved != commit {
+                return Err("Worktree source must be a full commit id resolved before approval".into());
+            }
         }
 
         // A worktree dir deleted by hand (rm -rf, Finder) leaves a stale
@@ -1345,6 +1372,10 @@ pub(crate) async fn worktree_add_core(
         let dir = std::path::PathBuf::from(format!("{toplevel}-worktrees"))
             .join(worktree_dir_name(branch));
         let path = dir.to_string_lossy().to_string();
+
+        if source_commit.is_some() && dir.exists() {
+            return Err("Worker worktree already exists; inspect it before dispatching a new attempt".into());
+        }
 
         // Already checked out here → reuse, so the action is safe to re-trigger.
         // Report the branch actually on disk, not the requested name: two distinct
@@ -1392,14 +1423,19 @@ pub(crate) async fn worktree_add_core(
             ],
         )
         .is_ok();
+        if source_commit.is_some() && branch_exists {
+            return Err("Worker branch already exists; dispatch a new attempt instead of reusing it".into());
+        }
         // Capture what HEAD is on *before* the add, so a newly created branch can
         // record what it forked from. None on a detached HEAD.
-        let base_branch = git_output(&toplevel, &["rev-parse", "--abbrev-ref", "HEAD"])
+        let base_branch = source_commit.clone().or_else(|| git_output(&toplevel, &["rev-parse", "--abbrev-ref", "HEAD"])
             .map(|s| s.trim().to_string())
             .ok()
-            .filter(|b| !b.is_empty() && b != "HEAD");
+            .filter(|b| !b.is_empty() && b != "HEAD"));
 
-        let args: Vec<&str> = if branch_exists {
+        let args: Vec<&str> = if let Some(commit) = source_commit.as_deref() {
+            vec!["worktree", "add", "--no-track", "-b", branch, &path, commit]
+        } else if branch_exists {
             vec!["worktree", "add", &path, branch]
         } else {
             vec!["worktree", "add", "-b", branch, &path]
@@ -1817,6 +1853,37 @@ detached
         run_git(&repo_s, &["add", "."]).unwrap();
         run_git(&repo_s, &["commit", "-m", "init"]).unwrap();
         (base, repo_s)
+    }
+
+    #[tokio::test]
+    async fn worker_source_is_pinned_even_if_the_named_branch_moves() {
+        let (_base, repo) = temp_repo("worker-source-pinned");
+        let original = resolve_worktree_source(&repo, "HEAD").unwrap();
+        run_git(&repo, &["checkout", "-b", "implementation"]).unwrap();
+        std::fs::write(std::path::Path::new(&repo).join("feature.txt"), "implemented").unwrap();
+        run_git(&repo, &["add", "feature.txt"]).unwrap();
+        run_git(&repo, &["commit", "-m", "implement"]).unwrap();
+        let approved = resolve_worktree_source(&repo, "implementation").unwrap();
+        // Approval sees this commit; the named source later advances.
+        std::fs::write(std::path::Path::new(&repo).join("later.txt"), "not approved").unwrap();
+        run_git(&repo, &["add", "later.txt"]).unwrap();
+        run_git(&repo, &["commit", "-m", "later"]).unwrap();
+        run_git(&repo, &["checkout", "main"]).unwrap();
+        std::fs::write(std::path::Path::new(&repo).join("parent-wip.txt"), "private WIP").unwrap();
+
+        let wt = worktree_add_from_commit_core(repo.clone(), "klide/tester".into(), None, None, noop_notify(), Some(approved.clone())).await.unwrap();
+        assert_eq!(resolve_worktree_source(&wt.path, "HEAD").unwrap(), approved);
+        assert_eq!(std::fs::read_to_string(std::path::Path::new(&wt.path).join("feature.txt")).unwrap(), "implemented");
+        assert!(!std::path::Path::new(&wt.path).join("later.txt").exists());
+        assert!(!std::path::Path::new(&wt.path).join("parent-wip.txt").exists());
+        assert!(!std::path::Path::new(&repo).join("feature.txt").exists());
+        assert_eq!(resolve_worktree_source(&repo, "HEAD").unwrap(), original);
+        assert_eq!(git_output(&repo, &["config", "branch.klide/tester.base"]).unwrap().trim(), approved);
+        assert!(worktree_add_from_commit_core(repo.clone(), "klide/tester".into(), None, None, noop_notify(), Some(approved.clone())).await.is_err(), "pinned dispatch cannot adopt an existing worktree");
+        assert!(worktree_add_from_commit_core(repo.clone(), "implementation".into(), None, None, noop_notify(), Some(approved)).await.is_err(), "nor an existing branch");
+        assert!(worktree_add_from_commit_core(repo.clone(), "unpinned".into(), None, None, noop_notify(), Some("main".into())).await.is_err());
+        assert!(resolve_worktree_source(&repo, "missing-branch").is_err());
+        assert!(resolve_worktree_source(&repo, "--help").is_err());
     }
 
     #[test]

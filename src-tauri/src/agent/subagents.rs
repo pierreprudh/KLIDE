@@ -12,6 +12,50 @@
 
 use super::types::AgentMode;
 
+/// Observed after settlement, separately from the worker's own report.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WorkerCheckoutEvidence {
+    pub head_commit: String,
+    pub branch: String,
+    pub has_uncommitted_changes: bool,
+}
+
+impl WorkerCheckoutEvidence {
+    pub fn description(&self) -> String {
+        let state = if self.has_uncommitted_changes {
+            "Uncommitted changes remain; merging the branch alone will not include them."
+        } else {
+            "The checkout is clean. This does not establish that tests passed or the task is complete."
+        };
+        format!(
+            "Observed HEAD `{}` on `{}`. {state} Review the worktree and branch before merging.",
+            self.head_commit, self.branch
+        )
+    }
+}
+
+/// Read Git facts without staging, committing, or trusting the child's prose.
+/// Call through blocking::run, like other Harness filesystem work.
+pub(super) fn worker_checkout_evidence(path: &str) -> Result<WorkerCheckoutEvidence, String> {
+    let git = |args: &[&str]| -> Result<String, String> {
+        let output = std::process::Command::new("git")
+            .args(["--no-optional-locks", "-C", path])
+            .args(args)
+            .output()
+            .map_err(|e| format!("Could not inspect worker checkout: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("Git inspection failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    };
+    Ok(WorkerCheckoutEvidence {
+        head_commit: git(&["rev-parse", "--verify", "HEAD"])?,
+        branch: git(&["rev-parse", "--abbrev-ref", "HEAD"])?,
+        has_uncommitted_changes: !git(&["status", "--porcelain", "--untracked-files=normal"])?.is_empty(),
+    })
+}
+
 /// One delegated role. Field-for-field the shape `src/agent/subagents.ts`
 /// exposes, minus the menu blurb (presentation stays in the frontend).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -127,7 +127,7 @@ something outside it answers.
 | Tool | Purpose | Lineage |
 |---|---|---|
 | `userAnswerQuestion` | Pause the run and ask the user one free-form question; their typed answer returns as the tool result. Powers the Codebase Interview. One question per turn. | K |
-| `spawn_subagent` | Delegate a focused, read-only investigation to a named subagent (`explorer` maps code, `reviewer` critiques it) and get its report back as the tool result. The subagent cannot edit — it parallelises discovery without spending the parent's context. Roles live in `src-tauri/src/agent/subagents.rs`, mirrored by `src/agent/subagents.ts`. | OC (sub-agent nesting) + K |
+| `spawn_subagent` | Delegate a focused task and return its report. Without a worker, explorer/reviewer are read-only. A CLI or API `worker` enables editing roles in an approved isolated worktree. Optional `source_ref` pins a source commit before approval; use the previous worker's `checkout.headCommit` for dependent testing/review. Results include `runId`, `outcome`, `sourceCommit`, and observed `checkout` evidence. | OC (sub-agent nesting) + K |
 | `consult_advisor` | Escalate one hard decision to a stronger advisor model without handing off the task. Emits `AdvisorRequested`; the frontend puts the self-contained question to the advisor (a bigger model or a Claude Code session) and resolves with the advice. The cheap executor stays in control and applies it. | K (the advisor strategy) |
 
 ## The edit contract *(Pi-derived, the core of write reliability)*

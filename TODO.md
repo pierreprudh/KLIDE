@@ -71,6 +71,25 @@ them.
   outcomes override transcript guesses; Codex's notifier now carries its thread
   id so that join survives restart.
 
+## Worker upgrades — comparison reviewed 2026-09-21
+
+- [x] Return failed child Runs as failed Tool results, require a durable `done`
+  state before accepting their report, and attach observed Git checkout state.
+  A clean checkout is not validation; auto-commit failure must not be hidden
+  behind an unconditional "committed" claim.
+- [x] Carry an explicit source commit between dependent workers: `source_ref`
+  resolves before approval, pins the new worktree, and returns `sourceCommit`.
+  Testers can receive the implementer's committed changes without merging them
+  into the parent. Uncommitted files are excluded and existing branches rejected.
+- [ ] Add bounded background dispatch and inspect/wait/cancel operations under
+  the Rust supervisor, with aggregate capacity and permission routing.
+- [ ] Make worker setup an approved, visible stage; workers currently skip the
+  configured setup script. Report setup failure before spending model tokens.
+- [ ] Join worker results to validation evidence and a review/apply action;
+  preserve dirty or failed worktrees until the operator chooses cleanup.
+
+Research and benchmark plan: `docs/workers-comparison-2026-09-21.md` (local notes).
+
 ## v0.6 — Dependable orchestration
 
 - [ ] Make a Mission the primary outcome object: intent, task graph, acceptance

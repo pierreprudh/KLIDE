@@ -158,6 +158,35 @@ the worker then edits the folder directly. The child's report names the
 worktree and branch; the operator reviews and merges that branch, and nothing
 in the parent's checkout changes.
 
+Worker settlement is separate from acceptance. A child report is successful only
+when its durable Run summary says `done` and it produced an assistant answer.
+Failed, cancelled, and incomplete children return `ok: false` to the parent,
+even if they wrote an answer before stopping. Result metadata includes `runId`
+and `outcome` (`succeeded` or `failed`); success describes execution, not an
+accepted validation contract.
+
+For an isolated worker, `checkout` records Git's observed `headCommit`, `branch`,
+and `hasUncommittedChanges` after settlement. Failed inspection is exposed as
+`checkoutError`, never converted to a clean checkout. Auto-commit remains
+best-effort: uncommitted changes require inspection, and a clean checkout does
+not prove tests passed. This evidence is returned with the normal Tool result;
+the worker's prose cannot certify that its branch is ready to merge.
+
+For dependent work, `spawn_subagent.source_ref` selects a Git branch or commit
+from the same repository. The Harness resolves it to a full commit id **before**
+dispatch approval, shows that id on the card, and creates a fresh worker branch
+at exactly that commit. With no source specified, Git workers pin the parent's
+HEAD in the same way. Invalid references fail without falling back to HEAD;
+non-Git dispatches and in-model subagents reject `source_ref`. Existing worker
+branches/checkouts are not adopted for a pinned dispatch.
+
+The Tool result includes `sourceCommit` and the child prompt names the same
+revision. A tester or reviewer following an implementer should receive the
+preceding result's `checkout.headCommit` as `source_ref`. Only committed files
+transfer; dirty source edits are not copied or committed on the parent's behalf.
+The worker's resulting branch includes the source history, so review its full
+diff against the intended integration target before merging.
+
 The project allowlist remains backward-compatible with `commands: string[]` and
 also accepts `rules: [{ "pattern": "cargo test *" }]`. Wildcard rules do not
 silently approve commands that introduce new outside-Workspace absolute paths;

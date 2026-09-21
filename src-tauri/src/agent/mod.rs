@@ -645,12 +645,23 @@ async fn run_subagent_to_completion(
         Ok(Err(err)) => return Err(err),
         Err(_) => return Err("The subagent run ended without settling.".to_string()),
     }
+    crate::blocking::run(move || settled_subagent_report(&runs_dir, &spec.run_id)).await
+}
+
+/// Loop completion is not task success: cancelled and exhausted Runs can
+/// return Ok after recording a terminal failure and even an assistant message.
+fn settled_subagent_report(runs_dir: &Path, run_id: &str) -> Result<String, String> {
+    let summary = transcripts::read_summary(runs_dir, run_id)?;
+    if summary.status != "done" {
+        return Err(last_run_error(runs_dir, run_id)
+            .unwrap_or_else(|| format!("The subagent settled with status {}.", summary.status)));
+    }
     // A child that never spoke usually failed before it could: say why, so the
     // parent can react to the cause rather than to silence.
-    if let Some(text) = last_assistant_text(&runs_dir, &spec.run_id) {
+    if let Some(text) = last_assistant_text(runs_dir, run_id) {
         return Ok(text);
     }
-    Err(last_run_error(&runs_dir, &spec.run_id)
+    Err(last_run_error(runs_dir, run_id)
         .unwrap_or_else(|| "the subagent produced no output".to_string()))
 }
 
@@ -3333,6 +3344,27 @@ mod worktree_commit_tests {
     }
 
     #[test]
+    fn worker_checkout_reports_uncommitted_work_and_git_failures_honestly() {
+        let (_base, main, wt) = repo_with_worktree("worker-evidence");
+        let path = wt.to_str().unwrap();
+        let initial = subagents::worker_checkout_evidence(path).unwrap();
+        assert_eq!(initial.head_commit, git(&wt, &["rev-parse", "HEAD"]));
+        assert_eq!(initial.branch, "klide/work");
+        assert!(!initial.has_uncommitted_changes);
+        std::fs::write(wt.join("new.txt"), "uncommitted work").unwrap();
+        let dirty = subagents::worker_checkout_evidence(path).unwrap();
+        assert!(dirty.has_uncommitted_changes);
+        assert!(dirty.description().contains("merging the branch alone will not include them"));
+        assert_eq!(git(&wt, &["diff", "--cached", "--name-only"]), "", "inspection never stages");
+        commit_worktree_on_done(&summary(&wt, "Worker evidence"));
+        let committed = subagents::worker_checkout_evidence(path).unwrap();
+        assert!(!committed.has_uncommitted_changes);
+        assert_ne!(initial.head_commit, committed.head_commit);
+        assert!(!main.join("new.txt").exists());
+        assert!(subagents::worker_checkout_evidence(wt.join("missing").to_str().unwrap()).is_err());
+    }
+
+    #[test]
     fn a_clean_worktree_and_a_missing_cwd_are_both_no_ops() {
         let (_base, _main, wt) = repo_with_worktree("clean-worktree");
         let before = git(&wt, &["rev-parse", "HEAD"]);
@@ -4350,6 +4382,7 @@ mod test_support {
         /// answers each with a canned report, so a handler test can assert on
         /// the spec — provider, model, root, prompt — without a real child.
         pub(super) spawned: Mutex<Vec<subagents::SubagentRunSpec>>,
+        pub(super) child_result: Mutex<Option<Result<String, String>>>,
     }
 
     impl FakeSupervisor {
@@ -4360,6 +4393,7 @@ mod test_support {
                 runs: Mutex::new(runs),
                 coordination: CoordinationStoreState::default(),
                 spawned: Mutex::new(Vec::new()),
+                child_result: Mutex::new(None),
             }
         }
     }
@@ -4371,7 +4405,9 @@ mod test_support {
         ) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
             self.spawned.lock().unwrap().push(spec);
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = tx.send(Ok("fake child report".to_string()));
+            let result = self.child_result.lock().unwrap().take()
+                .unwrap_or_else(|| Ok("fake child report".to_string()));
+            let _ = tx.send(result);
             rx
         }
         fn set_status(&self, run_id: &str, status: AgentRunStatus) {
@@ -5471,6 +5507,7 @@ mod run_loop_tests {
             "hello klide\n"
         );
         assert_eq!(read_summary(&runs_dir, "loop-run").unwrap().status, "done");
+        assert!(settled_subagent_report(&runs_dir, "loop-run").unwrap().contains("Done: greeting.txt"));
 
         // The handle is retired with the terminal status: the supervisor map
         // must not grow by one cancel-token + trust-memory entry per run ever
@@ -5546,6 +5583,7 @@ mod run_loop_tests {
         .await;
 
         assert_eq!(read_summary(&runs_dir, "err-run").unwrap().status, "error");
+        assert!(settled_subagent_report(&runs_dir, "err-run").unwrap_err().contains("connection refused"));
         let events = read_events(&runs_dir, "err-run").unwrap();
         assert!(events.iter().any(|e| matches!(
             e,
@@ -5575,6 +5613,9 @@ mod run_loop_tests {
         drive_loop(sup.clone(), &runs_dir, "cap-run", request, caller).await;
 
         assert_eq!(read_summary(&runs_dir, "cap-run").unwrap().status, "error");
+        assert!(last_assistant_text(&runs_dir, "cap-run").is_some());
+        assert!(settled_subagent_report(&runs_dir, "cap-run").is_err(),
+            "a written report does not turn a turn-cap failure into success");
         let events = read_events(&runs_dir, "cap-run").unwrap();
         assert!(
             events.iter().any(|e| matches!(
@@ -6930,6 +6971,92 @@ mod worker_dispatch_tests {
     }
 
     #[tokio::test]
+    async fn a_failed_child_is_a_failed_tool_result_with_its_run_identity() {
+        let root = plain_folder("failed-result");
+        let sup = FakeSupervisor::with_run("run");
+        *sup.child_result.lock().unwrap() = Some(Err("provider unavailable".into()));
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs = runs_dir("failed-result");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: &runs };
+        let (events, mut emit) = event_log();
+        let call = subagent_call("failure", serde_json::json!({"subagent": "explorer", "task": "Inspect"}));
+        let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+        assert!(!result.ok, "a child's failure must not become success in the parent");
+        assert!(result.content.contains("provider unavailable"));
+        let metadata = result.metadata.unwrap();
+        assert_eq!(metadata["outcome"], "failed");
+        assert_eq!(metadata["runId"], "sub_run_failure");
+        assert!(events.lock().unwrap().iter().any(|event| matches!(event,
+            AgentEvent::SubagentResolved { result, .. } if result.contains("provider unavailable")
+        )));
+        assert_eq!(sup.runs.lock().unwrap()["run"].status, AgentRunStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn a_tester_receives_the_implementers_commit_without_changing_the_parent() {
+        let root = git_repo("handoff");
+        let implementation = crate::git::worktree_add_core(
+            root.clone(), "klide/implementation".into(), None, None, Arc::new(|_| {}),
+        ).await.unwrap();
+        std::fs::write(std::path::Path::new(&implementation.path).join("feature.txt"), "implemented").unwrap();
+        assert!(Command::new("git").args(["add", "feature.txt"]).current_dir(&implementation.path).status().unwrap().success());
+        assert!(Command::new("git").args(["-c", "user.name=Klide", "-c", "user.email=test@klide.local", "commit", "-qm", "implementation"]).current_dir(&implementation.path).status().unwrap().success());
+        let source = crate::git::resolve_worktree_source(&root, "klide/implementation").unwrap();
+        let parent = crate::git::resolve_worktree_source(&root, "HEAD").unwrap();
+        let sup = FakeSupervisor::with_run("run");
+        let cancel = CancellationToken::new();
+        let mut request = test_request(&root, &[]);
+        request.initial_text = "Have Codex test the implementation".into();
+        let runs = runs_dir("handoff");
+        let ctx = ToolCtx { sup: &sup, id: "run", request: &request, cancel: &cancel, runs_dir: &runs };
+        let (events, mut emit) = event_log();
+        let call = subagent_call("tester", serde_json::json!({
+            "subagent": "tester", "task": "Test the implementation", "worker": "codex", "source_ref": source,
+        }));
+        let (outcome, _) = tokio::join!(
+            process_subagent_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "run", r#"{"behavior":"allow","scope":"once"}"#),
+        );
+        let result = produced(outcome);
+        assert!(result.ok, "{}", result.content);
+        let spawned = sup.spawned.lock().unwrap();
+        let tester_root = spawned[0].workspace_root.as_deref().unwrap();
+        assert_eq!(std::fs::read_to_string(std::path::Path::new(tester_root).join("feature.txt")).unwrap(), "implemented");
+        assert_eq!(crate::git::resolve_worktree_source(tester_root, "HEAD").unwrap(), source);
+        assert!(spawned[0].system_prompt.contains(&source));
+        assert!(!std::path::Path::new(&root).join("feature.txt").exists());
+        assert_eq!(crate::git::resolve_worktree_source(&root, "HEAD").unwrap(), parent);
+        let gates = permission_requests(&events);
+        assert_eq!(gates[0].input["sourceCommit"], source);
+        assert!(gates[0].reason.starts_with(&format!("Starts at {source}")));
+        assert_eq!(result.metadata.as_ref().unwrap()["sourceCommit"], source);
+        assert!(result.content.contains(&format!("source_ref: \"{source}\"")));
+    }
+
+    #[tokio::test]
+    async fn an_invalid_worker_source_never_reaches_dispatch_or_falls_back_to_head() {
+        for (name, root, input) in [
+            ("missing-ref", git_repo("missing-source"), serde_json::json!({"subagent":"tester", "task":"Test", "worker":"codex", "source_ref":"missing"})),
+            ("no-git", plain_folder("source-no-git"), serde_json::json!({"subagent":"tester", "task":"Test", "worker":"codex", "source_ref":"HEAD"})),
+            ("no-worker", git_repo("source-no-worker"), serde_json::json!({"subagent":"reviewer", "task":"Review", "source_ref":"HEAD"})),
+        ] {
+            let sup = FakeSupervisor::with_run("run");
+            let cancel = CancellationToken::new();
+            let mut request = test_request(&root, &[]);
+            request.initial_text = "Have Codex test it".into();
+            let runs = runs_dir(name);
+            let ctx = ToolCtx { sup: &sup, id:"run", request:&request, cancel:&cancel, runs_dir:&runs };
+            let (events, mut emit) = event_log();
+            let call = subagent_call(name, input);
+            let result = produced(process_subagent_tool(&ctx, &call, &mut emit).await);
+            assert!(!result.ok, "{name}: {}", result.content);
+            assert!(permission_requests(&events).is_empty());
+            assert!(sup.spawned.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn an_editing_role_without_a_worker_asks_which_one_and_skipping_is_the_users_no() {
         let root = plain_folder("no-worker");
         let sup = FakeSupervisor::with_run("run");
@@ -7248,6 +7375,10 @@ mod worker_dispatch_tests {
         assert!(result.content.contains(&branch), "and the branch to review: {}", result.content);
         assert_eq!(result.metadata.as_ref().unwrap()["worker"], "claude-code");
         assert_eq!(result.metadata.as_ref().unwrap()["branch"], branch);
+        assert_eq!(result.metadata.as_ref().unwrap()["outcome"], "succeeded");
+        assert_eq!(result.metadata.as_ref().unwrap()["checkout"]["branch"], branch);
+        assert_eq!(result.metadata.as_ref().unwrap()["checkout"]["hasUncommittedChanges"], false);
+        assert!(!result.content.contains("its edits are committed"));
     }
 
     #[tokio::test]
