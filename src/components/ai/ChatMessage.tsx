@@ -1326,7 +1326,7 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
           <ThinkingBlock text={mergedThinking} streaming={streaming} startedAt={m.thinkingStartedAt} thinkingMs={m.thinkingMs} />
         )}
         {visibleContent && (
-          <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 13, lineHeight: 1.58 }}>
+          <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 14, lineHeight: 1.6 }}>
             {renderMarkdown(visibleContent, { streaming: active })}
           </div>
         )}

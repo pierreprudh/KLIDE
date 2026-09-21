@@ -4546,7 +4546,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                       }}
                       onBlur={() => commitEdit(i)}
                       rows={Math.max(1, Math.min(10, editingDraft.split("\n").length))}
-                      style={{ maxWidth: "100%", width: "min(440px, 100%)", minWidth: 0, resize: "none", font: "inherit", fontSize: 13, lineHeight: 1.55, padding: "8px 12px", borderRadius: "12px 12px 4px 12px", border: "1px solid color-mix(in srgb, var(--accent) 50%, var(--border))", background: "var(--accent-soft)", color: "var(--fg-strong)", whiteSpace: "pre-wrap", wordBreak: "break-word", boxSizing: "border-box" }}
+                      style={{ maxWidth: "100%", width: "min(440px, 100%)", minWidth: 0, resize: "none", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "8px 12px", borderRadius: "12px 12px 4px 12px", border: "1px solid color-mix(in srgb, var(--accent) 50%, var(--border))", background: "var(--accent-soft)", color: "var(--fg-strong)", whiteSpace: "pre-wrap", wordBreak: "break-word", boxSizing: "border-box" }}
                     />,
                   )
                 ) : (
@@ -4557,7 +4557,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                     {hasText ? (
                       beside(
                         <div
-                          style={{ minWidth: 0, background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
+                          style={{ minWidth: 0, background: queued ? "color-mix(in srgb, var(--accent-soft) 48%, var(--bg))" : "var(--accent-soft)", color: queued ? "var(--fg-subtle)" : "var(--fg-strong)", border: (queued || running) ? "1px solid color-mix(in srgb, var(--accent) 36%, var(--border))" : "1px solid transparent", borderRadius: "12px 12px 4px 12px", padding: "8px 12px", fontSize: 14, lineHeight: 1.58, whiteSpace: "pre-wrap", wordBreak: "break-word", opacity: queued ? 0.82 : 1 }}>
                           {m.content}
                         </div>,
                       )
@@ -5265,7 +5265,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
-            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 13.5, lineHeight: 1.55, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
+            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
           />
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>

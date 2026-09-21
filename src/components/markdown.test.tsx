@@ -74,10 +74,26 @@ describe("renderMarkdown parse cache", () => {
 });
 
 describe("links in an answer", () => {
-  it("linkifies a URL a model wrote as prose", () => {
+  it("linkifies a URL a model wrote as prose, reading as its name", () => {
     const out = html("The docs are at https://v2.tauri.app for this.");
     expect(out).toContain('href="https://v2.tauri.app"');
-    expect(out).toContain(">https://v2.tauri.app</a>");
+    expect(out).toContain("Tauri</a>");
+    // The address is the hover, not the sentence.
+    expect(out).toContain('title="https://v2.tauri.app"');
+    expect(out).not.toContain(">https://v2.tauri.app<");
+  });
+
+  it("names a repo link after the repo, with GitHub's mark", () => {
+    const out = html("Ported from https://github.com/tauri-apps/tauri here.");
+    expect(out).toContain(">tauri</a>");
+    expect(out).toContain("<svg");
+  });
+
+  it("keeps the words an author chose", () => {
+    const out = html("See [the plain docs](https://example.com/guide) first.");
+    expect(out).toContain(">the plain docs</a>");
+    // No brand behind example.com, so no glyph under words that already read.
+    expect(out).not.toContain("<svg");
   });
 
   it("leaves the sentence's punctuation outside the link", () => {
@@ -85,6 +101,12 @@ describe("links in an answer", () => {
     expect(out).toContain('href="https://v2.tauri.app"');
     expect(out).not.toContain('href="https://v2.tauri.app."');
     expect(out).toContain("</a>.");
+  });
+
+  it("leaves a mail address as itself, with no mark", () => {
+    const out = html("Mail [someone](mailto:a@b.co) about it.");
+    expect(out).toContain('href="mailto:a@b.co"');
+    expect(out).not.toContain("<svg");
   });
 
   it("still renders a markdown link as its text, not twice", () => {

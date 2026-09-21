@@ -7,6 +7,8 @@ import { VisualExpandIcon, DownloadIcon, CodeIcon, CopyIcon, CheckIcon } from ".
 import { fitVisualCanvases, fitViewerCanvas } from "./visualLayout";
 import { saveVisualPng } from "./visualExport";
 import { BARE_URL_RE, openExternal, safeLinkHref, splitUrlTail } from "../externalLink";
+import { linkIdentity, type LinkSite } from "../linkIdentity";
+import { LinkMark } from "./linkMark";
 
 type MdNode = string | ReactElement;
 
@@ -491,7 +493,21 @@ export { safeLinkHref };
 // A link in a model's answer. It never navigates the app webview: the click is
 // handed to `openExternal`, which sends it to the system browser. The href is
 // still set so the URL shows in a hover, and copy-link keeps working.
-function ExternalLink({ href, title, children }: { href: string; title?: string; children: ReactNode }) {
+//
+// `mark` is drawn only where there is a brand to draw. A glyph in front of
+// words the author chose ("see the docs") would be decoration; a mark in front
+// of a name Klide supplied for a naked URL is what makes the name legible.
+function ExternalLink({
+  href,
+  title,
+  mark,
+  children,
+}: {
+  href: string;
+  title?: string;
+  mark?: LinkSite | null;
+  children: ReactNode;
+}) {
   return (
     <a
       href={href}
@@ -506,8 +522,22 @@ function ExternalLink({ href, title, children }: { href: string; title?: string;
         textDecorationColor: "color-mix(in srgb, var(--accent) 35%, transparent)",
         textUnderlineOffset: 2,
         cursor: "pointer",
+        // The mark rides with the name: inline-flex keeps them one unit, so a
+        // wrap never leaves a lone glyph at the end of a line.
+        ...(mark !== undefined
+          ? {
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              // Keeps the line's rhythm — an inline-flex box would otherwise
+              // sit on its own box's baseline and ride low against the prose.
+              verticalAlign: "baseline",
+              whiteSpace: "nowrap" as const,
+            }
+          : null),
       }}
     >
+      {mark !== undefined ? <LinkMark site={mark} /> : null}
       {children}
     </a>
   );
@@ -572,21 +602,36 @@ function renderInline(text: string, keyBase: string): MdNode[] {
         last = m.index + m[0].length;
         continue;
       }
+      // The author named it, so the name stands. A known brand still earns its
+      // mark; an unknown host gets no glyph, because the words already read.
+      const brand = linkIdentity(href).site;
       out.push(
-        <ExternalLink key={`${keyBase}-${key++}`} href={href} title={m[8]}>
+        <ExternalLink
+          key={`${keyBase}-${key++}`}
+          href={href}
+          title={m[8]}
+          mark={brand ?? undefined}
+        >
           {m[6]}
         </ExternalLink>
       );
     } else if (m[9] !== undefined) {
-      // A URL written as prose. It reads as itself, so the link text is the
-      // URL; the punctuation that ended the sentence stays outside it.
+      // A URL written as prose. Nobody reads a 90-character address mid
+      // sentence, so it reads as the one word inside it that carries meaning —
+      // the repo, the package, the product — with the full address on hover.
+      // The punctuation that ended the sentence stays outside the link.
       const [raw, trailing] = splitUrlTail(m[9]);
       const href = safeLinkHref(raw);
       if (!href) out.push(m[9]);
       else {
+        const id = linkIdentity(href);
         out.push(
-          <ExternalLink key={`${keyBase}-${key++}`} href={href}>
-            {href}
+          <ExternalLink
+            key={`${keyBase}-${key++}`}
+            href={href}
+            mark={id.bare ? undefined : id.site}
+          >
+            {id.label}
           </ExternalLink>
         );
         if (trailing) out.push(trailing);
