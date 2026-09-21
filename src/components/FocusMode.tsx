@@ -2084,9 +2084,9 @@ function FocusHome({
   );
 }
 
-/** What ran a conversation, drawn as one mark. `bare` marks a brand logo that
- *  carries its own shape and color, as opposed to a line glyph, which wants the
- *  boxed tile the starter icons use. */
+/** What ran a conversation, drawn as one mark. Every mark stands bare on the
+ *  card now — a brand logo carries its own shape and color, and the line
+ *  glyphs lost their tile too — so `bare` is kept for callers that box marks. */
 type ResumeMark = { node: ReactNode; label: string; bare: boolean };
 
 /**
@@ -2140,12 +2140,7 @@ function HomeCard({
       style={{ "--focus-card-delay": `${index * 35}ms` } as CSSProperties}
     >
       {mark ? (
-        <span
-          className="klide-focus-home-card-icon"
-          data-bare={mark.bare ? "true" : undefined}
-          title={mark.label}
-          aria-hidden="true"
-        >
+        <span className="klide-focus-home-card-icon" title={mark.label} aria-hidden="true">
           {mark.node}
         </span>
       ) : (

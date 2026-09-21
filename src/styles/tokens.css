@@ -6972,27 +6972,16 @@ button:focus-visible .menu-leadout {
   transition-duration: 100ms;
 }
 
+/* The mark stands bare — a line glyph or a brand logo, flush with the title,
+   no tile behind it. The fixed height keeps every card's title on one line. */
 .klide-focus-home-card-icon {
   position: relative;
   z-index: 1;
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  margin-bottom: 4px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 10%, var(--panel-border));
-  background: var(--menu-row-active);
-  color: var(--accent);
-}
-
-/* A provider mark carries its own shape and color — the tile just boxes it in. */
-.klide-focus-home-card-icon[data-bare] {
-  width: 24px;
   height: 24px;
-  border: 0;
-  border-radius: 0;
-  background: none;
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+  color: var(--accent);
 }
 
 .klide-focus-home-card-title {
