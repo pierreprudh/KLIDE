@@ -8909,3 +8909,42 @@ button:focus-visible .menu-leadout {
     animation: none;
   }
 }
+
+/* A place on disk, named in an answer (markdown.tsx `PathLink`).
+
+   Accent, because it opens — the same promise `ExternalLink` makes, kept by
+   Finder instead of the browser. Only a rooted path ever wears it; a name
+   relative to whichever project the answer is about (`skills/`, `CLAUDE.md`)
+   stays an ordinary code span, since Klide cannot say which machine folder it
+   means.
+
+   The underline waits for the pointer, so a paragraph naming several places
+   keeps its line. `text-decoration` cannot animate, so the rule is a 1px
+   gradient that wipes in from the left. */
+.klide-path-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  outline: none;
+  padding-bottom: 1px;
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--accent) 38%, transparent),
+    color-mix(in srgb, var(--accent) 38%, transparent)
+  );
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 0% 1px;
+  transition: background-size var(--motion-med) var(--ease-out);
+}
+
+.klide-path-link:hover,
+.klide-path-link:focus-visible {
+  background-size: 100% 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .klide-path-link {
+    transition: none;
+  }
+}

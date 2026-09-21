@@ -3,6 +3,7 @@ import {
   canonicalWorkspaceRoot,
   legacyAutoRunWorkspace,
   linkedFolderLabel,
+  parentDirectory,
   linkedProjectForPath,
   normalizeProjectPath,
   pathBelongsToProject,
@@ -58,5 +59,13 @@ describe("project path ownership", () => {
     expect(linkedFolderLabel(`${KIDE}/packages/ui`, KIDE)).toBe("packages/ui");
     expect(linkedFolderLabel(`${KIDE}-worktrees/race-one`, KIDE)).toBe("Worktree · race-one");
     expect(linkedFolderLabel(KIDE, KIDE)).toBeNull();
+  });
+
+  it("names the folder a project sits in, so a picker opens beside its siblings", () => {
+    expect(parentDirectory(KIDE)).toBe("/Users/pierre/Documents/Private");
+    expect(parentDirectory(`${KIDE}/`)).toBe("/Users/pierre/Documents/Private");
+    expect(parentDirectory("/Users")).toBe("/");
+    expect(parentDirectory("/")).toBeNull();
+    expect(parentDirectory(null)).toBeNull();
   });
 });

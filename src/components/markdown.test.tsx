@@ -131,3 +131,36 @@ describe("links in an answer", () => {
     expect(out).toContain("here");
   });
 });
+
+describe("a path in an answer", () => {
+  it("reads a rooted path as its last word and offers to show it", () => {
+    const out = html("It's at `/Users/pierre/Documents/Onetraak` — not here.");
+    expect(out).toContain("Show /Users/pierre/Documents/Onetraak in Finder");
+    expect(out).toContain(">Onetraak</a>");
+    expect(out).not.toContain(">/Users/pierre/Documents/Onetraak<");
+  });
+
+  it("leaves a project's own file names as the code spans they are", () => {
+    // An answer about another repository names a dozen of its files. None of
+    // them resolves against the project Klide has open, and a paragraph of
+    // accent would read as a link farm.
+    const out = html(
+      "a Python project (uv/`pyproject.toml`, `.venv`), on branch `dev`, last commit `d28f499` — a merge of `m6/orchestrator`. It has a `harness/` package, `skills/`, `deploy/`, `docs/` and a `CLAUDE.md`.",
+    );
+    expect(out).not.toContain("<a");
+    expect(out.match(/<code/g) ?? []).toHaveLength(10);
+  });
+
+  it("leaves a command as the code span it is", () => {
+    const out = html("Run `npm run tauri dev` to see it.");
+    expect(out).toContain("<code");
+    expect(out).not.toContain("<a");
+  });
+
+  it("renders markup nested inside emphasis — **`path`** is both", () => {
+    const out = html("It's at **`/Users/pierre/Documents/Onetraak`** today.");
+    expect(out).not.toContain("`");
+    expect(out).toContain("<strong");
+    expect(out).toContain(">Onetraak</a>");
+  });
+});

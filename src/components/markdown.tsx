@@ -8,6 +8,8 @@ import { fitVisualCanvases, fitViewerCanvas } from "./visualLayout";
 import { saveVisualPng } from "./visualExport";
 import { BARE_URL_RE, openExternal, safeLinkHref, splitUrlTail } from "../externalLink";
 import { linkIdentity, type LinkSite } from "../linkIdentity";
+import { pathFromCodeSpan, pathLabel } from "../filePaths";
+import { revealPath } from "../revealPath";
 import { LinkMark } from "./linkMark";
 
 type MdNode = string | ReactElement;
@@ -543,47 +545,80 @@ function ExternalLink({
   );
 }
 
+const INLINE_CODE_STYLE: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.9em",
+  background: "color-mix(in srgb, var(--bg-elevated) 80%, var(--bg))",
+  border: "1px solid var(--border)",
+  borderRadius: 4,
+  padding: "1px 5px",
+  color: "var(--fg)",
+};
+
+// A place on disk, written in backticks. It reads like every other openable
+// thing in an answer — accent, underlined, the full address on hover — because
+// that is what it is: `openExternal` hands a URL to the browser, `revealPath`
+// hands this to Finder. A rooted path reads as its last word (`Onetraak`), the
+// same reduction a bare URL gets; a project-relative one is already short and
+// stands as written.
+function PathLink({ text }: { text: string }) {
+  const place = pathFromCodeSpan(text);
+  if (!place) return <code style={INLINE_CODE_STYLE}>{text}</code>;
+  const title = place.line
+    ? `Show ${place.path} in Finder (line ${place.line})`
+    : `Show ${place.path} in Finder`;
+  return (
+    <a
+      className="klide-path-link"
+      role="button"
+      tabIndex={0}
+      title={title}
+      onClick={(e) => {
+        e.preventDefault();
+        void revealPath(place);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        void revealPath(place);
+      }}
+    >
+      {pathLabel(place.path)}
+    </a>
+  );
+}
+
 function renderInline(text: string, keyBase: string): MdNode[] {
   const out: MdNode[] = [];
   let last = 0;
   let key = 0;
   let m: RegExpExecArray | null;
-  INLINE_RE.lastIndex = 0;
-  while ((m = INLINE_RE.exec(text))) {
+  // Emphasis renders its contents through this same function — a model writes
+  // **`src/App.tsx`** and means both — so the scan cannot share `lastIndex`
+  // with the nested call. One matcher per invocation; `INLINE_RE` stays the
+  // single definition of the shapes.
+  const re = new RegExp(INLINE_RE.source, "g");
+  while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
+    const nested = (inner: string) => renderInline(inner, `${keyBase}-${key}n`);
     if (m[1] !== undefined) {
       out.push(
         <strong key={`${keyBase}-${key++}`} style={{ fontWeight: 700, color: "var(--fg-strong)" }}>
-          <em style={{ fontStyle: "italic", fontWeight: 600 }}>{m[1]}</em>
+          <em style={{ fontStyle: "italic", fontWeight: 600 }}>{nested(m[1])}</em>
         </strong>
       );
     } else if (m[2] !== undefined) {
       out.push(
         <strong key={`${keyBase}-${key++}`} style={{ fontWeight: 600, color: "var(--fg-strong)" }}>
-          {m[2]}
+          {nested(m[2])}
         </strong>
       );
     } else if (m[3] !== undefined) {
-      out.push(
-        <code
-          key={`${keyBase}-${key++}`}
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.9em",
-            background: "color-mix(in srgb, var(--bg-elevated) 80%, var(--bg))",
-            border: "1px solid var(--border)",
-            borderRadius: 4,
-            padding: "1px 5px",
-            color: "var(--fg)",
-          }}
-        >
-          {m[3]}
-        </code>
-      );
+      out.push(<PathLink key={`${keyBase}-${key++}`} text={m[3]} />);
     } else if (m[4] !== undefined) {
       out.push(
         <em key={`${keyBase}-${key++}`} style={{ fontStyle: "italic", color: "var(--fg)" }}>
-          {m[4]}
+          {nested(m[4])}
         </em>
       );
     } else if (m[5] !== undefined) {
@@ -592,7 +627,7 @@ function renderInline(text: string, keyBase: string): MdNode[] {
           key={`${keyBase}-${key++}`}
           style={{ textDecoration: "line-through", color: "var(--fg-subtle)" }}
         >
-          {m[5]}
+          {nested(m[5])}
         </span>
       );
     } else if (m[6] !== undefined) {

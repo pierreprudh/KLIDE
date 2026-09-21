@@ -104,3 +104,19 @@ export function linkedFolderLabel(
 
   return normalizedPath.split("/").filter(Boolean).pop() ?? normalizedPath;
 }
+
+/**
+ * The folder a project sits in — where its siblings live, and so where a
+ * folder picker should open rather than wherever the OS last left it. Returns
+ * null at a filesystem root, which has no useful parent to offer.
+ */
+export function parentDirectory(path: string | null | undefined): string | null {
+  const normalized = normalizeProjectPath(path);
+  if (!normalized || normalized === "/" || /^[A-Za-z]:\/$/u.test(normalized)) return null;
+  const cut = normalized.lastIndexOf("/");
+  if (cut < 0) return null;
+  const parent = normalized.slice(0, cut);
+  if (!parent) return normalized.startsWith("/") ? "/" : null;
+  if (/^[A-Za-z]:$/u.test(parent)) return `${parent}/`;
+  return parent;
+}

@@ -12,6 +12,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { documentDir } from "@tauri-apps/api/path";
 import { listen } from "@tauri-apps/api/event";
 import { WorkspaceRail, type RailNavItem } from "./components/WorkspaceRail";
 import {
@@ -135,6 +136,7 @@ import {
   canonicalWorkspaceRoot,
   legacyAutoRunWorkspace,
   linkedProjectForPath,
+  parentDirectory,
 } from "./projectPaths";
 import { promoteWorkedFolder, rememberOpenedFolder } from "./recentFolders";
 import "./styles/tokens.css";
@@ -2021,8 +2023,21 @@ function App() {
     });
   }
 
+  // Where a folder picker should land. Projects live beside each other, so the
+  // folder holding the last one opened is the useful place to start; with no
+  // history to go on, Documents beats wherever the OS last left the dialog.
+  async function projectPickerStart(): Promise<string | undefined> {
+    const recent = parentDirectory(workspaceRoot ?? recentFolders[0]);
+    if (recent) return recent;
+    try {
+      return await documentDir();
+    } catch {
+      return undefined;
+    }
+  }
+
   async function openFolderDialog() {
-    const picked = await open({ directory: true });
+    const picked = await open({ directory: true, defaultPath: await projectPickerStart() });
     if (typeof picked === "string") changeRoot(picked);
   }
 
@@ -2073,6 +2088,7 @@ function App() {
   async function newProject(name: string) {
     const parent = await open({
       directory: true,
+      defaultPath: await projectPickerStart(),
       title: "Choose where to create the project",
     });
     if (typeof parent !== "string") return;
@@ -2084,6 +2100,7 @@ function App() {
   async function cloneRepo(url: string) {
     const parent = await open({
       directory: true,
+      defaultPath: await projectPickerStart(),
       title: "Choose where to clone the repository",
     });
     if (typeof parent !== "string") return;
