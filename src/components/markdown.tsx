@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { VisualExpandIcon, DownloadIcon, CodeIcon, CopyIcon, CheckIcon } from "../icons";
 import { fitVisualCanvases, fitViewerCanvas } from "./visualLayout";
 import { saveVisualPng } from "./visualExport";
+import { BARE_URL_RE, openExternal, safeLinkHref, splitUrlTail } from "../externalLink";
 
 type MdNode = string | ReactElement;
 
@@ -286,7 +287,20 @@ export const VisualSurface = memo(function VisualSurface({ visual, scope }: { vi
       } as CSSProperties}
     >
       {visual.css ? <style>{visual.css}</style> : null}
-      <div ref={content} data-visual-content dangerouslySetInnerHTML={{ __html: visual.html }} />
+      {/* A drawing is injected into the app's own webview, so a link inside it
+          must not be followed in place either. One delegated handler covers
+          every anchor the sanitizer let through, however deep. */}
+      <div
+        ref={content}
+        data-visual-content
+        onClick={(e) => {
+          const anchor = (e.target as Element | null)?.closest?.("a[href]");
+          if (!(anchor instanceof HTMLAnchorElement)) return;
+          e.preventDefault();
+          void openExternal(anchor.getAttribute("href") ?? "");
+        }}
+        dangerouslySetInnerHTML={{ __html: visual.html }}
+      />
       {visual.dropped.length > 0 ? (
         <div
           style={{
@@ -459,24 +473,44 @@ function VisualBlock({ code, lang, closed }: { code: string; lang: string; close
 
 // One inline node at a time. Match the earliest of all supported patterns;
 // anything else flows through as plain text (HTML-safe by construction).
-const INLINE_RE =
-  /\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|`([^`]+)`|\*(.+?)\*|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
+// The bare-URL alternative comes last so a markdown link still wins: the
+// engine scans left to right, and `[text](url)` starts at its `[`, before the
+// URL it contains. Its shape is `BARE_URL_RE`'s alone — one source, so prose
+// and the opener agree on where a URL ends.
+const INLINE_RE = new RegExp(
+  /\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|`([^`]+)`|\*(.+?)\*|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/
+    .source + `|(${BARE_URL_RE.source})`,
+  "g"
+);
 
-// Only http(s)/mailto URLs may become clickable hrefs. Model output is
-// attacker-influenceable (prompt injection via a poisoned file the model
-// read), and React does not sanitize `javascript:` hrefs — a poisoned link
-// would execute script in the app webview on click. Anything else keeps its
-// link text but renders without an href.
-export function safeLinkHref(url: string): string | null {
-  try {
-    const scheme = new URL(url).protocol.toLowerCase();
-    return scheme === "http:" || scheme === "https:" || scheme === "mailto:"
-      ? url
-      : null;
-  } catch {
-    // Relative URLs / unparseable input: not navigable from the app webview.
-    return null;
-  }
+// `safeLinkHref` and the opening itself belong to `externalLink.ts` — the one
+// door out of the app webview. Re-exported here because this renderer was its
+// only caller when it was written.
+export { safeLinkHref };
+
+// A link in a model's answer. It never navigates the app webview: the click is
+// handed to `openExternal`, which sends it to the system browser. The href is
+// still set so the URL shows in a hover, and copy-link keeps working.
+function ExternalLink({ href, title, children }: { href: string; title?: string; children: ReactNode }) {
+  return (
+    <a
+      href={href}
+      title={title ?? href}
+      onClick={(e) => {
+        e.preventDefault();
+        void openExternal(href);
+      }}
+      style={{
+        color: "var(--accent)",
+        textDecoration: "underline",
+        textDecorationColor: "color-mix(in srgb, var(--accent) 35%, transparent)",
+        textUnderlineOffset: 2,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </a>
+  );
 }
 
 function renderInline(text: string, keyBase: string): MdNode[] {
@@ -539,22 +573,24 @@ function renderInline(text: string, keyBase: string): MdNode[] {
         continue;
       }
       out.push(
-        <a
-          key={`${keyBase}-${key++}`}
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          title={m[8] ?? href}
-          style={{
-            color: "var(--accent)",
-            textDecoration: "underline",
-            textDecorationColor: "color-mix(in srgb, var(--accent) 35%, transparent)",
-            textUnderlineOffset: 2,
-          }}
-        >
+        <ExternalLink key={`${keyBase}-${key++}`} href={href} title={m[8]}>
           {m[6]}
-        </a>
+        </ExternalLink>
       );
+    } else if (m[9] !== undefined) {
+      // A URL written as prose. It reads as itself, so the link text is the
+      // URL; the punctuation that ended the sentence stays outside it.
+      const [raw, trailing] = splitUrlTail(m[9]);
+      const href = safeLinkHref(raw);
+      if (!href) out.push(m[9]);
+      else {
+        out.push(
+          <ExternalLink key={`${keyBase}-${key++}`} href={href}>
+            {href}
+          </ExternalLink>
+        );
+        if (trailing) out.push(trailing);
+      }
     }
     last = m.index + m[0].length;
   }

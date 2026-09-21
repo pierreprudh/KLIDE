@@ -72,3 +72,40 @@ describe("renderMarkdown parse cache", () => {
     expect(renderMarkdown(text, { renderTool })).not.toBe(renderMarkdown(text, { renderTool }));
   });
 });
+
+describe("links in an answer", () => {
+  it("linkifies a URL a model wrote as prose", () => {
+    const out = html("The docs are at https://v2.tauri.app for this.");
+    expect(out).toContain('href="https://v2.tauri.app"');
+    expect(out).toContain(">https://v2.tauri.app</a>");
+  });
+
+  it("leaves the sentence's punctuation outside the link", () => {
+    const out = html("Read https://v2.tauri.app.");
+    expect(out).toContain('href="https://v2.tauri.app"');
+    expect(out).not.toContain('href="https://v2.tauri.app."');
+    expect(out).toContain("</a>.");
+  });
+
+  it("still renders a markdown link as its text, not twice", () => {
+    const out = html("See [the docs](https://v2.tauri.app) first.");
+    expect(out).toContain('href="https://v2.tauri.app"');
+    expect(out).toContain(">the docs</a>");
+    expect(out.match(/<a /g) ?? []).toHaveLength(1);
+  });
+
+  it("never opens the app webview onto the link", () => {
+    expect(html("Read https://v2.tauri.app now.")).not.toContain('target="_blank"');
+  });
+
+  it("leaves a URL inside a code span alone", () => {
+    const out = html("Run `curl https://v2.tauri.app` to check.");
+    expect(out).not.toContain("<a ");
+  });
+
+  it("refuses a scheme that would run script in the app", () => {
+    const out = html("Click [here](javascript:alert(1)) now.");
+    expect(out).not.toContain("<a ");
+    expect(out).toContain("here");
+  });
+});
