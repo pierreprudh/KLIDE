@@ -872,6 +872,12 @@ pub fn set_provider_reference(id: &str, reference: Option<&str>) -> Result<(), S
 /// Set or clear the keychain entry for a provider. `set` writes (after
 /// rejecting empty values); `clear` deletes. Both invalidate the in-memory
 /// token cache so the change takes effect on the next read.
+///
+/// The method saved last wins. A pasted key drops any `${VAR}` reference the
+/// provider still had: `provider_key_in` reads the reference first, so leaving
+/// it in place would make the fresh key unreachable and flip the Settings row
+/// back to "Env ref" — a dangling reference nobody's `.env` resolves used to
+/// trap the user there (2026-09-21).
 pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -881,6 +887,11 @@ pub fn set_keychain_key(provider: &str, key: &str) -> Result<(), String> {
         .set_password(trimmed)
         .map_err(|e| e.to_string())?;
     mark_keychain(provider, true);
+    if builtin_token_reference(provider).is_some() {
+        set_provider_reference(provider, None).map_err(|e| {
+            format!("Key saved, but its old env reference could not be removed: {e}")
+        })?;
+    }
     invalidate_token_cache(provider);
     Ok(())
 }

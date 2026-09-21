@@ -114,6 +114,13 @@ export function ApiKeyRow({
 
   async function save() {
     if (!value.trim() || busy) return;
+    // A key pasted while the toggle sits on "Env ref" is the common slip when
+    // a stale reference pre-selected that segment; name the way out instead
+    // of relaying the Rust rejection.
+    if (method === "ref" && !value.trim().startsWith("$")) {
+      setError(`That looks like a key, not a \${VAR} reference — switch to Paste to store it in the Keychain.`);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
