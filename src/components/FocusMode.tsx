@@ -980,7 +980,8 @@ function effortOptionsFor(levels: readonly string[]): MenuOption[] {
 
 type StarterKind = "explore" | "build" | "review" | "fix" | "resume";
 
-const STARTERS: { title: string; sub: string; prompt: string; kind: StarterKind }[] = [
+/** Exported for `preview/home-cards.tsx`, which draws the real cards in a browser tab. */
+export const STARTERS: { title: string; sub: string; prompt: string; kind: StarterKind }[] = [
   {
     title: "Explore the codebase",
     sub: "Understand the architecture and key decisions",
@@ -2110,7 +2111,7 @@ export function resumeMark(
   return { node: <KlideMark size={22} />, label: "Klide", bare: true };
 }
 
-function HomeCard({
+export function HomeCard({
   title,
   sub,
   kind,
