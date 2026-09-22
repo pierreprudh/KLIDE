@@ -6,6 +6,29 @@ import { renderMarkdown } from "./markdown";
 const html = (text: string, streaming?: boolean) =>
   renderToStaticMarkup(<Fragment>{renderMarkdown(text, streaming ? { streaming } : undefined)}</Fragment>);
 
+describe("fenced output", () => {
+  it.each(["", "text", "plaintext", "txt", "console", "output", "log"])("does not syntax-colour %s logs", (lang) => {
+    const out = html(`\`\`\`${lang}\n✔ returns an empty string for empty input (0.037541ms)\nℹ tests 6 ℹ pass 6 ℹ fail 0\n\`\`\``);
+    expect(out).toContain("returns an empty string for empty input (0.037541ms)");
+    expect(out).toContain("ℹ tests 6 ℹ pass 6 ℹ fail 0");
+    expect(out).not.toContain("var(--code-");
+    expect(out).not.toContain(">code</span>");
+    expect(out).toContain('title="Copy text"');
+  });
+  it("keeps explicit source code highlighted", () => {
+    const out = html("```javascript\nconst count = 6;\n```");
+    expect(out).toContain("var(--code-keyword)");
+    expect(out).toContain("var(--code-number)");
+    expect(out).toContain('title="Copy code"');
+  });
+  it("keeps plain output escaped and intact", () => {
+    const out = html("```text\n<script>alert('test')</script>\n  indented output\n```");
+    expect(out).toContain("&lt;script&gt;");
+    expect(out).not.toContain("<script>");
+    expect(out).toContain("\n  indented output");
+  });
+});
+
 describe("renderMarkdown streaming tail", () => {
   it("renders a finished message as plain text — no per-word spans", () => {
     expect(html("Pistachio is up 23% this month.")).not.toContain("ai-word-in");

@@ -43,6 +43,24 @@ export function hasCompletionReview(completion: RunCompletion): boolean {
     completion.commands.some((command) => command.status !== "passed");
 }
 
+/** Completed command history is not a deliverable or an assessment of success.
+ * Keep failures intact; a later, different command is not proof of recovery. */
+export function isCommandHistory(completion: RunCompletion): boolean {
+  return !completion.stopped && completion.files.length === 0 &&
+    completionDocuments(completion).length === 0 && completion.warnings.length === 0 &&
+    completion.commands.length > 0;
+}
+
+export function commandStatusSummary(completion: RunCompletion): string {
+  const counts = { passed: 0, failed: 0, unknown: 0 };
+  for (const command of completion.commands) counts[command.status]++;
+  return [
+    counts.passed ? `${counts.passed} passed` : "",
+    counts.failed ? `${counts.failed} failed` : "",
+    counts.unknown ? `${counts.unknown} without a result` : "",
+  ].filter(Boolean).join(" · ");
+}
+
 /** Recovery belongs to the view, not the replay-owned transcript. */
 export function latestReviewCompletion(
   messages: readonly {role: string; completion?: RunCompletion}[],

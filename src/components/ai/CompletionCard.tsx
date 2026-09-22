@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { completionDocumentCount, completionDocuments, hasCompletionReview, type RunCompletion } from "../../agent/completion";
+import { commandStatusSummary, completionDocumentCount, completionDocuments, hasCompletionReview, isCommandHistory, type RunCompletion } from "../../agent/completion";
 import { DocumentAppMark, stackedDocumentMarks } from "../../documentAppLogo";
 import { artifactActionLabel, artifactPreview } from "../../artifacts";
 import { ChevronIcon, CloseIcon, DocumentIcon, ReviewIcon } from "../../icons";
@@ -76,8 +76,9 @@ function Fold({ name, open, onToggle, title, label, failed, children }: {
 }
 
 export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact, onPreviewArtifact, onRequestChanges, onDone }: EvidenceProps) {
+  const history = isCommandHistory(completion);
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
-  const [commandsOpen, setCommandsOpen] = useState(false);
+  const [commandsOpen, setCommandsOpen] = useState(history && failed > 0);
   const [changesOpen, setChangesOpen] = useState(false);
   // The documents are what the run made, so they start open; the fold is
   // there to put them away while reading the rest.
@@ -88,6 +89,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   return (
     <>
       <div className="klide-result-body">
+        {history && <p className="klide-result-history-note">Commands from this run, including failed attempts. Their status is separate from the final answer.</p>}
         {completion.files.length > 0 && <section aria-label="Changed files">
           {/* The changed files fold the way the commands do: closed, one row
               that says how many — "2 changes" — and opens on a click. The
@@ -137,6 +139,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
           </Fold>
         </section>}
         {completion.commands.length > 0 && <section aria-label="Command results">
+          <p className="klide-result-command-summary">{commandStatusSummary(completion)}</p>
           {/* The commands are the run's receipts: evidence you check when
               something looks wrong, not something to read every time. So they
               arrive as one stack — a heading that opens — and stay quiet even
@@ -157,10 +160,10 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
         </section>}
         {completion.warnings.length > 0 && <section className="klide-result-notes" aria-label="Review notes"><h3>Worth a look</h3>{completion.warnings.map((warning) => <p key={warning}>{warning}</p>)}</section>}
       </div>
-      <footer className="klide-result-footer">
+      {!history && <footer className="klide-result-footer">
         {completion.files.length > 0 && onReview && <button type="button" className="klide-result-primary" onClick={() => review()}>Review changes <span aria-hidden="true">↗</span></button>}
         <button type="button" disabled={disabled} onClick={() => { onDone(); onRequestChanges(); }}>Request changes</button>
-      </footer>
+      </footer>}
     </>
   );
 }
@@ -199,16 +202,17 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
   if (!hasCompletionReview(completion)) return null;
 
   const failed = completion.commands.filter((command) => command.status !== "passed").length;
-  const attention = failed + completion.warnings.length;
-  const label = completion.stopped ? "Review partial work" : "Review result";
-  const title = completion.stopped ? "Partial work" : "Result";
+  const history = isCommandHistory(completion);
+  const attention = history ? 0 : failed + completion.warnings.length;
+  const label = completion.stopped ? "Review partial work" : history ? "Review commands" : "Review result";
+  const title = completion.stopped ? "Partial work" : history ? "Command history" : "Result";
   const files = completion.files.length > 0
     ? `${completion.files.length} file${completion.files.length === 1 ? "" : "s"}`
     : "";
   const dot = attention > 0 && <span className="klide-result-attention-dot" aria-label={`${attention} item${attention === 1 ? "" : "s"} to review`} />;
   // What the compact mark cannot say, its name says.
   const documentCount = completionDocumentCount(completion);
-  const spoken = [label, files, documentCount > 0 ? `${documentCount} document${documentCount === 1 ? "" : "s"}` : "", attention > 0 ? `${attention} item${attention === 1 ? "" : "s"} to review` : ""]
+  const spoken = [label, files, history ? commandStatusSummary(completion) : "", documentCount > 0 ? `${documentCount} document${documentCount === 1 ? "" : "s"}` : "", attention > 0 ? `${attention} item${attention === 1 ? "" : "s"} to review` : ""]
     .filter(Boolean).join(" · ");
 
   // The run's mark is what it made: the documents' app marks as a stack — one
@@ -274,6 +278,7 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
                 nor the other. Folded, it is a mark; there is no third state. */}
             {mark}
             <span className="klide-result-island-title">{title}</span>
+            {history && <span className="klide-result-meta">{completion.commands.length}</span>}
             {files && <span className="klide-result-meta">{files}</span>}
             {documentCount > 0 && <span className="klide-result-document-count">{documentCount} document{documentCount === 1 ? "" : "s"}</span>}
             {dot}
@@ -334,8 +339,8 @@ export function CompletionCard({ completion, disabled, onReview, onOpenArtifact,
           <div className="klide-result-drawer" id={id} role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}
             onClick={(event) => event.stopPropagation()}>
             <header className="klide-result-header">
-              <div><h2 id={`${id}-title`}>{title}</h2><p>{completion.files.length ? `${completion.files.length} changed file${completion.files.length === 1 ? "" : "s"}` : "Items to review"}</p></div>
-              <button type="button" autoFocus className="klide-result-close" aria-label="Close result" onClick={close}><CloseIcon size={18} /></button>
+              <div><h2 id={`${id}-title`}>{title}</h2><p>{history ? "Commands in execution order" : completion.files.length ? `${completion.files.length} changed file${completion.files.length === 1 ? "" : "s"}` : "Items to review"}</p></div>
+              <button type="button" autoFocus className="klide-result-close" aria-label={history ? "Close command history" : "Close result"} onClick={close}><CloseIcon size={18} /></button>
             </header>
             <ResultEvidence completion={completion} disabled={disabled} onReview={onReview}
               onOpenArtifact={onOpenArtifact} onPreviewArtifact={onPreviewArtifact} onRequestChanges={onRequestChanges} onDone={close} />

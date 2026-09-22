@@ -18,6 +18,40 @@ const renderEvidence = (value: RunCompletion, onOpenArtifact?: (path: string) =>
 const DECK = { path: "decks/Q3 review.pptx", bytes: 40_960, created: true };
 
 describe("CompletionCard", () => {
+  it("presents command-only evidence as history without a task-failure badge", () => {
+    const history: RunCompletion = { ...completion, commands: [
+      { id: "bad-ref", label: "git log wrong-branch", status: "failed", output: "unknown revision" },
+      { id: "inspect", label: "git worktree list", status: "passed" },
+      { id: "test", label: "npm test", status: "passed", output: "6 passed" },
+    ] };
+    const card = renderIsland(history);
+    expect(card).toContain("Command history");
+    expect(card).toContain("2 passed · 1 failed");
+    expect(card).not.toContain('data-attention="1"');
+    expect(card).not.toContain("klide-result-attention-dot");
+    expect(render(history)).toContain("Review commands");
+    const evidence = renderEvidence(history);
+    expect(evidence).toContain("unknown revision");
+    expect(evidence).toContain("Failed");
+    expect(evidence).toContain("6 passed");
+    expect(evidence).not.toContain("Request changes");
+    expect(evidence).not.toMatch(/recovered|resolved/i);
+    expect(evidence).toMatch(/klide-result-commands"[^>]*data-open="1"/);
+  });
+  it("keeps missing results distinct from failed commands", () => {
+    const history = { ...completion, commands: [{ id: "pending", label: "npm test", status: "unknown" as const }] };
+    expect(renderEvidence(history)).toContain("1 without a result");
+    expect(renderEvidence(history)).toContain("No result");
+    expect(renderIsland(history)).toContain("Command history");
+  });
+  it("still warns on failed checks for changed files and on stopped attempts", () => {
+    const commands = [{ id: "c", label: "npm test", status: "failed" as const }];
+    expect(renderIsland({ ...completion, commands, files: ["app.ts"] })).toContain('data-attention="1"');
+    const stopped = { ...completion, commands, stopped: true };
+    expect(renderIsland(stopped)).toContain("Partial work");
+    expect(renderEvidence(stopped)).toContain("Request changes");
+    expect(renderIsland(stopped)).not.toContain("Command history");
+  });
   it("renders nothing for empty evidence, including older saved completions", () => {
     expect(render(completion)).toBe("");
     expect(renderIsland(completion)).toBe("");

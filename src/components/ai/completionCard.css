@@ -1,4 +1,6 @@
 .klide-result-entry { display: flex; justify-content: flex-end; margin: 8px 0 14px; }
+.klide-result-history-note { margin: 0 0 12px; color: var(--fg-subtle); font-size: 12px; line-height: 1.5; }
+.klide-result-command-summary { margin: 0 0 8px; color: var(--fg-subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
 .klide-result-trigger { display: inline-flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--fg-strong); font: inherit; font-size: 12px; cursor: pointer; }
 /* On the Focus canvas the entry is one of the islands in the right-hand
    column, so it drops the transcript margins, wears the island's glass, and

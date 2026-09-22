@@ -207,7 +207,7 @@ function useCopy(code: string): [boolean, () => void] {
 }
 
 // The monospace body with our token highlighter.
-function CodeBody({ code }: { code: string }) {
+function CodeBody({ code, highlight = true }: { code: string; highlight?: boolean }) {
   return (
     <pre
         style={{
@@ -222,21 +222,36 @@ function CodeBody({ code }: { code: string }) {
           tabSize: 2,
         }}
       >
-        <code style={{ fontFamily: "inherit" }}>{highlightCode(code)}</code>
+        <code style={{ fontFamily: "inherit" }}>{highlight ? highlightCode(code) : code}</code>
       </pre>
   );
 }
 
 // Premium code block: language mark in the header, a Copy button on the right,
 // a subtle bg-elevated tint, monospace body.
+// Only an explicit source language earns syntax colours. Unlabelled fences
+// often hold terminal output, prose or diagrams; guessing colours those as code.
+const SOURCE_LANGS = new Set([
+  "js", "javascript", "jsx", "ts", "typescript", "tsx", "json", "jsonc",
+  "rust", "rs", "python", "py", "java", "c", "cpp", "c++", "csharp", "c#",
+  "go", "ruby", "rb", "php", "swift", "kotlin", "scala", "sql",
+  "sh", "bash", "zsh", "shell", "powershell", "ps1", "css", "scss",
+  "yaml", "yml", "toml", "xml", "html", "svg",
+]);
+const OUTPUT_LANGS = new Set(["console", "output", "log", "logs", "terminal"]);
+
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [copied, copy] = useCopy(code);
+  const language = lang.trim().toLowerCase();
+  const highlight = SOURCE_LANGS.has(language);
+  const label = OUTPUT_LANGS.has(language) ? "output"
+    : !language || ["text", "txt", "plain", "plaintext"].includes(language) ? "text" : lang;
   return (
     <BlockShell
-      lang={lang}
-      actions={<BlockAction label={copied ? "Copied" : "Copy"} title="Copy code" active={copied} onClick={copy} />}
+      lang={label}
+      actions={<BlockAction label={copied ? "Copied" : "Copy"} title={highlight ? "Copy code" : "Copy text"} active={copied} onClick={copy} />}
     >
-      <CodeBody code={code} />
+      <CodeBody code={code} highlight={highlight} />
     </BlockShell>
   );
 }
