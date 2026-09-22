@@ -4643,9 +4643,11 @@ This user request requires workspace inspection. Before answering, you MUST call
           // Observer completion is a boundary marker, not an assistant turn.
           // Keep it in the conversation flow without assigning it Klide's
           // response mark; the actual follow-up answer below owns that mark.
+          // It is machinery, so it sits on the tool rows' indent — one step
+          // (14px) inside the prose edge — not flush with the answer.
           if (m.role === "system" && m.observer) {
             return (
-              <div key={i} className="ai-msg-in" style={{ margin: "12px 0 5px 32px", color: "var(--fg-dim)", fontSize: 12 }}>
+              <div key={i} className="ai-msg-in" style={{ margin: "12px 0 5px 46px", color: "var(--fg-dim)", fontSize: 12 }}>
                 {renderMessageBody(m)}
               </div>
             );
