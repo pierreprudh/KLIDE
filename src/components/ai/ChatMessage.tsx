@@ -203,7 +203,10 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
         </div>
       )}
     </details>
-    {childRunId && !watching && !opened && (
+    {/* "View activity" is the settled shape — or the child turned out not to
+        be watchable once its transcript was read. Before that read nothing
+        shows, so a running child doesn't flash the button before its line. */}
+    {childRunId && !opened && (settled || (watch.loaded && !watching)) && (
       <button type="button" onClick={() => setOpened(true)} style={{ border: 0, background: "none", color: "var(--fg-dim)", fontSize: 12, cursor: "pointer", marginLeft: 24 }}>View activity</button>
     )}
     {(watching || opened) && (
@@ -440,9 +443,11 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
 function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string }) {
   const call =
     name === "spawn_subagent" ? (
-      // No result row yet means the child is still going — the only case where
-      // the parent has nothing to show but the child has plenty.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result} />
+      // The child is still going until a *real* report lands. The pending
+      // "Running spawn_subagent…" placeholder is attached as a result too, so
+      // "has a result" is not "settled" — that read would hide the live
+      // watcher for the whole time it exists to cover.
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !result.active} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (
