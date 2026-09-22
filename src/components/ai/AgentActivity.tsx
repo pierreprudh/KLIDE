@@ -115,7 +115,7 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
           if (record) return workerRunStats(record);
           return participantStats(loadConversations<Conversation>().find((conversation) => conversation.id === id)?.msgs ?? []);
         }}>
-        <button type="button" className="ai-agent-open" disabled={!open} onClick={open} aria-label={`Open ${peerName(id, index)}`} title={child && onOpenRun ? "Open in Mission Control" : "Open conversation"}>↗</button>
+        <button type="button" className="ai-agent-open" disabled={!open} onClick={open} aria-label={`Open ${peerName(id, index)}`} title={child && onOpenRun ? "Open in Mission Control" : "Open conversation"}><span aria-hidden="true">↗</span></button>
       </Participant>;
     })}
     {shellAgents.map((name) => <Participant key={name} name={name}

@@ -8863,6 +8863,14 @@ button:focus-visible .menu-leadout {
 
 .ai-agent-open { border: 0; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 2px 4px; }
 .ai-agent-open:disabled { display: none; }
+.ai-agent-open > span { display: inline-block; transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1), color var(--motion-fast) var(--ease-out); }
+.ai-agent-open:hover > span,
+.ai-agent-open:focus-visible > span { transform: translate(2px, -2px); color: var(--fg-strong); }
+@media (prefers-reduced-motion: reduce) {
+  .ai-agent-open > span { transition: none; }
+  .ai-agent-open:hover > span,
+  .ai-agent-open:focus-visible > span { transform: none; }
+}
 
 /* Question card choice rows — a picked answer is one click; hover is the
    soft-fill every list row in the app wears, no border, no chip. */
