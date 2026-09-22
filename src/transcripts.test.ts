@@ -69,3 +69,26 @@ describe("runMessagesToMarkdown", () => {
     expect(md).toContain('"path": "a.ts"');
   });
 });
+
+// A worker can make five tool-only turns before its final answer.
+describe("worker transcript inspection", () => {
+  it("preserves all seven messages and seven tool calls in execution order", () => {
+    const messages: RunMessage[] = [
+      { role: "user", text: "Test the implementation" },
+      ...[1, 3, 1, 1, 1].map((count, turn) => ({
+        role: "assistant" as const, text: "",
+        tools: Array.from({ length: count }, (_, index) => ({ id: `${turn}-${index}`, name: "run_command", input: {}, result: "ok" })),
+      })),
+      { role: "assistant", text: "All six tests passed." },
+    ];
+    const items = compactConversationMessages(messages, { preserveTurns: true });
+    expect(items).toHaveLength(7);
+    expect(items.every(item => item.type === "message")).toBe(true);
+    expect(items.flatMap(item => item.type === "message" ? item.tools : [])).toHaveLength(7);
+    expect(compactConversationMessages(messages, { preserveTurns: true })).toEqual(items);
+  });
+  it("keeps commentary visible with its tools", () => {
+    const items = compactConversationMessages([{ role: "assistant", text: "I found the implementation.", tools: [{ id: "read", name: "read_file", input: {} }] }], { preserveTurns: true });
+    expect(items[0]).toMatchObject({ type: "message", text: "I found the implementation.", tools: [{ id: "read" }] });
+  });
+});

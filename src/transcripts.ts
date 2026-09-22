@@ -43,7 +43,12 @@ export function isProcessNote(text: string): boolean {
 // Collapse a flat RunMessage[] into renderable items: real messages keep their
 // hoisted tool calls; consecutive process notes and empty tool-only turns fold
 // into process stacks attached to the nearest preceding assistant message.
-export function compactConversationMessages(messages: RunMessage[]): ConversationItem[] {
+export function compactConversationMessages(messages: RunMessage[], options?: { preserveTurns?: boolean }): ConversationItem[] {
+  // Inspection must retain tool-only turns and commentary at their original
+  // positions. The summary fold below deliberately combines those turns.
+  if (options?.preserveTurns) return messages.map(message => ({
+    type: "message", message, text: message.text.trim(), tools: [...(message.tools ?? [])],
+  }));
   const items: ConversationItem[] = [];
   let notes: string[] = [];
   const flush = () => {

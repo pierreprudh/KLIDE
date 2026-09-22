@@ -176,8 +176,10 @@ Mission Control. Everything downstream is a projection of that fold, never a
 second parse of the events.
 
 Two further folds sit *on top* of it, and are views rather than parsers:
-`src/transcripts.ts` compacts `RunMessage[]` into `ConversationItem[]` for the
-board's detail pane, and `src/components/ai/replayConversation.ts` adds the
+`src/transcripts.ts` projects `RunMessage[]` into `ConversationItem[]`. The
+board's detail pane preserves each message, including commentary and tool-only
+turns, so inspection retains the full sequence; compact summaries are optional.
+`src/components/ai/replayConversation.ts` adds the
 system lines a resumed panel needs to explain itself.
 
 > This entry used to say `transcripts.ts` was the shared parser, "so Mission

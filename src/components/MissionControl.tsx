@@ -1257,7 +1257,7 @@ function DetailLabel({ children, id }: { children: React.ReactNode; id?: string 
 function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage[] }) {
   const [messages, setMessages] = useState<RunMessage[]>([]);
   const [profileName, setProfileName] = useState("Me");
-  const [showTools, setShowTools] = useState(false);
+  const [showTools, setShowTools] = useState(true);
   const [showProcessNotes, setShowProcessNotes] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -1328,7 +1328,7 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
   if (error) return <div style={muted}>Couldn't read this session.</div>;
   if (messages.length === 0) return <div style={muted}>No readable messages.</div>;
 
-  const conversationItems = compactConversationMessages(messages);
+  const conversationItems = compactConversationMessages(messages, { preserveTurns: true });
   const reviewStats = conversationItems.reduce(
     (acc, item) => {
       if (item.type === "process") {
@@ -1457,6 +1457,7 @@ function ConversationView({ run, preloaded }: { run: Run; preloaded?: RunMessage
                       ))}
                     </div>
                   )}
+                  {!item.text && !m.images?.length && <span style={{ color: "var(--fg-subtle)", fontSize: 12 }}>Tool activity · {item.tools.length}</span>}
                   {item.text &&
                     renderMarkdown(item.text, {
                       renderTool: (name, summary) => <ToolCard name={name} summary={summary} />,
@@ -1511,7 +1512,7 @@ function ConversationReviewBar({
       <span style={{ color: "var(--fg-subtle)" }}>Review</span>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
         {TurnsGlyph}
-        {turns} turns
+        {turns} messages
       </span>
       {tools > 0 && (
         <ReviewToggle
