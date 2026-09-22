@@ -15,7 +15,7 @@
 // an event array current. The expanded view folds those same events through
 // `foldAgentEvents` — the ONE fold — so a child's rows read like the parent's.
 
-import { readAgentRunEvents, reattachAgentRun } from "../../agent/client";
+import { readAgentRunEvents, reattachAgentRun, getAgentRunStatus, isActiveRunStatus } from "../../agent/client";
 import type { AgentEvent } from "../../agent/types";
 
 /** What the child is doing right now: the tool name, and its own summary of
@@ -126,7 +126,7 @@ export function isWatchable(activity: SubagentActivity): boolean {
  */
 export function watchSubagentRun(
   runId: string,
-  onChange: (events: AgentEvent[]) => void
+  onChange: (events: AgentEvent[], active?: boolean) => void
 ): () => void {
   let stopped = false;
   let events: AgentEvent[] | null = null;
@@ -152,7 +152,7 @@ export function watchSubagentRun(
           return;
         }
         push(seq, event);
-        onChange(events);
+        onChange(events, true);
       });
     } catch {
       // Still read the durable transcript if live registration failed.
@@ -163,6 +163,11 @@ export function watchSubagentRun(
     }
     detachLive = reattachment?.detach ?? null;
 
+    // Query before reading the snapshot: if the run settles during this
+    // check, the subsequent transcript still contains its terminal event.
+    let active: boolean | undefined;
+    try { active = isActiveRunStatus(await getAgentRunStatus(runId)); }
+    catch { /* Unknown is not evidence that the worker stopped. */ }
     try {
       events = await readAgentRunEvents(runId);
     } catch {
@@ -172,8 +177,9 @@ export function watchSubagentRun(
     }
     applied = events.length;
     if (stopped) return;
+    if (buffered.length) active = true;
     for (const { seq, event } of buffered.splice(0)) push(seq, event);
-    onChange(events);
+    onChange(events, active);
   })();
 
   return () => {

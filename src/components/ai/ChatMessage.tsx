@@ -209,7 +209,7 @@ function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRu
     {childRunId && !opened && (settled || (watch.loaded && !watching)) && (
       <button type="button" onClick={() => setOpened(true)} style={{ border: 0, background: "none", color: "var(--fg-dim)", fontSize: 12, cursor: "pointer", marginLeft: 24 }}>View activity</button>
     )}
-    {(watching || opened) && (
+    {(watching || opened || (!settled && watch.loaded && watch.activity.status === "failed")) && (
       <SubagentWatchLine
         activity={watch.activity}
         open={opened}

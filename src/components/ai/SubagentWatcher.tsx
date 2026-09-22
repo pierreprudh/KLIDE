@@ -33,6 +33,7 @@ export type SubagentWatchState = {
  */
 export function useSubagentWatch(childRunId: string | undefined, enabled: boolean): SubagentWatchState {
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [active, setActive] = useState<boolean | undefined>();
   const [loaded, setLoaded] = useState(false);
   // The events of the run we are actually showing. A conversation switch can
   // swap the id under us; without this the old child's rows would linger.
@@ -43,12 +44,14 @@ export function useSubagentWatch(childRunId: string | undefined, enabled: boolea
     if (shownFor.current !== childRunId) {
       shownFor.current = childRunId;
       setEvents([]);
+      setActive(undefined);
       setLoaded(false);
     }
     let alive = true;
-    const detach = watchSubagentRun(childRunId, (next) => {
+    const detach = watchSubagentRun(childRunId, (next, live) => {
       if (!alive) return;
       setEvents(next);
+      setActive(live);
       setLoaded(true);
     });
     return () => {
@@ -57,7 +60,13 @@ export function useSubagentWatch(childRunId: string | undefined, enabled: boolea
     };
   }, [childRunId, enabled]);
 
-  const activity = useMemo(() => subagentActivity(events), [events]);
+  const activity = useMemo(() => {
+    const folded = subagentActivity(events);
+    if (active === false && (folded.status === "starting" || folded.status === "working")) {
+      return { ...folded, status: "failed" as const, current: null, error: "Interrupted: run is no longer active." };
+    }
+    return folded;
+  }, [events, active]);
   return { activity, events, loaded };
 }
 
@@ -98,7 +107,7 @@ export function SubagentWatchLine({
   /** Whether opening would show anything yet. */
   hasRows: boolean;
 }) {
-  const elapsed = useElapsed(activity.startedMs);
+  const elapsed = useElapsed(activity.status === "starting" || activity.status === "working" ? activity.startedMs : undefined);
   const working = activity.status === "starting" || activity.status === "working";
   const step = activity.current;
   // Between steps the child is thinking; before its first event it is starting.
@@ -106,7 +115,7 @@ export function SubagentWatchLine({
     ? stepVerb(step.name)
     : activity.status === "starting"
       ? "starting"
-      : activity.status === "done" ? "finished" : activity.status === "failed" ? "stopped" : "thinking";
+      : activity.status === "done" ? "finished" : activity.status === "failed" ? (activity.error?.startsWith("Interrupted:") ? "interrupted" : "stopped") : "thinking";
 
   const counts: string[] = [];
   if (activity.steps > 0) counts.push(`${activity.steps} ${activity.steps === 1 ? "step" : "steps"}`);

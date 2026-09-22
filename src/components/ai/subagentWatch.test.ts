@@ -143,10 +143,12 @@ describe("subagentActivity", () => {
 // The live half: the snapshot→subscribe seam is where a watcher would lose or
 // double-apply an event, so it is tested against fakes rather than trusted.
 const listeners = new Map<string, (payload: { payload: { seq: number; event: AgentEvent } }) => void>();
+const runStatus = vi.fn<() => Promise<string | null>>();
 const readRun = vi.fn<(runId: string) => Promise<AgentEvent[]>>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args: any) => {
+    if (cmd === "agent_run_status") return runStatus();
     if (cmd === "agent_read_run") return readRun(args.runId);
     return null;
   }),
@@ -167,6 +169,18 @@ describe("watchSubagentRun", () => {
   beforeEach(() => {
     listeners.clear();
     readRun.mockReset();
+    runStatus.mockResolvedValue("running");
+  });
+
+  it("reports an unfinished transcript as inactive after the backend restarts", async () => {
+    const { watchSubagentRun } = await import("./subagentWatch");
+    runStatus.mockResolvedValue(null);
+    const base = [started()];
+    readRun.mockResolvedValue(base);
+    const seen = vi.fn();
+    const detach = watchSubagentRun(CHILD, seen);
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledWith(base, false));
+    detach();
   });
 
   it("applies the snapshot, then only events past it", async () => {
