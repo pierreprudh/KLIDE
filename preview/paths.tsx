@@ -15,10 +15,35 @@ import "@fontsource/monaspace-neon/400.css";
 import "@fontsource/monaspace-neon/700.css";
 import "../src/styles/tokens.css";
 import { renderMarkdown } from "../src/components/markdown";
+import { primeWorkspaceIndex } from "../src/workspaceIndex";
+import { registerWorkspaceOpener } from "../src/revealPath";
+import { notify } from "../src/toast";
 import { subscribeToasts, type Toast } from "../src/toast";
 
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.theme = params.get("theme") ?? "klide-light";
+
+// The browser has no Tauri backend to walk a project with, so the page stands
+// in a repository: these are the files Klide is "opened on" here.
+primeWorkspaceIndex("/Users/pierre/Documents/Private/KIDE", [
+  "src/App.tsx",
+  "src/runPresentation.ts",
+  "docs/MODEL_ROUTING.md",
+  "docs/HARNESS_CONTRACT.md",
+  "CLAUDE.md",
+]);
+
+// Stand in for App's tab opener, so the two destinations are visibly
+// different out here: one logs an editor open, the other a Finder reveal.
+registerWorkspaceOpener("/Users/pierre/Documents/Private/KIDE", async (path, line) => {
+  notify(`editor \u2192 ${path}${line ? `:${line}` : ""}`, { tone: "success" });
+});
+
+const IN_REPO: [string, string][] = [
+  ["a file this project holds", "The one status vocabulary lives in `src/runPresentation.ts`."],
+  ["with a line", "The picker starts in `src/App.tsx:2028`, not wherever the OS left it."],
+  ["a folder on the way to one", "The contracts are under `docs/`."],
+];
 
 const OPENS: [string, string][] = [
   ["another project — the case that started this", "Take a look in the other project `/Users/pierre/Documents/Private/Sylvia`, the same rule is in there."],
@@ -79,20 +104,25 @@ function Page() {
       <div style={{ flex: 1, padding: "32px 28px", maxWidth: 720 }}>
         <h1 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 4px" }}>Paths in an answer</h1>
         <p style={{ fontSize: 12, color: "var(--fg-subtle)", margin: "0 0 30px" }}>
-          A backticked <em>rooted</em> path is accent, with the last word
-          standing for the whole; the hairline and the full address wait for
-          the pointer. Everything else, including a file named relative to
-          whichever project the answer is about, stays a code span and never
-          lights up. Click a path; where it resolved logs on the right.
+          A path this repository holds opens in a tab. A rooted path outside it
+          opens in Finder, reading as its last word. Anything this project does
+          not recognise stays a code span — it belongs to whichever project the
+          answer is about. Out here there is no editor and no Finder, so a
+          click reports where it would have gone.
         </p>
         <Cases
-          title="Opens"
-          note="Hover each accent word — a hairline wipes in from the left — and a click logs an absolute path."
+          title="Opens in the editor"
+          note="This repository holds these, so they belong in a tab. The path keeps its folder — `App.tsx` alone is not the file."
+          cases={IN_REPO}
+        />
+        <Cases
+          title="Opens in Finder"
+          note="Rooted, and outside this project — only the file manager can show them."
           cases={OPENS}
         />
         <Cases
           title="Stays prose"
-          note="Not a place Klide can name on its own. Still a code span, nothing to click — a link that goes to the wrong folder is worse than no link."
+          note="Either not a place at all, or a name this repository does not recognise — so it belongs to whichever project the answer is about, and stays a code span."
           cases={STAYS_PROSE}
         />
       </div>

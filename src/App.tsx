@@ -132,6 +132,8 @@ import {
 } from "./worktrees";
 import { createListenerScope } from "./tauriEvents";
 import { registerSettingsOpener } from "./settingsNavigation";
+import { registerWorkspaceOpener } from "./revealPath";
+import { setIndexedProject } from "./workspaceIndex";
 import {
   canonicalWorkspaceRoot,
   legacyAutoRunWorkspace,
@@ -680,6 +682,23 @@ function App() {
     return () => registerSettingsOpener(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // A path named in an answer opens where it belongs: this project's own files
+  // in a tab, anything else in Finder. Only App can open a tab, so it hands the
+  // opener over the way it hands over the Settings one.
+  useEffect(() => {
+    setIndexedProject(workspaceRoot);
+    registerWorkspaceOpener(workspaceRoot, async (path, line) => {
+      if (!workspaceRoot) throw new Error("no project open");
+      if (isSpreadsheetPath(path)) {
+        openSpreadsheet(path);
+        return;
+      }
+      const content = await readWorkspaceTextFile(workspaceRoot, path);
+      openFile(path, content, line ? { line, column: 1 } : undefined);
+    });
+    return () => registerWorkspaceOpener(null, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceRoot]);
   const [theme, setTheme] = useSetting(SETTINGS.theme);
   const [autoTheme] = useSetting(SETTINGS.autoTheme);
   const [lightTheme] = useSetting(SETTINGS.lightTheme);

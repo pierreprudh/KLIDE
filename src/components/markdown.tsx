@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useId, useMemo, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { memo, useLayoutEffect, useRef, useId, useMemo, useState, useSyncExternalStore, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { prepareVisual, type VisualHtml } from "./visualHtml";
 import { typesetVisual } from "./visualTypeset";
 
@@ -9,7 +9,8 @@ import { saveVisualPng } from "./visualExport";
 import { BARE_URL_RE, openExternal, safeLinkHref, splitUrlTail } from "../externalLink";
 import { linkIdentity, type LinkSite } from "../linkIdentity";
 import { pathFromCodeSpan, pathLabel } from "../filePaths";
-import { revealPath } from "../revealPath";
+import { openWrittenPath } from "../revealPath";
+import { ensureWorkspaceIndex, repoHasPath, subscribeWorkspaceIndex, workspaceIndexVersion } from "../workspaceIndex";
 import { LinkMark } from "./linkMark";
 
 type MdNode = string | ReactElement;
@@ -570,18 +571,33 @@ const INLINE_CODE_STYLE: CSSProperties = {
   color: "var(--fg)",
 };
 
-// A place on disk, written in backticks. It reads like every other openable
-// thing in an answer — accent, underlined, the full address on hover — because
-// that is what it is: `openExternal` hands a URL to the browser, `revealPath`
-// hands this to Finder. A rooted path reads as its last word (`Onetraak`), the
-// same reduction a bare URL gets; a project-relative one is already short and
-// stands as written.
+// A place on disk, written in backticks.
+//
+// A rooted path is a place on sight. A relative one is only a candidate — it
+// belongs to whichever project the answer is about — so it stays prose until
+// the open repository recognises it, and the walk that answers that is kicked
+// off here, lazily, by the first span that needs it.
 function PathLink({ text }: { text: string }) {
-  const place = pathFromCodeSpan(text);
-  if (!place) return <code style={INLINE_CODE_STYLE}>{text}</code>;
+  const place = useMemo(() => pathFromCodeSpan(text), [text]);
+  // The third snapshot is for server rendering, which the specs use: the index
+  // is a module, not a request, so it reads the same on both sides.
+  const known = useSyncExternalStore(
+    subscribeWorkspaceIndex,
+    workspaceIndexVersion,
+    workspaceIndexVersion,
+  );
+  // `known` is read only to re-render when the walk lands; the answer itself
+  // comes from the index.
+  void known;
+  if (place && !place.rooted) ensureWorkspaceIndex();
+
+  if (!place || (!place.rooted && repoHasPath(place.path) !== true)) {
+    return <code style={INLINE_CODE_STYLE}>{text}</code>;
+  }
+  const where = place.rooted ? "" : " in the editor";
   const title = place.line
-    ? `Show ${place.path} in Finder (line ${place.line})`
-    : `Show ${place.path} in Finder`;
+    ? `Open ${place.path}${where} (line ${place.line})`
+    : `Open ${place.path}${where}`;
   return (
     <a
       className="klide-path-link"
@@ -590,15 +606,15 @@ function PathLink({ text }: { text: string }) {
       title={title}
       onClick={(e) => {
         e.preventDefault();
-        void revealPath(place);
+        void openWrittenPath(place);
       }}
       onKeyDown={(e) => {
         if (e.key !== "Enter" && e.key !== " ") return;
         e.preventDefault();
-        void revealPath(place);
+        void openWrittenPath(place);
       }}
     >
-      {pathLabel(place.path)}
+      {pathLabel(place)}
     </a>
   );
 }

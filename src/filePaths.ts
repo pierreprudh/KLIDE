@@ -1,25 +1,28 @@
 // Which backticked words in an answer are places you can open.
 //
-// Only a *rooted* path qualifies — `/Users/pierre/Documents/Onetraak`,
-// `~/.klide/connectors.json`, `C:\…`. That is the one shape that names exactly
-// one place on this machine, and it is also the shape worth having: a path
-// written relative to a project ("`harness/`", "`CLAUDE.md`") belongs to
-// whichever project the answer is *about*, which is very often not the one
-// Klide has open. Resolving those against the open workspace sends you to the
-// wrong folder, or to nothing.
+// Two shapes reach that bar, and they are read differently. A *rooted* path —
+// `/Users/pierre/Documents/Onetraak`, `~/.klide/connectors.json` — names one
+// place on this machine and needs nothing else to be understood. A *relative*
+// one — `src/App.tsx`, `harness/`, `CLAUDE.md` — belongs to whichever project
+// the answer is about, which is very often not the one Klide has open, so the
+// writing alone can never settle it: the open repository has to recognise the
+// path before it becomes anything (`workspaceIndex.ts`).
 //
-// Leaving them alone fixes the other half of the problem too. An answer
-// describing a repository names a dozen of its files in one breath; if every
-// one turned accent the paragraph would read as a link farm, and a branch like
-// `m6/orchestrator` — a slash, no extension, indistinguishable from a folder —
-// would turn blue as well.
+// That second gate is what keeps a paragraph describing *another* repository
+// from reading as a link farm. An answer names a dozen of a project's files in
+// one breath; none of them is here, so none of them lights up — and a branch
+// like `m6/orchestrator`, a slash and no extension, shaped exactly like a
+// folder, is refused for the same reason rather than by guesswork.
 //
-// Nothing here touches the filesystem. It reads the writing, not the disk —
-// whether the path exists is the opener's question to answer, out loud, when
-// someone actually clicks.
+// Nothing here touches the filesystem. It reads the writing, not the disk.
 
-/** A path as a model wrote it, plus the line it pointed at (`file.rs:42`). */
-export type WrittenPath = { path: string; line: number | null };
+/**
+ * A path as a model wrote it, plus the line it pointed at (`file.rs:42`).
+ *
+ * `rooted` says whether the path stands on its own. A relative one is only a
+ * *candidate* until the open repository recognises it.
+ */
+export type WrittenPath = { path: string; line: number | null; rooted: boolean };
 
 // A locator suffix — `:42` or `:42:7` — is how every editor and every agent
 // cites a line. It is not part of the path, so it comes off before the path is
@@ -30,20 +33,26 @@ const LOCATOR_RE = /:(\d+)(?::\d+)?$/u;
 // shell punctuation, globs, and the brackets of a function call.
 const NOT_A_PATH = /[\s()[\]{}<>=;,|&$"'`*?!]/u;
 
-// Absolute, home-relative, or a Windows drive — the only shapes that name one
-// place without a project to resolve them against.
+// Absolute, home-relative, or a Windows drive — the shapes that name one place
+// without a project to resolve them against.
 function isRooted(path: string): boolean {
   return path.startsWith("/") || path.startsWith("~/") || /^[A-Za-z]:[\\/]/u.test(path);
 }
 
+// A relative candidate has to look like a path at all: a folder step, or a
+// filename whose extension starts with a letter — which is what keeps a
+// version (`1.2.3`), an address (`127.0.0.1`) and a bare word (`dev`) out
+// before the repository is ever asked.
+const RELATIVE_SHAPE = /^(?:[\w.@-]+[\\/])|^[\w.@-]+\.[A-Za-z][A-Za-z0-9]{0,8}$/u;
+
 /**
  * Read one inline-code span as a place, or decide it isn't one.
  *
- * Accepts an absolute or `~`-relative path, with an optional `:line` locator.
- * Refuses anything project-relative (`src/App.tsx`, `CLAUDE.md`, the branch
- * `m6/orchestrator`), anything holding whitespace or shell punctuation (`npm
- * run tauri dev`), a glob (`src/**` + `/*.ts`), a flag (`--force`), and a URL
- * (the web door already owns those).
+ * Accepts a rooted path outright, and a relative one as a candidate, each with
+ * an optional `:line` locator. Refuses anything holding whitespace or shell
+ * punctuation (`npm run tauri dev`), a glob (`src/**` + `/*.ts`), a flag
+ * (`--force`), a bare word (`dev`, `d28f499`) and a URL (the web door already
+ * owns those).
  */
 export function pathFromCodeSpan(raw: string): WrittenPath | null {
   const span = raw.trim();
@@ -54,10 +63,13 @@ export function pathFromCodeSpan(raw: string): WrittenPath | null {
   const path = locator && locator.index > 1 ? span.slice(0, locator.index) : span;
   const line = locator && locator.index > 1 ? Number(locator[1]) : null;
 
-  if (!path || path === "/" || path === "~" || !isRooted(path)) return null;
+  if (!path || path === "/" || path === "~") return null;
   if (NOT_A_PATH.test(path)) return null;
 
-  return { path, line };
+  const rooted = isRooted(path);
+  if (!rooted && !RELATIVE_SHAPE.test(path)) return null;
+
+  return { path, line, rooted };
 }
 
 /**
@@ -65,9 +77,13 @@ export function pathFromCodeSpan(raw: string): WrittenPath | null {
  *
  * Nobody reads `/Users/pierre/Documents/Onetraak` mid-prose; the word that
  * carries the meaning is the last one — the same bargain a bare URL already
- * makes, with the full address on hover.
+ * makes, with the full address on hover. A path already written relative to
+ * the project is short, and its folder is the point (`src/App.tsx` is not
+ * `App.tsx`), so that one stands exactly as written.
  */
-export function pathLabel(path: string): string {
+export function pathLabel(written: WrittenPath | string): string {
+  const path = typeof written === "string" ? written : written.path;
+  if (typeof written !== "string" && !written.rooted) return path;
   const segments = path.split(/[\\/]+/u).filter(Boolean);
   const last = segments[segments.length - 1];
   return last && last !== "~" ? last : path;

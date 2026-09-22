@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { renderMarkdown } from "./markdown";
+import { primeWorkspaceIndex, setIndexedProject } from "../workspaceIndex";
 
 const html = (text: string, streaming?: boolean) =>
   renderToStaticMarkup(<Fragment>{renderMarkdown(text, streaming ? { streaming } : undefined)}</Fragment>);
@@ -158,9 +159,22 @@ describe("links in an answer", () => {
 describe("a path in an answer", () => {
   it("reads a rooted path as its last word and offers to show it", () => {
     const out = html("It's at `/Users/pierre/Documents/Onetraak` — not here.");
-    expect(out).toContain("Show /Users/pierre/Documents/Onetraak in Finder");
+    expect(out).toContain("Open /Users/pierre/Documents/Onetraak");
     expect(out).toContain(">Onetraak</a>");
     expect(out).not.toContain(">/Users/pierre/Documents/Onetraak<");
+  });
+
+  it("opens a file this repository holds in the editor, not Finder", () => {
+    primeWorkspaceIndex("/Users/pierre/Documents/Private/KIDE", [
+      "src/App.tsx",
+      "docs/MODEL_ROUTING.md",
+    ]);
+    const out = html("The rule is in `src/App.tsx` and written up in `docs/`.");
+    expect(out).toContain("Open src/App.tsx in the editor");
+    // A relative path keeps its folder — `App.tsx` alone is not the file.
+    expect(out).toContain(">src/App.tsx</a>");
+    expect(out).toContain("Open docs/ in the editor");
+    setIndexedProject(null);
   });
 
   it("leaves a project's own file names as the code spans they are", () => {
