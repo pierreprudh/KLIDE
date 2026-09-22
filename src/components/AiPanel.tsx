@@ -4713,7 +4713,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           // the running answer as finished and hand it its copy/retry row
           // mid-run, which is the one thing this rule exists to prevent.
           const nextMsg = msgs[i + 1];
-          const isResponseEnd = !nextMsg || (nextMsg.role === "system" && !!nextMsg.completion) || (nextMsg.role === "user" && nextMsg.queueState !== "queued");
+          // An observer wake continues this response rather than opening a
+          // new one — the person asked nothing in between — so once the
+          // follow-up lands, the icon row moves to it. Each answer keeps its
+          // own stats line; only the actions are one per response.
+          const afterCompletion = nextMsg?.role === "system" && nextMsg.completion ? msgs[i + 2] : nextMsg;
+          const observerFollows = afterCompletion?.role === "system" && !!afterCompletion.observer;
+          const isResponseEnd = !observerFollows && (!nextMsg || (nextMsg.role === "system" && !!nextMsg.completion) || (nextMsg.role === "user" && nextMsg.queueState !== "queued"));
           const mark = isResponseStart && m.role === "assistant" ? responseMark(m) : null;
           // This turn's results, handed to its call rows. A result is live
           // while it is the exchange's tail and still says "Running".
