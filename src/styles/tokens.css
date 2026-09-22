@@ -3071,6 +3071,11 @@ button:focus-visible .menu-leadout {
     transform: translateY(0) scale(1);
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .popover-enter {
+    animation: none;
+  }
+}
 
 /* Side-rail navigation item. The active state adds a thin accent bar
    on the inner edge (left in LTR) and an inset highlight on the

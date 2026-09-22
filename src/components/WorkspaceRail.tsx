@@ -504,7 +504,7 @@ function ConvoRow({
   const entranceDelay = useEntranceValue(revealDelay);
   // Where the ⋯ menu is open, if it is. Anchored under the button it came
   // from, or at the pointer for a right-click on the row.
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number; align: "start" | "end" } | null>(null);
   // The title is being typed over. The open button steps aside for the input,
   // because an <input> may not live inside a <button>.
   const [renaming, setRenaming] = useState(false);
@@ -543,7 +543,7 @@ function ConvoRow({
         hasMenu
           ? (e) => {
               e.preventDefault();
-              setMenuAt({ x: e.clientX, y: e.clientY });
+              setMenuAt({ x: e.clientX, y: e.clientY, align: "start" });
             }
           : undefined
       }
@@ -635,13 +635,23 @@ function ConvoRow({
           onClick={(e) => {
             e.stopPropagation();
             const rect = e.currentTarget.getBoundingClientRect();
-            setMenuAt({ x: rect.right - 190, y: rect.bottom + 4 });
+            // Hung from the button's trailing edge, so the sheet lines up with
+            // the row's own right edge instead of guessing its width.
+            setMenuAt({ x: rect.right, y: rect.bottom + 4, align: "end" });
           }}
         >
           <MoreIcon size={15} />
         </button>
       ) : null}
-      {menuAt ? <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onClose={() => setMenuAt(null)} /> : null}
+      {menuAt ? (
+        <ContextMenu
+          x={menuAt.x}
+          y={menuAt.y}
+          align={menuAt.align}
+          items={menuItems}
+          onClose={() => setMenuAt(null)}
+        />
+      ) : null}
     </div>
   );
 }
