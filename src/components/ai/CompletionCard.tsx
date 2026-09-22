@@ -88,8 +88,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
   const artifacts = completionDocuments(completion);
   return (
     <>
-      <div className="klide-result-body">
-        {history && <p className="klide-result-history-note">Commands from this run, including failed attempts. Their status is separate from the final answer.</p>}
+      <div className="klide-result-body" data-history={history ? "1" : undefined}>
         {completion.files.length > 0 && <section aria-label="Changed files">
           {/* The changed files fold the way the commands do: closed, one row
               that says how many — "2 changes" — and opens on a click. The
@@ -139,7 +138,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
           </Fold>
         </section>}
         {completion.commands.length > 0 && <section aria-label="Command results">
-          <p className="klide-result-command-summary">{commandStatusSummary(completion)}</p>
+          {!history && <p className="klide-result-command-summary">{commandStatusSummary(completion)}</p>}
           {/* The commands are the run's receipts: evidence you check when
               something looks wrong, not something to read every time. So they
               arrive as one stack — a heading that opens — and stay quiet even
@@ -151,7 +150,7 @@ export function ResultEvidence({ completion, disabled, onReview, onOpenArtifact,
               turning over on open instead of swapping a + for a −: one mark
               that moves, not two that replace each other. */}
           <Fold name="commands" open={commandsOpen} onToggle={() => setCommandsOpen((was) => !was)} failed={failed > 0}
-            title={<><span className="klide-result-fold-count">{completion.commands.length}</span><span>command{completion.commands.length === 1 ? "" : "s"}</span></>}>
+            title={history ? commandStatusSummary(completion) : <><span className="klide-result-fold-count">{completion.commands.length}</span><span>command{completion.commands.length === 1 ? "" : "s"}</span></>}>
           {completion.commands.map((command) => <details key={command.id} className="klide-result-command">
             <summary><code>{command.label}</code><span className={`klide-result-status-${command.status}`}>{command.status === "unknown" ? "No result" : command.status === "passed" ? "Passed" : "Failed"}</span></summary>
             <pre>{command.output || "No output recorded."}</pre>

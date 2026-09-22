@@ -1,5 +1,4 @@
 .klide-result-entry { display: flex; justify-content: flex-end; margin: 8px 0 14px; }
-.klide-result-history-note { margin: 0 0 12px; color: var(--fg-subtle); font-size: 12px; line-height: 1.5; }
 .klide-result-command-summary { margin: 0 0 8px; color: var(--fg-subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
 .klide-result-trigger { display: inline-flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--fg-strong); font: inherit; font-size: 12px; cursor: pointer; }
 /* On the Focus canvas the entry is one of the islands in the right-hand
@@ -248,3 +247,8 @@
 .klide-result-artifacts .klide-result-document-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 7px; margin: 4px 0; border: 0; border-radius: 6px; background: transparent; }
 .klide-result-artifacts button.klide-result-document-icon:hover { background: var(--bg-hover); }
 .klide-result-artifacts button.klide-result-document-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* History has one summary row; keep its receipts compact. */
+.klide-result-body[data-history="1"] .klide-result-command summary { padding: 7px 0; gap: 8px; }
+.klide-result-body[data-history="1"] .klide-result-command:last-child { border-bottom: 0; }
+.klide-result-body[data-history="1"] .klide-result-fold-summary { margin-bottom: 2px; }

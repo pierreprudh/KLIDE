@@ -210,11 +210,10 @@ describe("ResultEvidence", () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("klide-result-fold-body");
     expect(html).not.toContain('data-failed');
-    // The count leads on the left as part of the row's name; the disclosure is
-    // the chevron, and nothing repeats the number on the right.
-    expect(html).toContain('class="klide-result-fold-count">2</span>');
+    // History combines counts and statuses in its single disclosure row.
+    expect(html).toContain("2 passed");
     expect(html).toContain("klide-result-fold-chevron");
-    expect(html).toContain("commands</span>");
+    expect(html).not.toContain("commands</span>");
   });
 
   it("stops dimming the stack when a command failed", () => {
