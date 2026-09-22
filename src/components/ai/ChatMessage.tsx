@@ -447,7 +447,7 @@ function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: stri
       // "Running spawn_subagent…" placeholder is attached as a result too, so
       // "has a result" is not "settled" — that read would hide the live
       // watcher for the whole time it exists to cover.
-      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !result.active} />
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result && !/^Running /.test(result.msg.content)} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (

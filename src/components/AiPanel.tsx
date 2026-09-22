@@ -839,6 +839,10 @@ export function AiPanel({
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
       if (m.role === "user" && m.queueState === "queued") continue;
+      // A background subagent's report rides beside the exchange, not at its
+      // end — otherwise the main turn's live tool result stops reading as live
+      // the moment an @role bubble is dropped below it.
+      if (m.role === "assistant" && m.subagentRunId) continue;
       return i;
     }
     return -1;
@@ -4440,7 +4444,10 @@ This user request requires workspace inspection. Before answering, you MUST call
           // off the run that owns it — all while the run is still going.
           const following = msgs[i + 1];
           const isLast = i === lastExchangeIndex || (i + 1 === lastExchangeIndex && following?.role === "system" && !!following.completion);
-          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls;
+          // A background subagent's report bubble is empty while its child
+          // works, but it is its own surface (an @role header + watcher), never
+          // the main answer's "not yet started" dots.
+          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls && !m.subagent;
           const previous = msgs[i - 1];
           const activeToolRunning =
             streaming &&
