@@ -14,7 +14,7 @@ import { AgentMark } from "../fileMarks";
 import { StepMark } from "../TodoStrip";
 import { loadConversations } from "./storedConversations";
 import { METRIC_GAP, participantStats, workerRunStats } from "./participantStats";
-import { fetchAgentRunsCached, type Run } from "../../runs";
+import { fetchAgentRunsCached, fetchRunOrigins, type Run, type RunOrigin } from "../../runs";
 
 function Participant({ name, mark, status, outcome, stats, children }: {
   name: string; mark: ReactNode; status: string;
@@ -64,6 +64,7 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
   // conversation, so its duration, messages, tokens and cost come from the
   // run ledger instead. Refreshed with the journal.
   const [runRecords, setRunRecords] = useState<Map<string, Run>>(() => new Map());
+  const [origins, setOrigins] = useState<Map<string, RunOrigin>>(() => new Map());
   const [children, setChildren] = useState<{ key: string; runs: CoordinationRunSnapshot[] }>({ key: "", runs: [] });
   const key = `${workspaceRoot}\0${selfId}`;
   useEffect(() => {
@@ -74,7 +75,12 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
       const request = ++revision;
       try {
         const snapshot = await readCoordinationSnapshot(workspaceRoot);
-        if (!disposed && request === revision) setChildren({ key, runs: snapshot.runs.filter((r) => r.registration.parentRunId === selfId) });
+        const childRuns = snapshot.runs.filter((r) => r.registration.parentRunId === selfId);
+        if (!disposed && request === revision) setChildren({ key, runs: childRuns });
+        try {
+          const identities = await fetchRunOrigins(childRuns.map((r) => r.registration.runId));
+          if (!disposed && request === revision) setOrigins(new Map(identities.map((origin) => [origin.runId, origin])));
+        } catch { /* Keep the participants visible if identity lookup fails. */ }
       } catch { if (!disposed && request === revision) setChildren({ key, runs: [] }); }
       try {
         const recent = await fetchAgentRunsCached(60, 0, { force: true });
@@ -96,7 +102,13 @@ export function AgentActivity({ msgs, onOpenRun, ...props }: ComponentProps<type
   const workers = useMemo(() => workerChildrenOf(msgs, selfId), [msgs, selfId]);
   for (const run of runs) if (!index.has(run.registration.runId)) {
     const worker = workers.get(run.registration.runId);
-    index.set(run.registration.runId, { title: run.registration.label ?? run.registration.runId, provider: (worker?.provider as ProviderId | undefined) ?? null, model: worker?.model ?? null });
+    const record = runRecords.get(run.registration.runId);
+    const origin = origins.get(run.registration.runId);
+    index.set(run.registration.runId, {
+      title: run.registration.label ?? run.registration.runId,
+      provider: ((origin?.provider ?? record?.provider ?? worker?.provider) as ProviderId | undefined) ?? null,
+      model: origin?.model ?? record?.model ?? worker?.model ?? null,
+    });
   }
   if (!peers.length && !shellAgents.length) return null;
   return <div className="ai-agent-activity" key={key} role="group" aria-label="Agents in this conversation">

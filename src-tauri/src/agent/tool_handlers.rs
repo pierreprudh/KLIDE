@@ -250,7 +250,7 @@ where
     let settled_by_user = worker.is_some_and(|w| {
         user_named_dispatch(&ctx.request.initial_text, w, chosen_model.as_deref())
     });
-    if (needs_worker || worker.is_some()) && !settled_by_user {
+    if !settled_by_user {
         let mut options = available_worker_ids().await;
         if options.is_empty() {
             options = subagents::worker_ids().into_iter().map(str::to_string).collect();

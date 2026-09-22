@@ -453,7 +453,9 @@ function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: stri
     ) : (
       <ToolCallDisclosure name={name} args={args} />
     );
-  if (!result) return call;
+  // A watchable child owns its live status line; the tool placeholder would
+  // repeat the same running animation underneath it. Keep actual reports.
+  if (!result || (name === "spawn_subagent" && childRunId && /^Running /.test(result.msg.content))) return call;
   return (
     <>
       {call}
