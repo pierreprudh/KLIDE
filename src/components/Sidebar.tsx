@@ -5,6 +5,7 @@ import { isSpreadsheetPath } from "../spreadsheets/paths";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, KeyboardEvent } from "react";
 import { ContextMenu, MenuItem } from "./ContextMenu";
+import { InlineNameInput } from "./InlineNameInput";
 import { FileTypeIcon } from "./fileMarks";
 import type { GitFile } from "../gitTypes";
 import {
@@ -215,70 +216,6 @@ function loadExpanded(root: string | null): Set<string> {
   } catch {
     return new Set();
   }
-}
-
-function InlineNameInput({
-  defaultValue,
-  onCommit,
-  onCancel,
-}: {
-  defaultValue: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  // The input commits on both Enter and blur; Enter unmounts it, which
-  // fires blur too — this flag makes sure we only commit once.
-  const doneRef = useRef(false);
-
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.focus();
-    // Select the basename but not the extension (like VS Code's rename).
-    const dot = defaultValue.lastIndexOf(".");
-    el.setSelectionRange(0, dot > 0 ? dot : defaultValue.length);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function commit(value: string) {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    onCommit(value);
-  }
-
-  function cancel() {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    onCancel();
-  }
-
-  return (
-    <input
-      ref={inputRef}
-      defaultValue={defaultValue}
-      spellCheck={false}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") commit(e.currentTarget.value);
-        else if (e.key === "Escape") cancel();
-      }}
-      onBlur={(e) => commit(e.currentTarget.value)}
-      style={{
-        flex: 1,
-        minWidth: 0,
-        font: "inherit",
-        fontSize: 12.5,
-        color: "var(--fg-strong)",
-        background: "var(--bg)",
-        border: "1px solid var(--accent)",
-        borderRadius: "var(--radius-xs)",
-        padding: "0 4px",
-        outline: "none",
-      }}
-    />
-  );
 }
 
 export function Sidebar({

@@ -20,6 +20,7 @@ import {
   loadConversations,
   loadPanelSession,
   persistConversation,
+  renameStoredConversation,
   saveConversations,
   savePanelSession,
 } from "./storedConversations";
@@ -486,5 +487,60 @@ describe("forgetting a conversation", () => {
 
     expect(deleted).toEqual(["a"]);
     expect(loadConversations<Conversation>().map((c) => c.id)).toEqual(["b"]);
+  });
+});
+
+describe("renameStoredConversation — a given name outlives the derived one", () => {
+  it("renames in place, marks the record, and does not count as activity", () => {
+    saveConversations([
+      conversation({ id: "newer", title: "Newer", updatedAt: 20 }),
+      conversation({ id: "older", title: "Older", updatedAt: 10 }),
+    ]);
+    const next = renameStoredConversation("older", "  Payments   refactor ");
+    expect(next.map((c) => c.id)).toEqual(["newer", "older"]);
+    const renamed = next.find((c) => c.id === "older");
+    expect(renamed?.title).toBe("Payments refactor");
+    expect(renamed?.renamed).toBe(true);
+    expect(renamed?.updatedAt).toBe(10);
+  });
+
+  it("ignores an empty name and an unknown id", () => {
+    saveConversations([conversation({ id: "only", title: "Only", updatedAt: 1 })]);
+    expect(renameStoredConversation("only", "   ")[0]?.title).toBe("Only");
+    expect(renameStoredConversation("missing", "Name")).toHaveLength(1);
+    expect(loadConversations<Conversation>()[0]?.renamed).toBeUndefined();
+  });
+
+  it("survives the panel's next snapshot, which re-derives the title", () => {
+    saveConversations([conversation({ id: "thread", title: "Fix the flaky test", updatedAt: 1 })]);
+    renameStoredConversation("thread", "Flaky test");
+    const persisted = persistConversation(
+      conversation({
+        id: "thread",
+        title: "Fix the flaky test",
+        updatedAt: 2,
+        msgs: [
+          { role: "user", content: "Fix the flaky test" },
+          { role: "assistant", content: "Done." },
+        ],
+      }),
+    );
+    expect(persisted[0]?.title).toBe("Flaky test");
+    expect(persisted[0]?.renamed).toBe(true);
+    expect(persisted[0]?.msgs).toHaveLength(2);
+  });
+
+  it("publishes the change so every rail reloads", () => {
+    saveConversations([conversation({ id: "thread", title: "Old", updatedAt: 1 })]);
+    const seen: string[] = [];
+    const onChange = (e: Event) =>
+      seen.push((e as CustomEvent<{ conversationId: string }>).detail.conversationId);
+    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, onChange);
+    try {
+      renameStoredConversation("thread", "New");
+    } finally {
+      window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, onChange);
+    }
+    expect(seen).toEqual(["thread"]);
   });
 });

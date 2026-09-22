@@ -167,6 +167,7 @@ Klide/
 │   │   ├── GridLayoutBuilder.tsx Drag-and-drop grid layout editor (GridWorkbench.tsx renders it)
 │   │   ├── HoverPopover.tsx     Generic delayed hover popover
 │   │   ├── ImageView.tsx        Read-only image preview in the editor
+│   │   ├── InlineNameInput.tsx  The one in-place name editor — Explorer rename and conversation rename
 │   │   ├── InlineCommandReview.tsx Inline approval card for shell/network commands + allowlists
 │   │   ├── InlineDiffReview.tsx Inline hunk-peek edit review — apply, reject, request changes
 │   │   ├── Kbd.tsx              The single keycap renderer (KeyboardShortcuts.tsx: cheatsheet overlay)

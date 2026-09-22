@@ -8,7 +8,7 @@ import {
   conversationStartedAt,
   deriveTitle,
   loadConversations,
-  persistConversation,
+  renameStoredConversation,
 } from "./components/ai/storedConversations";
 import { createPersistedStore, validatedArray } from "./persistedStore";
 import type { RunMessage, RunStatus } from "./runs";
@@ -171,12 +171,7 @@ export function renameKlideConvo(id: string, title: string): void {
       convos.map((c) => (c.id === id ? { ...c, title: nextTitle, updatedMs: Date.now() } : c))
     );
   }
-  const conversation = loadConversations<Conversation>().find((c) => c.id === id);
-  if (conversation) {
-    persistConversation({
-      ...conversation,
-      title: nextTitle,
-      updatedAt: Date.now(),
-    });
-  }
+  // The Stored conversation is the record every rail row reads; the title
+  // travels with it (`renamed`) so the panel's next snapshot keeps it.
+  renameStoredConversation(id, nextTitle);
 }

@@ -61,7 +61,8 @@ import {
   loadConversations,
   type ConversationChangedDetail,
 } from "./ai/storedConversations";
-import { deleteKlideConvo } from "../klideConvos";
+import { deleteKlideConvo, renameKlideConvo } from "../klideConvos";
+import { InlineNameInput } from "./InlineNameInput";
 import { relativeTime, isSubsequence } from "./ai/utils";
 import type { Conversation } from "./ai/types";
 import type { ProviderId } from "../agent/types";
@@ -450,6 +451,7 @@ function ConvoRow({
   onOpen,
   onInspect,
   onDelete,
+  onRename,
   pinned = false,
   onTogglePin,
   indent = false,
@@ -464,6 +466,10 @@ function ConvoRow({
   /** Remove this conversation from local history. Offered, with the other
    *  actions, behind the row's ⋯ menu — the row keeps one trailing mark. */
   onDelete?: () => void;
+  /** Give this conversation the name typed into the row. Behind the ⋯ menu;
+   *  the title itself becomes the input, so the rename happens where the
+   *  name is read. */
+  onRename?: (title: string) => void;
   /** Open this conversation in Mission Control rather than a panel. */
   onInspect?: () => void;
   /** Kept at the top of its group. Shown as a pin where the timestamp was. */
@@ -499,14 +505,24 @@ function ConvoRow({
   // Where the ⋯ menu is open, if it is. Anchored under the button it came
   // from, or at the pointer for a right-click on the row.
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  // The title is being typed over. The open button steps aside for the input,
+  // because an <input> may not live inside a <button>.
+  const [renaming, setRenaming] = useState(false);
   const menuItems: MenuItem[] = [];
+  if (onRename) menuItems.push({ type: "item", label: "Rename", onSelect: () => setRenaming(true) });
   if (onTogglePin) menuItems.push({ type: "item", label: pinned ? "Unpin" : "Pin", onSelect: onTogglePin });
   if (onInspect) menuItems.push({ type: "item", label: "Open in Mission Control", onSelect: onInspect });
   if (onDelete) {
     if (menuItems.length > 0) menuItems.push({ type: "separator" });
     menuItems.push({ type: "item", label: "Delete", danger: true, onSelect: onDelete });
   }
-  const hasMenu = menuItems.length > 0 && !running;
+  const hasMenu = menuItems.length > 0 && !running && !renaming;
+  const displayTitle = convo.title || "Untitled";
+  const markNode = mark ? (
+    <span className="klide-focus-convo-model" title={mark.label} aria-hidden="true">
+      {mark.node}
+    </span>
+  ) : null;
 
   return (
     /* The row is a plain box around two buttons, because a button cannot hold
@@ -536,6 +552,25 @@ function ConvoRow({
       }
     >
       {indent ? <TreeElbow /> : null}
+      {renaming ? (
+        <div className="klide-focus-convo-open" data-renaming="true">
+          <span className="klide-focus-convo-content">
+            {markNode}
+            <InlineNameInput
+              defaultValue={convo.title}
+              select="all"
+              ariaLabel={`Rename “${displayTitle}”`}
+              style={{ fontSize: "inherit", padding: "0 3px" }}
+              onCommit={(title) => {
+                setRenaming(false);
+                const next = title.replace(/\s+/g, " ").trim();
+                if (next && next !== convo.title) onRename?.(next);
+              }}
+              onCancel={() => setRenaming(false)}
+            />
+          </span>
+        </div>
+      ) : (
       <button
         type="button"
         className="klide-focus-convo-open"
@@ -561,12 +596,8 @@ function ConvoRow({
         aria-current={selected ? "page" : undefined}
       >
         <span className="klide-focus-convo-content">
-          {mark ? (
-            <span className="klide-focus-convo-model" title={mark.label} aria-hidden="true">
-              {mark.node}
-            </span>
-          ) : null}
-          <span className="klide-focus-convo-title">{convo.title || "Untitled"}</span>
+          {markNode}
+          <span className="klide-focus-convo-title">{displayTitle}</span>
           {/* The trailing slot says one thing at a time. While a run is going,
               "4m ago" is the least interesting fact about the row — the panel's
               own working animation takes the slot instead, so the same motion
@@ -587,6 +618,7 @@ function ConvoRow({
           )}
         </span>
       </button>
+      )}
       {/* Same slot, on hover: the timestamp steps aside and one ⋯ takes its
           place, holding the rest — pin, inspect, delete — so the row itself
           never grows a second or third mark. Not offered while the run is
@@ -798,6 +830,7 @@ function ProviderHistoryGroup({
   onOpen,
   onInspect,
   onDelete,
+  onRename,
   pinnedConversationIds: pinnedIds,
   onTogglePin,
 }: {
@@ -817,6 +850,7 @@ function ProviderHistoryGroup({
   onOpen: (conversation: Conversation) => void;
   onInspect?: (conversation: Conversation) => void;
   onDelete: (conversation: Conversation) => void;
+  onRename: (conversation: Conversation, title: string) => void;
   /** Kept at the top of the group, and always inside its collapsed window. */
   pinnedConversationIds: ReadonlySet<string>;
   onTogglePin: (conversation: Conversation) => void;
@@ -998,6 +1032,7 @@ function ProviderHistoryGroup({
                   onOpen={() => onOpen(conversation)}
                   onInspect={onInspect ? () => onInspect(conversation) : undefined}
                   onDelete={() => onDelete(conversation)}
+                  onRename={(title) => onRename(conversation, title)}
                   pinned={pinnedIds.has(conversation.id)}
                   onTogglePin={() => onTogglePin(conversation)}
                 />
@@ -1302,6 +1337,14 @@ export function WorkspaceRail({
    *  disk and in Mission Control; only the resumable snapshot goes. Forgetting
    *  it publishes the deletion, so any panel showing the thread drops it
    *  before its next persist could write it back. */
+  function renameHistoryConversation(conversation: Conversation, title: string) {
+    // One call names the thread in both records — the Stored conversation the
+    // rail reads and the Mission Control row — and the store's change event
+    // brings every other rail along.
+    renameKlideConvo(conversation.id, title);
+    setConvos(loadConversations<Conversation>());
+  }
+
   function deleteHistoryConversation(conversation: Conversation) {
     forgetPinnedConversation(conversation.id);
     forgetStoredConversation(conversation.id);
@@ -1541,6 +1584,7 @@ export function WorkspaceRail({
                             : undefined
                         }
                         onDelete={() => deleteHistoryConversation(c)}
+                        onRename={(title) => renameHistoryConversation(c, title)}
                         pinned={pinnedIds.has(c.id)}
                         onTogglePin={() => togglePin(c)}
                       />
@@ -1621,6 +1665,7 @@ export function WorkspaceRail({
                                   onOpen={openHistoryConversation}
                                   onInspect={onOpenConversationInMissionControl}
                                   onDelete={deleteHistoryConversation}
+                                  onRename={renameHistoryConversation}
                                   pinnedConversationIds={pinnedIds}
                                   onTogglePin={togglePin}
                                 />

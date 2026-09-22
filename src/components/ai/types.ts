@@ -146,6 +146,10 @@ export type QueuedTurn = {
 export type Conversation = {
   id: string;
   title: string;
+  /** Set once the person named this thread themselves. A derived title is
+   *  recomputed from the first user message on every save; a given one is
+   *  kept by `upsertConversation` no matter what the next snapshot says. */
+  renamed?: boolean;
   msgs: Msg[];
   updatedAt: number;
   /** When the conversation began, epoch ms. Set from the first message's own

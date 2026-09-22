@@ -206,12 +206,17 @@ export function upsertConversation(
   const createdAt = previous
     ? conversationStartedAt(previous)
     : (conv.createdAt ?? conversationStartedAt(conv));
+  // A name the person gave wins over the derived one, for the same reason:
+  // every snapshot recomputes `title` from the first user message, so a
+  // rename that only lived in the record would be undone by the next token.
+  const named =
+    previous?.renamed && !conv.renamed ? { title: previous.title, renamed: true } : {};
   // The index is ordered by recency, not by write order — a record that was
   // re-saved without gaining a turn keeps its place instead of jumping the
   // queue. Sorting rather than unshifting also means the prune below drops the
   // genuinely oldest thread. The upserted record leads among equal times, and
   // Array#sort is stable, so it keeps that lead.
-  const next = [{ ...conv, createdAt }, ...existing.filter((c) => c.id !== conv.id)];
+  const next = [{ ...conv, createdAt, ...named }, ...existing.filter((c) => c.id !== conv.id)];
   next.sort((a, b) => b.updatedAt - a.updatedAt);
   return next.slice(0, MAX_CONVERSATIONS);
 }
@@ -509,6 +514,23 @@ export function dropCachedImages(): number {
  *  surface still showing the thread hears about it — the rail, Settings
  *  storage and a panel's own history list all delete through here, so a panel
  *  drops to a fresh chat instead of re-persisting the snapshot you removed. */
+/** Give a conversation the name the person typed. Whitespace-collapsed like a
+ *  derived title; an empty name is a no-op, not an erasure. The record is
+ *  marked `renamed` so later snapshots keep it (see `upsertConversation`),
+ *  and its place in the list is unchanged — naming a thread is not using it. */
+export function renameStoredConversation(id: string, title: string): Conversation[] {
+  const nextTitle = title.replace(/\s+/g, " ").trim();
+  const current = loadConversations<Conversation>();
+  const previous = current.find((c) => c.id === id);
+  if (!nextTitle || !previous || (previous.renamed && previous.title === nextTitle)) return current;
+  const next = current.map((c) => (c.id === id ? { ...c, title: nextTitle, renamed: true } : c));
+  return saveConversations(next, undefined, true, {
+    conversationId: id,
+    provider: previous.provider ?? "ollama",
+    cwd: previous.cwd ?? null,
+  });
+}
+
 export function forgetStoredConversation(id: string): Conversation[] {
   const next = saveConversations(
     loadConversations<Conversation>().filter((conv) => conv.id !== id),
