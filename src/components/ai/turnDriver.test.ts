@@ -307,3 +307,12 @@ describe("a turn that stops reaching the screen says so", () => {
     expect(h.driver.isDetached()).toBe(true);
   });
 });
+
+it("projects an observer completion in a live turn without exposing raw log text", () => {
+  const h = harness([{ role: "assistant", content: "" }]);
+  expect(h.driver.handleEvent({ type: "observer_completed", runId: "r", shellId: "s", text: "raw build output", ts: 1200 })).toBe(true);
+  h.driver.handleEvent(message([{ type: "text", text: "Your deployment finished." }]));
+  expect(h.ref.current.some((m) => m.role === "system" && m.observer?.shellId === "s")).toBe(true);
+  expect(h.ref.current.some((m) => m.role === "assistant" && m.content === "Your deployment finished.")).toBe(true);
+  expect(JSON.stringify(h.ref.current)).not.toContain("raw build output");
+});

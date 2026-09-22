@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import type { Msg } from "./types";
 import { DelegateConsole } from "../lazySurfaces";
 import {
@@ -15,6 +15,9 @@ import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
 import { formatElapsed, useElapsed } from "./WorkingRow";
 import { MIN_STACKED_CALLS, toolCallKey, toolRunLabel } from "./toolRuns";
+import { SubagentWatchBody, SubagentWatchLine, useSubagentWatch } from "./SubagentWatcher";
+import { isWatchable } from "./subagentWatch";
+import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
 
 // Premium thinking block. Renders as a soft card with a pulsing dot while the
 // agent is still streaming, a rotating chevron, and a markdown body so code
@@ -154,7 +157,7 @@ function summarizeArgs(args: unknown): string {
 // when it's long. No JSON, no "spawn_subagent(...)" — the report follows below.
 // A call that named a worker wears that Delegate's mark and name in front of
 // the role, the same way the dispatch card does: "Claude Code implementer".
-function SubagentCallRow({ args }: { args: unknown }) {
+function SubagentCallRow({ args, childRunId, settled }: { args: unknown; childRunId?: string; settled: boolean }) {
   const o = (args ?? {}) as Record<string, unknown>;
   const subagent = typeof o.subagent === "string" ? o.subagent : "subagent";
   const worker = typeof o.worker === "string" && o.worker.trim() ? (o.worker.trim() as ProviderId) : null;
@@ -164,7 +167,20 @@ function SubagentCallRow({ args }: { args: unknown }) {
   const task = typeof o.task === "string" ? o.task.replace(/\s+/g, " ").trim() : "";
   const long = task.length > 96;
   const short = long ? task.slice(0, 95) + "…" : task;
+  // While the child works, its own Run is the only thing happening — watch it.
+  // Once the report lands the parent shows that instead, and the child's rows
+  // stay one click away (fetched only if that click comes).
+  const [opened, setOpened] = useState(false);
+  const watch = useSubagentWatch(childRunId, !!childRunId && (!settled || opened));
+  // Only once its transcript has been read: an unresolved call whose child
+  // actually died with the app would otherwise flash "starting" and vanish.
+  const watching = !!childRunId && !settled && watch.loaded && isWatchable(watch.activity);
+  const rows = useMemo(
+    () => (opened && watch.events.length ? foldedToMsgs(foldAgentEvents(watch.events)) : []),
+    [opened, watch.events],
+  );
   return (
+    <>
     <details style={{ margin: "5px 0 -3px" }}>
       <summary style={{ display: "flex", alignItems: "center", gap: 7, padding: 0, cursor: long ? "pointer" : "default", listStyle: "none", userSelect: "none", minWidth: 0 }}>
         <span aria-hidden style={{ color: "var(--fg-dim)", flexShrink: 0 }}>·</span>
@@ -187,6 +203,85 @@ function SubagentCallRow({ args }: { args: unknown }) {
         </div>
       )}
     </details>
+    {childRunId && !watching && !opened && (
+      <button type="button" onClick={() => setOpened(true)} style={{ border: 0, background: "none", color: "var(--fg-dim)", fontSize: 12, cursor: "pointer", marginLeft: 24 }}>View activity</button>
+    )}
+    {(watching || opened) && (
+      <SubagentWatchLine
+        activity={watch.activity}
+        open={opened}
+        onToggle={() => setOpened((was) => !was)}
+        hasRows={watch.events.length > 0}
+      />
+    )}
+    {opened && (
+      <SubagentWatchBody>
+        {rows.length === 0 ? (
+          <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+            {watch.loaded ? "Nothing on its transcript yet." : "Reading its transcript…"}
+          </span>
+        ) : (
+          rows.map((row, i) => <div key={i}>{renderMessageBody(row)}</div>)
+        )}
+      </SubagentWatchBody>
+    )}
+    </>
+  );
+}
+
+// A subagent dispatched by an embedded `@role` mention runs *beside* the main
+// answer rather than inside a tool call, so its progress has nowhere else to
+// show. Same watcher, same line — the only difference is where the child's id
+// came from (the message, not the call).
+function BackgroundSubagentReport({
+  role,
+  runId,
+  pending,
+  content,
+}: {
+  role: string;
+  runId?: string;
+  pending: boolean;
+  content: string;
+}) {
+  const [opened, setOpened] = useState(false);
+  const watch = useSubagentWatch(runId, !!runId && (pending || opened));
+  const rows = useMemo(
+    () => (opened && watch.events.length ? foldedToMsgs(foldAgentEvents(watch.events)) : []),
+    [opened, watch.events],
+  );
+  return (
+    <div style={{ margin: "4px 0 8px" }}>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
+        @{role}
+        {/* Without a run id to watch there is still something to say. */}
+        {pending && !runId && <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}> · working…</span>}
+      </div>
+      {runId && ((pending && watch.loaded) || opened) && (
+        <SubagentWatchLine
+          activity={watch.activity}
+          open={opened}
+          onToggle={() => setOpened((was) => !was)}
+          hasRows={watch.events.length > 0}
+        />
+      )}
+      {opened && (
+        <SubagentWatchBody>
+          {rows.length === 0 ? (
+            <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+              {watch.loaded ? "Nothing on its transcript yet." : "Reading its transcript…"}
+            </span>
+          ) : (
+            rows.map((row, i) => <div key={i}>{renderMessageBody(row)}</div>)
+          )}
+        </SubagentWatchBody>
+      )}
+      {content.trim() && (
+        <div style={{ marginTop: 4, padding: "8px 11px", fontSize: 12.5, lineHeight: 1.55, color: "var(--fg-subtle)", background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))", border: "1px solid var(--border)", borderLeft: "2px solid var(--accent)", borderRadius: "var(--radius-sm)" }}>
+          {renderMarkdown(content)}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -342,10 +437,12 @@ function InlineToolRun({ count, names, working, children }: { count: string; nam
   );
 }
 
-function ToolCallRow({ name, args, count = 1, result }: { name: string; args: unknown; count?: number; result?: AttachedResult }) {
+function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: string; args: unknown; count?: number; result?: AttachedResult; childRunId?: string }) {
   const call =
     name === "spawn_subagent" ? (
-      <SubagentCallRow args={args} />
+      // No result row yet means the child is still going — the only case where
+      // the parent has nothing to show but the child has plenty.
+      <SubagentCallRow args={args} childRunId={childRunId} settled={!!result} />
     ) : COORDINATION_TOOL_NAMES.has(name) ? (
       <AgentCoordinationCallRow name={name} args={args} count={count} />
     ) : (
@@ -1246,6 +1343,9 @@ type MessageBodyProps = MessageBodyOptions & {
 };
 
 function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, results }: MessageBodyProps): ReactElement {
+  if (m.role === "system" && m.observer) {
+    return <div style={{ margin: "12px 0 5px", fontSize: 12, color: "var(--fg-dim)" }}>Background observer finished</div>;
+  }
   if (m.role === "system" && m.steering) {
     const delivered = parseDeliveryReason(m.steering.reason);
     if (delivered) return <AgentInboxRow delivered={delivered} workspaceRoot={workspaceRoot} />;
@@ -1295,17 +1395,12 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
     // top, an accent-railed report below, and a quiet "working…" until it lands.
     if (m.subagent) {
       return (
-        <div style={{ margin: "4px 0 8px" }}>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", color: "var(--accent)", marginBottom: 4 }}>
-            @{m.subagent}
-            {m.subagentPending && <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}> · working…</span>}
-          </div>
-          {m.content.trim() && (
-            <div style={{ padding: "8px 11px", fontSize: 12.5, lineHeight: 1.55, color: "var(--fg-subtle)", background: "color-mix(in srgb, var(--bg-elevated) 60%, var(--bg))", border: "1px solid var(--border)", borderLeft: "2px solid var(--accent)", borderRadius: "var(--radius-sm)" }}>
-              {renderMarkdown(m.content)}
-            </div>
-          )}
-        </div>
+        <BackgroundSubagentReport
+          role={m.subagent}
+          runId={m.subagentRunId}
+          pending={!!m.subagentPending}
+          content={m.content}
+        />
       );
     }
     const { content: cleanedContent } = splitThinking(m.content);
@@ -1338,7 +1433,7 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
             calls.map((tc, index) => ({ tc, key: toolCallKey(tc, index) })),
             ({ tc }) => (COORDINATION_TOOL_NAMES.has(tc.name) ? `${tc.name}\n${JSON.stringify(tc.args ?? null)}` : null),
           ).map(({ item: { tc, key }, count }) => (
-            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} />
+            <ToolCallRow key={key} name={tc.name} args={tc.args} count={count} result={results?.get(key)} childRunId={tc.childRunId} />
           ));
           if (!visibleContent || calls.length < MIN_STACKED_CALLS) return rows;
           const names: string[] = [];

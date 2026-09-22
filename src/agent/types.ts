@@ -301,6 +301,7 @@ export type AgentEvent =
    *  otherwise the reloaded transcript looks like an unbroken conversation
    *  that mysteriously forgot its early turns. */
   | { type: "context_compacted"; runId: string; summary: string; ts: number }
+  | { type: "observer_completed"; runId: string; shellId: string; text: string; ts: number }
   | { type: "steering_injected"; runId: string; reason: string; ts: number }
   /** An `auto` request settled on this pair. Follows `run_started` (which
    *  already carries the resolved provider/model); `skipped` names each

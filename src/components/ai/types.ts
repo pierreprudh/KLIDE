@@ -76,6 +76,8 @@ export type Msg =
       role: "system";
       content: string;
       completion?: RunCompletion;
+      /** A command completed and opened a new reply, without a user message. */
+      observer?: { shellId: string };
       /** Set when this system message is a context-compaction marker, so the
        *  chat renders it as a compaction card instead of a text blob.
        *  `content` is kept as a plain-text fallback (serialization, search).

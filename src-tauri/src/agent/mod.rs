@@ -1,5 +1,7 @@
 mod approval_store;
 mod artifacts;
+mod background;
+mod observers;
 mod command_allowlist;
 mod conversation_search;
 mod glob_match;
@@ -16,7 +18,8 @@ mod steering;
 pub mod subagents;
 mod tool_handlers;
 use tool_handlers::{
-    last_tool_output, process_advisor_tool, process_command_tool, process_coordination_tool,
+    last_tool_output, process_advisor_tool, process_background_shell_tool, process_command_tool,
+    process_coordination_tool,
     review_coordination_inbox,
     process_network_tool, process_pause_tool, process_subagent_tool, process_write_tool,
     steer_via_advisor, AdvisorSteer,
@@ -284,6 +287,7 @@ trait RunSupervisor: Send + Sync {
     /// through the `emit` closure (structural events, persisted with a `seq`)
     /// are broadcast — token deltas stream separately and are not replayed.
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent);
+    fn watch_background(&self, _run_id: &str, _shell_id: &str, _request: &StartRunRequest) {}
     /// Feed the failure budget: a run settled in error (`failed`) or done.
     /// Default no-op keeps FakeSupervisor tests headless; the budget itself
     /// is unit-tested in failure_budget.rs.
@@ -525,6 +529,9 @@ impl RunSupervisor for TauriSupervisor {
     }
 
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent) {
+        if matches!(event, AgentEvent::ObserverCompleted { .. }) {
+            let _ = self.app.emit("agent-observer-wake", run_id);
+        }
         let _ = self.app.emit(
             &format!("agent-run:{run_id}"),
             RunEventEnvelope {
@@ -532,6 +539,10 @@ impl RunSupervisor for TauriSupervisor {
                 event: event.clone(),
             },
         );
+    }
+
+    fn watch_background(&self, run_id: &str, shell_id: &str, request: &StartRunRequest) {
+        observers::watch(self.app.clone(), run_id.into(), shell_id.into(), request.clone());
     }
 
     fn note_terminal(&self, run_id: &str, provider: &str, model: &str, failed: bool) {
@@ -620,7 +631,7 @@ async fn run_subagent_to_completion(
         max_turns: spec.max_turns,
         preferred_models: vec![],
         routed: None,
-        command_timeout_secs: None,
+        command_timeout_secs: spec.command_timeout_secs,
         test_after_edit_command: None,
         command_allowlist: vec![],
         require_diff_review: spec.require_diff_review,
@@ -637,7 +648,7 @@ async fn run_subagent_to_completion(
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let on_event = Channel::<AgentEvent>::new(|_| Ok(()));
-    start_run(app, request, on_event, Some(done_tx)).await?;
+    start_run(app, request, on_event, Some(done_tx), None).await?;
     // A dropped sender means the spawned loop task went away without settling.
     // Report that instead of hanging the parent forever.
     match done_rx.await {
@@ -743,6 +754,10 @@ fn settle_run(
             ..summary.clone()
         },
     );
+    // Explicit observers belong to the conversation and survive a reply.
+    // User cancellation stops both observers and transient commands.
+    if status == AgentRunStatus::Cancelled { background::kill_run_shells(id); }
+    else { background::settle_shells(id, false); }
     // The run is terminal either way: drop the handle so the supervisor map
     // doesn't grow by one cancel-token + trust-memory entry per run ever
     // started. Done after the summary write so a reattach landing in between
@@ -968,6 +983,9 @@ fn reconstruct_prior_messages(
 
     for event in prior_events {
         match event {
+            AgentEvent::ObserverCompleted { text, .. } => {
+                out.push(user_provider_message(text, &[]));
+            }
             AgentEvent::UserMessage {
                 text, attachments, ..
             } => {
@@ -1064,6 +1082,9 @@ fn reconstruct_structured_messages(
 
     for event in prior_events {
         match event {
+            AgentEvent::ObserverCompleted { text, .. } => {
+                out.push(user_provider_message(text, &[]));
+            }
             AgentEvent::UserMessage {
                 text, attachments, ..
             } => {
@@ -1374,7 +1395,7 @@ pub async fn agent_start_run(
     request: StartRunRequest,
     on_event: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
-    start_run(app, request, on_event, None).await
+    start_run(app, request, on_event, None, None).await
 }
 
 /// Start a Harness run without a request-scoped frontend channel. Structural
@@ -1386,7 +1407,7 @@ pub(crate) async fn start_background_run(
     request: StartRunRequest,
 ) -> Result<StartRunResponse, String> {
     let on_event = Channel::<AgentEvent>::new(|_| Ok(()));
-    start_run(app, request, on_event, None).await
+    start_run(app, request, on_event, None, None).await
 }
 
 /// `done` fires once the detached loop has finished, carrying whatever the loop
@@ -1568,6 +1589,7 @@ async fn start_run(
     mut request: StartRunRequest,
     on_event: Channel<AgentEvent>,
     done: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    observer_shell_id: Option<&str>,
 ) -> Result<StartRunResponse, String> {
     let state = app.state::<AgentSupervisorState>();
     let runs_dir = app_runs_dir(&app)?;
@@ -1665,30 +1687,21 @@ async fn start_run(
         return Err(reason);
     }
 
-    // One live run per conversation id. The handle stays in the map with a
-    // terminal status after a run finishes, so reusing the id for a NEW run is
-    // fine — but starting one while the previous is still active would spawn a
-    // second loop appending to the same transcript (interleaved/duplicated seq
-    // numbers, the "dropped after compacting" corruption). Check + insert under
-    // one lock so the guard is atomic.
+    // A handle remains owned through terminal summary write and retirement.
+    // Even a terminal status is busy until the old loop releases that handle;
+    // otherwise its settle_run could retire a newly started observer reply.
     {
         let mut runs = state
             .runs
             .lock()
             .map_err(|_| "Agent state is unavailable".to_string())?;
-        if let Some(existing) = runs.get(&id) {
-            if matches!(
-                existing.status,
-                AgentRunStatus::Queued
-                    | AgentRunStatus::Running
-                    | AgentRunStatus::WaitingForPermission
-                    | AgentRunStatus::WaitingForDiff
-                    | AgentRunStatus::Paused
-            ) {
-                return Err(format!(
-                    "A run is already active for this conversation ({id}). Wait for it to finish or stop it first."
-                ));
-            }
+        if runs.contains_key(&id) {
+            return Err(format!(
+                "A run is already active for this conversation ({id}). Wait for it to finish or stop it first."
+            ));
+        }
+        if observer_shell_id.is_some_and(|shell| !background::notification_pending(&id, shell)) {
+            return Err("Observer completion was already delivered or cancelled.".into());
         }
         runs.insert(
             id.clone(),
@@ -1910,10 +1923,21 @@ async fn run_agent_loop(
         let prior = reconstruct_prior_messages(&prior_events, structured_replay, values);
         // `provider_messages` always returns `[..., user]` with the new
         // turn at the tail. Pop it, splice the history in, push it back.
-        if let Some(new_user) = messages.pop() {
+        if wake {
+            messages.extend(prior);
+        } else if let Some(new_user) = messages.pop() {
             messages.extend(prior);
             messages.push(new_user);
         }
+    }
+    // Consume completions at the start of a turn, never mid-response. A user
+    // send that wins against the scheduler can deliver them too, exactly once.
+    for (shell_id, text) in background::completions(&id) {
+        emit(AgentEvent::ObserverCompleted {
+            run_id: id.clone(), shell_id: shell_id.clone(), text: text.clone(), ts: now_ms(),
+        })?;
+        background::acknowledge(&id, &shell_id);
+        messages.push(user_provider_message(&text, &[]));
     }
     // Count this turn's user message on top of the turns already on disk so
     // the Mission Control "Messages" tally reflects the whole conversation.
@@ -2445,6 +2469,7 @@ async fn run_agent_loop(
                     _ => process_pause_tool(&ctx, &call, &mut emit).await?,
                 },
                 Some(ToolKind::Command) => process_command_tool(&ctx, &call, &mut emit).await?,
+                Some(ToolKind::BackgroundShell) => process_background_shell_tool(&ctx, &call)?,
                 Some(ToolKind::Network) => process_network_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Write) => process_write_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Coordination) => {
@@ -2849,6 +2874,19 @@ pub fn agent_run_status(
     let runs = state.runs.lock().ok()?;
     runs.get(&run_id)
         .map(|h| run_status_wire(&h.status).to_string())
+}
+
+pub(crate) fn shutdown_observers() { background::shutdown(); }
+
+/// Conversation-owned observer controls. The same id is used on subsequent turns.
+#[tauri::command]
+pub fn agent_list_observers(run_id: String) -> Vec<background::ShellSnapshot> {
+    background::list(&run_id).into_iter().filter(|s| s.notify_on_exit || s.status == background::ShellStatus::Signalled).collect()
+}
+
+#[tauri::command]
+pub fn agent_stop_observer(run_id: String, shell_id: String) -> Result<(), String> {
+    background::stop_observer(&run_id, &shell_id)
 }
 
 /// Write a compaction marker into a run's transcript. The frontend generates
@@ -5140,6 +5178,59 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    #[tokio::test]
+    async fn observer_completion_becomes_a_separate_turn_without_a_fake_user_message() {
+        let (runs_dir, root) = sandbox("observer-followup");
+        let id = "observer-conversation";
+        let request = test_request(&root, &[]);
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("I will notify you when it finishes.", vec![])]);
+        let shell = background::spawn_observer(id, &root, "sleep 0.15; printf 'https://preview.example.test/branch'; exit 2").unwrap();
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request.clone(), caller).await;
+        assert!(background::notification_pending(id, &shell.id), "a normal reply must not cancel its observer");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while background::completions(id).is_empty() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; }
+        }).await.unwrap();
+
+        let mut wake = request.clone();
+        wake.initial_text.clear();
+        wake.mode = AgentMode::Plan;
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("The watched command failed with exit 2.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, wake, caller.clone()).await;
+        let events = read_events(&runs_dir, id).unwrap();
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::UserMessage { .. })).count(), 1);
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::ObserverCompleted { .. })).count(), 1);
+        assert_eq!(events.iter().filter(|e| matches!(e, AgentEvent::RunResult { .. })).count(), 2);
+        assert!(background::completions(id).is_empty());
+        let seen = caller.seen_messages.lock().unwrap();
+        assert_eq!(seen[0][0]["role"], "system", "wake must keep system prompt ahead of history");
+        let last = seen[0].last().unwrap().to_string();
+        assert!(last.contains("exit 2") && last.contains("https://preview.example.test/branch"));
+        drop(seen);
+        for structured in [false, true] {
+            assert!(reconstruct_prior_messages(&events, structured, None).iter().any(|m| m.to_string().contains("exit 2")));
+        }
+        // A later user send sees durable history, without delivering the event twice.
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Next answer.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller).await;
+        assert_eq!(read_events(&runs_dir, id).unwrap().iter().filter(|e| matches!(e, AgentEvent::ObserverCompleted { .. })).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_user_turn_can_consume_a_finished_observer_before_the_wake() {
+        let (runs_dir, root) = sandbox("observer-user-wins");
+        let id = "observer-user-wins";
+        let shell = background::spawn_observer(id, &root, "printf finished").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while background::completions(id).is_empty() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; }
+        }).await.unwrap();
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Your watch finished; here is my answer too.", vec![])]);
+        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, test_request(&root, &[]), caller.clone()).await;
+        assert!(!background::notification_pending(id, &shell.id));
+        let seen = caller.seen_messages.lock().unwrap();
+        assert!(seen[0].iter().any(|m| m.to_string().contains("Complete the fixture task.")));
+        assert!(seen[0].iter().any(|m| m.to_string().contains("printf finished")));
     }
 
     #[tokio::test]

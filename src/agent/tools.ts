@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentMode } from "./types";
 
-export type AgentToolCall = { id?: string; name: string; args: any };
+export type AgentToolCall = { id?: string; name: string; args: any; childRunId?: string };
 
 // The Rust tool registry is the source of truth. The frontend fetches
 // tool schemas over IPC so there is only one copy of each tool's name,

@@ -508,6 +508,7 @@ where
                 branch.as_deref(),
             ),
             max_turns: ctx.request.max_turns,
+            command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: Some(false),
             auto_approve_commands: None,
         },
@@ -530,6 +531,7 @@ where
                 branch.as_deref(),
             ),
             max_turns: ctx.request.max_turns,
+            command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: Some(false),
             auto_approve_commands: Some(true),
         },
@@ -548,6 +550,7 @@ where
             task: task.clone(),
             system_prompt: subagents::build_system_prompt(def, &base_system_prompt(ctx.request)),
             max_turns: ctx.request.max_turns,
+            command_timeout_secs: ctx.request.command_timeout_secs,
             require_diff_review: ctx.request.require_diff_review,
             auto_approve_commands: None,
         },
@@ -1574,6 +1577,115 @@ async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<S
         .then(|| artifacts::parse_porcelain(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// Start an approved command in the background and tell the model how to get
+/// back to it.
+///
+/// No artifact bracketing here: the dirty set is read either side of a command
+/// that *finished*, and this one has not. Whatever it leaves behind is found by
+/// the commands that come after it.
+fn start_background_command(ctx: &ToolCtx<'_>, cwd: &str, command: &str, notify: bool) -> ToolResult {
+    if notify && (ctx.request.parent_id.is_some() || ctx.request.mission_id.is_some()) {
+        return ToolResult { ok: false, content: "A persistent observer must be started by the main conversation, not a child or Mission run.".into(), metadata: None };
+    }
+    let started = if notify { background::spawn_observer(ctx.id, cwd, command) } else { background::spawn(ctx.id, cwd, command) };
+    if let Ok(shell) = &started {
+        if notify { ctx.sup.watch_background(ctx.id, &shell.id, ctx.request); }
+    }
+    match started {
+        Ok(shell) => ToolResult {
+            ok: true,
+            content: if notify { format!(
+                "Watching `{command}` as `{}`. Finish your reply now; do not poll or wait. This observer survives this reply and will trigger a new reply in this conversation when the command exits, after any active reply finishes. It stops if the user stops it or quits Klide. Do not use spawn_subagent to wait for it.", shell.id
+            ) } else { format!(
+                "Started `{command}` in the background as `{}`. It keeps running while you work. \
+                 Read what it has printed with read_command_output(shellId: \"{}\"), and stop it \
+                 with kill_command when you are done — do not wait on it in a tight loop.",
+                shell.id, shell.id
+            ) },
+            metadata: Some(serde_json::json!({ "shell": shell })),
+        },
+        Err(message) => ToolResult { ok: false, content: message, metadata: None },
+    }
+}
+
+/// `read_command_output` / `kill_command` — the two halves of a background
+/// shell, dispatched on kind so neither is matched by name.
+///
+/// Both are scoped to the Run: the registry answers only for shells this Run
+/// started, so an id from another conversation reads as "no such shell". That
+/// check lives in `background`, not here, because it is an ownership rule
+/// rather than a ceremony.
+///
+/// Synchronous on purpose — these touch an in-memory registry, never the disk
+/// or a process's exit, so there is nothing to hand to `blocking::run`.
+pub(super) fn process_background_shell_tool(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+) -> Result<ToolOutcome, String> {
+    let shell_id = call
+        .input
+        .get("shellId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if shell_id.is_empty() {
+        return Ok(ToolOutcome::Produced(ToolResult {
+            ok: false,
+            content: "This tool needs the shellId that run_command returned when it started the background shell.".to_string(),
+            metadata: None,
+        }));
+    }
+
+    if call.name == "kill_command" {
+        return Ok(ToolOutcome::Produced(match background::kill(ctx.id, &shell_id) {
+            Ok(snapshot) => ToolResult {
+                ok: true,
+                content: format!("Stop requested for `{}` (last observed state: {}).", snapshot.command, snapshot.status.describe()),
+                metadata: Some(serde_json::json!({ "shell": snapshot })),
+            },
+            Err(message) => ToolResult { ok: false, content: message, metadata: None },
+        }));
+    }
+
+    Ok(ToolOutcome::Produced(match background::read(ctx.id, &shell_id) {
+        Ok(read) => {
+            let mut content = format!(
+                "`{}` is {}.",
+                read.snapshot.command,
+                read.snapshot.status.describe()
+            );
+            if read.dropped > 0 {
+                // Say it rather than hand back a gap: the model must be able to
+                // tell "nothing happened" from "you were too slow to read".
+                content.push_str(&format!(
+                    "\n\n({} bytes of earlier output aged out of the buffer before this read.)",
+                    read.dropped
+                ));
+            }
+            if read.output.trim().is_empty() {
+                content.push_str(if read.snapshot.status.is_running() {
+                    "\n\nNo new output since your last read. Give it longer before reading again."
+                } else {
+                    "\n\nNo new output."
+                });
+            } else {
+                content.push_str("\n\nNew output:\n");
+                content.push_str(read.output.trim_end());
+            }
+            ToolResult {
+                // A shell that exited non-zero is still a successful *read*.
+                // The exit code is in the text; conflating the two would make
+                // the model retry the read instead of reacting to the failure.
+                ok: true,
+                content,
+                metadata: Some(serde_json::json!({ "shell": read.snapshot })),
+            }
+        }
+        Err(message) => ToolResult { ok: false, content: message, metadata: None },
+    }))
+}
+
 pub(super) async fn process_command_tool<E>(
     ctx: &ToolCtx<'_>,
     call: &NormalizedToolCall,
@@ -1607,6 +1719,20 @@ where
         reason,
     } = invocation;
 
+    // Only the builtin `run_command` offers it; a dynamic tool's template is
+    // its author's contract and stays foreground.
+    let background = call.name == tools::RUN_COMMAND_TOOL
+        && call
+            .input
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+    let notify = call.input.get("notifyOnExit").and_then(|v| v.as_bool()).unwrap_or(false);
+    if notify && !background {
+        return Ok(ToolOutcome::Produced(ToolResult { ok: false, content: "notifyOnExit requires background: true.".into(), metadata: None }));
+    }
+
     let approval_key = if cwd == root_value {
         command.clone()
     } else {
@@ -1639,15 +1765,19 @@ where
     ) {
         permission::Precheck::Execute => {
             return Ok(ToolOutcome::Produced(
-                run_command_announcing_artifacts(
-                    ctx,
-                    root_value,
-                    &cwd,
-                    &command,
-                    timeout_secs,
-                    emit,
-                )
-                .await?,
+                if background {
+                    start_background_command(ctx, &cwd, &command, notify)
+                } else {
+                    run_command_announcing_artifacts(
+                        ctx,
+                        root_value,
+                        &cwd,
+                        &command,
+                        timeout_secs,
+                        emit,
+                    )
+                    .await?
+                },
             ));
         }
         permission::Precheck::AutoReject(msg) => {
@@ -1672,6 +1802,15 @@ where
             " Project rule `{}` matched, but this command still needs approval.",
             rule.pattern
         ));
+    }
+    if background {
+        // Approving this does not approve a few seconds of work — say so on
+        // the card, where the decision is actually made.
+        permission_reason.push_str(if notify {
+            " It keeps watching after this reply ends and starts a follow-up in this conversation when it exits. Stop it from the observer row; quitting Klide stops it too."
+        } else {
+            " It runs in the background with no time limit and is stopped when this run ends."
+        });
     }
 
     let perm = PermissionRequest {
@@ -1703,6 +1842,9 @@ where
     );
 
     let result = match decision {
+        permission::GateDecision::Approved { .. } if background => {
+            start_background_command(ctx, &cwd, &command, notify)
+        }
         permission::GateDecision::Approved { .. } => {
             run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit)
                 .await?

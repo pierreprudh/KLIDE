@@ -1,3 +1,4 @@
+import { ConversationObservers } from "./ai/ConversationObservers";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
@@ -2265,7 +2266,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             replayed !== null &&
             conversationSessionRef.current.conversationId === reattachId &&
             (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen);
-          if (safe) setMsgs(replayed);
+          if (safe) { msgsRef.current = replayed; setMsgs(replayed); }
           const tail = events[events.length - 1]?.type;
           return {
             len: events.length,
@@ -3533,7 +3534,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       // run), so Mission Control nests it under the convo. Events still stream
       // through `handleEvent`, so the delegation + any diffs render inline here.
       const turnRunId = turn.subagent ? `${currentId}-at-${turn.clientId}` : currentId;
-      const session = await startAgentRun({
+      const startSession = () => startAgentRun({
         runId: turnRunId,
         parentId: turn.subagent ? currentId : undefined,
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
@@ -3554,6 +3555,18 @@ This user request requires workspace inspection. Before answering, you MUST call
         // renderer's storage, so an `auto` turn carries them along.
         preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
       }, handleEvent);
+      let session;
+      for (;;) {
+        if (queueGenerationRef.current !== generation) return;
+        try { session = await startSession(); break; }
+        catch (error) {
+          // A completion-triggered reply may win the atomic backend guard
+          // between our queue check and dispatch. Preserve this user's turn.
+          if (!String(error).includes("A run is already active for this conversation")) throw error;
+          viewBehind.reason = "region-detached";
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
       if (harnessError) throw harnessError;
@@ -4620,6 +4633,17 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
+          // Observer completion is a boundary marker, not an assistant turn.
+          // Keep it in the conversation flow without assigning it Klide's
+          // response mark; the actual follow-up answer below owns that mark.
+          if (m.role === "system" && m.observer) {
+            return (
+              <div key={i} className="ai-msg-in" style={{ margin: "12px 0 5px 32px", color: "var(--fg-dim)", fontSize: 12 }}>
+                {renderMessageBody(m)}
+              </div>
+            );
+          }
+
           // Run-failure marker: a terminal event, not an assistant utterance —
           // rendered as its own centered hairline row (the local-server
           // starting line's family), full width, no gutter.
@@ -4768,6 +4792,11 @@ This user request requires workspace inspection. Before answering, you MUST call
             </div>
           );
         }))}
+        <ConversationObservers key={currentId} runId={currentId} onFollowup={() => {
+          if (processingQueueRef.current || reattachRef.current) return false;
+          followConversationRun(currentId, provider);
+          return true;
+        }} />
         {/* "Working" heartbeat — shown while a run is in progress but nothing
             else is animating. Covers the gap where the model is generating the
             next turn (esp. providers that don't stream token deltas, so there's

@@ -350,6 +350,10 @@ pub struct SubagentRunSpec {
     pub system_prompt: String,
     /// Inherited from the parent so a child cannot outlive the parent's budget.
     pub max_turns: Option<usize>,
+    /// Also inherited: a project whose build legitimately takes six minutes
+    /// raises this once in Settings, and a subagent running that same build
+    /// must not be cut off at the 180s default the parent was excused from.
+    pub command_timeout_secs: Option<u64>,
     pub require_diff_review: Option<bool>,
     /// Whether the child runs shell commands without asking. A headless child
     /// has no card to ask on, so a gate it hits parks it — and its parent — for
