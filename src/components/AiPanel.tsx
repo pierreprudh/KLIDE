@@ -1,3 +1,4 @@
+import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
@@ -1280,10 +1281,12 @@ export function AiPanel({
       out.push(
         <div
           key={`tool-run-${run.start}`}
+          data-observer-row={run.start}
           style={{ display: "flex", gap: 10, margin: startsResponse ? "14px 0 0" : "6px 0 0" }}
         >
           <div
             aria-hidden="true"
+            data-observer-logo={startsResponse ? run.start : undefined}
             style={{
               flexShrink: 0,
               width: 22,
@@ -4422,6 +4425,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             )}
           </div>
         )}
+        <ObserverConnections msgs={msgs}>
         {stackToolRuns(msgs.map((m, i) => {
           if (m.role === "system" && m.completion) {
             const completion = m.completion;
@@ -4647,7 +4651,7 @@ This user request requires workspace inspection. Before answering, you MUST call
           // (14px) inside the prose edge — not flush with the answer.
           if (m.role === "system" && m.observer) {
             return (
-              <div key={i} className="ai-msg-in" style={{ margin: "12px 0 5px 46px", color: "var(--fg-dim)", fontSize: 12 }}>
+              <div key={i} data-observer-row={i} tabIndex={0} className="ai-msg-in" style={{ margin: "12px 0 5px 46px", color: "var(--fg-dim)", fontSize: 12 }}>
                 {renderMessageBody(m)}
               </div>
             );
@@ -4736,7 +4740,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             }
           }
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+            <div key={i} data-observer-row={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {isResponseStart ? (
                 // A brand mark is worn bare — no disc, no ring, no tile, the
                 // rule every other pairing in the app follows. Klide's own mark
@@ -4744,7 +4748,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                 // logo bare rather than a hand-typed initial in a sage disc.
                 // Same 22px box either way, so bodies stay column-aligned with
                 // the tool rows below them.
-                <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, display: "grid", placeItems: "center" }}>
+                <div aria-hidden="true" data-observer-logo={i} style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, display: "grid", placeItems: "center" }}>
                   {mark ? mark.node : <KlideMark size={20} />}
                 </div>
               ) : (
@@ -4807,6 +4811,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             </div>
           );
         }))}
+        </ObserverConnections>
         <ConversationObservers key={currentId} runId={currentId} onFollowup={() => {
           if (processingQueueRef.current || reattachRef.current) return false;
           followConversationRun(currentId, provider);

@@ -8961,3 +8961,17 @@ button:focus-visible .menu-leadout {
     transition: none;
   }
 }
+
+/* Observer ancestry is revealed only at either end, without moving content. */
+.observer-hover-connection {
+  fill: none;
+  stroke: var(--fg-dim);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  opacity: 0;
+  transition: opacity 650ms cubic-bezier(.22, 1, .36, 1);
+}
+.observer-hover-connection[data-active="true"] { opacity: .28; }
+@media (prefers-reduced-motion: reduce) {
+  .observer-hover-connection { transition: none; }
+}
