@@ -146,6 +146,19 @@ accepted mail and marks it delivered and acknowledged in the same call, since
 handing the text back over the wire is the read. PTY bytes are never used for
 delivery.
 
+Every door renders mail through one module, `agent/delivery.rs`: the turn
+boundary, an `agent_wait` result, the replies inside a send receipt, and the
+Delegate bridge's `agent_wait`. A preamble says once that none of it was
+written by the operator, and each envelope sits inside a fence closed by a
+random nonce minted for that delivery (re-minted if any body contains it), so
+a body cannot end its fence and write a line that looks like an operator
+header. At the turn boundary the delivery goes *in front of* the operator's
+message, so the operator's words are always the last user turn. Background
+observer completions ride the same delivery — except on a full-auto turn,
+which leaves them pending for the observer's own Plan follow-up, because
+command output never rides a turn that runs commands unasked. A wake turn
+keeps the conversation's own Mode.
+
 ## Snapshot and event cursors
 
 Consumers follow one race-free pattern:
@@ -288,6 +301,13 @@ reverse onto, so only the other half of the rule binds it: the Run the operator
 wrote to may answer, and that answer still waits for the receiving side's
 review. Enforcement happens before a new event is appended; historical journals
 keep their existing replay rules.
+
+A Run-authored reply skips the asker's review because the asker invited it, so
+it is held to what was invited: its kind must be `answer` (an omitted kind
+defaults to `answer` when `replyTo` is set), and a Run may answer one envelope
+once. A second reply is rejected with "Already answered; send a new message (it
+will be reviewed)." — the follow-up goes as a new envelope and waits for review.
+Operator-authored replies are exempt from both rules.
 
 Both the native Harness and embedded MCP use `send_receipt` in the Rust
 coordination core. It reads the sent Envelope's actual delivery state from a

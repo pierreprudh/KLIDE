@@ -107,8 +107,19 @@ idempotency key, evidence references, and queued → delivered → acknowledged
 lifecycle. Delivery happens at an execution adapter's safe boundary; terminal
 bytes are never the authoritative envelope. A reply reverses the route it
 answers: only the original recipient may answer the original sender with that
-envelope's reply identity, so an id is an address, never an entry pass.
+envelope's reply identity, so an id is an address, never an entry pass. A
+Run's reply is kind answer, and one per envelope; anything more is a new,
+reviewed message.
 _Avoid_: Agent event, prompt injection, terminal text, chat message
+
+**Delivery**:
+Everything a Run's model reads that the operator did not type — peer
+envelopes and background observer completions — rendered once, in front of the
+operator's own words, with each item inside a fence closed by a per-delivery
+random nonce. A body cannot close its fence, so nothing inside one can pose as
+Klide's framing or speak for the operator. The same renderer serves the turn
+boundary, `agent_wait`, a send receipt's replies, and the Delegate bridge.
+_Avoid_: inbox text, injected message, system note
 
 **Send receipt**:
 What a Run learns about a message it just sent: the envelope's delivery state
