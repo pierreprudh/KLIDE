@@ -1380,7 +1380,8 @@ pub(super) fn message_gate_options() -> Vec<PermissionOption> {
 /// same card as a shell command, and the answer is written to the journal as
 /// an accept or a decline. "For this run" is remembered per sending peer, so
 /// a peer once welcomed keeps talking without a prompt and a peer once refused
-/// is declined silently. Full auto accepts everything, as it runs commands.
+/// is declined silently. The full-auto rung does not reach this card: it
+/// silences commands, never another agent's words.
 /// Returns `true` when the user cancelled the run while a card was up.
 pub(super) async fn review_coordination_inbox<E>(
     ctx: &ToolCtx<'_>,
@@ -1392,7 +1393,6 @@ where
 {
     let snapshot = ctx.sup.coordination_snapshot(workspace_root)?;
     let awaiting = crate::coordination::awaiting_review_for(&snapshot, ctx.id)?;
-    let full_auto = permission::full_auto(ctx);
     for entry in awaiting {
         let envelope = &entry.envelope;
         let peer = match &envelope.from {
@@ -1400,7 +1400,7 @@ where
             CoordinationActor::Operator => "operator",
         };
         let accept =
-            match permission::precheck(ctx, permission::Capability::Message, peer, full_auto) {
+            match permission::precheck(ctx, permission::Capability::Message, peer, false) {
                 permission::Precheck::Execute(_) => true,
                 permission::Precheck::AutoReject(_) => false,
                 permission::Precheck::Ask => {

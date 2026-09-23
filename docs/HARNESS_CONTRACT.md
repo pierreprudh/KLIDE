@@ -30,6 +30,14 @@ Mode filtering happens twice:
 The second check is load-bearing. A Provider may hallucinate, replay, or return a
 Tool call that was not advertised. The Harness still denies disallowed Tools.
 
+Both checks read one value, the Run's Gate subject (`permission::GateSubject`):
+its Mode, the Tools turned off for it, its lineage (conversation, Mission
+attempt, or spawned child), and whether its request chose full auto. A Tool is
+turned off by `disabledTools` on the run request: a Settings toggle arrives as
+`<mode>.<tool>` and applies to that Mode only, a bare name applies to every
+Mode. A turned-off Tool is neither advertised nor dispatched — a call to it
+returns a not-ok result.
+
 ## Goal Mode vs Mission Supervision
 
 `goal` mode is a capability tier: the model may use the full Tool surface, while
@@ -117,11 +125,22 @@ Rejected commands are remembered for the current Run. If the model proposes the
 same command/cwd again, the Harness auto-declines and tells the model to take a
 different approach.
 
+An approval is for a command's shape as well as its text. `run_command` with
+`background: true` is keyed `<command> [background]`, and with `notifyOnExit`
+`<command> [watch]`, so approving a command for the Run does not approve the
+same command left running in the background. The project allowlist and its
+wildcard rules approve foreground commands only: a background command always
+gets a card, the card offers no project scope, and nothing suffixed is ever
+written to `.klide/command-allowlist.json`.
+
 The full-auto Goal policy (`autoApproveCommands: true` on the run request)
 silences the command gate for that Run: commands execute as if allowlisted,
 including over a remembered rejection — escalating the policy is the override.
 It is chosen per conversation, never persisted, and does not extend to network
-targets, headless Mission attempts, or spawned subagent runs.
+targets, peer messages, headless Mission attempts, or spawned subagent runs. A
+command the policy runs still records `PermissionRequested` and a
+`PermissionResolved` carrying `via: "full_auto"`, so the transcript tells the
+policy from an allowlist hit.
 
 The policy is per conversation, and a conversation's live Run is part of it.
 Flipping the rung while the Run works reaches that Run through
@@ -131,7 +150,9 @@ Flipping the rung while the Run works reaches that Run through
 user never made. Every other card standing at that moment (a dispatch, a
 network target, a peer's message) stays for the user. Stepping back down makes
 the Run ask again from its next command. The next Run needs none of this: its
-request carries the rung.
+request carries the rung. A Mission attempt or a child Run has no conversation
+rung to follow: `agent_set_command_policy` refuses it, and it keeps what its
+request said at start.
 
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the
@@ -204,8 +225,9 @@ before the next turn, or on the same card as a shell command when the turn
 boundary finds them still queued. The answer is durable (`review_envelope` →
 `envelope_accepted` / `envelope_declined`); a declined message is never
 delivered. "For this run" is remembered per sending peer, with no project scope
-— a peer Run id names one conversation. Full auto, which runs commands
-unprompted, accepts unprompted too. Three kinds skip review because the
+— a peer Run id names one conversation. Full auto does not reach this card: it
+runs commands unprompted, but another agent's words always wait for the user.
+Three kinds skip review because the
 receiver invited them: the operator's own messages, a Run's message to itself,
 and a reply to something the receiver asked.
 

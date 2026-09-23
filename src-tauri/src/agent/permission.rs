@@ -287,12 +287,6 @@ pub fn remember_edits_auto_apply(ctx: &ToolCtx<'_>) {
     with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_edits_auto_apply());
 }
 
-/// Is this run on the full-auto rung right now? See [`GateSubject::full_auto`].
-pub fn full_auto(ctx: &ToolCtx<'_>) -> bool {
-    with_run_handle(ctx.sup, ctx.id, |h| h.subject.full_auto(h.trust.commands_policy()))
-        .unwrap_or(false)
-}
-
 /// The decision a command card receives when the rung silences it, so the
 /// transcript says the policy answered, not the user.
 pub const FULL_AUTO_DECISION: &str = "{\"behavior\":\"allow\",\"scope\":\"once\",\"via\":\"full_auto\"}";
@@ -301,20 +295,30 @@ pub const FULL_AUTO_DECISION: &str = "{\"behavior\":\"allow\",\"scope\":\"once\"
 /// is full auto and a *command* card is up, answer that card. Returns whether
 /// a card was answered. Any other pending card — a dispatch, a network target,
 /// a peer's message — is left for the user, as the full-auto rung excludes
-/// them by design.
-pub fn apply_command_policy(handle: &super::AgentRunHandle, auto_approve: bool) -> bool {
+/// them by design. Refused for a Mission attempt or a spawned child: the rung
+/// is a conversation's, and theirs was fixed by the request that started them.
+pub fn apply_command_policy(
+    handle: &super::AgentRunHandle,
+    auto_approve: bool,
+) -> Result<bool, String> {
+    if handle.subject.lineage != RunLineage::Conversation {
+        return Err(format!(
+            "The command policy belongs to a conversation; this Run is a {:?}.",
+            handle.subject.lineage
+        ));
+    }
     handle.trust.set_commands_policy(auto_approve);
     if !auto_approve || handle.trust.pending_capability() != Some(Capability::Command) {
-        return false;
+        return Ok(false);
     }
     let sender = handle.pending_permission.lock().unwrap().take();
-    match sender {
+    Ok(match sender {
         Some(tx) => {
             handle.trust.note_pending_capability(None);
             tx.send(FULL_AUTO_DECISION.to_string()).is_ok()
         }
         None => false,
-    }
+    })
 }
 
 /// How long an approved command lives. A background shell outlasts the turn

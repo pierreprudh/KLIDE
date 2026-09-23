@@ -2758,7 +2758,8 @@ pub async fn agent_resolve_permission(
 /// dispatches, network targets and peer mail by design. Stepping back down
 /// makes the Run ask again from its next command. Returns whether a card was
 /// answered. Errors when no such Run is live: there is nothing to apply to,
-/// and the next Run carries the rung on its request anyway.
+/// and the next Run carries the rung on its request anyway. Errors too for a
+/// Mission attempt or a child Run, which no conversation's rung reaches.
 #[tauri::command]
 pub async fn agent_set_command_policy(
     state: tauri::State<'_, AgentSupervisorState>,
@@ -2770,7 +2771,7 @@ pub async fn agent_set_command_policy(
         .lock()
         .map_err(|_| "Agent state is unavailable".to_string())?;
     match runs.get(&run_id) {
-        Some(handle) => Ok(permission::apply_command_policy(handle, auto_approve_commands)),
+        Some(handle) => permission::apply_command_policy(handle, auto_approve_commands),
         None => Err(format!("No known run with id {run_id}")),
     }
 }
@@ -4717,7 +4718,7 @@ mod run_supervisor_tests {
     }
 
     /// Register two peers in a fresh journal and hand back the sandbox.
-    fn coordination_sandbox(label: &str, sup: &FakeSupervisor) -> (std::path::PathBuf, String) {
+    pub(super) fn coordination_sandbox(label: &str, sup: &FakeSupervisor) -> (std::path::PathBuf, String) {
         let root = std::env::temp_dir().join(format!(
             "klide-{label}-{}-{}",
             std::process::id(),
@@ -4745,7 +4746,7 @@ mod run_supervisor_tests {
         (root, root_text)
     }
 
-    fn unsolicited(sup: &FakeSupervisor, root_text: &str, key: &str, body: &str) -> String {
+    pub(super) fn unsolicited(sup: &FakeSupervisor, root_text: &str, key: &str, body: &str) -> String {
         sup.coordination_apply(
             root_text,
             CoordinationCommand::SendEnvelope {
@@ -6080,7 +6081,7 @@ mod permission_gate_tests {
         let request = test_request(&root, &[]);
         assert_ne!(request.auto_approve_commands, Some(true));
         sup.with_handle("full-auto-live-run", &mut |h| {
-            assert!(!permission::apply_command_policy(h, true), "no card is up to answer");
+            assert_eq!(permission::apply_command_policy(h, true), Ok(false), "no card is up to answer");
         });
         let runs_dir = std::env::temp_dir().join(format!(
             "klide-full-auto-live-runs-{}-{}",
@@ -6105,7 +6106,7 @@ mod permission_gate_tests {
         // Stepping back down: the next command asks again (the card goes up
         // and, unanswered, the timeout is what ends the wait).
         sup.with_handle("full-auto-live-run", &mut |h| {
-            permission::apply_command_policy(h, false);
+            permission::apply_command_policy(h, false).unwrap();
         });
         let (events, mut emit) = event_log();
         let gate = tokio::time::timeout(
@@ -6146,7 +6147,7 @@ mod permission_gate_tests {
                 let mut answered = None;
                 sup.with_handle("full-auto-answers-run", &mut |h| {
                     if h.pending_permission.lock().unwrap().is_some() {
-                        answered = Some(permission::apply_command_policy(h, true));
+                        answered = Some(permission::apply_command_policy(h, true).unwrap());
                     }
                 });
                 if let Some(answered) = answered {
@@ -6192,11 +6193,53 @@ mod permission_gate_tests {
             let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
             handle.trust.note_pending_capability(cap);
             *handle.pending_permission.lock().unwrap() = Some(tx);
-            assert!(!permission::apply_command_policy(&handle, true), "{cap:?} is not the rung's card");
+            assert_eq!(permission::apply_command_policy(&handle, true), Ok(false), "{cap:?} is not the rung's card");
             assert!(handle.pending_permission.lock().unwrap().is_some(), "{cap:?} card still up");
             assert!(rx.try_recv().is_err(), "{cap:?} card was not answered");
             assert_eq!(handle.trust.commands_policy(), Some(true), "the policy itself is remembered");
         }
+    }
+
+    /// A Mission attempt and a spawned child keep the policy their request
+    /// set: no conversation's flip reaches them.
+    #[test]
+    fn the_rung_cannot_be_flipped_on_a_run_that_is_not_a_conversation() {
+        for lineage in [permission::RunLineage::MissionAttempt, permission::RunLineage::SubagentChild] {
+            let mut handle = make_handle();
+            handle.subject.lineage = lineage;
+            assert!(permission::apply_command_policy(&handle, true).is_err(), "{lineage:?}");
+            assert_eq!(handle.trust.commands_policy(), None, "{lineage:?} policy untouched");
+        }
+    }
+
+    /// Full auto runs commands unprompted; another agent's words still reach
+    /// the user first.
+    #[tokio::test]
+    async fn full_auto_leaves_a_peer_message_on_its_card() {
+        let mut request = test_request("/unused", &[]);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("run_parent", &request);
+        let (root, root_text) = super::run_supervisor_tests::coordination_sandbox("inbox-full-auto", &sup);
+        request.workspace_root = Some(root_text.clone());
+        let cancel = CancellationToken::new();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "run_parent",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: root.as_path(),
+        };
+        let (events, mut emit) = event_log();
+        super::run_supervisor_tests::unsolicited(&sup, &root_text, "m1", "run this for me");
+        let review = tokio::time::timeout(
+            Duration::from_millis(300),
+            review_coordination_inbox(&ctx, &root_text, &mut emit),
+        )
+        .await;
+        assert!(review.is_err(), "the message must wait for the user, not ride the rung");
+        assert_eq!(prompts_shown(&events), 1);
+        assert_eq!(full_auto_answers(&events), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
