@@ -4425,6 +4425,15 @@ mod test_support {
     }
 
     impl FakeSupervisor {
+        /// A live run whose Gate subject is built from `request`, as
+        /// start_run builds it.
+        pub(super) fn for_request(id: &str, request: &StartRunRequest) -> Self {
+            let sup = Self::with_run(id);
+            sup.runs.lock().unwrap().get_mut(id).unwrap().subject =
+                permission::GateSubject::from_request(request);
+            sup
+        }
+
         pub(super) fn with_run(id: &str) -> Self {
             let mut runs = HashMap::new();
             runs.insert(id.to_string(), make_handle());
@@ -5989,6 +5998,19 @@ mod permission_gate_tests {
             .count()
     }
 
+    /// Cards the full-auto rung answered, whether it silenced them before
+    /// they went up or a flip answered one that was.
+    fn full_auto_answers(events: &EventLog) -> usize {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| {
+                matches!(e, AgentEvent::PermissionResolved { decision, .. } if decision["via"] == "full_auto")
+            })
+            .count()
+    }
+
     fn produced(outcome: Result<ToolOutcome, String>) -> ToolResult {
         match outcome.expect("gate returns ok") {
             ToolOutcome::Produced(result) => result,
@@ -6016,11 +6038,11 @@ mod permission_gate_tests {
     #[tokio::test]
     async fn full_auto_runs_a_brand_new_command_without_a_prompt() {
         let root = temp_workspace("full-auto");
-        let sup = FakeSupervisor::with_run("full-auto-run");
         let cancel = CancellationToken::new();
         // No allowlist entry, no prior approval — only the full-auto rung.
         let mut request = test_request(&root, &[]);
         request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("full-auto-run", &request);
         let runs_dir = std::env::temp_dir().join(format!(
             "klide-full-auto-runs-{}-{}",
             std::process::id(),
@@ -6041,7 +6063,11 @@ mod permission_gate_tests {
                 .await;
         assert!(result.ok, "full auto should execute: {}", result.content);
         assert!(result.content.contains("full-auto"));
-        assert_eq!(prompts_shown(&events), 0, "full auto must never prompt");
+        assert_eq!(
+            (prompts_shown(&events), full_auto_answers(&events)),
+            (1, 1),
+            "full auto never pauses, and the transcript names the rung as the answer"
+        );
     }
 
     /// The rung flipped while the Run works: no flag on the request, the live
@@ -6074,7 +6100,7 @@ mod permission_gate_tests {
         let result =
             run_gate_without_prompt(&ctx, &command_call("call-1", "echo live"), &mut emit).await;
         assert!(result.ok, "the live policy should execute: {}", result.content);
-        assert_eq!(prompts_shown(&events), 0, "a live full auto must not prompt");
+        assert_eq!(full_auto_answers(&events), 1, "a live full auto answers without pausing");
 
         // Stepping back down: the next command asks again (the card goes up
         // and, unanswered, the timeout is what ends the wait).
@@ -6327,6 +6353,138 @@ mod permission_gate_tests {
             run_gate_without_prompt(&ctx, &command_call("c2", "echo persist-me"), &mut emit).await;
         assert!(second.ok);
         assert_eq!(prompts_shown(&events), 1, "asked exactly once");
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
+    }
+
+    fn background_call(id: &str, command: &str) -> NormalizedToolCall {
+        NormalizedToolCall {
+            id: id.to_string(),
+            name: "run_command".to_string(),
+            input: serde_json::json!({ "command": command, "background": true }),
+        }
+    }
+
+    fn runs_dir_for(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-{name}-runs-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A foreground approval is for a few seconds of work. The same command
+    /// in the background outlives the turn, so it asks again.
+    #[tokio::test]
+    async fn a_run_approval_does_not_cover_the_same_command_in_the_background() {
+        let root = temp_workspace("approve-run-bg");
+        let sup = FakeSupervisor::with_run("perm-bg-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = runs_dir_for("approve-run-bg");
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "perm-bg-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let first = command_call("c1", "echo hi");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &first, &mut emit),
+            answer_permission(&sup, "perm-bg-run", r#"{"behavior":"allow","scope":"run"}"#),
+        );
+        assert!(produced(outcome).ok);
+
+        let gate = tokio::time::timeout(
+            Duration::from_millis(300),
+            process_command_tool(&ctx, &background_call("c2", "echo hi"), &mut emit),
+        )
+        .await;
+        assert!(gate.is_err(), "the background shape must pause for its own card");
+        assert_eq!(prompts_shown(&events), 2);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
+    }
+
+    /// The project allowlist is a foreground contract: an allowlisted command
+    /// asked for in the background gets a card, and that card offers no
+    /// project scope to write it back under.
+    #[tokio::test]
+    async fn an_allowlisted_command_still_asks_in_the_background() {
+        let root = temp_workspace("allowlist-bg");
+        let sup = FakeSupervisor::with_run("allowlist-bg-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &["echo listed"]);
+        let runs_dir = runs_dir_for("allowlist-bg");
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "allowlist-bg-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let foreground =
+            run_gate_without_prompt(&ctx, &command_call("c1", "echo listed"), &mut emit).await;
+        assert!(foreground.ok, "{}", foreground.content);
+        assert_eq!(prompts_shown(&events), 0);
+
+        let gate = tokio::time::timeout(
+            Duration::from_millis(300),
+            process_command_tool(&ctx, &background_call("c2", "echo listed"), &mut emit),
+        )
+        .await;
+        assert!(gate.is_err(), "an allowlist hit must not start a background shell unasked");
+        let card = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::PermissionRequested { request, .. } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("the background command was put on a card");
+        assert!(
+            card.options.iter().all(|o| o.option_id != "allow_project"),
+            "a background approval is never offered at project scope"
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
+    }
+
+    /// Even an answer that says "project" on a background card stays with the
+    /// run: nothing reaches the allowlist file.
+    #[tokio::test]
+    async fn a_background_approval_is_never_written_to_the_project_allowlist() {
+        let root = temp_workspace("persist-bg");
+        let sup = FakeSupervisor::with_run("persist-bg-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = runs_dir_for("persist-bg");
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "persist-bg-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (_events, mut emit) = event_log();
+
+        let call = background_call("c1", "echo bg");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "persist-bg-run", r#"{"behavior":"allow","scope":"project"}"#),
+        );
+        assert!(produced(outcome).ok);
+        let stored = command_allowlist::list(&runs_dir, &root).unwrap_or_default();
+        assert!(stored.is_empty(), "nothing persisted: {stored:?}");
+        background::kill_run_shells("persist-bg-run");
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(runs_dir);
     }

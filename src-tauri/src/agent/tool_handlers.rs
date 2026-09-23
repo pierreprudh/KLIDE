@@ -1401,7 +1401,7 @@ where
         };
         let accept =
             match permission::precheck(ctx, permission::Capability::Message, peer, full_auto) {
-                permission::Precheck::Execute => true,
+                permission::Precheck::Execute(_) => true,
                 permission::Precheck::AutoReject(_) => false,
                 permission::Precheck::Ask => {
                     let peer_label = snapshot
@@ -1443,7 +1443,7 @@ where
                         permission::GateDecision::Cancelled => return Ok(true),
                         decision => decision,
                     };
-                    permission::record(ctx, permission::Capability::Message, peer, peer, &decision);
+                    permission::record(ctx, permission::Capability::Message, peer, None, &decision);
                     matches!(decision, permission::GateDecision::Approved { .. })
                 }
             };
@@ -1733,37 +1733,84 @@ where
         return Ok(ToolOutcome::Produced(ToolResult { ok: false, content: "notifyOnExit requires background: true.".into(), metadata: None }));
     }
 
-    let approval_key = if cwd == root_value {
-        command.clone()
-    } else {
-        format!("{cwd} :: {command}")
+    let shape = match (background, notify) {
+        (false, _) => permission::CommandShape::Foreground,
+        (true, false) => permission::CommandShape::Background,
+        (true, true) => permission::CommandShape::Watch,
     };
+    let key = permission::CommandKey::new(root_value, &cwd, &command, shape);
+    let approval_key = key.to_string();
+    let foreground = shape == permission::CommandShape::Foreground;
     let preflight = preflight_command(root_value, &cwd, &command);
     // Wildcard allowlist rules are intentionally narrower than exact approvals:
     // if a wildcard command references outside-workspace paths, ask again so the
     // path is visible to the user instead of hidden behind a broad pattern. That
     // nuance is command-specific, so the project verdict is computed here and
-    // handed to the engine as a plain bool.
-    let matched_rule =
-        command_allowlist::match_rule(&ctx.request.command_allowlist, &command, &approval_key);
-    let project_ok = matched_rule
-        .as_ref()
-        .map(|rule| rule.exact || preflight.external_paths.is_empty())
-        .unwrap_or(false);
-    // The full-auto rung: the user chose to run this conversation's commands
-    // without prompts. Same trust as a project-allowlist hit, but scoped to
-    // the run — nothing is persisted, a flip while the Run works counts from
-    // its next command, and a rejection remembered from before the user
-    // escalated no longer blocks (escalating IS the override).
-    let full_auto = permission::full_auto(ctx);
+    // handed to the engine as a plain bool. The allowlist approves foreground
+    // commands; a rule that matches a background one still asks.
+    let matched_rule = command_allowlist::match_rule(
+        &ctx.request.command_allowlist,
+        &command,
+        &key.foreground_key(),
+    );
+    let project_ok = foreground
+        && matched_rule
+            .as_ref()
+            .map(|rule| rule.exact || preflight.external_paths.is_empty())
+            .unwrap_or(false);
 
-    match permission::precheck(
-        ctx,
-        permission::Capability::Command,
-        &approval_key,
-        project_ok || full_auto,
-    ) {
-        permission::Precheck::Execute => {
+    let external_paths = preflight.external_paths.clone();
+    let mut permission_reason = reason;
+    if !external_paths.is_empty() {
+        permission_reason.push_str(" It references paths outside the workspace: ");
+        permission_reason.push_str(&external_paths.join(", "));
+        permission_reason.push('.');
+    }
+    if let Some(rule) = matched_rule.as_ref() {
+        permission_reason.push_str(&format!(
+            " Project rule `{}` matched, but this command still needs approval.",
+            rule.pattern
+        ));
+    }
+    if background {
+        // Approving this does not approve a few seconds of work — say so on
+        // the card, where the decision is actually made.
+        permission_reason.push_str(if notify {
+            " It keeps watching after this reply ends and starts a follow-up in this conversation when it exits. Stop it from the observer row; quitting Klide stops it too."
+        } else {
+            " It runs in the background with no time limit and is stopped when this run ends."
+        });
+    }
+    let options = if foreground {
+        standard_gate_options("Approve for this run", "Approve for this project")
+    } else {
+        standard_gate_options("Approve for this run", "")
+            .into_iter()
+            .filter(|option| option.option_id != "allow_project")
+            .collect()
+    };
+
+    let perm = PermissionRequest {
+        id: permission::request_id(ctx, call),
+        run_id: ctx.id.to_string(),
+        tool_call_id: call.id.clone(),
+        tool_name: permission_tool_name.to_string(),
+        input: serde_json::json!({
+            "command": command,
+            "cwd": cwd,
+            "externalPaths": external_paths,
+            "matchedAllowRule": matched_rule.as_ref().map(|rule| rule.pattern.clone())
+        }),
+        summary: permission_summary,
+        reason: permission_reason,
+        options,
+    };
+
+    match permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok) {
+        permission::Precheck::Execute(trusted) => {
+            if trusted == permission::Trusted::FullAuto {
+                permission::record_full_auto(ctx, call, perm, emit)?;
+            }
             return Ok(ToolOutcome::Produced(
                 if background {
                     start_background_command(ctx, &cwd, &command, notify)
@@ -1790,45 +1837,6 @@ where
         permission::Precheck::Ask => {}
     }
 
-    let external_paths = preflight.external_paths.clone();
-    let mut permission_reason = reason;
-    if !external_paths.is_empty() {
-        permission_reason.push_str(" It references paths outside the workspace: ");
-        permission_reason.push_str(&external_paths.join(", "));
-        permission_reason.push('.');
-    }
-    if let Some(rule) = matched_rule.as_ref() {
-        permission_reason.push_str(&format!(
-            " Project rule `{}` matched, but this command still needs approval.",
-            rule.pattern
-        ));
-    }
-    if background {
-        // Approving this does not approve a few seconds of work — say so on
-        // the card, where the decision is actually made.
-        permission_reason.push_str(if notify {
-            " It keeps watching after this reply ends and starts a follow-up in this conversation when it exits. Stop it from the observer row; quitting Klide stops it too."
-        } else {
-            " It runs in the background with no time limit and is stopped when this run ends."
-        });
-    }
-
-    let perm = PermissionRequest {
-        id: permission::request_id(ctx, call),
-        run_id: ctx.id.to_string(),
-        tool_call_id: call.id.clone(),
-        tool_name: permission_tool_name.to_string(),
-        input: serde_json::json!({
-            "command": command,
-            "cwd": cwd,
-            "externalPaths": external_paths,
-            "matchedAllowRule": matched_rule.as_ref().map(|rule| rule.pattern.clone())
-        }),
-        summary: permission_summary,
-        reason: permission_reason,
-        options: standard_gate_options("Approve for this run", "Approve for this project"),
-    };
-
     let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Command), perm, emit).await? {
         permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
         decision => decision,
@@ -1837,7 +1845,7 @@ where
         ctx,
         permission::Capability::Command,
         &approval_key,
-        &command,
+        foreground.then_some(command.as_str()),
         &decision,
     );
 
@@ -1990,7 +1998,7 @@ where
         network_allowlist::is_allowed(ctx.runs_dir, root_value, &target).unwrap_or(false);
 
     match permission::precheck(ctx, permission::Capability::Network, &target, project_ok) {
-        permission::Precheck::Execute => {
+        permission::Precheck::Execute(_) => {
             return Ok(ToolOutcome::Produced(
                 execute_network_tool(root_value, call, ctx.id).await,
             ));
@@ -2027,7 +2035,7 @@ where
         ctx,
         permission::Capability::Network,
         &target,
-        &target,
+        Some(&target),
         &decision,
     );
 

@@ -287,13 +287,10 @@ pub fn remember_edits_auto_apply(ctx: &ToolCtx<'_>) {
     with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_edits_auto_apply());
 }
 
-/// Is this run on the full-auto rung right now? The live override wins over
-/// what the run request said at start: a rung flipped while the Run works
-/// applies to its next command, not only to the next Run.
+/// Is this run on the full-auto rung right now? See [`GateSubject::full_auto`].
 pub fn full_auto(ctx: &ToolCtx<'_>) -> bool {
-    with_run_handle(ctx.sup, ctx.id, |h| h.trust.commands_policy())
-        .flatten()
-        .unwrap_or(ctx.request.auto_approve_commands == Some(true))
+    with_run_handle(ctx.sup, ctx.id, |h| h.subject.full_auto(h.trust.commands_policy()))
+        .unwrap_or(false)
 }
 
 /// The decision a command card receives when the rung silences it, so the
@@ -320,11 +317,70 @@ pub fn apply_command_policy(handle: &super::AgentRunHandle, auto_approve: bool) 
     }
 }
 
+/// How long an approved command lives. A background shell outlasts the turn
+/// and a watch outlasts the run, so neither is the same approval as the
+/// foreground command it spells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandShape {
+    Foreground,
+    Background,
+    Watch,
+}
+
+/// What a command approval is for: the command, where it runs, and its shape.
+/// A foreground key reads `cwd :: command` (just `command` at the Workspace
+/// root) — the spelling the project allowlist stores. The other shapes add a
+/// suffix, so a foreground approval never covers them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandKey {
+    cwd: Option<String>,
+    command: String,
+    pub shape: CommandShape,
+}
+
+impl CommandKey {
+    pub fn new(root: &str, cwd: &str, command: &str, shape: CommandShape) -> Self {
+        Self {
+            cwd: (cwd != root).then(|| cwd.to_string()),
+            command: command.to_string(),
+            shape,
+        }
+    }
+
+    /// The key without its shape: what the project allowlist matches on.
+    pub fn foreground_key(&self) -> String {
+        match &self.cwd {
+            Some(cwd) => format!("{cwd} :: {}", self.command),
+            None => self.command.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for CommandKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let base = self.foreground_key();
+        match self.shape {
+            CommandShape::Foreground => write!(f, "{base}"),
+            CommandShape::Background => write!(f, "{base} [background]"),
+            CommandShape::Watch => write!(f, "{base} [watch]"),
+        }
+    }
+}
+
+/// Why a gated call may run without asking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trusted {
+    /// Approved for this run earlier.
+    Run,
+    /// The project allowlist covers it.
+    Project,
+    /// The full-auto rung silences it.
+    FullAuto,
+}
+
 /// What the pre-check concluded before any prompt is shown.
 pub enum Precheck {
-    /// Already trusted — a run-scoped approval or the project allowlist covers
-    /// it. Run it without asking.
-    Execute,
+    Execute(Trusted),
     /// Already refused this run. Return this canned message to the model so it
     /// changes course, and never re-ask for the same key.
     AutoReject(&'static str),
@@ -425,20 +481,55 @@ pub fn request_id(ctx: &ToolCtx<'_>, call: &NormalizedToolCall) -> String {
 /// Classify a capability before prompting. `run_key` is the run-scoped trust
 /// key; `project_ok` is the caller's project-allowlist verdict (kept in the
 /// handler because the command capability's wildcard/external-path nuance is
-/// command-specific). Falls back to `Ask` whenever the run handle is missing.
+/// command-specific). The full-auto rung is read here, off the Run's subject,
+/// and outranks a remembered rejection — escalating is the override. Falls
+/// back to `Ask` whenever the run handle is missing.
 pub fn precheck(ctx: &ToolCtx<'_>, cap: Capability, run_key: &str, project_ok: bool) -> Precheck {
-    let (run_ok, run_no) = with_run_handle(ctx.sup, ctx.id, |h| {
-        (h.trust.approved(cap, run_key), h.trust.rejected(cap, run_key))
+    let (run_ok, run_no, full_auto) = with_run_handle(ctx.sup, ctx.id, |h| {
+        (
+            h.trust.approved(cap, run_key),
+            h.trust.rejected(cap, run_key),
+            h.subject.rung_covers(cap) && h.subject.full_auto(h.trust.commands_policy()),
+        )
     })
-    .unwrap_or((false, false));
+    .unwrap_or((false, false, false));
 
-    if run_ok || project_ok {
-        Precheck::Execute
+    if run_ok {
+        Precheck::Execute(Trusted::Run)
+    } else if project_ok {
+        Precheck::Execute(Trusted::Project)
+    } else if full_auto {
+        Precheck::Execute(Trusted::FullAuto)
     } else if run_no {
         Precheck::AutoReject(cap.already_refused())
     } else {
         Precheck::Ask
     }
+}
+
+/// The rung answered this card before it went up. Record the same pair a flip
+/// under an open card records, so the transcript tells full auto from an
+/// allowlist hit.
+pub fn record_full_auto<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    request: PermissionRequest,
+    emit: &mut E,
+) -> Result<(), String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    emit(AgentEvent::PermissionRequested {
+        run_id: ctx.id.to_string(),
+        request,
+        ts: now_ms(),
+    })?;
+    emit(AgentEvent::PermissionResolved {
+        run_id: ctx.id.to_string(),
+        request_id: request_id(ctx, call),
+        decision: serde_json::from_str(FULL_AUTO_DECISION).expect("a JSON literal"),
+        ts: now_ms(),
+    })
 }
 
 /// The pause ceremony: flip to waiting, stash the permission oneshot, emit the
@@ -514,12 +605,14 @@ where
 /// Remember a gate decision. `run_key` is what the run-scoped sets and pre-check
 /// match on; `persist` is what a project-scoped approval writes to disk (they
 /// differ for commands: the run key may carry a cwd prefix, the persisted value
-/// is the bare command). A `Cancelled` decision records nothing.
+/// is the bare command). `None` keeps a project-scoped answer to this run — the
+/// project allowlist is a foreground contract, so a background command is
+/// never written to it. A `Cancelled` decision records nothing.
 pub fn record(
     ctx: &ToolCtx<'_>,
     cap: Capability,
     run_key: &str,
-    persist: &str,
+    persist: Option<&str>,
     decision: &GateDecision,
 ) {
     match decision {
@@ -528,7 +621,7 @@ pub fn record(
                 with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_approved(cap, run_key));
             }
             if scope == "project" {
-                if let Some(root) = ctx.request.workspace_root.as_deref() {
+                if let (Some(root), Some(persist)) = (ctx.request.workspace_root.as_deref(), persist) {
                     cap.persist_project(ctx.runs_dir, root, persist, pattern.as_deref());
                 }
             }
