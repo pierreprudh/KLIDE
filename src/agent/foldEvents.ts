@@ -37,6 +37,13 @@ export type FoldedToolCall = {
    *  that is the whole reason this field exists rather than a silent reuse of
    *  the dispatched-call shape. */
   observedBy?: string;
+  /** For a `spawn_subagent` call: the Run id of the child it started, learned
+   *  from the `subagent_requested` event (the harness names it
+   *  `sub_<parent>_<toolCallId>`). It is the address a surface watches the
+   *  child on — the child broadcasts on `agent-run:{id}` like any other Run —
+   *  so it is carried on the call rather than re-derived from a parent id the
+   *  renderer does not have. */
+  childRunId?: string;
 };
 
 /** Per-message footer metrics. One type for both paces — a turn must read the
@@ -109,6 +116,7 @@ export type FoldedRow =
        *  carried on the wire, which has no count. */
       count: number;
     }
+  | { kind: "observer"; shellId: string }
   | {
       kind: "steering";
       reason: string;
@@ -434,8 +442,12 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
     // (the delegated-to line, the participants strip) says who really took it.
     if (event.type === "subagent_requested") {
       const prefix = `sub_${event.runId}_`;
-      if (!event.worker || !event.requestId.startsWith(prefix)) return { changed: [] };
+      if (!event.requestId.startsWith(prefix)) return { changed: [] };
       const idx = upsertTool(event.requestId.slice(prefix.length), (t) => {
+        // The child's address, whether or not a worker took the task: a
+        // subagent on our own model is watchable too.
+        t.childRunId = event.requestId;
+        if (!event.worker) return;
         const input = t.input && typeof t.input === "object" && !Array.isArray(t.input)
           ? { ...(t.input as Record<string, unknown>) }
           : {};
@@ -558,6 +570,22 @@ export function createFold(opts: FoldOptions = {}): FoldHandle {
         summary: event.summary,
         count: rows.length,
       });
+      return { changed: [rows.length - 1] };
+    }
+
+    if (event.type === "observer_completed") {
+      // An observer starts a fresh response without inventing a user message.
+      splitRow();
+      turnOpen = true;
+      turnStartTs = event.ts;
+      turnRendered = "";
+      completed = false;
+      attemptStart = rows.length;
+      changedFiles.clear();
+      producedFiles.clear();
+      commands.clear();
+      completionWarnings.clear();
+      rows.push({ kind: "observer", shellId: event.shellId });
       return { changed: [rows.length - 1] };
     }
 
@@ -734,6 +762,9 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
   if (row.kind === "compaction") {
     return [compactionMsg(row.count, row.summary)];
   }
+  if (row.kind === "observer") {
+    return [{ role: "system", content: "Background observer finished", observer: { shellId: row.shellId } }];
+  }
   if (row.kind === "steering") {
     return [
       {
@@ -765,6 +796,7 @@ export function foldedRowToMsgs(row: FoldedRow, view: FoldedMsgView = {}): Msg[]
             // structured rows (spawn_subagent, path summaries) read fields
             // off it, and the memory summarizer extracts file paths from it.
             args: t.input,
+            childRunId: t.childRunId,
           }))
         : undefined,
       meta: row.meta
@@ -831,7 +863,7 @@ export function foldedToRunMessages(rows: FoldedRow[]): RunMessage[] {
     // `RunMessage.role` is "user" | "assistant" by wire contract (the Rust
     // struct and every Delegate adapter agree), so AI-panel transcript
     // annotations have no row to occupy in Mission Control.
-    if (row.kind === "compaction" || row.kind === "steering" || row.kind === "completion" || row.kind === "interrupted") continue;
+    if (row.kind === "observer" || row.kind === "compaction" || row.kind === "steering" || row.kind === "completion" || row.kind === "interrupted") continue;
     if (!row.text.trim() && row.toolCalls.length === 0) continue;
     out.push({
       role: "assistant",

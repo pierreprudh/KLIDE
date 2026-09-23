@@ -488,6 +488,7 @@ impl AgentEvent {
             | AgentEvent::SubagentResolved { ts, .. }
             | AgentEvent::AdvisorRequested { ts, .. }
             | AgentEvent::AdvisorResolved { ts, .. }
+            | AgentEvent::ObserverCompleted { ts, .. }
             | AgentEvent::SteeringInjected { ts, .. }
             | AgentEvent::RouteResolved { ts, .. } => *ts,
         }
@@ -709,6 +710,12 @@ pub enum AgentEvent {
     /// is the short human-readable line the transcript shows (the long nudge the
     /// model receives lives only in the provider messages, not here). See
     /// `steering.rs`.
+    ObserverCompleted {
+        run_id: String,
+        shell_id: String,
+        text: String,
+        ts: i64,
+    },
     SteeringInjected {
         run_id: String,
         reason: String,

@@ -1,3 +1,5 @@
+import { ObserverConnections } from "./ai/ObserverConnections";
+import { ConversationObservers } from "./ai/ConversationObservers";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
@@ -838,6 +840,10 @@ export function AiPanel({
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
       if (m.role === "user" && m.queueState === "queued") continue;
+      // A background subagent's report rides beside the exchange, not at its
+      // end — otherwise the main turn's live tool result stops reading as live
+      // the moment an @role bubble is dropped below it.
+      if (m.role === "assistant" && m.subagentRunId) continue;
       return i;
     }
     return -1;
@@ -1275,10 +1281,12 @@ export function AiPanel({
       out.push(
         <div
           key={`tool-run-${run.start}`}
+          data-observer-row={run.start}
           style={{ display: "flex", gap: 10, margin: startsResponse ? "14px 0 0" : "6px 0 0" }}
         >
           <div
             aria-hidden="true"
+            data-observer-logo={startsResponse ? run.start : undefined}
             style={{
               flexShrink: 0,
               width: 22,
@@ -2265,7 +2273,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             replayed !== null &&
             conversationSessionRef.current.conversationId === reattachId &&
             (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen);
-          if (safe) setMsgs(replayed);
+          if (safe) { msgsRef.current = replayed; setMsgs(replayed); }
           const tail = events[events.length - 1]?.type;
           return {
             len: events.length,
@@ -3533,7 +3541,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       // run), so Mission Control nests it under the convo. Events still stream
       // through `handleEvent`, so the delegation + any diffs render inline here.
       const turnRunId = turn.subagent ? `${currentId}-at-${turn.clientId}` : currentId;
-      const session = await startAgentRun({
+      const startSession = () => startAgentRun({
         runId: turnRunId,
         parentId: turn.subagent ? currentId : undefined,
         workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
@@ -3554,6 +3562,18 @@ This user request requires workspace inspection. Before answering, you MUST call
         // renderer's storage, so an `auto` turn carries them along.
         preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
       }, handleEvent);
+      let session;
+      for (;;) {
+        if (queueGenerationRef.current !== generation) return;
+        try { session = await startSession(); break; }
+        catch (error) {
+          // A completion-triggered reply may win the atomic backend guard
+          // between our queue check and dispatch. Preserve this user's turn.
+          if (!String(error).includes("A run is already active for this conversation")) throw error;
+          viewBehind.reason = "region-detached";
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
       if (harnessError) throw harnessError;
@@ -4405,6 +4425,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             )}
           </div>
         )}
+        <ObserverConnections msgs={msgs}>
         {stackToolRuns(msgs.map((m, i) => {
           if (m.role === "system" && m.completion) {
             const completion = m.completion;
@@ -4427,7 +4448,10 @@ This user request requires workspace inspection. Before answering, you MUST call
           // off the run that owns it — all while the run is still going.
           const following = msgs[i + 1];
           const isLast = i === lastExchangeIndex || (i + 1 === lastExchangeIndex && following?.role === "system" && !!following.completion);
-          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls;
+          // A background subagent's report bubble is empty while its child
+          // works, but it is its own surface (an @role header + watcher), never
+          // the main answer's "not yet started" dots.
+          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls && !m.subagent;
           const previous = msgs[i - 1];
           const activeToolRunning =
             streaming &&
@@ -4620,6 +4644,19 @@ This user request requires workspace inspection. Before answering, you MUST call
             );
           }
 
+          // Observer completion is a boundary marker, not an assistant turn.
+          // Keep it in the conversation flow without assigning it Klide's
+          // response mark; the actual follow-up answer below owns that mark.
+          // It is machinery, so it sits on the tool rows' indent — one step
+          // (14px) inside the prose edge — not flush with the answer.
+          if (m.role === "system" && m.observer) {
+            return (
+              <div key={i} data-observer-row={i} tabIndex={0} className="ai-msg-in" style={{ margin: "12px 0 5px 46px", color: "var(--fg-dim)", fontSize: 12 }}>
+                {renderMessageBody(m)}
+              </div>
+            );
+          }
+
           // Run-failure marker: a terminal event, not an assistant utterance —
           // rendered as its own centered hairline row (the local-server
           // starting line's family), full width, no gutter.
@@ -4682,7 +4719,13 @@ This user request requires workspace inspection. Before answering, you MUST call
           // the running answer as finished and hand it its copy/retry row
           // mid-run, which is the one thing this rule exists to prevent.
           const nextMsg = msgs[i + 1];
-          const isResponseEnd = !nextMsg || (nextMsg.role === "system" && !!nextMsg.completion) || (nextMsg.role === "user" && nextMsg.queueState !== "queued");
+          // An observer wake continues this response rather than opening a
+          // new one — the person asked nothing in between — so once the
+          // follow-up lands, the icon row moves to it. Each answer keeps its
+          // own stats line; only the actions are one per response.
+          const afterCompletion = nextMsg?.role === "system" && nextMsg.completion ? msgs[i + 2] : nextMsg;
+          const observerFollows = afterCompletion?.role === "system" && !!afterCompletion.observer;
+          const isResponseEnd = !observerFollows && (!nextMsg || (nextMsg.role === "system" && !!nextMsg.completion) || (nextMsg.role === "user" && nextMsg.queueState !== "queued"));
           const mark = isResponseStart && m.role === "assistant" ? responseMark(m) : null;
           // This turn's results, handed to its call rows. A result is live
           // while it is the exchange's tail and still says "Running".
@@ -4697,7 +4740,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             }
           }
           return (
-            <div key={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+            <div key={i} data-observer-row={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {isResponseStart ? (
                 // A brand mark is worn bare — no disc, no ring, no tile, the
                 // rule every other pairing in the app follows. Klide's own mark
@@ -4705,7 +4748,7 @@ This user request requires workspace inspection. Before answering, you MUST call
                 // logo bare rather than a hand-typed initial in a sage disc.
                 // Same 22px box either way, so bodies stay column-aligned with
                 // the tool rows below them.
-                <div aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, display: "grid", placeItems: "center" }}>
+                <div aria-hidden="true" data-observer-logo={i} style={{ flexShrink: 0, width: 22, height: 22, marginTop: 1, display: "grid", placeItems: "center" }}>
                   {mark ? mark.node : <KlideMark size={20} />}
                 </div>
               ) : (
@@ -4768,6 +4811,12 @@ This user request requires workspace inspection. Before answering, you MUST call
             </div>
           );
         }))}
+        </ObserverConnections>
+        <ConversationObservers key={currentId} runId={currentId} onFollowup={() => {
+          if (processingQueueRef.current || reattachRef.current) return false;
+          followConversationRun(currentId, provider);
+          return true;
+        }} />
         {/* "Working" heartbeat — shown while a run is in progress but nothing
             else is animating. Covers the gap where the model is generating the
             next turn (esp. providers that don't stream token deltas, so there's

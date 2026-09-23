@@ -253,6 +253,7 @@ export function createTurnDriver(opts: TurnDriverOptions): TurnDriver {
       case "observed_tool_result":
       case "tool_call_started":
       case "tool_call_finished":
+      case "observer_completed":
       case "steering_injected": {
         drainPending();
         transcript.apply(event);

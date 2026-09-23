@@ -996,6 +996,8 @@ pub fn run() {
             agent::agent_compact_context,
             agent::agent_abort_run,
             agent::agent_run_status,
+            agent::agent_list_observers,
+            agent::agent_stop_observer,
             agent::agent_list_runs,
             agent::agent_run_origins,
             agent::agent_read_run,
@@ -1052,8 +1054,11 @@ pub fn run() {
             git::project_create,
             git::project_clone
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_, event| {
+            if matches!(event, tauri::RunEvent::Exit) { agent::shutdown_observers(); }
+        });
 }
 
 #[cfg(test)]
@@ -1187,6 +1192,9 @@ mod blocking_door_tests {
         // local_servers.rs / agent/mod.rs — kill a child / read a status map
         "ai_local_server_stop",
         "agent_run_status",
+        // Observer controls touch only the in-memory registry and a oneshot.
+        "agent_list_observers",
+        "agent_stop_observer",
     ];
 
     const COMMAND_SOURCES: &[(&str, &str)] = &[

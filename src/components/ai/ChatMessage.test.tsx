@@ -198,3 +198,28 @@ describe("a speaking turn with a wall of calls", () => {
     expect(speaking(4, results)).toContain('data-open="true"');
   });
 });
+
+describe("a delegation row while the child works", () => {
+  const delegation = (result?: AttachedResult): string =>
+    renderToStaticMarkup(
+      renderMessageBody(
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "c0", name: "spawn_subagent", args: { subagent: "explorer", task: "Map the fold." }, childRunId: "sub_run_c0" }],
+        },
+        false,
+        { results: result ? new Map([["c0", result]]) : undefined },
+      ),
+    );
+
+  it("does not treat the pending 'Running' placeholder as the child's report", () => {
+    const pending: AttachedResult = { msg: { role: "tool", content: "Running spawn_subagent...", toolName: "spawn_subagent" }, active: true };
+    expect(delegation(pending)).not.toContain("View activity");
+  });
+
+  it("offers the child's activity once the report has landed", () => {
+    const report: AttachedResult = { msg: { role: "tool", content: "The fold has three stages.", toolName: "spawn_subagent" }, active: false };
+    expect(delegation(report)).toContain("View activity");
+  });
+});

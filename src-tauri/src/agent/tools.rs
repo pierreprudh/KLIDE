@@ -159,6 +159,12 @@ pub enum ToolKind {
     // request, waits for approval, then calls `run_command_capture`. Goal-mode
     // only — any command can mutate the workspace.
     Command,
+    // Reads from or stops a background shell THIS run already started through
+    // an approved `run_command`. Distinct from Command because no new command
+    // is proposed: the trust decision was made when the shell was started, so
+    // polling it must not re-prompt. Goal-mode only, like the Command that
+    // could have produced one.
+    BackgroundShell,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +178,7 @@ pub enum ToolCapability {
     PauseForUser,
     CoordinateAgents,
     Network,
+    ManageBackgroundShell,
 }
 
 impl ToolKind {
@@ -186,6 +193,7 @@ impl ToolKind {
             ToolKind::Command => ToolCapability::RunCommand,
             ToolKind::Pause => ToolCapability::PauseForUser,
             ToolKind::Coordination => ToolCapability::CoordinateAgents,
+            ToolKind::BackgroundShell => ToolCapability::ManageBackgroundShell,
         }
     }
 }
@@ -224,6 +232,7 @@ pub fn tool_capability_label(capability: ToolCapability) -> &'static str {
         ToolCapability::PauseForUser => "pause for user",
         ToolCapability::CoordinateAgents => "coordinate agents",
         ToolCapability::Network => "network",
+        ToolCapability::ManageBackgroundShell => "manage background shell",
     }
 }
 
@@ -243,6 +252,7 @@ impl ToolCapability {
             ToolCapability::PauseForUser => "pause_for_user",
             ToolCapability::CoordinateAgents => "coordinate_agents",
             ToolCapability::Network => "network",
+            ToolCapability::ManageBackgroundShell => "manage_background_shell",
         }
     }
 }
@@ -996,13 +1006,50 @@ fn registry() -> Vec<ToolEntry> {
             kind: ToolKind::Command,
             schema: schema("run_command", "Run a shell command in the workspace and return its stdout, stderr, and exit code. Use this to run tests, build, typecheck, lint, install dependencies, or any CLI step — it is how you verify your own work. Every command is shown to the user for approval before it runs. Commands run from the workspace root; keep them non-interactive (no prompts/pagers).",
                 serde_json::json!({
-                    "command": { "type": "string", "description": "The shell command to run, e.g. 'npm test' or 'cargo check'." }
+                    "command": { "type": "string", "description": "The shell command to run, e.g. 'npm test' or 'cargo check'." },
+                    "background": { "type": "boolean", "description": "Start it and return a shell id immediately instead of waiting for it to finish. Use this for anything that waits on the world — a deploy, `gh run watch`, a watch task, a long migration — because a foreground command is stopped after a few minutes. You keep working; read what it has printed with read_command_output, and stop it with kill_command. Default false. For a persistent deployment/CI observer also set notifyOnExit: true, then finish your reply instead of polling." },
+                    "notifyOnExit": { "type": "boolean", "description": "With background:true, keep the command running after this reply and automatically notify this same conversation in a new turn when it exits. Use for watching a deployment or gh run watch <run-id> --exit-status. Pin the exact branch/commit/run first. Main conversations only; survives navigation, not quitting Klide. Do not wait or poll: finish this reply once started. Default false." }
                 }),
                 &["command"]),
             run_read: None,
             run_write_preview: None,
             summary: |call| call.input.get("command").and_then(|v| v.as_str())
-                .map(|c| format!("$ {c}")).unwrap_or_else(|| "run_command".to_string()),
+                .map(|c| {
+                    let bg = call.input.get("background").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if bg { format!("$ {c} &") } else { format!("$ {c}") }
+                })
+                .unwrap_or_else(|| "run_command".to_string()),
+        },
+        // The two halves of a background shell. Neither proposes a command, so
+        // neither carries the Command capability or its gate: the trust
+        // decision was made when the shell was started, and re-prompting on
+        // every poll would make polling useless. They dispatch on
+        // `kind == ToolKind::BackgroundShell`; `run_read` stays None because
+        // the registry lives outside the read executor's world (it needs the
+        // run id, which only the loop has).
+        ToolEntry {
+            kind: ToolKind::BackgroundShell,
+            schema: schema("read_command_output", "Read what a background shell has printed since you last read it. Returns only the new output, plus whether the command is still running or how it exited — so you can poll it in a loop without re-reading the same lines. Pass the shellId that run_command gave you when you started it with `background: true`.",
+                serde_json::json!({
+                    "shellId": { "type": "string", "description": "The id run_command returned when it started the background shell." }
+                }),
+                &["shellId"]),
+            run_read: None,
+            run_write_preview: None,
+            summary: |call| call.input.get("shellId").and_then(|v| v.as_str())
+                .map(|id| format!("read {id}")).unwrap_or_else(|| "read_command_output".to_string()),
+        },
+        ToolEntry {
+            kind: ToolKind::BackgroundShell,
+            schema: schema("kill_command", "Stop a background shell you started. Use this when you have seen enough of its output, when it is stuck, or before you finish so nothing is left running. Stopping an already-finished shell is harmless.",
+                serde_json::json!({
+                    "shellId": { "type": "string", "description": "The id run_command returned when it started the background shell." }
+                }),
+                &["shellId"]),
+            run_read: None,
+            run_write_preview: None,
+            summary: |call| call.input.get("shellId").and_then(|v| v.as_str())
+                .map(|id| format!("stop {id}")).unwrap_or_else(|| "kill_command".to_string()),
         },
         // The `userAnswerQuestion` tool does not actually execute — the agent
         // loop dispatches on `kind == ToolKind::Pause` and pauses the run via
@@ -4620,6 +4667,7 @@ mod tests {
             ToolCapability::PauseForUser,
             ToolCapability::CoordinateAgents,
             ToolCapability::Network,
+            ToolCapability::ManageBackgroundShell,
         ];
         let mut wires: Vec<&str> = all.iter().map(|c| c.wire()).collect();
         wires.sort_unstable();
@@ -4634,6 +4682,45 @@ mod tests {
         assert_eq!(
             ToolCapability::ReadProjectMemory.wire(),
             "read_project_memory"
+        );
+        // Polling a background shell must never be recorded as having run a
+        // command: the Validation contract counts `run_command` calls, and a
+        // read that claimed that capability would inflate every count.
+        assert_eq!(
+            ToolCapability::ManageBackgroundShell.wire(),
+            "manage_background_shell"
+        );
+    }
+
+    #[test]
+    fn background_shell_tools_are_goal_only_and_carry_their_own_capability() {
+        for name in ["read_command_output", "kill_command"] {
+            let kind = find_tool_kind_for_workspace(name, None)
+                .unwrap_or_else(|| panic!("{name} must be registered"));
+            assert_eq!(kind, ToolKind::BackgroundShell, "{name}");
+            assert_eq!(kind.capability(), ToolCapability::ManageBackgroundShell, "{name}");
+            assert!(!tool_allowed_in_mode(&AgentMode::Plan, kind), "{name} must not reach Plan");
+            assert!(!tool_allowed_in_mode(&AgentMode::Chat, kind), "{name} must not reach Chat");
+            assert!(tool_allowed_in_mode(&AgentMode::Goal, kind), "{name} belongs in Goal");
+        }
+    }
+
+    #[test]
+    fn run_command_offers_background_without_making_it_required() {
+        let schemas = schemas_for_mode(&AgentMode::Goal, &[], None).expect("Goal has tools");
+        let run = schemas
+            .iter()
+            .find(|s| s["function"]["name"] == "run_command")
+            .expect("run_command is a Goal tool");
+        let params = &run["function"]["parameters"];
+        assert!(
+            params["properties"]["background"].is_object(),
+            "the model has no way to start a long command without this"
+        );
+        let required = params["required"].as_array().expect("required list");
+        assert!(
+            !required.iter().any(|v| v == "background"),
+            "an ordinary command must stay a one-argument call"
         );
     }
 }

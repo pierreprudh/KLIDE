@@ -563,6 +563,20 @@ const TOOL_ICON_PATHS: Record<string, ReactElement> = {
       <path d="m3.5 5.5 1 1 2-2M3.5 11.5l1 1 2-2M3.5 17.5l1 1 2-2" />
     </>
   ),
+  // The two halves of a background shell: a terminal with a caret for reading
+  // what it has printed, a stop square for ending it.
+  read_command_output: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="m6 9 3 3-3 3M13 15h5" />
+    </>
+  ),
+  kill_command: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <rect x="9" y="10" width="6" height="5" rx="1" />
+    </>
+  ),
   clean_context: (
     <>
       <path d="m19 11-8-8-8 8 8 8z" />

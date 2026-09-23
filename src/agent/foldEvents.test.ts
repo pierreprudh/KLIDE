@@ -295,6 +295,32 @@ describe("foldAgentEvents", () => {
       expect(assistant.toolCalls[0].input).toEqual({ subagent: "explorer", task: "Map the repo" });
     });
 
+    it("records the child Run's id on the spawn call, worker or not", () => {
+      // The address a surface watches the child on. It is on the call because
+      // the renderer has the call and not the parent's run id — and it must
+      // survive replay, so a reloaded transcript can pick a live child back up.
+      const rows = foldAgentEvents([
+        assistantMessage("delegating", { toolCalls: [{ toolCallId: "c3", name: "spawn_subagent", input: { subagent: "explorer", task: "Map it" } }] }),
+        toolStarted("c3", "spawn_subagent", { subagent: "explorer", task: "Map it" }),
+        { type: "subagent_requested", runId: RUN, requestId: `sub_${RUN}_c3`, subagent: "explorer", task: "Map it", ts: at() },
+      ]);
+      const assistant = rows[0];
+      if (assistant.kind !== "assistant") throw new Error("expected assistant");
+      expect(assistant.toolCalls[0].childRunId).toBe(`sub_${RUN}_c3`);
+      const msgs = foldedRowToMsgs(assistant);
+      expect(msgs[0].role === "assistant" && msgs[0].toolCalls?.[0].childRunId).toBe(`sub_${RUN}_c3`);
+    });
+
+    it("ignores a subagent_requested addressed to another run", () => {
+      const rows = foldAgentEvents([
+        assistantMessage("delegating", { toolCalls: [{ toolCallId: "c4", name: "spawn_subagent", input: { subagent: "explorer" } }] }),
+        { type: "subagent_requested", runId: RUN, requestId: "sub_other-run_c4", subagent: "explorer", task: "Map it", ts: at() },
+      ]);
+      const assistant = rows[0];
+      if (assistant.kind !== "assistant") throw new Error("expected assistant");
+      expect(assistant.toolCalls[0].childRunId).toBeUndefined();
+    });
+
     it("attaches a result to a NON-final assistant row", () => {
       // The reason findTool walks every assistant row rather than just the last:
       // a tool result can land after the model has already produced more text.
@@ -1014,4 +1040,19 @@ describe("foldedToRunMessages — the Mission Control shape", () => {
     );
     expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
   });
+});
+
+it("renders an observer completion as a new response without a user bubble", () => {
+  const rows = foldedToMsgs(foldAgentEvents([
+    userMessage("Watch deployment"),
+    assistantMessage("I will notify you."),
+    { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
+    { type: "observer_completed", runId: RUN, shellId: "shell-1", text: "Untrusted command log", ts: at() },
+    assistantMessage("Deployment finished."),
+    { type: "run_result", runId: RUN, result: { status: "done" }, ts: at() },
+  ]));
+  expect(rows.filter((r) => r.role === "user")).toHaveLength(1);
+  expect(rows.filter((r) => r.role === "assistant").map((r) => r.content)).toEqual(["I will notify you.", "Deployment finished."]);
+  expect(rows.some((r) => r.role === "system" && r.observer?.shellId === "shell-1")).toBe(true);
+  expect(JSON.stringify(rows)).not.toContain("Untrusted command log");
 });

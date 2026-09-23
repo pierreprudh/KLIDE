@@ -41,6 +41,7 @@ import { StatusBar } from "./components/StatusBar";
 // Mission Control chunk loads, so it has to be in the main bundle.
 import { MissionControlSkeleton } from "./components/MissionControlSkeleton";
 import ToastHost from "./components/ToastHost";
+import { ObserverNotifications } from "./components/ObserverNotifications";
 import { notify } from "./toast";
 import { onDelegateExit } from "./ipc/delegatePty";
 import {
@@ -4125,6 +4126,7 @@ function App() {
           }} />
       )}
       <ToastHost />
+      <ObserverNotifications />
     </div>
   );
 }

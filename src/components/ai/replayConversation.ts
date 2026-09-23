@@ -50,7 +50,7 @@ export function hasOpenTurn(events: AgentEvent[]): boolean {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const type = events[i].type;
     if (type === "run_result" || type === "run_error" || type === "assistant_message") return false;
-    if (type === "user_message") return true;
+    if (type === "user_message" || type === "observer_completed") return true;
   }
   return false;
 }
