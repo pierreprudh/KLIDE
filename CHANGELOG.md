@@ -2,6 +2,196 @@
 
 Notable changes per milestone. Dates are completion dates.
 
+## v0.6.5 — Shells, Watchers, Links (2026-09-23)
+
+Three things the v0.6 line gained after the 0.6.4 cut. A long command no
+longer has to be sat on: a Run can start a shell in the background, read what
+it wrote since last time, stop it, or ask to be woken when it exits. A
+delegated subagent is no longer a static line: the parent's conversation
+follows the child Run live, and a worker that failed comes back as a failure.
+And what an answer names is something you can reach — a URL opens in the
+browser under its name, a rooted path opens in Finder, and a file of the open
+project opens in a tab.
+
+Around them, the interface pass: a context menu that behaves like a native
+menu, a conversation rename that sticks, command history that reads as
+history rather than a result, and a Skills modal with the same brow as every
+other overlay.
+
+The v0.6 orchestration milestone is unchanged: Missions as outcomes, budgets,
+capacity, capability routing and validation contracts are still open. The macOS
+bundle is still ad-hoc signed rather than Apple-notarized. This is a patch cut
+on the v0.6 line, not that milestone.
+
+### Background shells (a command that outlives the turn)
+
+- **`run_command` can start a command instead of running it.** A foreground
+  command blocks the turn and dies on a timer — 180s by default — which is
+  right for `npm test` and wrong for anything that waits on the world: a
+  deploy, `gh run watch`, a slow migration were killed mid-flight and reported
+  as failures. `run_command(background: true)` now returns a shell id at once
+  and the agent keeps working; `read_command_output(shellId)` returns only what
+  was written since the last read, so a polling loop sees each line once;
+  `kill_command(shellId)` stops it. The registry (`agent/background.rs`) is
+  Tauri-free like the PTY host, caps each buffer at 256 KB and *reports*
+  dropped bytes rather than handing back a silent gap, and marks stderr so a
+  warning does not read as a result.
+- **Nothing the agent started outlives the Run.** Shells are reaped in
+  `settle_run`, the one terminal door every outcome passes through,
+  cancellation included. Shells are run-scoped: another Run's shell id is
+  indistinguishable from one that never existed, and a model that lost its own
+  id gets its shells listed back so it recovers instead of doing the work
+  twice.
+- **Polling is its own capability.** `read_command_output` and `kill_command`
+  carry a `ManageBackgroundShell` capability rather than `RunCommand`, for two
+  reasons: a poll must not re-open the permission card every ten seconds, and
+  a poll recorded as a command would inflate every Validation contract's
+  command count.
+- **A shell can wake the conversation.** A background command can ask to
+  notify on exit; when it does, the conversation gets a follow-up turn with
+  the result instead of waiting to be polled. The wake reads as a continuation
+  of the answer that started the shell — one action row, each answer keeping
+  its stats — with a finished marker on the tool-row indent and a hairline
+  joining the wake to the exchange it belongs to on hover.
+
+### Subagent watcher (a child Run you can see working)
+
+- **The "Delegated to" line follows the child live.** `spawn_subagent` parked
+  the parent and showed one static line while the child read forty files. The
+  child is a Run like any other — Rust already persists its events and
+  broadcasts them — so the fold now records its id (`childRunId`, from
+  `subagent_requested`, so a reloaded transcript can pick a live child back
+  up) and the delegation row shows its current step, step count, tokens, a
+  clock, and the child's own rows on click. The same line sits under an
+  `@role` background report, which previously showed a bare `· working…`.
+  Settled means a real report landed, never the "Running spawn_subagent…"
+  placeholder, so a running child never flashes a "View activity" button
+  beside a static line, and an interrupted child stops animating.
+- **A subagent inherits the parent's command timeout.** `SubagentRunSpec`
+  carries `command_timeout_secs`, so a child reads the Settings value instead
+  of silently falling back to 180s.
+
+### Workers (what a child's result may claim)
+
+- **A failed child is a failed Tool result.** Loop completion is not task
+  success: a cancelled, exhausted or errored child could return `Ok` with the
+  answer it wrote before stopping. A child report now counts as success only
+  when its durable Run summary says `done` and it produced an answer; anything
+  else returns `ok: false` to the parent with the error itself, and the result
+  carries `runId` and `outcome`. Success describes execution, not an accepted
+  validation contract.
+- **An isolated worker reports its checkout as Git saw it.** After settlement
+  the result records `headCommit`, `branch` and `hasUncommittedChanges`; a
+  failed inspection is exposed as `checkoutError`, never converted to a clean
+  checkout, and auto-commit stays best-effort rather than an unconditional
+  "committed" claim. The worker's prose cannot certify that its branch is
+  ready to merge.
+- **Dependent dispatches pin a source commit.** `spawn_subagent.source_ref`
+  names a branch or commit of the same repository; the Harness resolves it to
+  a full commit id *before* the dispatch card, shows that id on the card, and
+  creates a fresh worker branch at exactly that commit. With nothing named, a
+  Git worker pins the parent's HEAD the same way. A tester following an
+  implementer receives the implementer's `checkout.headCommit` and works on
+  its committed changes without merging them into the parent; only committed
+  files transfer, invalid references fail without falling back to HEAD, and an
+  existing worker branch is never adopted for a pinned dispatch.
+- **Mission Control keeps a worker's tool-only turns.** The detail pane used
+  to fold commentary and tool-only messages into summaries; inspection now
+  preserves every message at its original position.
+
+### Links and places (what an answer names, you can open)
+
+- **A URL in an answer is a link, and it opens where links open.** A model
+  writing a URL in prose left it as text, and the one link shape the renderer
+  did understand carried `target="_blank"` — which in a Tauri webview has no
+  tab and no back button, so following it would replace the running app with
+  a web page. `externalLink.ts` is now the one door out of the webview: it
+  linkifies a bare URL with its sentence punctuation left outside, opens it in
+  the system browser under Tauri and a new window elsewhere, and toasts
+  rather than failing silently. A drawing's anchors are delegated to the same
+  door. The `opener` plugin the frontend had been calling is finally
+  registered on the Rust side — every part looked present and one line joined
+  them — and a drift test walks the frontend for `@tauri-apps/plugin-*`
+  imports and asserts each is registered in the builder.
+- **A link reads as its name.** A 90-character URL is a worm across a
+  sentence and the part a reader wants is one word inside it. `linkIdentity`
+  names it — the repo, the package, the product, or the hostname when Klide
+  has no name for the site — and moves the address to the hover. Marks come
+  from a table, never a favicon fetch: an app whose claim is that it runs
+  locally does not announce to every host a model mentions that you are
+  reading about it. The conversation also moves from 13 to 14px — the answer,
+  your own message, the composer — while chrome stays at 13.
+- **A rooted path opens in Finder.** A backticked `/Users/…` or `~/…` path
+  reads as the word that carries the meaning and reveals in the file manager
+  through `revealPath.ts`. Rooted is the rule on purpose: a name written
+  relative to a project belongs to whichever repository the answer is
+  *about*, which is often not the one Klide has open. Emphasis renders its
+  contents through the same inline pass, so **`/Users/…`** shows both. The
+  folder pickers now start where the last opened project's siblings live.
+- **This project's own files open in the editor.** A relative path is a
+  *candidate* until the open repository recognises it: `workspaceIndex.ts`
+  runs the walk `⌘P` already uses, once per project, lazily, on the first
+  relative path an answer names. A recognised file opens as a tab at its
+  cited line; anything else — another project's folder, a directory, a
+  branch name shaped like a folder — stays prose or goes to Finder.
+
+### Interface
+
+- **The context menu joins the app's popover sheet and behaves like a native
+  menu.** Explorer rows and conversation rows share one ContextMenu, which
+  now wears the same sheet every other popover wears and unfolds from the
+  corner that sits on its anchor. Rows are real menuitems: arrows walk them,
+  Home/End jump, a letter finds the next row, Enter takes it, Escape and Tab
+  leave; one highlight serves pointer and keyboard and it is the focus ring.
+  The sheet closes when the page under it scrolls. Every popover entrance now
+  honours `prefers-reduced-motion`.
+- **Rename a conversation in place, and the name sticks.** The row's `⋯` menu
+  gains Rename; the title becomes an input where it is read, sharing the
+  Explorer's in-place editor (`InlineNameInput.tsx`). Mission Control's rename
+  used to be overwritten by the next autosave, which re-derived the title
+  from the first message; a Stored conversation now carries `renamed` and a
+  given name wins over a derived one. Naming a thread does not bump
+  `updatedAt`, because naming is not using.
+- **Command history reads as history, not a result.** A completion card whose
+  run changed no files and produced no document but ran commands now says so
+  — passed, failed, without a result — and keeps failures intact; a later,
+  different command is not proof of recovery. Only a fence with an explicit
+  source language gets syntax colours; an unlabelled fence or one marked
+  `console` / `output` / `log` is shown as text, since guessing colours
+  terminal output as code.
+- **A pasted API key replaces a stale env reference.** A dangling `${VAR}`
+  reference used to win over a freshly pasted Keychain key, so the row
+  verified against the reference, failed, and rejected the next paste as a
+  literal. The method saved last wins, and a key typed under Env ref says to
+  switch to Paste.
+- **Focus starter cards stand bare.** The four direction cards drop the 26px
+  tile behind each glyph; a browser preview page renders the real HomeCard
+  against the real tokens.
+- **The Skills modal wears the same brow as Memory and Worktrees.** The
+  header drops its counts, says its name at 20px in a 50px strip, the rail
+  drops its "Sections" label, and a row's meta line eases in over 240ms with
+  a short delay so a cursor swept down the list does not strobe.
+- **The install note says how to open the bundle.** Control-click › Open is
+  gone from macOS 15; the README now points at Privacy & Security › Open
+  Anyway, with `xattr -dr com.apple.quarantine` as the direct alternative.
+  Distribution is GitHub Releases only; notarization is deferred, recorded
+  in TODO.md with what taking it on would cost.
+
+### Known findings, open
+
+A review over the background-shells diff raised eleven findings, none fixed
+in this cut. The three that matter: the AiPanel retry on "run already active"
+has no attempt cap, so a send behind a Run parked on an unanswered card can
+spin without an error; the observer guard admits race members, so a race run
+can register an observer that wakes a Run whose worktree a merge may already
+have torn down; and a background command admitted by an allowlist entry or the
+full-auto rung starts without the disclosure the permission card carries. The
+rest are smaller: a possibly-recycled process-group pid killed after reap, a
+1 Hz observer poll per mounted panel whether or not an observer exists, a
+failed follow-up that still toasts success, observer guidance injected into
+Chat and Plan prompts that have no `run_command`, and an `observer_completed`
+that does not mark an interrupted turn.
+
 ## v0.6.4 — Workers, Connectors, Visuals (2026-09-20)
 
 Three things the v0.6 line gained after the 0.6.3 cut. A Harness Run can hand

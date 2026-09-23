@@ -422,12 +422,13 @@ only mentions, without claiming the run created them. What a *command* left
 behind is a separate question, answered by bracketing the workspace's dirty set
 around the command (`agent/artifacts.rs`).
 
-### Where the product is (v0.6.4 shipped)
+### Where the product is (v0.6.5 shipped)
 
-v0.5 closed on 2026-07-21, and the v0.6 line has cut four patch releases:
+v0.5 closed on 2026-07-21, and the v0.6 line has cut five patch releases:
 v0.6.1 — Subscriptions and Reach (2026-08-23), v0.6.2 — Memory, Routing,
-Recovery (2026-09-11), v0.6.3 — Coordination and Documents (2026-09-12), and
-v0.6.4 — Workers, Connectors, Visuals (2026-09-20).
+Recovery (2026-09-11), v0.6.3 — Coordination and Documents (2026-09-12),
+v0.6.4 — Workers, Connectors, Visuals (2026-09-20), and v0.6.5 — Shells,
+Watchers, Links (2026-09-23).
 Mission Control is the operations surface for Harness runs and Delegate runs;
 review evidence, worktree fleets, mission chaining, subagents, advisor
 escalation and two-agent races are shipped; `auto` resolves to one concrete
@@ -435,7 +436,10 @@ provider+model in Rust at run start; Project Memory is recalled natively; Runs
 address each other through one journal; and a Run writes real workbooks the app
 opens. A Run can also hand a task to another CLI agent as a worker, Klide
 connects to the MCP servers you already configured elsewhere, and an answer can
-draw a picture in the conversation.
+draw a picture in the conversation. A Run can start a command in the
+background and be woken when it exits, a delegated subagent is watched live,
+and a URL, a rooted path or a file of the open project named in an answer
+opens where it belongs.
 
 Release work still owed from v0.5.1: full race/restart/merge dogfooding, the
 first signed/notarized macOS bundle (what ships today is ad-hoc signed), and
@@ -623,7 +627,7 @@ delegate PTY, AI providers) or a domain data layer — not raw `invoke` in
 components. Rust drift tests (e.g. `every_git_command_has_a_frontend_wrapper`)
 enforce wrapper coverage for the git family.
 
-## Features shipped (through v0.6.4)
+## Features shipped (through v0.6.5)
 
 - [x] Activity bar — top zone (6 tools) with FLIP-animated indicator + bottom zone (Settings + Profile) with a dock-style dot and a hairline divider.
 - [x] File explorer with tree view, git decorations, context menu, inline rename
@@ -659,6 +663,9 @@ enforce wrapper coverage for the git family.
 - [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use
 - [x] Visuals — an `html` or `svg` fence renders as a sanitized, themed picture in the conversation
 - [x] Delegate CLI versions — each CLI's version on its Settings row, with its own updater beside it
+- [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit
+- [x] Subagent watcher — the "Delegated to" row follows the child Run live; a failed child is a failed Tool result, dependent dispatches pin a source commit
+- [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
 
 ## Development
 
