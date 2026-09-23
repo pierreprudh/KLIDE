@@ -2,6 +2,21 @@
 
 Notable changes per milestone. Dates are completion dates.
 
+## Unreleased
+
+### Permission
+
+- **Settings → Harness → Tools per mode now takes effect.** The toggles were
+  saved as `goal.write_file` and sent verbatim, which matched no Tool, so every
+  toggle was dead. A turned-off Tool is now neither offered nor dispatched, the
+  chips come from the Tool registry per mode (Chat included), and the Skills
+  inventory groups Tools by the capability Rust records.
+- **Approving a command does not approve it in the background.** A background
+  or watched command asks on its own card; the project allowlist covers
+  foreground commands only, and full auto is recorded as full auto.
+- **Full auto no longer lets another agent's messages in unreviewed**, and a
+  Mission attempt or child Run can no longer be flipped by a conversation's rung.
+
 ## v0.6.5 — Shells, Watchers, Links (2026-09-23)
 
 Three things the v0.6 line gained after the 0.6.4 cut. A long command no

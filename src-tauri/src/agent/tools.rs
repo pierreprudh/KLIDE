@@ -1176,6 +1176,35 @@ pub fn schemas_for_mode(
     }
 }
 
+/// One built-in Tool as a settings or inventory surface shows it: what it is
+/// called, what it does, and the capability the Harness gates it by.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ToolCatalogEntry {
+    pub name: String,
+    pub description: String,
+    pub capability: &'static str,
+}
+
+/// The built-in Tools a Run in `mode` may call, with their capability. A
+/// surface reads trust effects from here rather than keeping its own list of
+/// names; provider schemas stay exactly what `list_tools` returns.
+pub fn tool_catalog(mode: &AgentMode) -> Vec<ToolCatalogEntry> {
+    let subject = GateSubject::for_mode(mode.clone());
+    registry()
+        .into_iter()
+        .filter_map(|e| {
+            let function = &e.schema["function"];
+            let name = function["name"].as_str()?;
+            subject.permits(name, Some(e.kind)).ok()?;
+            Some(ToolCatalogEntry {
+                name: name.to_string(),
+                description: function["description"].as_str().unwrap_or("").to_string(),
+                capability: e.kind.capability().wire(),
+            })
+        })
+        .collect()
+}
+
 fn find_builtin_tool_kind(name: &str) -> Option<ToolKind> {
     registry()
         .into_iter()
@@ -4606,6 +4635,18 @@ mod tests {
         let refused = command_invocation(&unknown, root, 180).unwrap_err();
         assert!(refused.content.contains("Unknown command-capability tool"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_tool_catalog_names_each_tools_capability() {
+        let goal = tool_catalog(&AgentMode::Goal);
+        let write = goal.iter().find(|e| e.name == "write_file").expect("write_file in Goal");
+        assert_eq!(write.capability, "write_workspace");
+        assert!(!write.description.is_empty());
+        let chat = tool_catalog(&AgentMode::Chat);
+        assert!(!chat.is_empty(), "Chat carries the coordination tools");
+        assert!(chat.iter().all(|e| e.capability == "coordinate_agents"));
+        assert!(tool_catalog(&AgentMode::Plan).iter().all(|e| e.name != "write_file"));
     }
 
     #[test]

@@ -50,7 +50,7 @@ import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, 
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
 import { serviceAdvisorConsult } from "../agent/advisorConsult";
-import { toolsForMode } from "../agent/tools";
+import { disabledToolsFor, toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { TodoStrip, type TodoStripSlot } from "./TodoStrip";
@@ -1855,11 +1855,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       }
       const tools = await toolsForMode(effectiveMode);
       if (cancelled) return;
-      const disabled = new Set(
-        Object.entries(harnessSettings?.toolOverrides ?? {})
-          .filter(([, enabled]) => enabled === false)
-          .map(([name]) => name)
-      );
+      const disabled = new Set(disabledToolsFor(effectiveMode, harnessSettings?.toolOverrides));
       const activeTools = (tools ?? []).filter((tool) => {
         const name = tool?.function?.name ?? tool?.name;
         return typeof name !== "string" || !disabled.has(name);
@@ -3503,8 +3499,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 
     try {
       const toolsAvailable = turn.modelSupportsTools;
-      const overrides = harnessSettings?.toolOverrides;
-      const disabledTools = overrides ? Object.keys(overrides).filter((k) => overrides[k] === false) : undefined;
+      const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
       let systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
         ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
 
@@ -3548,7 +3543,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         text: turn.text, attachments: turn.attachments,
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
         systemPrompt,
-        disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
+        disabledTools: disabledTools.length > 0 ? disabledTools : undefined,
         numCtx,
         numPredict,
         reflectionLevel,
