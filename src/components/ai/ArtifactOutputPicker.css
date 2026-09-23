@@ -44,3 +44,35 @@
     transform: none;
   }
 }
+
+/* The clear mark folds away; on hover it opens and the label slides aside
+   to make room. The negative margin cancels the button's gap while folded. */
+.artifact-output-clear {
+  display: inline-block;
+  max-width: 0;
+  margin-left: -5px;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-width 360ms cubic-bezier(0.16, 1, 0.3, 1),
+    margin-left 360ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 280ms ease;
+}
+.artifact-output-selection:hover .artifact-output-clear,
+.artifact-output-selection:focus-visible .artifact-output-clear {
+  max-width: 1em;
+  margin-left: 0;
+  opacity: 1;
+}
+/* The selection fades in where it lands once an output is picked. */
+.artifact-output-selection {
+  animation: artifact-output-in 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes artifact-output-in {
+  from { opacity: 0; transform: translateY(3px); filter: blur(2px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .artifact-output-clear { transition: none; }
+  .artifact-output-selection { animation: none; }
+}

@@ -1779,16 +1779,23 @@ function FocusComposer({
   // bottom-anchored composer.
   return (
     <div className="klide-focus-composer-dock">
-      {branch && onPingGit && (
-        <div className="klide-focus-context-strip" role="group" aria-label="Task context">
-          <button
-            type="button"
-            onClick={onPingGit}
-            title={`On ${branch} — show me the git panel`}
-          >
-            <GitIcon size={13} />
-            {branch}
-          </button>
+      {((branch && onPingGit) || artifactOutput) && (
+        // The chosen output stands beside the branch tab, not inside it: the
+        // tab carries the one git fact, the output is this turn's own.
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 34 }}>
+          <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
+          {branch && onPingGit && (
+            <div className="klide-focus-context-strip" role="group" aria-label="Task context">
+              <button
+                type="button"
+                onClick={onPingGit}
+                title={`On ${branch} — show me the git panel`}
+              >
+                <GitIcon size={13} />
+                {branch}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1910,7 +1917,6 @@ function FocusComposer({
               onAutoApproveCommandsChange={onAutoApproveCommandsChange}
               openFilesRequest={openFilesRequest}
             />
-            <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
             <InlineMenu
               label="Provider"
               display={providerName(provider)}

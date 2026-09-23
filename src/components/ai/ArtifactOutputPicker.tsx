@@ -44,9 +44,9 @@ export function ArtifactOutputRows({ value, onChange, disabled = false }: {
 export function ArtifactOutputSelection({ value, onClear }: { value: ArtifactOutput | null; onClear: () => void }) {
   if (!value) return null;
   const item = ARTIFACT_OUTPUTS.find((item) => item.id === value)!;
-  return <button type="button" onClick={onClear} aria-label={`Clear ${item.label} output`}
+  return <button type="button" className="artifact-output-selection" onClick={onClear} aria-label={`Clear ${item.label} output`}
     title={`Create ${item.extension} · click to clear`}
     style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: 0, color: "var(--accent)", font: "inherit", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
-    <DocumentAppMark path={`output${item.extension}`} size={18} />{item.label}<span aria-hidden="true">×</span>
+    <DocumentAppMark path={`output${item.extension}`} size={18} />{item.label}<span className="artifact-output-clear" aria-hidden="true">×</span>
   </button>;
 }

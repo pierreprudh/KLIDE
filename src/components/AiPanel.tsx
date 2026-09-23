@@ -5391,7 +5391,6 @@ This user request requires workspace inspection. Before answering, you MUST call
                   )}
                 </div>
               )}
-              <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
               {/* Focus keeps the same footer order as the start-stage composer
                   (FocusMode.tsx): the "+" leads, the provider follows — firing
                   the first message must not shuffle the controls. */}
@@ -5654,6 +5653,8 @@ This user request requires workspace inspection. Before answering, you MUST call
               </span>
             </button>
           )}
+          {/* The output this turn will create stands after the Mode note. */}
+          <ArtifactOutputSelection value={artifactOutput} onClear={() => setArtifactOutput(null)} />
           {/* Only while there is something to act on. The idle placeholder
               used to sit here disabled, permanently saying "Accept
               modification" — which read as a review-mode promise even in the
