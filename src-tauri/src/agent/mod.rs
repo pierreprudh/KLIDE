@@ -2968,6 +2968,13 @@ pub fn agent_stop_observer(run_id: String, shell_id: String) -> Result<(), Strin
     background::stop_observer(&run_id, &shell_id)
 }
 
+/// A deleted conversation takes what outlived its last reply with it: its
+/// observers belong to the conversation, and nothing can answer them now.
+#[tauri::command]
+pub fn agent_release_conversation(run_id: String) {
+    background::kill_run_shells(&run_id);
+}
+
 /// Write a compaction marker into a run's transcript. The frontend generates
 /// `summary` (one model call over the older turns) and calls this; on the next
 /// turn, `reconstruct_prior_messages` collapses everything before the marker
