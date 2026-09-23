@@ -12,9 +12,10 @@
 //! shared here. The handlers keep only what is genuinely theirs: parsing the
 //! tool call into an invocation, and running the approved command.
 
-use super::tools::NormalizedToolCall;
+use super::tools::{self, NormalizedToolCall, ToolKind};
 use super::transcripts::now_ms;
-use super::types::{AgentEvent, AgentRunStatus, PermissionRequest};
+use super::types::{AgentEvent, AgentMode, AgentRunStatus, PermissionRequest, StartRunRequest};
+use std::collections::HashSet;
 use super::{command_allowlist, network_allowlist};
 use super::{pause_for_user, with_run_handle, PauseOutcome, ToolCtx};
 
@@ -29,6 +30,118 @@ pub enum Capability {
     Command,
     Network,
     Message,
+}
+
+/// Where a Run came from. The full-auto rung is a conversation's choice: a
+/// Mission attempt or a spawned child takes whatever its request said at start
+/// and no live flip reaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunLineage {
+    Conversation,
+    MissionAttempt,
+    SubagentChild,
+}
+
+/// Why a Tool call is refused before it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockReason {
+    /// The Tool's capability is outside the Run's Mode.
+    Mode(ToolKind),
+    /// The Tool is turned off for this Run — by a Settings toggle, or by a
+    /// caller with no surface to host it (a headless attempt, a child).
+    Disabled,
+}
+
+/// The facts about a Run that every gate reads: which Mode it is in, which
+/// Tools are off, where it came from, and whether its request chose full auto.
+/// Built once from the request, so the schemas the model is offered and the
+/// dispatch-time check answer from the same place.
+#[derive(Clone, Debug)]
+pub struct GateSubject {
+    pub mode: AgentMode,
+    /// Bare Tool names, already narrowed to this Mode.
+    pub disabled: HashSet<String>,
+    pub lineage: RunLineage,
+    pub requested_full_auto: bool,
+}
+
+impl GateSubject {
+    /// A conversation Run in `mode` with nothing turned off.
+    pub fn for_mode(mode: AgentMode) -> Self {
+        Self {
+            mode,
+            disabled: HashSet::new(),
+            lineage: RunLineage::Conversation,
+            requested_full_auto: false,
+        }
+    }
+
+    /// Settings store a toggle as `<mode>.<tool>`; headless callers send bare
+    /// names. A prefixed entry applies only to its own Mode, a bare one to
+    /// every Mode.
+    pub fn from_request(request: &StartRunRequest) -> Self {
+        let mode_prefix = match request.mode {
+            AgentMode::Chat => "chat",
+            AgentMode::Plan => "plan",
+            AgentMode::Goal => "goal",
+        };
+        let disabled = request
+            .disabled_tools
+            .iter()
+            .filter_map(|entry| match entry.split_once('.') {
+                Some((prefix, name)) if matches!(prefix, "chat" | "plan" | "goal") => {
+                    (prefix == mode_prefix).then(|| name.to_string())
+                }
+                _ => Some(entry.clone()),
+            })
+            .collect();
+        let lineage = if request.parent_id.is_some() {
+            RunLineage::SubagentChild
+        } else if request.mission_id.is_some() {
+            RunLineage::MissionAttempt
+        } else {
+            RunLineage::Conversation
+        };
+        Self {
+            mode: request.mode.clone(),
+            disabled,
+            lineage,
+            requested_full_auto: request.auto_approve_commands == Some(true),
+        }
+    }
+
+    /// May this Tool run in this Run at all? `kind` is `None` for a name the
+    /// registry does not know; that call goes on to the unknown-tool path.
+    pub fn permits(&self, name: &str, kind: Option<ToolKind>) -> Result<(), BlockReason> {
+        if self.disabled.contains(name) {
+            return Err(BlockReason::Disabled);
+        }
+        // consult_advisor is side-effect free, so Plan may escalate too.
+        if name == tools::ADVISOR_TOOL && self.mode != AgentMode::Chat {
+            return Ok(());
+        }
+        let Some(kind) = kind else { return Ok(()) };
+        let mission_ok = name != tools::MISSION_ORCHESTRATE_TOOL || self.mode == AgentMode::Goal;
+        if mission_ok && tools::tool_allowed_in_mode(&self.mode, kind) {
+            Ok(())
+        } else {
+            Err(BlockReason::Mode(kind))
+        }
+    }
+
+    /// Is the run on the full-auto rung right now? `live` is the rung flipped
+    /// while the Run works, which only a conversation honors.
+    pub fn full_auto(&self, live: Option<bool>) -> bool {
+        match (self.lineage, live) {
+            (RunLineage::Conversation, Some(live)) => live,
+            _ => self.requested_full_auto,
+        }
+    }
+
+    /// The rung silences commands and nothing else.
+    pub fn rung_covers(&self, cap: Capability) -> bool {
+        cap == Capability::Command
+    }
 }
 
 /// Everything the engine remembers about this run's approvals and rejections,
@@ -521,6 +634,77 @@ mod tests {
         // Edit keys never read as commands or network targets.
         assert!(!trust.rejected(Capability::Command, "src/a.rs::abc123"));
         assert!(!trust.rejected(Capability::Network, "src/a.rs::abc123"));
+    }
+
+    fn subject_request(mode: &str, disabled: &[&str]) -> StartRunRequest {
+        let mut request = super::super::test_support::test_request("/workspace", &[]);
+        request.mode = serde_json::from_value(serde_json::json!(mode)).unwrap();
+        request.disabled_tools = disabled.iter().map(|d| d.to_string()).collect();
+        request
+    }
+
+    #[test]
+    fn a_mode_prefixed_toggle_applies_only_to_its_own_mode() {
+        let toggles = ["goal.write_file", "plan.grep", "web_fetch"];
+        let goal = GateSubject::from_request(&subject_request("goal", &toggles));
+        assert_eq!(
+            goal.disabled,
+            HashSet::from(["write_file".to_string(), "web_fetch".to_string()])
+        );
+        let plan = GateSubject::from_request(&subject_request("plan", &toggles));
+        assert_eq!(
+            plan.disabled,
+            HashSet::from(["grep".to_string(), "web_fetch".to_string()])
+        );
+    }
+
+    #[test]
+    fn permits_refuses_a_disabled_tool_and_an_out_of_mode_one() {
+        let goal = GateSubject::from_request(&subject_request("goal", &["spawn_subagent"]));
+        assert_eq!(
+            goal.permits("spawn_subagent", Some(ToolKind::Pause)),
+            Err(BlockReason::Disabled)
+        );
+        assert_eq!(goal.permits("run_command", Some(ToolKind::Command)), Ok(()));
+        let plan = GateSubject::for_mode(AgentMode::Plan);
+        assert_eq!(
+            plan.permits("run_command", Some(ToolKind::Command)),
+            Err(BlockReason::Mode(ToolKind::Command))
+        );
+        assert_eq!(plan.permits(tools::ADVISOR_TOOL, Some(ToolKind::Pause)), Ok(()));
+        assert!(plan
+            .permits(tools::MISSION_ORCHESTRATE_TOOL, Some(ToolKind::Coordination))
+            .is_err());
+        assert_eq!(plan.permits("made_up", None), Ok(()));
+    }
+
+    #[test]
+    fn lineage_decides_whether_a_live_flip_counts() {
+        let conversation = GateSubject::from_request(&subject_request("goal", &[]));
+        assert_eq!(conversation.lineage, RunLineage::Conversation);
+        assert!(conversation.full_auto(Some(true)));
+        assert!(!conversation.full_auto(None));
+
+        let mut child_request = subject_request("goal", &[]);
+        child_request.parent_id = Some("parent".into());
+        child_request.auto_approve_commands = Some(true);
+        let child = GateSubject::from_request(&child_request);
+        assert_eq!(child.lineage, RunLineage::SubagentChild);
+        assert!(child.full_auto(Some(false)), "the request's own choice stands");
+
+        let mut attempt_request = subject_request("goal", &[]);
+        attempt_request.mission_id = Some("mission".into());
+        let attempt = GateSubject::from_request(&attempt_request);
+        assert_eq!(attempt.lineage, RunLineage::MissionAttempt);
+        assert!(!attempt.full_auto(Some(true)), "no flip reaches a Mission attempt");
+    }
+
+    #[test]
+    fn the_rung_covers_commands_only() {
+        let subject = GateSubject::for_mode(AgentMode::Goal);
+        assert!(subject.rung_covers(Capability::Command));
+        assert!(!subject.rung_covers(Capability::Network));
+        assert!(!subject.rung_covers(Capability::Message));
     }
 
     #[test]

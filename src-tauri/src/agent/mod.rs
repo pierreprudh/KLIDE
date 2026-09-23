@@ -108,6 +108,9 @@ pub struct AgentRunHandle {
     /// rejected commands and network targets, rejected edits. The engine owns
     /// the type; the handle just carries it for the run's lifetime.
     pub trust: permission::TrustMemory,
+    /// What every gate reads about this Run — Mode, disabled Tools, lineage,
+    /// the full-auto request. Fixed at start.
+    pub subject: permission::GateSubject,
 }
 
 pub struct AgentSupervisorState {
@@ -1716,6 +1719,7 @@ async fn start_run(
                 pending_question: std::sync::Mutex::new(None),
                 pending_permission: std::sync::Mutex::new(None),
                 trust: permission::TrustMemory::default(),
+                subject: permission::GateSubject::from_request(&request),
             },
         );
     }
@@ -4502,6 +4506,7 @@ mod test_support {
             pending_question: Mutex::new(None),
             pending_permission: Mutex::new(None),
             trust: permission::TrustMemory::default(),
+            subject: permission::GateSubject::for_mode(AgentMode::Goal),
         }
     }
 

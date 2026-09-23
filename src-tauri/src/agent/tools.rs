@@ -65,6 +65,8 @@ pub const ADVISOR_TOOL: &str = "consult_advisor";
 /// The builtin shell-command tool name. Every other command-capability tool
 /// is a dynamic tool from `.agents/tools.json`.
 pub const RUN_COMMAND_TOOL: &str = "run_command";
+/// Launches a Mission from inside a Run — a Goal-only coordination tool.
+pub const MISSION_ORCHESTRATE_TOOL: &str = "mission_orchestrate";
 
 /// Which Pause ceremony a Pause entry runs. Tool identity is registry data:
 /// the run loop dispatches on this, never on a tool-name literal.
