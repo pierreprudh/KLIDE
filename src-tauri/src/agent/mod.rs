@@ -297,6 +297,11 @@ trait RunSupervisor: Send + Sync {
     /// reattach/status callers already treat a missing handle as "show the
     /// snapshot". Default no-op keeps headless test supervisors simple.
     fn retire_run(&self, _run_id: &str) {}
+    /// Undo a headless Delegate turn's bridge binding (see
+    /// [`RunSupervisor::delegate_mcp_wiring`]) once the Run lets go of it —
+    /// unless a PTY for the same conversation is live and still acts as it.
+    /// Default no-op: the default wiring binds nothing.
+    fn release_delegate_session(&self, _run_id: &str, _provider: &str) {}
     /// Execute an approved Mission operation in the app-owned supervisor.
     /// The receiver keeps the host seam object-safe and the caller cancellable.
     fn orchestrate(
@@ -562,6 +567,15 @@ impl RunSupervisor for TauriSupervisor {
         runs.remove(run_id);
     }
 
+    fn release_delegate_session(&self, run_id: &str, provider: &str) {
+        // The same `{convoId}:{provider}` id `delegate_mcp_wiring` bound.
+        let session_id = format!("{run_id}:{provider}");
+        let pty_live = crate::pty::delegate_session_is_live(&self.app, &session_id);
+        self.app
+            .state::<crate::coordination_bridge::CoordinationBridgeState>()
+            .release_headless_session(&session_id, pty_live);
+    }
+
     fn orchestrate(
         &self,
         root: String,
@@ -716,19 +730,83 @@ fn set_run_status(sup: &dyn RunSupervisor, run_id: &str, status: AgentRunStatus)
     sup.set_status(run_id, status);
 }
 
+/// Everything a Run holds while its loop is alive: the supervisor handle (which
+/// is what makes a second send "busy"), the shells it started, and a headless
+/// Delegate turn's bridge binding. `settle_run` is the happy path and releases
+/// them explicitly; `Drop` is the backstop for every other way out of the loop
+/// — a `?` on a failed transcript write, a panic — so no exit can leave the
+/// conversation wedged behind a handle nobody will ever retire.
+struct RunLease {
+    sup: Arc<dyn RunSupervisor>,
+    runs_dir: PathBuf,
+    id: String,
+    /// Set when this Run bound a headless Delegate session at the bridge.
+    delegate_provider: Option<String>,
+    settled: bool,
+}
+
+impl RunLease {
+    fn new(sup: Arc<dyn RunSupervisor>, runs_dir: PathBuf, id: String) -> Self {
+        Self { sup, runs_dir, id, delegate_provider: None, settled: false }
+    }
+
+    fn hold_delegate_session(&mut self, provider: &str) {
+        self.delegate_provider = Some(provider.to_string());
+    }
+
+    /// Let go of everything. Explicit observers belong to the conversation and
+    /// survive a reply; user cancellation stops both observers and transient
+    /// commands. The handle goes last, so a reattach landing in between still
+    /// finds the Run.
+    fn release(&mut self, cancelled: bool) {
+        if cancelled { background::kill_run_shells(&self.id); }
+        else { background::settle_shells(&self.id, false); }
+        if let Some(provider) = self.delegate_provider.take() {
+            self.sup.release_delegate_session(&self.id, &provider);
+        }
+        self.sup.retire_run(&self.id);
+        self.settled = true;
+    }
+}
+
+impl Drop for RunLease {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        // The loop left without settling. Say so where a reattach looks —
+        // the handle status and the summary on disk — then release. No
+        // transcript event: the write that failed may well be that one.
+        self.sup.set_status(&self.id, AgentRunStatus::Error);
+        if let Ok(prior) = transcripts::read_summary(&self.runs_dir, &self.id) {
+            let _ = write_summary(
+                &self.runs_dir,
+                &AgentRunSummary {
+                    status: run_status_wire(&AgentRunStatus::Error).to_string(),
+                    updated_ms: now_ms(),
+                    ..prior
+                },
+            );
+        }
+        self.release(false);
+    }
+}
+
 /// Settle a run that ended without cancellation (done / error / max-turns):
 /// broadcast the terminal status and write the terminal summary to disk. The one
 /// place the "status + summary" terminal sequence lives — callers only choose
 /// the status. (Cancellation adds a RunError(aborted) emit on top; see
 /// `finish_cancelled`.)
 fn settle_run(
-    sup: &dyn RunSupervisor,
+    lease: &mut RunLease,
     runs_dir: &Path,
-    id: &str,
     summary: &AgentRunSummary,
     message_count: u32,
     status: AgentRunStatus,
 ) -> Result<(), String> {
+    let sup = lease.sup.clone();
+    let id = lease.id.clone();
+    let (sup, id) = (sup.as_ref(), id.as_str());
     set_run_status(sup, id, status);
     // Only real outcomes move the failure budget: error counts against it,
     // done clears it, cancellation is the user's call and says nothing.
@@ -754,15 +832,12 @@ fn settle_run(
             ..summary.clone()
         },
     );
-    // Explicit observers belong to the conversation and survive a reply.
-    // User cancellation stops both observers and transient commands.
-    if status == AgentRunStatus::Cancelled { background::kill_run_shells(id); }
-    else { background::settle_shells(id, false); }
-    // The run is terminal either way: drop the handle so the supervisor map
-    // doesn't grow by one cancel-token + trust-memory entry per run ever
-    // started. Done after the summary write so a reattach landing in between
-    // still sees the terminal status; retired even when the write failed.
-    sup.retire_run(id);
+    // The run is terminal either way: release its shells and drop the handle
+    // so the supervisor map doesn't grow by one cancel-token + trust-memory
+    // entry per run ever started. Done after the summary write so a reattach
+    // landing in between still sees the terminal status; released even when
+    // the write failed.
+    lease.release(status == AgentRunStatus::Cancelled);
     result
 }
 
@@ -1257,14 +1332,13 @@ async fn run_read_tools_parallel(
 /// Settle a cancelled run: aborted event, summary on disk, handle status.
 fn finish_cancelled<E: FnMut(AgentEvent) -> Result<(), String>>(
     emit: &mut E,
-    sup: &dyn RunSupervisor,
+    lease: &mut RunLease,
     runs_dir: &Path,
-    id: &str,
     summary: &AgentRunSummary,
     message_count: u32,
 ) -> Result<(), String> {
     emit(AgentEvent::RunError {
-        run_id: id.to_string(),
+        run_id: lease.id.clone(),
         error: AgentError {
             code: error_code::ABORTED.to_string(),
             message: "Run stopped by user.".to_string(),
@@ -1274,9 +1348,8 @@ fn finish_cancelled<E: FnMut(AgentEvent) -> Result<(), String>>(
         ts: now_ms(),
     })?;
     settle_run(
-        sup,
+        lease,
         runs_dir,
-        id,
         summary,
         message_count,
         AgentRunStatus::Cancelled,
@@ -1735,7 +1808,11 @@ async fn start_run(
     let mission_app = app.clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        let result = run_agent_loop(
+        // The loop runs in a task of its own so a panic inside it surfaces
+        // here as a join error: its `RunLease` has already released the Run
+        // while unwinding, and the Mission write-back and `done` below still
+        // happen, in the same order as a normal exit.
+        let result = tauri::async_runtime::spawn(run_agent_loop(
             supervisor,
             runs_dir,
             task_id.clone(),
@@ -1743,8 +1820,9 @@ async fn start_run(
             on_event,
             cancel,
             RealProviderCaller,
-        )
-        .await;
+        ))
+        .await
+        .unwrap_or_else(|_| Err("run panicked".to_string()));
         if let Some((root, mission_id, mission_task_id)) = mission_link {
             if let Err(err) = crate::missions::record_linked_attempt_validation(
                 &mission_app,
@@ -1778,6 +1856,9 @@ async fn run_agent_loop(
     cancel: CancellationToken,
     provider_caller: impl AgentProviderCaller,
 ) -> Result<(), String> {
+    // First, before anything can fail: from here on every way out of the loop
+    // releases what the Run holds (see `RunLease`).
+    let mut lease = RunLease::new(supervisor.clone(), runs_dir.clone(), id.clone());
     // The loop touches run-scoped state only through this seam — no direct
     // AppHandle reach. Production passes a TauriSupervisor; tests pass a fake.
     let sup: &dyn RunSupervisor = supervisor.as_ref();
@@ -2151,7 +2232,7 @@ async fn run_agent_loop(
                 };
                 match review_coordination_inbox(&ctx, root, &mut emit).await {
                     Ok(true) => {
-                        finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
+                        finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                         return Ok(());
                     }
                     Ok(false) => {}
@@ -2205,13 +2286,16 @@ async fn run_agent_loop(
             &request.provider,
             coordination_workspace_for(&request),
         );
+        if mcp.is_some() {
+            lease.hold_delegate_session(&request.provider);
+        }
 
         // Race the provider stream against user cancellation so abort takes
         // effect mid-request, not only between turns.
         let request_started_ms = now_ms();
         let provider_result = tokio::select! {
             _ = cancel.cancelled() => {
-                finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
+                finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                 return Ok(());
             }
             result = provider_caller.call(ProviderTurnRequest {
@@ -2258,9 +2342,8 @@ async fn run_agent_loop(
                     ts: now_ms(),
                 })?;
                 settle_run(
-                    sup,
+                    &mut lease,
                     &runs_dir,
-                    &id,
                     &summary,
                     message_count,
                     AgentRunStatus::Error,
@@ -2360,9 +2443,8 @@ async fn run_agent_loop(
                     ts: now_ms(),
                 })?;
                 settle_run(
-                    sup,
+                    &mut lease,
                     &runs_dir,
-                    &id,
                     &summary,
                     message_count,
                     AgentRunStatus::Done,
@@ -2416,7 +2498,7 @@ async fn run_agent_loop(
 
         for call in tool_calls {
             if cancel.is_cancelled() {
-                finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
+                finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                 return Ok(());
             }
             let kind = find_tool_kind_for_workspace(&call.name, request.workspace_root.as_deref());
@@ -2517,7 +2599,7 @@ async fn run_agent_loop(
             let tool_result: ToolResult = match outcome {
                 ToolOutcome::Produced(result) => result,
                 ToolOutcome::Cancelled => {
-                    finish_cancelled(&mut emit, sup, &runs_dir, &id, &summary, message_count)?;
+                    finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                     return Ok(());
                 }
             };
@@ -2597,9 +2679,8 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
             settle_run(
-                sup,
+                &mut lease,
                 &runs_dir,
-                &id,
                 &summary,
                 message_count,
                 AgentRunStatus::Error,
@@ -2631,9 +2712,8 @@ async fn run_agent_loop(
                         AdvisorSteer::Cancelled => {
                             finish_cancelled(
                                 &mut emit,
-                                sup,
+                                &mut lease,
                                 &runs_dir,
-                                &id,
                                 &summary,
                                 message_count,
                             )?;
@@ -2702,9 +2782,8 @@ async fn run_agent_loop(
             ts: now_ms(),
         })?;
         settle_run(
-            sup,
+            &mut lease,
             &runs_dir,
-            &id,
             &summary,
             message_count,
             AgentRunStatus::Error,
@@ -4421,6 +4500,11 @@ mod test_support {
         /// the spec — provider, model, root, prompt — without a real child.
         pub(super) spawned: Mutex<Vec<subagents::SubagentRunSpec>>,
         pub(super) child_result: Mutex<Option<Result<String, String>>>,
+        /// When set, every turn gets Delegate MCP wiring, as a headless turn
+        /// on a Delegate provider does in the app.
+        pub(super) wire_delegate: std::sync::atomic::AtomicBool,
+        /// Every `(run_id, provider)` whose headless session was released.
+        pub(super) released_delegates: Mutex<Vec<(String, String)>>,
     }
 
     impl FakeSupervisor {
@@ -4432,6 +4516,8 @@ mod test_support {
                 coordination: CoordinationStoreState::default(),
                 spawned: Mutex::new(Vec::new()),
                 child_result: Mutex::new(None),
+                wire_delegate: std::sync::atomic::AtomicBool::new(false),
+                released_delegates: Mutex::new(Vec::new()),
             }
         }
     }
@@ -4489,6 +4575,22 @@ mod test_support {
             if let Ok(mut runs) = self.runs.lock() {
                 runs.remove(run_id);
             }
+        }
+        fn delegate_mcp_wiring(
+            &self,
+            _run_id: &str,
+            _provider: &str,
+            _workspace_root: Option<&str>,
+        ) -> Option<crate::delegate::McpWiring> {
+            self.wire_delegate
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .then(|| crate::delegate::McpWiring { args: vec![], env: vec![], files: vec![] })
+        }
+        fn release_delegate_session(&self, run_id: &str, provider: &str) {
+            self.released_delegates
+                .lock()
+                .unwrap()
+                .push((run_id.to_string(), provider.to_string()));
         }
     }
 
@@ -5178,6 +5280,131 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    /// A "model" that never answers, so a cancelled run is settled by the
+    /// cancellation branch rather than by whichever branch the select picks.
+    #[derive(Clone)]
+    struct SilentCaller;
+
+    impl AgentProviderCaller for SilentCaller {
+        fn call<'a>(
+            &'a self,
+            _request: ProviderTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// A "model" whose call panics — the loop's worst way out.
+    #[derive(Clone)]
+    struct PanickingCaller;
+
+    impl AgentProviderCaller for PanickingCaller {
+        fn call<'a>(
+            &'a self,
+            _request: ProviderTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+            Box::pin(async { panic!("provider adapter bug") })
+        }
+    }
+
+    /// The loop used to release its handle and shells only inside
+    /// `settle_run`, so any `?` before it — here, the first transcript write —
+    /// left the conversation "already active" forever and its shells running.
+    #[tokio::test]
+    async fn a_loop_that_fails_before_settling_releases_its_lease() {
+        let (runs_dir, root) = sandbox("lease-early-error");
+        let id = "lease-early-error";
+        // A directory where the transcript file goes: the summary still
+        // writes, every event append fails.
+        std::fs::create_dir_all(transcript_path(&runs_dir, id)).unwrap();
+        let shell = background::spawn(id, &root, "sleep 30").unwrap();
+        let sup = Arc::new(FakeSupervisor::with_run(id));
+        let result = run_agent_loop(
+            sup.clone(),
+            runs_dir.clone(),
+            id.to_string(),
+            test_request(&root, &[]),
+            Channel::new(|_| Ok(())),
+            CancellationToken::new(),
+            ScriptedProviderCaller::new(vec![]),
+        )
+        .await;
+        assert!(result.is_err(), "the failed append is still reported");
+        assert!(!sup.with_handle(id, &mut |_| {}), "the handle is released");
+        assert!(
+            background::list(id).iter().all(|s| s.id != shell.id),
+            "the run's shells are released"
+        );
+        assert_eq!(read_summary(&runs_dir, id).unwrap().status, "error");
+    }
+
+    #[tokio::test]
+    async fn a_panicking_loop_releases_its_lease() {
+        let (runs_dir, root) = sandbox("lease-panic");
+        let id = "lease-panic";
+        let shell = background::spawn(id, &root, "sleep 30").unwrap();
+        let sup = Arc::new(FakeSupervisor::with_run(id));
+        let joined = tokio::spawn(run_agent_loop(
+            sup.clone(),
+            runs_dir.clone(),
+            id.to_string(),
+            test_request(&root, &[]),
+            Channel::new(|_| Ok(())),
+            CancellationToken::new(),
+            PanickingCaller,
+        ))
+        .await;
+        assert!(joined.is_err(), "the panic surfaces as a join error");
+        assert!(!sup.with_handle(id, &mut |_| {}));
+        assert!(background::list(id).iter().all(|s| s.id != shell.id));
+        assert_eq!(read_summary(&runs_dir, id).unwrap().status, "error");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_still_stops_its_observers() {
+        let (runs_dir, root) = sandbox("lease-cancel");
+        let id = "lease-cancel";
+        let shell = background::spawn_observer(id, &root, "sleep 30").unwrap();
+        let sup = Arc::new(FakeSupervisor::with_run(id));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        run_agent_loop(
+            sup.clone(),
+            runs_dir.clone(),
+            id.to_string(),
+            test_request(&root, &[]),
+            Channel::new(|_| Ok(())),
+            cancel,
+            SilentCaller,
+        )
+        .await
+        .unwrap();
+        assert!(!sup.with_handle(id, &mut |_| {}));
+        assert!(!background::notification_pending(id, &shell.id));
+        assert!(background::list(id).iter().all(|s| s.id != shell.id));
+        assert_eq!(read_summary(&runs_dir, id).unwrap().status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn a_headless_delegate_turn_releases_its_bridge_session_at_settle() {
+        let (runs_dir, root) = sandbox("lease-delegate");
+        let id = "lease-delegate";
+        let sup = Arc::new(FakeSupervisor::with_run(id));
+        sup.wire_delegate.store(true, std::sync::atomic::Ordering::Relaxed);
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Done.", vec![])]);
+        drive_loop(sup.clone(), &runs_dir, id, test_request(&root, &[]), caller).await;
+        assert_eq!(
+            sup.released_delegates.lock().unwrap().as_slice(),
+            &[(id.to_string(), "mock".to_string())]
+        );
+
+        // A turn that bound nothing has nothing to release.
+        let plain = Arc::new(FakeSupervisor::with_run(id));
+        let caller = ScriptedProviderCaller::new(vec![scripted_turn("Again.", vec![])]);
+        drive_loop(plain.clone(), &runs_dir, id, test_request(&root, &[]), caller).await;
+        assert!(plain.released_delegates.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
