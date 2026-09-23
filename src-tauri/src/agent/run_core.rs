@@ -4,9 +4,10 @@
 //! Tauri app handle: provider capability quirks, provider-message assembly,
 //! TODO context refresh, and token-budget compaction.
 
+use super::permission::{BlockReason, GateSubject};
 use super::todo;
 use super::tools::{
-    clean_context_ids, parse_tool_calls, recover_text_tool_calls, tool_allowed_in_mode,
+    clean_context_ids, parse_tool_calls, recover_text_tool_calls,
     tool_kind_label, NormalizedToolCall, ToolKind,
 };
 use super::types::{AgentAttachment, AgentContentBlock, AgentMode, StartRunRequest, ToolResult};
@@ -505,46 +506,43 @@ pub(super) enum ToolStepPlan {
 }
 
 pub(super) fn plan_tool_step(
-    mode: &AgentMode,
+    subject: &GateSubject,
     call: &NormalizedToolCall,
     kind: Option<ToolKind>,
 ) -> ToolStepPlan {
-    // consult_advisor is a side-effect-free Pause tool allowed in Plan and Goal
-    // (see tools::ADVISOR_TOOL) — bypass the generic Pause-is-Goal-only gate.
-    if call.name == super::tools::ADVISOR_TOOL && !matches!(mode, AgentMode::Chat) {
-        return ToolStepPlan::Execute { kind };
+    let content = match subject.permits(&call.name, kind) {
+        Ok(()) => return ToolStepPlan::Execute { kind },
+        Err(BlockReason::Disabled) => format!(
+            "Tool '{}' is turned off for this run and was not called. Continue without it.",
+            call.name
+        ),
+        // Chat is conversation-only — it offers no tools at all. When a
+        // model (especially an agentic fine-tune) calls one anyway, give an
+        // actionable nudge rather than a bare capability error, so the model
+        // stops retrying and the user knows which mode to switch to.
+        Err(BlockReason::Mode(kind)) => match subject.mode {
+            AgentMode::Chat => format!(
+                "Chat is a conversation-only mode with no tools, so '{}' ({} capability) \
+                 is not available in Chat mode. Switch to Goal mode to let me edit files and \
+                 run commands, or Plan mode for read-only tools.",
+                call.name,
+                tool_kind_label(kind),
+            ),
+            _ => format!(
+                "Tool '{}' has {} capability and is not available in {:?} mode.",
+                call.name,
+                tool_kind_label(kind),
+                subject.mode
+            ),
+        },
+    };
+    ToolStepPlan::Blocked {
+        result: ToolResult {
+            ok: false,
+            content,
+            metadata: None,
+        },
     }
-    if let Some(kind) = kind {
-        if !tool_allowed_in_mode(mode, kind) {
-            // Chat is conversation-only — it offers no tools at all. When a
-            // model (especially an agentic fine-tune) calls one anyway, give an
-            // actionable nudge rather than a bare capability error, so the model
-            // stops retrying and the user knows which mode to switch to.
-            let content = match mode {
-                AgentMode::Chat => format!(
-                    "Chat is a conversation-only mode with no tools, so '{}' ({} capability) \
-                     is not available in Chat mode. Switch to Goal mode to let me edit files and \
-                     run commands, or Plan mode for read-only tools.",
-                    call.name,
-                    tool_kind_label(kind),
-                ),
-                _ => format!(
-                    "Tool '{}' has {} capability and is not available in {:?} mode.",
-                    call.name,
-                    tool_kind_label(kind),
-                    mode
-                ),
-            };
-            return ToolStepPlan::Blocked {
-                result: ToolResult {
-                    ok: false,
-                    content,
-                    metadata: None,
-                },
-            };
-        }
-    }
-    ToolStepPlan::Execute { kind }
 }
 
 /// Choose the read-only calls worth precomputing in parallel. This is pure over
@@ -915,7 +913,7 @@ mod tests {
     #[test]
     fn plan_tool_step_blocks_every_known_tool_in_chat_mode() {
         match plan_tool_step(
-            &AgentMode::Chat,
+            &GateSubject::for_mode(AgentMode::Chat),
             &call("read_file"),
             Some(ToolKind::ReadOnly),
         ) {
@@ -931,7 +929,7 @@ mod tests {
     #[test]
     fn plan_tool_step_allows_read_only_tools_in_plan_mode() {
         match plan_tool_step(
-            &AgentMode::Plan,
+            &GateSubject::for_mode(AgentMode::Plan),
             &call("read_file"),
             Some(ToolKind::ReadOnly),
         ) {
@@ -943,7 +941,7 @@ mod tests {
     #[test]
     fn plan_tool_step_blocks_commands_in_plan_mode() {
         match plan_tool_step(
-            &AgentMode::Plan,
+            &GateSubject::for_mode(AgentMode::Plan),
             &call("run_command"),
             Some(ToolKind::Command),
         ) {
@@ -967,7 +965,7 @@ mod tests {
             ToolKind::Pause,
             ToolKind::Network,
         ] {
-            match plan_tool_step(&AgentMode::Goal, &call("tool"), Some(kind)) {
+            match plan_tool_step(&GateSubject::for_mode(AgentMode::Goal), &call("tool"), Some(kind)) {
                 ToolStepPlan::Execute { kind: actual } => assert_eq!(actual, Some(kind)),
                 ToolStepPlan::Blocked { result } => {
                     panic!("goal capability was blocked: {result:?}")
@@ -978,9 +976,35 @@ mod tests {
 
     #[test]
     fn plan_tool_step_preserves_unknown_tool_path() {
-        match plan_tool_step(&AgentMode::Goal, &call("made_up"), None) {
+        match plan_tool_step(&GateSubject::for_mode(AgentMode::Goal), &call("made_up"), None) {
             ToolStepPlan::Execute { kind } => assert_eq!(kind, None),
             ToolStepPlan::Blocked { .. } => panic!("unknown tools should reach normal execution"),
+        }
+    }
+
+    #[test]
+    fn plan_tool_step_blocks_a_disabled_tool_the_mode_allows() {
+        let mut request = super::super::test_support::test_request("/workspace", &[]);
+        request.disabled_tools = vec!["spawn_subagent".to_string()];
+        let subject = GateSubject::from_request(&request);
+        match plan_tool_step(&subject, &call("spawn_subagent"), Some(ToolKind::Pause)) {
+            ToolStepPlan::Blocked { result } => {
+                assert!(!result.ok);
+                assert!(result.content.contains("turned off"), "{}", result.content);
+            }
+            ToolStepPlan::Execute { .. } => panic!("a disabled tool must not dispatch"),
+        }
+    }
+
+    #[test]
+    fn a_child_run_cannot_call_the_pause_tools_it_was_never_offered() {
+        let mut request = super::super::test_support::test_request("/workspace", &[]);
+        request.parent_id = Some("parent".to_string());
+        request.disabled_tools = super::super::tools::interactive_tool_names();
+        let subject = GateSubject::from_request(&request);
+        match plan_tool_step(&subject, &call("userAnswerQuestion"), Some(ToolKind::Pause)) {
+            ToolStepPlan::Blocked { result } => assert!(!result.ok),
+            ToolStepPlan::Execute { .. } => panic!("a child has nothing to answer a question"),
         }
     }
 

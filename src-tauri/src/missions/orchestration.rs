@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn native_catalog_limits_orchestration_to_goal() {
         for mode in [AgentMode::Chat, AgentMode::Plan, AgentMode::Goal] {
-            let tools = crate::agent::tools::list_tools(&mode, &[]);
+            let tools = crate::agent::tools::list_tools(&mode);
             assert_eq!(
                 tools
                     .iter()

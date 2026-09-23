@@ -1908,11 +1908,8 @@ async fn run_agent_loop(
     // context the user does on screen. Without this, every follow-up
     // turn would arrive as a fresh chat — the "agent has no memory"
     // bug the user kept hitting.
-    let tools = schemas_for_mode(
-        &request.mode,
-        &request.disabled_tools,
-        request.workspace_root.as_deref(),
-    );
+    let subject = permission::GateSubject::from_request(&request);
+    let tools = schemas_for_mode(&subject, request.workspace_root.as_deref());
     // Retention only makes sense while the model can actually peek the
     // stored value back: without `peek_value` in this run's tool list, a
     // stub would be a dead end, so results ride in context verbatim and
@@ -2434,7 +2431,7 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
 
-            let kind = match plan_tool_step(&request.mode, &call, kind) {
+            let kind = match plan_tool_step(&subject, &call, kind) {
                 ToolStepPlan::Execute { kind } => kind,
                 ToolStepPlan::Blocked { result } => {
                     turn_observations.push(steering::CallObservation {
@@ -5475,7 +5472,7 @@ mod run_loop_tests {
             let wire = |messages: Vec<serde_json::Value>| {
                 crate::adapters::openai_chat_body(
                     "default_model", messages,
-                    schemas_for_mode(&AgentMode::Goal, &[], Some(&root)), true,
+                    schemas_for_mode(&permission::GateSubject::for_mode(AgentMode::Goal), Some(&root)), true,
                 )
             };
             let warm = wire(seen[1].clone());

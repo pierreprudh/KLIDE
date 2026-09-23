@@ -3,6 +3,7 @@ mod spreadsheets;
 use super::conversation_search;
 use super::todo;
 use super::glob_match::wildcard_match;
+use super::permission::GateSubject;
 use super::types::{AgentMode, DiffProposal, ToolResult};
 use crate::workspace::{
     is_sensitive_path, Access, Workspace, AGENT_MAX_READ_BYTES, AGENT_MAX_WRITE_BYTES,
@@ -1129,43 +1130,34 @@ fn registry() -> Vec<ToolEntry> {
     ]
 }
 
-pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Value> {
-    list_tools_for_workspace(mode, disabled, None)
+pub fn list_tools(mode: &AgentMode) -> Vec<serde_json::Value> {
+    list_tools_for_workspace(&GateSubject::for_mode(mode.clone()), None)
 }
 
+/// The schemas a Run is offered: exactly the Tools its Gate subject permits,
+/// so what the model sees and what dispatch lets through cannot disagree.
 pub fn list_tools_for_workspace(
-    mode: &AgentMode,
-    disabled: &[String],
+    subject: &GateSubject,
     workspace_root: Option<&str>,
 ) -> Vec<serde_json::Value> {
-    let reg = registry();
-    let mut tools: Vec<serde_json::Value> = reg
-        .iter()
+    let mut tools: Vec<serde_json::Value> = registry()
+        .into_iter()
         .filter(|e| {
             let name = e.schema["function"]["name"].as_str().unwrap_or("");
-            let mission_ok = !schema_has_name(&e.schema, "mission_orchestrate") || matches!(mode, AgentMode::Goal);
-            let kind_ok = mission_ok && tool_allowed_in_mode(mode, e.kind)
-                // consult_advisor is a side-effect-free Pause tool — escalating
-                // a hard decision to a stronger model is as useful while
-                // planning as while executing. Offer it in Plan too, even
-                // though other Pause tools stay Goal-only.
-                || (matches!(mode, AgentMode::Plan) && name == ADVISOR_TOOL);
-            if !kind_ok {
-                return false;
-            }
-            !disabled.iter().any(|d| d == name)
+            subject.permits(name, Some(e.kind)).is_ok()
         })
-        .map(|e| e.schema.clone())
+        .map(|e| e.schema)
         .collect();
     // Dynamic tools are shell-backed command tools. They are Goal-only and go
     // through the same permission gate as run_command; Plan stays read-only.
-    if mode == &AgentMode::Goal {
+    if tool_allowed_in_mode(&subject.mode, ToolKind::Command) {
         tools.extend(
             load_dynamic_tools(workspace_root)
                 .into_iter()
                 .filter(|schema| {
                     let name = schema["function"]["name"].as_str().unwrap_or("");
-                    !disabled.iter().any(|d| d == name) && find_builtin_tool_kind(name).is_none()
+                    find_builtin_tool_kind(name).is_none()
+                        && subject.permits(name, Some(ToolKind::Command)).is_ok()
                 }),
         );
     }
@@ -1173,11 +1165,10 @@ pub fn list_tools_for_workspace(
 }
 
 pub fn schemas_for_mode(
-    mode: &AgentMode,
-    disabled: &[String],
+    subject: &GateSubject,
     workspace_root: Option<&str>,
 ) -> Option<Vec<serde_json::Value>> {
-    let tools = list_tools_for_workspace(mode, disabled, workspace_root);
+    let tools = list_tools_for_workspace(subject, workspace_root);
     if tools.is_empty() {
         None
     } else {
@@ -4029,7 +4020,7 @@ mod tests {
             r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"pwd","cwd":"workspace"}]}"#,
         );
 
-        let plan = list_tools_for_workspace(&AgentMode::Plan, &[], Some(&root));
+        let plan = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Plan), Some(&root));
         assert!(
             !plan
                 .iter()
@@ -4037,7 +4028,7 @@ mod tests {
             "Plan mode must not advertise shell-backed dynamic tools"
         );
 
-        let goal = list_tools_for_workspace(&AgentMode::Goal, &[], Some(&root));
+        let goal = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Goal), Some(&root));
         assert!(
             goal.iter()
                 .any(|schema| schema["function"]["name"] == "workspace_probe"),
@@ -4101,7 +4092,7 @@ mod tests {
             &AgentMode::Plan,
             ToolKind::ProjectMemory
         ));
-        let plan = list_tools_for_workspace(&AgentMode::Plan, &[], Some(&root));
+        let plan = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Plan), Some(&root));
         assert!(
             plan.iter()
                 .any(|schema| schema["function"]["name"] == "update_todo_list"),
@@ -4149,7 +4140,7 @@ mod tests {
         };
         assert!(matches!(
             crate::agent::run_core::plan_tool_step(
-                &AgentMode::Plan,
+                &GateSubject::for_mode(AgentMode::Plan),
                 &advisor_call,
                 Some(ToolKind::Pause)
             ),
@@ -4165,7 +4156,7 @@ mod tests {
     /// its Mode, and those tools only append to the reviewed journal.
     #[test]
     fn chat_mode_exposes_only_coordination_tools_so_an_advisor_cannot_recurse() {
-        let names: Vec<String> = list_tools_for_workspace(&AgentMode::Chat, &[], None)
+        let names: Vec<String> = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Chat), None)
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap().to_string())
             .collect();
@@ -4177,7 +4168,7 @@ mod tests {
                 "Chat exposes nothing but coordination tools, got {name}"
             );
         }
-        assert!(schemas_for_mode(&AgentMode::Chat, &[], None).is_some());
+        assert!(schemas_for_mode(&GateSubject::for_mode(AgentMode::Chat), None).is_some());
     }
 
     #[test]
@@ -4709,7 +4700,7 @@ mod tests {
 
     #[test]
     fn run_command_offers_background_without_making_it_required() {
-        let schemas = schemas_for_mode(&AgentMode::Goal, &[], None).expect("Goal has tools");
+        let schemas = schemas_for_mode(&GateSubject::for_mode(AgentMode::Goal), None).expect("Goal has tools");
         let run = schemas
             .iter()
             .find(|s| s["function"]["name"] == "run_command")

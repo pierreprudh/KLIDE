@@ -275,7 +275,7 @@ fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
         "goal" => agent::types::AgentMode::Goal,
         _ => agent::types::AgentMode::Chat,
     };
-    agent::tools::list_tools(&mode, &[])
+    agent::tools::list_tools(&mode)
 }
 
 // ── Find in files ───────────────────────────────────────────────────────
