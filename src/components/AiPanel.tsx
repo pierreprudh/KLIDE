@@ -37,7 +37,8 @@ import {
 import { usePortalMenu } from "../hooks/usePortalMenu";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
-import { errMessage, providerFailureMessage } from "../errors";
+import { errMessage, providerFailureMessage, RunBusyError } from "../errors";
+import { nextBusyWait } from "./ai/runBusyRetry";
 import { InlineDiffReview } from "./InlineDiffReview";
 import { InlineCommandReview } from "./InlineCommandReview";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -46,7 +47,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
+import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunStatus, isActiveRunStatus, isRunBusyError, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
 import { serviceAdvisorConsult } from "../agent/advisorConsult";
@@ -3562,18 +3563,33 @@ This user request requires workspace inspection. Before answering, you MUST call
         // renderer's storage, so an `auto` turn carries them along.
         preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
       }, handleEvent);
+      // The user message wears `queued` while it waits on a busy Run, and
+      // `running` again once its own Run has started.
+      const markUser = (queueState: "queued" | "running") => {
+        const next = [...msgsRef.current];
+        const user = next[userIndex];
+        if (user?.role !== "user" || user.queueState === queueState) return;
+        next[userIndex] = { ...user, queueState };
+        commit(next);
+      };
       let session;
-      for (;;) {
+      const busySince = Date.now();
+      for (let attempt = 0; ; attempt++) {
         if (queueGenerationRef.current !== generation) return;
         try { session = await startSession(); break; }
         catch (error) {
           // A completion-triggered reply may win the atomic backend guard
-          // between our queue check and dispatch. Preserve this user's turn.
-          if (!String(error).includes("A run is already active for this conversation")) throw error;
+          // between our queue check and dispatch. Preserve this user's turn —
+          // for a while (runBusyRetry.ts), then say so and hand it back.
+          if (!isRunBusyError(error)) throw error;
           viewBehind.reason = "region-detached";
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          const wait = nextBusyWait(attempt, Date.now() - busySince);
+          if (wait === null) throw new RunBusyError();
+          markUser("queued");
+          await new Promise((resolve) => setTimeout(resolve, wait));
         }
       }
+      markUser("running");
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
       if (harnessError) throw harnessError;
