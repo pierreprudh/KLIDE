@@ -36,21 +36,26 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
     return () => { alive = false; clearTimeout(timer); };
   }, [runId, observer.id, running, stopped]);
   const label = stopped ? "Watching stopped" : stale ? "Status unavailable" : watch ? githubObserverLabel(watch) : "Checking GitHub…";
+  const prLabel = watch?.prNumber ? `PR #${watch.prNumber}` : `Run #${observer.githubWatch?.runId}`;
+  const detail = watch && !stale && !stopped ? githubObserverDetail(watch) : "";
+  const state = watch?.prState === "merged" ? "PR merged" : watch?.prState === "closed" ? "PR closed" : watch?.prHeadSha && watch.prHeadSha !== watch.headSha ? "Earlier commit" : "";
+  const tone = label === "Checks failed" ? "failed" : label === "Checks passed" || state === "PR merged" ? "passed" : "neutral";
   const openOnline = () => {
     if (watch) void openExternal(watch.prUrl || watch.url).catch(error => notify(String(error), { tone: "error" }));
   };
-  const card = (inSidebar: boolean) => <section className={`github-observer${inSidebar ? " github-observer-sidebar" : ""}`} aria-label={inSidebar ? "GitHub Actions in side panel" : "GitHub Actions observer"}>
+  const card = (inSidebar: boolean) => <section className={`github-observer github-observer-${tone}${inSidebar ? " github-observer-sidebar" : ""}`} aria-label={inSidebar ? "GitHub Actions in side panel" : "GitHub Actions observer"}>
     <LinkMark site="github" size={36} />
+    <span className="github-observer-pr">{prLabel}</span>
     <div className="github-observer-content">
       <div className="github-observer-line" role="status" aria-live="polite">
-        <span>{watch?.prNumber ? `PR #${watch.prNumber}` : `Run #${observer.githubWatch?.runId}`}</span>
-        <span style={{ color: label === "Checks failed" ? "var(--danger)" : "var(--fg-subtle)" }}>{label}</span>
-        {watch && !stale && !stopped && <span className="github-observer-meta">{githubObserverDetail(watch)}{watch.prState === "merged" ? " · PR merged" : watch.prState === "closed" ? " · PR closed" : watch.prHeadSha && watch.prHeadSha !== watch.headSha ? " · Earlier commit" : ""}</span>}
+        <span className="github-observer-status">{label}</span>
+        <span className="github-observer-detail">{detail}</span>
+        <span className="github-observer-state">{state}</span>
       </div>
       <div className="github-observer-actions">
         {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)}>Open in Git panel ↗</button>}
-        {running && <button onClick={onStop} className="github-observer-action">Stop</button>}
         {watch && <button className="github-observer-action github-observer-online" onClick={openOnline}>View online ↗</button>}
+        {running && <button onClick={onStop} className="github-observer-action github-observer-stop">Stop</button>}
       </div>
     </div>
   </section>;

@@ -9059,17 +9059,29 @@ button:focus-visible .menu-leadout {
 }
 
 /* A conversation's GitHub observer: identity, status, and two destinations. */
-.github-observer { display:flex; align-items:center; gap:17px; padding:18px 21px; margin:10px 0; border:1px solid var(--border); border-radius:16px; background:var(--bg-elevated); width:100%; min-width:0; box-sizing:border-box; }
+.github-observer { display:grid; grid-template-columns:36px max-content minmax(0,1fr); align-items:center; gap:14px; padding:18px 21px; margin:10px 0; border:1px solid var(--border); border-radius:16px; background:var(--bg-elevated); width:100%; min-width:0; box-sizing:border-box; }
 .github-observer-sidebar-slot { display:flex; flex-direction:column; gap:10px; flex-shrink:0; }
 .github-observer-sidebar-slot:empty { display:none; }
-.github-observer-sidebar { pointer-events:auto; margin:0; padding:14px; gap:12px; }
+.github-observer-sidebar { pointer-events:auto; margin:0; padding:14px; gap:10px; grid-template-columns:30px max-content minmax(0,1fr); }
 .github-observer-sidebar .github-observer-line { overflow-wrap:anywhere; }
 .github-observer-mark { pointer-events:auto; align-self:flex-end; display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--border); border-radius:14px; background:var(--bg-elevated); cursor:pointer; }
 .github-observer-logo { width:36px; height:36px; flex-shrink:0; }
-.github-observer-content { flex:1; min-width:0; }
-.github-observer-line { display:flex; align-items:center; flex-wrap:wrap; gap:9px; font-size:13px; color:var(--fg); }
-.github-observer-meta { margin-left:auto; color:var(--fg-dim); font-size:12px; overflow-wrap:anywhere; }
-.github-observer-actions { display:flex; flex-wrap:wrap; gap:18px; margin-top:6px; }
+.github-observer-pr { align-self:center; white-space:nowrap; font-size:13px; font-weight:500; color:var(--fg); }
+.github-observer-content { min-width:0; }
+.github-observer-line { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:center; gap:10px; font-size:13px; color:var(--fg); min-width:0; }
+.github-observer-line > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.github-observer-status { color:var(--fg-subtle); }
+.github-observer-detail { text-align:center; color:var(--fg-dim); font-size:12px; }
+.github-observer-state { text-align:right; color:var(--fg-dim); font-size:12px; }
+.github-observer-passed .github-observer-status,
+.github-observer-passed .github-observer-state { color:var(--accent); }
+.github-observer-failed .github-observer-status,
+.github-observer-failed .github-observer-state { color:var(--danger); }
+.github-observer-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
 .github-observer-action { font:inherit; font-size:12px; border:0; background:none; color:var(--fg-subtle); padding:2px 0; cursor:pointer; }
 .github-observer-action:hover { color:var(--fg-strong); }
-.github-observer-online { margin-left:auto; }
+.github-observer-stop { grid-column:1 / -1; justify-self:end; color:var(--fg-dim); }
+.github-observer-sidebar .github-observer-line { gap:6px; font-size:11px; }
+.github-observer-sidebar .github-observer-detail,
+.github-observer-sidebar .github-observer-state { font-size:11px; }
+.github-observer-sidebar .github-observer-actions { gap:4px; }
