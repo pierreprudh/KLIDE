@@ -1530,8 +1530,7 @@ async fn document_versions(
     let Ok(ws) = crate::workspace::Workspace::new(root) else { return versions; };
     let mut remaining = 100_000_000u64;
     for path in dirty.keys() {
-        let extension = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if !path.to_ascii_lowercase().ends_with(".sheet.json") && !matches!(extension.as_str(), "xlsx"|"xls"|"docx"|"doc"|"pptx"|"ppt"|"pdf"|"odt"|"odp"|"ods"|"rtf"|"png"|"jpg"|"jpeg"|"webp"|"svg"|"html"|"htm") { continue; }
+        if !crate::documents::is_previewable(std::path::Path::new(path)) { continue; }
         let Ok(full) = ws.resolve_abs_read(&top.join(path).to_string_lossy()) else {continue;};
         if ws.guard(&full, crate::workspace::Access::Agent).is_err() {continue;}
         let Ok(meta) = tokio::fs::metadata(&full).await else {continue;};
