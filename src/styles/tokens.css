@@ -9066,8 +9066,10 @@ button:focus-visible .menu-leadout {
 .github-observer-sidebar .github-observer-line { overflow-wrap:anywhere; }
 .github-observer-mark { pointer-events:auto; align-self:flex-end; display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--border); border-radius:14px; background:var(--bg-elevated); cursor:pointer; }
 .github-observer-logo { width:36px; height:36px; flex-shrink:0; }
+.github-observer-content { flex:1; min-width:0; }
 .github-observer-line { display:flex; align-items:center; flex-wrap:wrap; gap:9px; font-size:13px; color:var(--fg); }
-.github-observer-meta { color:var(--fg-dim); font-size:12px; }
+.github-observer-meta { margin-left:auto; color:var(--fg-dim); font-size:12px; overflow-wrap:anywhere; }
 .github-observer-actions { display:flex; flex-wrap:wrap; gap:18px; margin-top:6px; }
 .github-observer-action { font:inherit; font-size:12px; border:0; background:none; color:var(--fg-subtle); padding:2px 0; cursor:pointer; }
 .github-observer-action:hover { color:var(--fg-strong); }
+.github-observer-online { margin-left:auto; }
