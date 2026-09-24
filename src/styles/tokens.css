@@ -9066,24 +9066,22 @@ button:focus-visible .menu-leadout {
 .github-observer-sidebar .github-observer-line { overflow-wrap:anywhere; }
 .github-observer-mark { pointer-events:auto; align-self:flex-end; display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--border); border-radius:14px; background:var(--bg-elevated); cursor:pointer; }
 .github-observer-logo { width:38px; height:38px; flex-shrink:0; }
-.github-observer-pr { align-self:center; white-space:nowrap; font-size:14px; line-height:1.2; font-weight:600; letter-spacing:-.01em; color:var(--fg); }
+.github-observer-pr { align-self:center; white-space:nowrap; font-size:15px; line-height:1.2; font-weight:600; letter-spacing:-.01em; color:var(--fg-strong); }
 .github-observer-content { min-width:0; }
-.github-observer-line { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:center; gap:12px; font-size:12px; line-height:1.25; color:var(--fg); min-width:0; }
+.github-observer-line { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:center; gap:12px; font-size:13px; line-height:1.3; color:var(--fg); min-width:0; }
 .github-observer-line > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .github-observer-status { color:var(--fg-subtle); font-weight:500; }
-.github-observer-detail { margin-left:8px; color:var(--fg-subtle); font-size:11px; font-weight:400; opacity:.8; }
-.github-observer-state { text-align:right; color:var(--fg-subtle); font-size:12px; font-weight:500; }
+.github-observer-detail { margin-left:6px; color:var(--fg-subtle); font-size:12px; font-weight:400; font-variant-numeric:tabular-nums; }
+.github-observer-state { text-align:right; color:var(--fg-subtle); font-size:inherit; font-weight:500; }
 .github-observer-passed .github-observer-status,
 .github-observer-passed .github-observer-state { color:var(--accent); }
 .github-observer-failed .github-observer-status,
 .github-observer-failed .github-observer-state { color:var(--danger); }
 .github-observer-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:9px; }
-.github-observer-action { font:inherit; font-size:13px; line-height:1.3; border:0; background:none; color:var(--fg-subtle); opacity:.85; padding:3px 0; cursor:pointer; }
+.github-observer-action { font:inherit; font-size:12px; font-weight:400; line-height:1.3; border:0; background:none; color:var(--fg-subtle); padding:3px 0; cursor:pointer; }
 .github-observer-action:hover,
 .github-observer-action:focus-visible { color:var(--fg-strong); opacity:1; }
 .github-observer-stop { grid-column:1 / -1; justify-self:end; color:var(--fg-dim); }
-.github-observer-sidebar .github-observer-pr { font-size:12px; }
-.github-observer-sidebar .github-observer-line { gap:7px; font-size:11px; }
-.github-observer-sidebar .github-observer-detail,
-.github-observer-sidebar .github-observer-state { font-size:11px; }
+.github-observer-sidebar .github-observer-pr { font-size:14px; }
+.github-observer-sidebar .github-observer-line { gap:7px; font-size:13px; }
 .github-observer-sidebar .github-observer-actions { gap:4px; }
