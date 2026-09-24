@@ -105,6 +105,7 @@ import {
 } from "../projectPaths";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { FocusGitIsland } from "./FocusGitIsland";
+import { usePresence } from "../hooks/usePresence";
 
 type Props = {
   workspaceRoot: string | null;
@@ -554,6 +555,11 @@ function InlineMenu({
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState(false);
   const [focusIdx, setFocusIdx] = useState(-1);
+  // Headings are collapsible stacks. Each open starts compact — only the
+  // stack holding the current choice is unfolded — the same rule the AI
+  // panel's provider picker follows, so both pickers open the same way.
+  const presence = usePresence(open, 150);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   // Portalled to <body> (fixed, measured from the trigger) so it escapes the
@@ -571,6 +577,19 @@ function InlineMenu({
     const left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - width - 8));
     setMenuPos({ bottom: Math.round(window.innerHeight - r.top + 8), left });
     setFocusIdx(-1);
+    const stacks = new Set<string>();
+    let stack: string | null = null;
+    let selectedStack: string | null = null;
+    for (const o of options) {
+      if (o.heading) {
+        stack = o.label;
+        stacks.add(o.label);
+      } else if (stack && o.value === selected) {
+        selectedStack = stack;
+      }
+    }
+    if (selectedStack) stacks.delete(selectedStack);
+    setCollapsed(stacks);
     setOpen(true);
   }
 
@@ -594,6 +613,54 @@ function InlineMenu({
   }, [open]);
 
   const hasIcons = options.some((o) => !o.heading && o.icon);
+  // Which stack each row sits under, so a folded heading hides its rows.
+  const stackOf: Array<string | null> = [];
+  {
+    let stack: string | null = null;
+    for (const o of options) {
+      if (o.heading) stack = o.label;
+      stackOf.push(o.heading ? null : stack);
+    }
+  }
+  // Lays the rows out as stacks: each heading, then its rows inside a fold
+  // that stays mounted, so closing a stack animates instead of snapping.
+  function renderStacks(render: (o: MenuOption, idx: number) => ReactNode) {
+    const out: ReactNode[] = [];
+    let i = 0;
+    while (i < options.length) {
+      const o = options[i];
+      if (!o.heading) {
+        out.push(render(o, i));
+        i++;
+        continue;
+      }
+      out.push(render(o, i));
+      const rows: ReactNode[] = [];
+      let j = i + 1;
+      for (; j < options.length && !options[j].heading; j++) rows.push(render(options[j], j));
+      const folded = collapsed.has(o.label);
+      out.push(
+        <div
+          key={`s-${o.label}`}
+          className="picker-stack-body"
+          data-open={folded ? "false" : "true"}
+          inert={folded}
+        >
+          <div>{rows}</div>
+        </div>,
+      );
+      i = j;
+    }
+    return out;
+  }
+  function toggleStack(label: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
 
   return (
     <div ref={rootRef} style={{ position: "relative", display: "flex", minWidth: 0 }}>
@@ -706,13 +773,15 @@ function InlineMenu({
         </svg>
       </button>
       )}
-      {open && menuPos && createPortal(
+      {presence.mounted && menuPos && createPortal(
         <div
           ref={menuRef}
           role="listbox"
           aria-label={label}
-          className="popover-enter menu-glass"
+          className="picker-menu menu-glass"
+          data-leaving={presence.leaving}
           style={{
+            transformOrigin: "bottom left",
             position: "fixed",
             bottom: menuPos.bottom,
             left: menuPos.left,
@@ -772,23 +841,44 @@ function InlineMenu({
           </div>
           )}
           <div className="menu-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 5 }}>
-            {options.map((o, idx) => {
+            {renderStacks((o, idx) => {
               if (o.heading) {
+                const folded = collapsed.has(o.label);
+                // A folded stack that holds the current choice says so.
+                const holdsSelected =
+                  folded && options.some((r, i) => stackOf[i] === o.label && r.value === selected);
                 return (
-                  <div
+                  <button
                     key={`h-${o.label}`}
+                    type="button"
+                    aria-expanded={!folded}
+                    onClick={() => toggleStack(o.label)}
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                      width: "100%",
                       padding: "7px 9px 3px",
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      textAlign: "left",
                       fontSize: 9.5,
                       fontWeight: 600,
                       letterSpacing: "0.07em",
                       textTransform: "uppercase",
-                      color: "var(--fg-dim)",
+                      color: holdsSelected ? "var(--fg-strong)" : "var(--fg-dim)",
                       opacity: o.dimmed ? 0.5 : 1,
+                      transition: "color var(--motion-fast) var(--ease-out)",
                     }}
                   >
+                    <span className="picker-stack-chevron" data-open={!folded}>
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M9 6l6 6-6 6" />
+                      </svg>
+                    </span>
                     {o.label}
-                  </div>
+                  </button>
                 );
               }
               const active = o.value === selected;

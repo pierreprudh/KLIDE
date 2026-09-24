@@ -3077,6 +3077,88 @@ button:focus-visible .menu-leadout {
   }
 }
 
+/* Picker menus (provider pickers in the composer and the panel header).
+   Grows out of its trigger the way a macOS menu does: a short fade with a
+   small scale from the corner nearest the trigger, on a curve that starts
+   quick and settles long. The close is shorter and eases in — a menu you've
+   finished with should get out of the way faster than it arrived.
+   `transform-origin` is set inline: the menu opens up from the composer and
+   down from a panel header. No blur filter: it would flatten the glass. */
+.picker-menu {
+  animation: picker-menu-in 260ms var(--ease-soft) both;
+}
+.picker-menu[data-leaving="true"] {
+  animation: picker-menu-out 150ms cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+@keyframes picker-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes picker-menu-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* A picker's folding stack — the tool-run fold, tuned for a menu: the box
+   makes room on the settling curve, the rows fade in a beat behind it. */
+.picker-stack-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-slow) var(--ease-soft);
+}
+.picker-stack-body[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.picker-stack-body > * {
+  overflow: hidden;
+  min-height: 0;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-slow) var(--ease-soft);
+}
+.picker-stack-body[data-open="true"] > * {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--motion-med) var(--ease-out) 40ms,
+    transform var(--motion-slow) var(--ease-soft);
+}
+.picker-stack-chevron {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: transform var(--motion-slow) var(--ease-soft);
+}
+.picker-stack-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .picker-menu,
+  .picker-menu[data-leaving="true"] {
+    animation: none;
+  }
+  .picker-stack-body,
+  .picker-stack-body > *,
+  .picker-stack-chevron {
+    transition: none;
+  }
+}
+
 /* Side-rail navigation item. The active state adds a thin accent bar
    on the inner edge (left in LTR) and an inset highlight on the
    rail surface. The 3px bar replaces the heavier full-tile tint used

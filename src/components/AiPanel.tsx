@@ -35,6 +35,7 @@ import {
   storedReflectionLevel,
 } from "../reflectionLevels";
 import { usePortalMenu } from "../hooks/usePortalMenu";
+import { usePresence } from "../hooks/usePresence";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
 import { errMessage, providerFailureMessage, RunBusyError } from "../errors";
@@ -1351,7 +1352,7 @@ export function AiPanel({
   } = usePortalMenu<{ top?: number; bottom?: number; left: number; maxHeight: number }>({
     computePos: (rect) => {
       const pad = 8;
-      const width = 200; // menu minWidth — used for the viewport clamp
+      const width = 236; // menu width — used for the viewport clamp
       if (variant === "focus") {
         return {
           bottom: Math.round(window.innerHeight - rect.top + 6),
@@ -1367,6 +1368,12 @@ export function AiPanel({
     },
     closeOnOutsideClick: true,
   });
+  // The menu plays a short leave animation after closing; closing clears the
+  // position, so the last one is held for that window.
+  const providerPresence = usePresence(providerOpen, 150);
+  const lastProviderMenuPos = useRef(providerMenuPos);
+  if (providerMenuPos) lastProviderMenuPos.current = providerMenuPos;
+  const shownProviderMenuPos = providerMenuPos ?? (providerPresence.leaving ? lastProviderMenuPos.current : null);
   // Self-hosted endpoints, read from the shared store. It refreshes on mount
   // and whenever the picker opens (so endpoints added in Settings show up
   // without a panel reload), and it publishes changes — a rename in Settings
@@ -4134,30 +4141,32 @@ This user request requires workspace inspection. Before answering, you MUST call
         <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{providerName(provider)}</span>
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
       </button>
-      {providerOpen && providerMenuPos && createPortal(
-        <div ref={providerMenuRef} role="menu" className="popover-enter menu-scroll menu-glass" style={{ position: "fixed", top: providerMenuPos.top, bottom: providerMenuPos.bottom, left: providerMenuPos.left, minWidth: 200, maxHeight: providerMenuPos.maxHeight, overflowY: "auto", overscrollBehavior: "contain", padding: 5, zIndex: Z.popover }}>
+      {providerPresence.mounted && shownProviderMenuPos && createPortal(
+        <div ref={providerMenuRef} role="menu" className="picker-menu menu-scroll menu-glass" data-leaving={providerPresence.leaving} style={{ transformOrigin: shownProviderMenuPos.bottom !== undefined ? "bottom left" : "top left", position: "fixed", top: shownProviderMenuPos.top, bottom: shownProviderMenuPos.bottom, left: shownProviderMenuPos.left, width: 236, maxHeight: shownProviderMenuPos.maxHeight, overflowY: "auto", overscrollBehavior: "contain", padding: 5, zIndex: Z.popover }}>
+          {/* Drawn to the Focus start stage's picker (FocusMode InlineMenu):
+              plain eyebrows with a fold chevron, roomy logo rows, the active
+              row carried by its fill and weight. Rows that can't run yet
+              (unavailable providers) are left out, as they are there. */}
           {providerGroupsForSurface.map((group) => {
+            const items = group.items.filter((it) => it.available);
+            if (items.length === 0) return null;
             const expanded = expandedGroups.has(group.label);
-            const hasActive = group.items.some((it) => it.id === provider);
+            const hasActive = items.some((it) => it.id === provider);
             // A whole stack with no keys anywhere reads as quiet as its rows.
-            const stackKeyless = group.items.every((it) => keylessProviders.has(it.id));
+            const stackKeyless = items.every((it) => keylessProviders.has(it.id));
             return (
-            <div key={group.label} style={{ marginBottom: 2 }}>
+            <div key={group.label}>
               <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={expanded}
-                /* The card itself is frosted now, so this sticky eyebrow only
-                   has to mask the rows scrolling under it — a nested
-                   backdrop-filter would be a second blur over the first and
-                   renders muddy in the webview. A near-opaque elevated fill
-                   does the masking instead. */
-                style={{ position: "sticky", top: 0, zIndex: 1, width: "100%", display: "flex", alignItems: "center", gap: 6, background: "color-mix(in srgb, var(--bg-elevated) 92%, transparent)", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)", padding: "6px 8px 5px", textAlign: "left", opacity: stackKeyless ? 0.5 : 1, transition: "color 120ms ease, opacity var(--motion-fast) var(--ease-out)" }}
-                onMouseEnter={(e) => { if (!(!expanded && hasActive)) e.currentTarget.style.color = "var(--fg-subtle)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)"; }}>
-                <span style={{ display: "grid", placeItems: "center", flexShrink: 0, transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 140ms cubic-bezier(0.4, 0, 0.2, 1)" }}>
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, background: "transparent", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)", padding: "7px 9px 3px", textAlign: "left", opacity: stackKeyless ? 0.5 : 1, transition: "color var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out)" }}>
+                <span className="picker-stack-chevron" data-open={expanded}>
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                 </span>
-                <span style={{ flex: 1 }}>{group.label}</span>
+                {group.label}
               </button>
-              {expanded && group.items.map((item) => {
+              {/* Rows stay mounted inside the fold so a stack closes as smoothly as it opens. */}
+              <div className="picker-stack-body" data-open={expanded ? "true" : "false"} inert={!expanded}>
+              <div>
+              {items.map((item) => {
                 const active = item.id === provider;
                 // No key Rust can resolve → the row can't run. Quiet it and
                 // (when the host wired Settings) send the click to API keys
@@ -4165,26 +4174,26 @@ This user request requires workspace inspection. Before answering, you MUST call
                 const keyless = item.available && keylessProviders.has(item.id);
                 const routesToSettings = keyless && !!onOpenSettingsSection;
                 return (
-                  <button key={item.id} role="menuitem" disabled={!item.available}
+                  <button key={item.id} role="menuitem"
                     title={keyless ? `${item.name} has no API key — open Settings` : undefined}
                     onClick={() => {
-                      if (!item.available) return;
                       if (routesToSettings) { closeProviderMenu(); onOpenSettingsSection?.("api"); return; }
                       selectProvider(item.id);
                     }}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-sm)", background: active ? "var(--menu-row-active)" : "transparent", color: item.available ? "var(--fg-strong)" : "var(--fg-dim)", cursor: item.available ? "pointer" : "default", fontSize: 12, textAlign: "left", transition: "background 120ms ease" }}
-                    onMouseEnter={(e) => { if (item.available && !active) e.currentTarget.style.background = "var(--menu-row-hover)"; }}
+                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--menu-row-active)" : "transparent", color: "var(--fg-strong)", cursor: "pointer", fontSize: 12, fontWeight: active ? 550 : 500, textAlign: "left", transition: "background var(--motion-fast) var(--ease-out)" }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--menu-row-hover)"; }}
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
-                    <span style={{ display: "grid", placeItems: "center", flexShrink: 0, color: item.available ? "var(--fg-subtle)" : "var(--fg-dim)", opacity: keyless ? 0.4 : 1 }}><ProviderLogo id={item.id} size={15} /></span>
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: keyless ? 0.45 : 1 }}>{item.name}</span>
+                    <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0, color: "var(--fg-subtle)", opacity: keyless ? 0.4 : 1 }}><ProviderLogo id={item.id} size={17} /></span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: keyless ? 0.45 : 1 }}>{item.name}</span>
                     {routesToSettings && (
                       /* Leads out to Settings rather than choosing anything. */
                       <svg className="menu-leadout" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><path d="M7 17 17 7" /><path d="M8 7h9v9" /></svg>
                     )}
-                    {active && !routesToSettings && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg-subtle)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
                   </button>
                 );
               })}
+              </div>
+              </div>
             </div>
             );
           })}
