@@ -997,6 +997,7 @@ pub fn run() {
             agent::agent_abort_run,
             agent::agent_run_status,
             agent::agent_list_observers,
+            agent::agent_observer_github,
             agent::agent_stop_observer,
             agent::agent_release_conversation,
             agent::agent_list_runs,

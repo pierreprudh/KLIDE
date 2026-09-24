@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 export type Observer = {
   id: string;
   command: string;
+  cwd?: string;
+  githubWatch?: { runId: number; repo: string | null } | null;
   status: { state: "running" } | { state: "exited"; code: number } | { state: "signalled" };
   startedMs: number;
   endedMs: number | null;

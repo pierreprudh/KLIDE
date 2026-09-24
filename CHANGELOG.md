@@ -1,5 +1,11 @@
 # Changelog
 
+## GitHub observer cards (2026-09-24)
+
+- Plain `gh run watch <id> --exit-status` observers now show a compact GitHub card in the conversation, refreshing the pinned run's checks every eight seconds while visible. Completion still wakes the original conversation through the native observer.
+- Cards link to GitHub and open the associated PR directly in Git Review. Failed checks, unavailable status, and results from older PR commits are distinct from success. Completed cards retain no command logs and remain available for the app session (up to eight recent completed GitHub observers per conversation).
+
+
 Notable changes per milestone. Dates are completion dates.
 
 ## v0.6.5 — Shells, Watchers, Links (2026-09-23)
