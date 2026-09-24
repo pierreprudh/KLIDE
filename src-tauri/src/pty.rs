@@ -581,6 +581,14 @@ pub(crate) fn provider_has_live_session(app: &tauri::AppHandle, provider: &str) 
     provider_is_live(local, &daemon_live_rows(app), provider)
 }
 
+/// Is this exact session live in **either** host?
+pub(crate) fn delegate_session_is_live(app: &tauri::AppHandle, session_id: &str) -> bool {
+    app.state::<SessionHost>().live_ids().contains(session_id)
+        || daemon_live_rows(app)
+            .iter()
+            .any(|row| row.session_id == session_id)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DelegateAttemptRecovery {
     Live,
@@ -596,14 +604,7 @@ pub(crate) fn delegate_attempt_recovery(
     app: &tauri::AppHandle,
     session_id: &str,
 ) -> DelegateAttemptRecovery {
-    let local_live = app
-        .state::<SessionHost>()
-        .live_ids()
-        .contains(session_id);
-    let daemon_live = daemon_live_rows(app)
-        .iter()
-        .any(|row| row.session_id == session_id);
-    if local_live || daemon_live {
+    if delegate_session_is_live(app, session_id) {
         return DelegateAttemptRecovery::Live;
     }
     scrollback_dir(app)

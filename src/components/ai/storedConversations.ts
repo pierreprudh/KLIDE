@@ -10,6 +10,7 @@ import type { AgentAttachment as Attachment, ProviderId } from "../../agent/type
 import { isAutoProvider } from "../../agent/providers";
 import type { Conversation, Msg } from "./types";
 import { notify as notifyUser } from "../../toast";
+import { releaseConversation } from "../../agent/observers";
 import { canOpenSettings, openSettingsSection } from "../../settingsNavigation";
 
 const CONVOS_KEY = "klide-conversations";
@@ -535,6 +536,10 @@ export function forgetStoredConversation(id: string): Conversation[] {
   const next = saveConversations(
     loadConversations<Conversation>().filter((conv) => conv.id !== id),
   );
+  // Every delete path comes through here — the panel, the rail, Settings
+  // storage — so this is where the thread's observers are let go. Off-Tauri
+  // (tests) the invoke rejects, and there is nothing to release anyway.
+  void releaseConversation(id).catch(() => {});
   if (typeof window !== "undefined") {
     const detail: ConversationDeletedDetail = { conversationId: id };
     window.dispatchEvent(new CustomEvent(CONVERSATION_DELETED_EVENT, { detail }));

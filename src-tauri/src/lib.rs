@@ -998,6 +998,7 @@ pub fn run() {
             agent::agent_run_status,
             agent::agent_list_observers,
             agent::agent_stop_observer,
+            agent::agent_release_conversation,
             agent::agent_list_runs,
             agent::agent_run_origins,
             agent::agent_read_run,
@@ -1195,6 +1196,7 @@ mod blocking_door_tests {
         // Observer controls touch only the in-memory registry and a oneshot.
         "agent_list_observers",
         "agent_stop_observer",
+        "agent_release_conversation",
     ];
 
     const COMMAND_SOURCES: &[(&str, &str)] = &[

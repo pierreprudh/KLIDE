@@ -1577,6 +1577,24 @@ async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<S
         .then(|| artifacts::parse_porcelain(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// A race member's checkout: a linked worktree on a `klide/race-*` branch
+/// (`src/agent/race.ts` names them). Any linked worktree is not enough — a
+/// user can open one as their project. Read from the worktree's own HEAD file,
+/// no git process.
+fn is_race_worktree(root: &str) -> bool {
+    if crate::delegate::worktree_label(root).is_none() {
+        return false;
+    }
+    let root = std::path::Path::new(root);
+    let Some(gitdir) = std::fs::read_to_string(root.join(".git")).ok().and_then(|pointer| {
+        pointer.lines().find_map(|l| l.trim().strip_prefix("gitdir:").map(|p| p.trim().to_string()))
+    }) else {
+        return false;
+    };
+    std::fs::read_to_string(root.join(gitdir).join("HEAD"))
+        .is_ok_and(|head| head.trim().starts_with("ref: refs/heads/klide/race-"))
+}
+
 /// Start an approved command in the background and tell the model how to get
 /// back to it.
 ///
@@ -1586,6 +1604,9 @@ async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<S
 fn start_background_command(ctx: &ToolCtx<'_>, cwd: &str, command: &str, notify: bool) -> ToolResult {
     if notify && (ctx.request.parent_id.is_some() || ctx.request.mission_id.is_some()) {
         return ToolResult { ok: false, content: "A persistent observer must be started by the main conversation, not a child or Mission run.".into(), metadata: None };
+    }
+    if notify && ctx.request.workspace_root.as_deref().is_some_and(is_race_worktree) {
+        return ToolResult { ok: false, content: "A persistent observer cannot be started in a race worktree: merging the race removes the checkout it would watch.".into(), metadata: None };
     }
     let started = if notify { background::spawn_observer(ctx.id, cwd, command) } else { background::spawn(ctx.id, cwd, command) };
     if let Ok(shell) = &started {
@@ -2280,5 +2301,26 @@ mod artifact_revision_tests {
         assert!(!files[0].created);
         assert!(artifacts::produced_with_versions(&dirty, &dirty, &after, &after).is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod race_worktree_tests {
+    use super::*;
+    #[test]
+    fn only_a_worktree_on_a_race_branch_is_a_race_worktree() {
+        let base = std::env::temp_dir().join(format!("klide-race-worktree-{}-{}", std::process::id(), now_ms()));
+        let admin = base.join("repo/.git/worktrees/member");
+        let checkout = base.join("member");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::write(checkout.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        let root = checkout.to_str().unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/klide/race-m1x-2\n").unwrap();
+        assert!(is_race_worktree(root));
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/feature-login\n").unwrap();
+        assert!(!is_race_worktree(root), "a worktree the user opened is not a race member");
+        assert!(!is_race_worktree(base.join("repo").to_str().unwrap()));
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

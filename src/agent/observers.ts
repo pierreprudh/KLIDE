@@ -16,4 +16,6 @@ export function observerLabel(observer: Observer): string {
 }
 
 export const listObservers = (runId: string): Promise<Observer[]> => invoke("agent_list_observers", { runId });
+/** A deleted conversation stops the observers that outlived its last reply. */
+export const releaseConversation = (runId: string): Promise<void> => invoke("agent_release_conversation", { runId });
 export const stopObserver = (runId: string, shellId: string): Promise<void> => invoke("agent_stop_observer", { runId, shellId });

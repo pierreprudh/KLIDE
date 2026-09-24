@@ -551,6 +551,14 @@ impl CoordinationBridgeState {
         self.sessions.lock().unwrap().remove(session_id)
     }
 
+    /// A headless Delegate turn's binding ends with the Harness Run that made
+    /// it — unless a PTY for the same conversation is live, in which case the
+    /// binding is that session's and its exit settles it. Returns whether a
+    /// binding was dropped.
+    pub fn release_headless_session(&self, session_id: &str, pty_live: bool) -> bool {
+        !pty_live && self.forget_session(session_id).is_some()
+    }
+
     pub fn session(&self, session_id: &str) -> Option<BridgeSession> {
         self.sessions.lock().unwrap().get(session_id).cloned()
     }
@@ -979,6 +987,25 @@ mod tests {
         assert_eq!(me.state, CoordinationRunState::Working);
         assert_eq!(me.registration.label.as_deref(), Some("refactor the pty host"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A headless Delegate turn binds `{convo}:{provider}` so the CLI can reach
+    /// the journal; the Run letting go must unbind it, or `agent_list` reports
+    /// the conversation live forever. A live PTY on the same id keeps its own.
+    #[test]
+    fn releasing_a_headless_session_unbinds_it_unless_a_pty_holds_it() {
+        let bridge = CoordinationBridgeState::default();
+        let session = BridgeSession {
+            run_id: "convo-9".to_string(),
+            workspace_root: "/tmp/ws".to_string(),
+            terminal: false,
+        };
+        bridge.bind_session("convo-9:claude-code", session);
+        assert!(!bridge.release_headless_session("convo-9:claude-code", true));
+        assert!(bridge.is_bound_run("convo-9"), "a live PTY keeps its binding");
+        assert!(bridge.release_headless_session("convo-9:claude-code", false));
+        assert!(!bridge.is_bound_run("convo-9"));
+        assert!(!bridge.release_headless_session("convo-9:claude-code", false));
     }
 
     /// The Harness registers a worker child with its parent and its label;
