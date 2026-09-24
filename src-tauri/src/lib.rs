@@ -1017,14 +1017,10 @@ pub fn run() {
             coordination::coordination_snapshot,
             coordination::coordination_events,
             missions::mission_create,
-            missions::mission_read,
             missions::mission_list,
             missions::mission_save_task,
             missions::mission_approve,
-            missions::mission_dispatch_task,
-            missions::mission_prepare_attempt,
-            missions::mission_fail_attempt_dispatch,
-            missions::mission_validate_attempt,
+            missions::mission_request_task,
             missions::mission_review_attempt,
             git::github::create_pr,
             git::git_log,
@@ -1173,9 +1169,6 @@ mod blocking_door_tests {
         // gate (ADR-0002); a blocking closure cannot hold that State lock.
         "mission_create",
         "mission_save_task",
-        "mission_prepare_attempt",
-        "mission_fail_attempt_dispatch",
-        "mission_validate_attempt",
         // pty.rs — a mutex touch on an in-process session, or a spawn whose
         // cost is the fork itself
         "delegate_daemon_status",

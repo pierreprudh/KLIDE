@@ -43,6 +43,7 @@ import { MissionControlSkeleton } from "./components/MissionControlSkeleton";
 import ToastHost from "./components/ToastHost";
 import { ObserverNotifications } from "./components/ObserverNotifications";
 import { notify } from "./toast";
+import { MISSIONS_UNREADABLE_EVENT, type UnreadableMission } from "./agent/durableMissions";
 import { onDelegateExit } from "./ipc/delegatePty";
 import {
   gitWorktreeAdd,
@@ -2741,6 +2742,22 @@ function App() {
         const tail = lines[lines.length - 1] ?? "";
         notify(`Worktree setup failed · ${name}${tail ? ` — ${tail}` : ""}`, { tone: "error" });
       }
+    }));
+    return listeners.dispose;
+  }, []);
+
+  // Restart reconciliation sets aside a Mission it cannot read and resumes the
+  // rest; the only place that is visible is here — `set_active_workspace`
+  // errors are swallowed above.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const listeners = createListenerScope();
+    listeners.add(listen<UnreadableMission[]>(MISSIONS_UNREADABLE_EVENT, (e) => {
+      const [first] = e.payload;
+      if (!first) return;
+      const name = first.dir.split("/").pop() ?? first.dir;
+      const more = e.payload.length > 1 ? ` and ${e.payload.length - 1} more` : "";
+      notify(`Mission ${name}${more} could not be read — ${first.error}`, { tone: "warn" });
     }));
     return listeners.dispose;
   }, []);
