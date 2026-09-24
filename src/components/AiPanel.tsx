@@ -4769,7 +4769,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             }
           }
           return (
-            <div key={i} data-observer-row={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+            <div key={i} data-observer-row={i} className="ai-msg-in" style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {isResponseStart ? (
                 // A brand mark is worn bare — no disc, no ring, no tile, the
                 // rule every other pairing in the app follows. Klide's own mark
@@ -4837,11 +4837,12 @@ This user request requires workspace inspection. Before answering, you MUST call
                   </>
                 )}
               </div>
+              <div data-observer-slot={i} className="github-observer-message-slot" />
             </div>
           );
         }))}
         </ObserverConnections>
-        <ConversationObservers key={currentId} runId={currentId}
+        <ConversationObservers key={currentId} runId={currentId} msgs={msgs} messageRoot={scrollRef.current}
           onGithubPresence={onGithubPresence}
           sidebar={variant === "focus" ? { target: observerSidebarTarget, folded: column.planFolded, onUnfold: () => setSidePanelHidden(false) } : undefined}
           onFollowup={() => {

@@ -6,11 +6,26 @@ import { listObservers, stopObserver, observerLabel, type Observer } from "../..
 import { notify } from "../../toast";
 import { DotGridLoader } from "./icons";
 import { useElapsed } from "./WorkingRow";
+import { createPortal } from "react-dom";
+import type { Msg } from "./types";
+
+export function observerMessageIndex(msgs: Msg[], id: string): number | null {
+  const start = msgs.findIndex(msg => msg.role === "tool" && msg.toolName === "run_command" && msg.content.startsWith("Watching `") && msg.content.includes(` as \`${id}\`.`));
+  if (start < 0) return null;
+  let anchor: number | null = null;
+  for (let i = start + 1; i < msgs.length; i++) {
+    if (msgs[i].role === "user" || msgs[i].role === "system") break;
+    if (msgs[i].role === "assistant") anchor = i;
+  }
+  return anchor;
+}
 
 /** A conversation can be idle while its observers are working. These rows
  * stay separate from the reply's Working row, so sending remains available. */
-export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPresence }: {
+export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPresence, msgs, messageRoot }: {
   runId: string;
+  msgs: Msg[];
+  messageRoot: HTMLElement | null;
   sidebar?: ObserverSidebar;
   onGithubPresence?: (runId: string, present: boolean) => void;
   /** False means a local turn is still cleaning up; try after it releases. */
@@ -50,7 +65,12 @@ export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPres
 
   if (!observers.length) return null;
   return <div aria-label="Background observers" style={{ margin: "12px 0", color: "var(--fg-subtle)", fontSize: 12 }}>
-    {observers.map((observer) => <ObserverRow key={observer.id} observer={observer} runId={runId} sidebar={sidebar} onStopped={() => void listObservers(runId).then(setObservers)} />)}
+    {observers.map((observer) => {
+      const index = observer.githubWatch ? observerMessageIndex(msgs, observer.id) : null;
+      const target = index === null ? null : messageRoot?.querySelector<HTMLElement>(`[data-observer-slot="${index}"]`);
+      const row = <ObserverRow key={observer.id} observer={observer} runId={runId} sidebar={sidebar} onStopped={() => void listObservers(runId).then(setObservers)} />;
+      return target ? createPortal(row, target, observer.id) : row;
+    })}
   </div>;
 }
 
