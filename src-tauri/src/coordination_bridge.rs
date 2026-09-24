@@ -46,7 +46,9 @@ use std::time::{Duration, Instant};
 /// Hard ceiling on one blocking wait, matching the Harness Tool schema.
 pub const MAX_WAIT_SECONDS: u64 = 120;
 const DEFAULT_WAIT_SECONDS: u64 = 30;
-const WAIT_POLL: Duration = Duration::from_millis(400);
+/// A waiting Delegate is woken by the journal itself when this process
+/// appends; this floor only bounds how late it sees another process's append.
+const WAIT_POLL: Duration = Duration::from_secs(2);
 const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// What one bound Delegate session acts as. Filled by the app at spawn time
@@ -290,10 +292,18 @@ fn wait_for_messages(
             }
             return Ok(Some(matched));
         }
-        if Instant::now() >= deadline {
+        let now = Instant::now();
+        if now >= deadline {
             return Ok(None);
         }
-        std::thread::sleep(WAIT_POLL);
+        // Woken the moment this process appends; the floor catches an append
+        // from another Klide process, which wakes nobody here.
+        coordination::wait_for_change(
+            store,
+            &session.workspace_root,
+            snapshot.next_seq,
+            WAIT_POLL.min(deadline - now),
+        )?;
     }
 }
 
@@ -1268,6 +1278,75 @@ mod tests {
         );
         let value = waited.value.unwrap();
         assert!(value["text"].as_str().unwrap().contains("[answer"), "{value}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A waiting Delegate hears accepted mail when it is appended, not on the
+    /// next floor poll.
+    #[test]
+    fn a_waiting_delegate_wakes_on_an_in_process_append() {
+        let (dir, root) = sandbox("wait-wake");
+        let (store, _bridge, session) = bound(&root);
+        let nudged = coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::SendEnvelope {
+                from: CoordinationActor::Run {
+                    run_id: "run_kit".into(),
+                },
+                to_run_id: "convo-1".into(),
+                kind: CoordinationEnvelopeKind::Instruction,
+                body: "Rebase first.".into(),
+                reply_to: None,
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            },
+        )
+        .unwrap();
+        let nudge_id = match &nudged.appended.unwrap().event {
+            CoordinationEvent::EnvelopeQueued { envelope } => envelope.id.clone(),
+            other => panic!("{other:?}"),
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter_store = store.clone();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let waited = execute(
+                &waiter_store,
+                &BridgeHooks::silent(),
+                &session,
+                BridgeRequest::Wait {
+                    from_run_id: Some("run_kit".into()),
+                    reply_to: None,
+                    timeout_seconds: Some(30),
+                },
+            );
+            let _ = tx.send((waited, started.elapsed()));
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let accepted_at = Instant::now();
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::ReviewEnvelope {
+                actor: CoordinationActor::Operator,
+                run_id: "convo-1".into(),
+                envelope_id: nudge_id,
+                accept: true,
+            },
+        )
+        .unwrap();
+        let (waited, _) = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the wait never returned");
+        assert!(
+            accepted_at.elapsed() < WAIT_POLL,
+            "woke on the floor poll, not the append"
+        );
+        let value = waited.value.unwrap();
+        assert!(value["text"].as_str().unwrap().contains("Rebase first."), "{value}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

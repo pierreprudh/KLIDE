@@ -278,6 +278,15 @@ trait RunSupervisor: Send + Sync {
     fn coordination_snapshot(&self, _workspace_root: &str) -> Result<CoordinationSnapshot, String> {
         Err("Agent coordination is unavailable in this run host.".to_string())
     }
+    /// A wake that fires when this Workspace's journal moves, so an
+    /// `agent_wait` answers the moment mail lands instead of on its next poll.
+    /// `None` keeps the caller on its plain poll.
+    fn coordination_changes(
+        &self,
+        _workspace_root: &str,
+    ) -> Option<tokio::sync::watch::Receiver<u64>> {
+        None
+    }
     /// Broadcast a persisted event on the per-run *global* channel
     /// (`agent-run:{id}`), carrying its transcript `seq`. This is the reattach
     /// stream: the request-scoped `Channel` in `agent_start_run` dies when the
@@ -354,6 +363,20 @@ struct TauriSupervisor {
 impl TauriSupervisor {
     fn new(app: tauri::AppHandle) -> Self {
         Self { app }
+    }
+}
+
+/// Journal calls are file IO behind a cross-process lock, reached from the
+/// async run loop through a sync trait. On the app's multi-thread runtime the
+/// worker hands its other tasks off before blocking, so one Run waiting on the
+/// lock never stalls another Run's stream. Anywhere else (a test's
+/// current-thread runtime, a plain thread) the call just runs inline.
+fn off_the_worker<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
     }
 }
 
@@ -515,8 +538,9 @@ impl RunSupervisor for TauriSupervisor {
         command: CoordinationCommand,
     ) -> Result<CoordinationCommandOutcome, String> {
         let state = self.app.state::<CoordinationStoreState>();
-        let outcome =
-            crate::coordination::apply_coordination_command(state.inner(), workspace_root, command)?;
+        let outcome = off_the_worker(|| {
+            crate::coordination::apply_coordination_command(state.inner(), workspace_root, command)
+        })?;
         // Tell every panel in this Workspace the journal moved, so a message
         // queued for an idle Run shows in its panel before that Run's next turn.
         crate::coordination::emit_coordination_changed(&self.app, workspace_root, &outcome);
@@ -525,7 +549,15 @@ impl RunSupervisor for TauriSupervisor {
 
     fn coordination_snapshot(&self, workspace_root: &str) -> Result<CoordinationSnapshot, String> {
         let state = self.app.state::<CoordinationStoreState>();
-        crate::coordination::read_snapshot(state.inner(), workspace_root)
+        off_the_worker(|| crate::coordination::read_snapshot(state.inner(), workspace_root))
+    }
+
+    fn coordination_changes(
+        &self,
+        workspace_root: &str,
+    ) -> Option<tokio::sync::watch::Receiver<u64>> {
+        let state = self.app.state::<CoordinationStoreState>();
+        crate::coordination::subscribe_changes(state.inner(), workspace_root).ok()
     }
 
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent) {

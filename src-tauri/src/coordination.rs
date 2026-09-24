@@ -1714,11 +1714,16 @@ impl JournalMemo {
 }
 
 /// One Workspace's journal as this process sees it: the memoised fold, and a
-/// wake for anyone waiting on it. `changed` carries the next `seq`; it moves
+/// wake for anyone waiting on it. The wake carries the next `seq`; it moves
 /// when this process appends, or when a refresh finds another process did.
+/// Async waiters (the Harness) watch `changed`; the bridge's request threads
+/// are plain threads, so they block on `announced` + `wake` instead of
+/// entering a runtime.
 struct Journal {
     memo: Mutex<JournalMemo>,
     changed: tokio::sync::watch::Sender<u64>,
+    announced: Mutex<u64>,
+    wake: std::sync::Condvar,
 }
 
 impl Journal {
@@ -1726,6 +1731,8 @@ impl Journal {
         Self {
             memo: Mutex::new(JournalMemo::new()),
             changed: tokio::sync::watch::Sender::new(0),
+            announced: Mutex::new(0),
+            wake: std::sync::Condvar::new(),
         }
     }
 
@@ -1743,6 +1750,12 @@ impl Journal {
             *current = next_seq;
             true
         });
+        if let Ok(mut announced) = self.announced.lock() {
+            if *announced != next_seq {
+                *announced = next_seq;
+                self.wake.notify_all();
+            }
+        }
     }
 }
 
@@ -1949,6 +1962,28 @@ pub(crate) fn subscribe_changes(
     workspace_root: &str,
 ) -> Result<tokio::sync::watch::Receiver<u64>, String> {
     Ok(state.journal(workspace_root)?.changed.subscribe())
+}
+
+/// The blocking twin of [`subscribe_changes`] for plain threads: return once
+/// this process has announced a next `seq` other than `seen_next_seq` (the
+/// cursor of the snapshot the caller last read), or after `limit`. A move that
+/// landed between that read and this call returns at once.
+pub(crate) fn wait_for_change(
+    state: &CoordinationStoreState,
+    workspace_root: &str,
+    seen_next_seq: u64,
+    limit: std::time::Duration,
+) -> Result<(), String> {
+    let journal = state.journal(workspace_root)?;
+    let announced = journal
+        .announced
+        .lock()
+        .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
+    let _ = journal
+        .wake
+        .wait_timeout_while(announced, limit, |next| *next == seen_next_seq)
+        .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
+    Ok(())
 }
 
 /// Run a journal fold off the main thread. Sync Tauri commands execute on the
