@@ -1134,3 +1134,91 @@ git.example.com:
         assert!(err.contains("PR #5 not found"), "{err}");
     }
 }
+
+/// Recognize only a plain, pinned gh watch. Shell wrappers remain generic
+/// observers: never guess a repository or execute observer text while polling.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CiWatchTarget { pub run_id: u64, pub repo: Option<String> }
+
+pub fn ci_watch_target(command: &str) -> Option<CiWatchTarget> {
+    let args = shell_words::split(command).ok()?;
+    if args.first()?.rsplit('/').next()? != "gh" || args.get(1)? != "run" || args.get(2)? != "watch" { return None; }
+    let mut run_id = None;
+    let mut repo = None;
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--exit-status" | "--compact" => {},
+            "-R" | "--repo" => {
+                i += 1;
+                let value = args.get(i)?;
+                let parts: Vec<_> = value.split('/').collect();
+                if parts.len() != 2 || parts.iter().any(|p| (p.is_empty() || *p == "." || *p == "..") || !p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))) { return None; }
+                repo = Some(value.clone());
+            },
+            value if run_id.is_none() && value.chars().all(|c| c.is_ascii_digit()) => run_id = Some(value.parse().ok()?),
+            _ => return None,
+        }
+        i += 1;
+    }
+    Some(CiWatchTarget { run_id: run_id?, repo })
+}
+
+pub fn ci_watch_status(cwd: &str, target: CiWatchTarget) -> Result<serde_json::Value, String> {
+    let local_repo = gh_output(cwd, &["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).ok().map(|s| s.trim().to_string());
+    let repo = target.repo.or_else(|| local_repo.clone()).ok_or("Could not resolve the observer repository")?;
+    let endpoint = format!("repos/{repo}/actions/runs/{}", target.run_id);
+    let run: serde_json::Value = serde_json::from_str(&gh_output(cwd, &["api", &endpoint])?).map_err(|e| e.to_string())?;
+    let attempt = run["run_attempt"].as_u64().ok_or("Missing run attempt")?;
+    let jobs_endpoint = format!("{endpoint}/attempts/{attempt}/jobs?per_page=100");
+    let pages: Vec<serde_json::Value> = serde_json::from_str(&gh_output(cwd, &["api", &jobs_endpoint, "--paginate", "--slurp"])?) .map_err(|e| e.to_string())?;
+    let jobs: Vec<_> = pages.iter().flat_map(|page| page["jobs"].as_array().into_iter().flatten()).map(|j| serde_json::json!({"name":j["name"],"status":j["status"],"conclusion":j["conclusion"]})).collect();
+    let mut pr_number = run["pull_requests"].as_array().and_then(|prs| prs.first()).and_then(|p| p["number"].as_u64());
+    // GitHub sometimes omits pull_requests (including after merge). Ask for
+    // PRs associated with the exact SHA and require a unique branch/repo match.
+    if pr_number.is_none() {
+        if let Some(sha) = run["head_sha"].as_str() {
+            if let Ok(json) = gh_output(cwd, &["api", &format!("repos/{repo}/commits/{sha}/pulls")]) {
+                if let Ok(prs) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+                    pr_number = associated_watch_pr(&run, &prs, &repo);
+                }
+            }
+        }
+    }
+    let pr = pr_number.and_then(|n| gh_output(cwd, &["api", &format!("repos/{repo}/pulls/{n}")]).ok()).and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok());
+    Ok(serde_json::json!({
+        "runId": target.run_id, "attempt": attempt, "url": run["html_url"],
+        "status": run["status"], "conclusion": run["conclusion"], "headSha": run["head_sha"],
+        "jobs": jobs, "prNumber": pr_number,
+        "prUrl": pr.as_ref().map(|p| &p["html_url"]),
+        "prHeadSha": pr.as_ref().map(|p| &p["head"]["sha"]),
+        "prState": pr.as_ref().map(|p| if p["merged"].as_bool() == Some(true) { "merged" } else { p["state"].as_str().unwrap_or("unknown") }),
+        "repo": repo, "cwd": cwd, "localRepo": local_repo
+    }))
+}
+
+fn associated_watch_pr(run: &serde_json::Value, prs: &[serde_json::Value], repo: &str) -> Option<u64> {
+    let candidates: Vec<_> = prs.iter().filter(|p| p["head"]["ref"] == run["head_branch"] && p["head"]["repo"]["full_name"].as_str() == Some(repo)).filter_map(|p| p["number"].as_u64()).collect();
+    if candidates.len() == 1 { Some(candidates[0]) } else { None }
+}
+
+#[cfg(test)]
+mod ci_watch_tests {
+    use super::*;
+    #[test]
+    fn commit_association_must_be_unambiguous_and_in_the_same_repo() {
+        let run = serde_json::json!({"head_branch":"feature"});
+        let pr = serde_json::json!({"number":120,"head":{"ref":"feature","repo":{"full_name":"owner/repo"}}});
+        assert_eq!(associated_watch_pr(&run, &[pr.clone()], "owner/repo"), Some(120));
+        assert_eq!(associated_watch_pr(&run, &[pr.clone()], "other/repo"), None);
+        assert_eq!(associated_watch_pr(&run, &[pr.clone(), pr], "owner/repo"), None);
+    }
+    #[test]
+    fn only_pinned_plain_watches_are_recognized() {
+        let target = ci_watch_target("gh run watch 123 --exit-status -R owner/repo").unwrap();
+        assert_eq!(target.run_id, 123);
+        assert_eq!(target.repo.as_deref(), Some("owner/repo"));
+        for command in ["gh run watch", "gh run watch 1; echo done", "gh run watch 1 && echo done", "echo gh run watch 1", "gh run watch 1 -R ../repo", "gh run watch 1 --unknown"] { assert!(ci_watch_target(command).is_none(), "{command}"); }
+    }
+}

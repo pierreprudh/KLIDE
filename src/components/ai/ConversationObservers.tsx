@@ -1,3 +1,4 @@
+import { GithubObserverCard } from "./GithubObserverCard";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { createListenerScope } from "../../tauriEvents";
@@ -53,6 +54,9 @@ function ObserverRow({ observer, runId, onStopped }: { observer: Observer; runId
   const [hovered, setHovered] = useState(false);
   const elapsed = useElapsed(observer.startedMs);
   const running = observer.status.state === "running";
+  if (observer.githubWatch) return <GithubObserverCard observer={observer} runId={runId} onStop={() => {
+    void stopObserver(runId, observer.id).then(onStopped).catch(error => notify(String(error), { tone: "error" }));
+  }} />;
   return <div
     onMouseEnter={() => setHovered(true)}
     onMouseLeave={() => setHovered(false)}

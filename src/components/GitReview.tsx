@@ -1,3 +1,4 @@
+import type { GitDestination } from "../gitNavigation";
 // Git Review — a full-window surface for source control, branch management,
 // and pull requests. Replaces the old floating `GitPanel` as the single
 // entry point for staging, committing, syncing, browsing history, and
@@ -92,6 +93,7 @@ import { SearchIcon } from "../icons";
 import { useFlipIndicator } from "../hooks/useFlipIndicator";
 
 type Props = {
+  initialPr?: GitDestination | null;
   workspaceRoot: string | null;
   gitStatus: GitStatus | null;
   onRefreshGitStatus: () => Promise<void> | void;
@@ -791,6 +793,7 @@ function PRCard({ pr, selected, detail, detailLoading, nowMs, onSelect, onOpen, 
       : lift ? "var(--shadow-raised)" : "none";
   return (
     <div
+      data-pr-number={pr.number}
       role="button"
       tabIndex={0}
       onClick={() => onSelect(pr.number)}
@@ -1459,7 +1462,7 @@ function BranchMenu({ branches, tags, defaultBranch, current, onSelect, onClose 
   );
 }
 
-export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme: _theme }: Props) {
+export function GitReview({ initialPr, workspaceRoot, gitStatus, onRefreshGitStatus, theme: _theme }: Props) {
   const [log, setLog] = useState<GitLog | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [localStatus, setLocalStatus] = useState<GitStatus | null>(null);
@@ -1625,9 +1628,21 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
 
   const files = reviewStatus?.files ?? [];
   const { stagedFiles, changedFiles } = splitStatusFiles(files);
-  const prList = prs ?? [];
+  const prList = useMemo(() => {
+    const rows = prs ?? [];
+    if (!selectedPr || rows.some(pr => pr.number === selectedPr.number)) return rows;
+    // A direct destination may be older than the latest 50 PRs returned by gh.
+    const pr: PullRequest = { ...selectedPr, commentAuthors: [], isCurrentBranch: false };
+    return [pr, ...rows];
+  }, [prs, selectedPr]);
   const prCounts = useMemo(() => derivePrCounts(prList), [prList]);
   const visiblePrs = useMemo(() => deriveVisiblePrs(prList, prFilter), [prFilter, prList]);
+
+  useEffect(() => {
+    if (initialPr && expandedPr === initialPr.pr && selectedPr) {
+      rootRef.current?.querySelector(`[data-pr-number="${initialPr.pr}"]`)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [initialPr, expandedPr, selectedPr, prs]);
 
   const refreshers: Record<GitReviewRefresh, () => Promise<void>> = {
     status: refreshStatus,
@@ -1743,6 +1758,20 @@ export function GitReview({ workspaceRoot, gitStatus, onRefreshGitStatus, theme:
       setPrDetailLoading(false);
     }
   }
+  useEffect(() => {
+    if (!initialPr || !workspaceRoot) return;
+    let alive = true;
+    setExpandedPr(initialPr.pr);
+    setSelectedPr(null);
+    setPrDetailLoading(true);
+    void gitPrView(workspaceRoot, initialPr.pr).then(detail => {
+      if (!alive) return;
+      setSelectedPr(detail);
+      setPrFilter(detail.state === "OPEN" ? "open" : "closed");
+    }).catch(error => { if (alive) setActionMessage({ kind: "err", text: errMessage(error) }); })
+      .finally(() => { if (alive) setPrDetailLoading(false); });
+    return () => { alive = false; };
+  }, [initialPr, workspaceRoot]);
   async function openPrInBrowser(n: number) {
     if (!workspaceRoot) return;
     await runGitAction(openPrInBrowserOutcome(), () => gitPrOpen(workspaceRoot, n));

@@ -86,6 +86,7 @@ struct Shell {
     id: String,
     run_id: String,
     command: String,
+    cwd: String,
     started_ms: u64,
     state: Arc<Mutex<ShellState>>,
     /// Dropped to ask the waiter task to kill the process. `None` once used.
@@ -113,6 +114,8 @@ fn now_ms() -> u64 {
 pub struct ShellSnapshot {
     pub id: String,
     pub command: String,
+    pub cwd: String,
+    pub github_watch: Option<crate::git::github::CiWatchTarget>,
     pub status: ShellStatus,
     pub started_ms: u64,
     pub ended_ms: Option<u64>,
@@ -146,6 +149,13 @@ pub fn spawn_observer(run_id: &str, cwd: &str, command: &str) -> Result<ShellSna
 }
 
 fn spawn_inner(run_id: &str, cwd: &str, command: &str, notify_on_exit: bool) -> Result<ShellSnapshot, String> {
+    // Retain a small, log-free set of completed GitHub cards for navigation.
+    if let Ok(mut shells) = registry().lock() {
+        let mut completed: Vec<_> = shells.values().filter(|s| s.run_id == run_id && s.delivered).map(|s| (s.started_ms, s.id.clone())).collect();
+        completed.sort();
+        let remove = completed.len().saturating_sub(7);
+        for (_, id) in completed.into_iter().take(remove) { shells.remove(&id); }
+    }
     if list(run_id).len() >= 32 {
         return Err("This conversation already has 32 background commands. Start a new conversation for more.".into());
     }
@@ -209,6 +219,8 @@ fn spawn_inner(run_id: &str, cwd: &str, command: &str, notify_on_exit: bool) -> 
     let snapshot = ShellSnapshot {
         id: id.clone(),
         command: command.to_string(),
+        cwd: cwd.to_string(),
+        github_watch: crate::git::github::ci_watch_target(command),
         status: ShellStatus::Running,
         started_ms: now_ms(),
         ended_ms: None,
@@ -221,6 +233,7 @@ fn spawn_inner(run_id: &str, cwd: &str, command: &str, notify_on_exit: bool) -> 
                 id,
                 run_id: run_id.to_string(),
                 command: command.to_string(),
+                cwd: cwd.to_string(),
                 started_ms: snapshot.started_ms,
                 state,
                 kill: Some(kill_tx),
@@ -278,6 +291,8 @@ fn snapshot_of(shell: &Shell, state: &ShellState) -> ShellSnapshot {
     ShellSnapshot {
         id: shell.id.clone(),
         command: shell.command.clone(),
+        cwd: shell.cwd.clone(),
+        github_watch: crate::git::github::ci_watch_target(&shell.command),
         status: state.status.clone(),
         started_ms: shell.started_ms,
         ended_ms: state.ended_ms,
@@ -381,7 +396,16 @@ pub fn acknowledge(run_id: &str, shell_id: &str) {
     if let Ok(mut shells) = registry().lock() {
         if let Ok(shell) = owned(&mut shells, run_id, shell_id) { shell.delivered = true; }
         // The completion and its bounded log now live in the transcript.
-        shells.retain(|_, shell| !shell.delivered);
+        shells.retain(|_, shell| {
+            if !shell.delivered { return true; }
+            if crate::git::github::ci_watch_target(&shell.command).is_none() { return false; }
+            if let Ok(mut state) = shell.state.lock() { state.buffer.clear(); }
+            true
+        });
+        let mut completed: Vec<_> = shells.values().filter(|s| s.run_id == run_id && s.delivered).map(|s| (s.started_ms, s.id.clone())).collect();
+        completed.sort();
+        let remove = completed.len().saturating_sub(8);
+        for (_, id) in completed.into_iter().take(remove) { shells.remove(&id); }
     }
 }
 
@@ -493,6 +517,25 @@ mod tests {
         acknowledge(run, &shell.id);
         assert!(completions(run).is_empty());
         assert!(list(run).is_empty(), "delivered logs must not leak in memory");
+    }
+
+    #[tokio::test]
+    async fn github_completion_keeps_card_identity_without_logs_or_second_notification() {
+        let run = "github-card-retention";
+        let shell = spawn_observer(run, ".", "printf 'done'").unwrap();
+        until(|| (!completions(run).is_empty()).then_some(())).await;
+        // The fixture runs no network command; only its display identity is GitHub.
+        registry().lock().unwrap().get_mut(&shell.id).unwrap().command = "gh run watch 123 --exit-status".into();
+        acknowledge(run, &shell.id);
+        settle_shells(run, false);
+        let rows = list(run);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].github_watch.as_ref().unwrap().run_id, 123);
+        assert_eq!(rows[0].cwd, ".");
+        assert!(completions(run).is_empty());
+        assert!(read(run, &shell.id).unwrap().output.is_empty());
+        kill_run_shells(run);
+        assert!(list(run).is_empty());
     }
 
     #[tokio::test]

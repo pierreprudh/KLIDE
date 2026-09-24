@@ -1,3 +1,4 @@
+import { registerGitOpener, type GitDestination } from "./gitNavigation";
 import {
   Fragment,
   lazy,
@@ -762,7 +763,13 @@ function App() {
     activeGridId != null
       ? gridLayouts.find((g) => g.id === activeGridId) ?? null
       : null;
-  const effectiveGitReviewRoot = workspaceRoot;
+  const [gitDestination, setGitDestination] = useState<GitDestination | null>(null);
+  useEffect(() => {
+    registerGitOpener(destination => { setGitDestination(destination); openOverlay("git-review"); });
+    return () => registerGitOpener(null);
+  }, [openOverlay]);
+  useEffect(() => { if (overlay !== "git-review") setGitDestination(null); }, [overlay]);
+  const effectiveGitReviewRoot = gitDestination?.root ?? workspaceRoot;
   const activityState: Record<ActivityPanel, boolean> = {
     home: overlay === null,
     explorer: overlay === null && (explorerVisible || sidebarSlot2 === "explorer"),
@@ -3311,6 +3318,7 @@ function App() {
             {overlay === "git-review" ? (
               <Suspense fallback={null}>
                 <GitReview
+                  initialPr={gitDestination}
                   workspaceRoot={effectiveGitReviewRoot}
                   gitStatus={effectiveGitReviewRoot === workspaceRoot ? gitStatus : null}
                   onRefreshGitStatus={() =>

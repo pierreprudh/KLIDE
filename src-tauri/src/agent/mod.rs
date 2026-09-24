@@ -7832,3 +7832,11 @@ mod worker_dispatch_tests {
         assert_eq!(sup.spawned.lock().unwrap()[0].model, "gpt-5.4", "skipping keeps Kit's pick");
     }
 }
+
+/// Read-only enrichment of an existing observer, using its actual cwd and run id.
+#[tauri::command]
+pub async fn agent_observer_github(run_id: String, shell_id: String) -> Result<serde_json::Value, String> {
+    let shell = background::list(&run_id).into_iter().find(|s| s.id == shell_id).ok_or("Observer no longer exists")?;
+    let target = shell.github_watch.ok_or("Not a GitHub run observer")?;
+    crate::blocking::run(move || crate::git::github::ci_watch_status(&shell.cwd, target)).await
+}
