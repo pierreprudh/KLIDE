@@ -303,6 +303,7 @@ Klide/
     │       ├── tools.rs           Tool registry (schema + capability + execution, including native memory recall)
     │       ├── spreadsheet_tools.rs Native workbook Tools — recalculated and exported before review
     │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command
+    │       ├── process.rs         One lifecycle for every command a Run starts — process group, bounded capture, exit from wait() with a 1 s drain, cancel-aware wait (background.rs is its registry)
     │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts

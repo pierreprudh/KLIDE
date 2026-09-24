@@ -2366,6 +2366,7 @@ dependencies = [
  "getrandom 0.3.4",
  "ironcalc",
  "keyring",
+ "libc",
  "portable-pty",
  "reqwest",
  "rusqlite",

@@ -1,6 +1,7 @@
 mod approval_store;
 mod artifacts;
 mod background;
+mod process;
 mod observers;
 mod command_allowlist;
 mod conversation_search;
@@ -43,7 +44,7 @@ use self::run_core::{
 use self::tools::{
     apply_write, clear_run_snapshots, execute_read_only_tool, execute_read_only_tool_with_runs_dir,
     execute_write_tool_preview, find_tool_kind_for_workspace, preflight_command,
-    run_command_capture, run_command_capture_in, schemas_for_mode, tool_summary_for_workspace,
+    run_command_capture_in, schemas_for_mode, tool_summary_for_workspace,
     NormalizedToolCall, ToolKind,
 };
 #[cfg(test)]
@@ -1195,12 +1196,22 @@ async fn run_test_after_edit(
     root: &str,
     command: Option<&str>,
     timeout_secs: u64,
+    cancel: &CancellationToken,
     result: &mut ToolResult,
 ) {
     let Some(command) = command.map(str::trim).filter(|c| !c.is_empty()) else {
         return;
     };
-    let check = run_command_capture(root, command, timeout_secs).await;
+    // Stop reaches the check too. The edit itself is already applied, so the
+    // result still says so — the loop settles the cancellation next.
+    let check = match run_command_capture_in(root, root, command, timeout_secs, cancel).await {
+        tools::CommandRun::Done(check) => check,
+        tools::CommandRun::Cancelled => ToolResult {
+            ok: false,
+            content: "Stopped before it finished: the run was cancelled.".to_string(),
+            metadata: None,
+        },
+    };
     let status = if check.ok { "passed" } else { "failed" };
     result.content.push_str(&format!(
         "\nPost-edit check `{command}` {status}.\n{}",
@@ -4293,7 +4304,7 @@ mod test_after_edit_tests {
     async fn test_after_edit_pass_keeps_result_ok() {
         let root = temp_workspace("pass");
         let mut result = applied_result();
-        run_test_after_edit(&root, Some("echo checked"), 30, &mut result).await;
+        run_test_after_edit(&root, Some("echo checked"), 30, &CancellationToken::new(), &mut result).await;
         assert!(result.ok);
         assert!(result
             .content
@@ -4315,7 +4326,7 @@ mod test_after_edit_tests {
     async fn test_after_edit_failure_marks_result_not_ok() {
         let root = temp_workspace("fail");
         let mut result = applied_result();
-        run_test_after_edit(&root, Some("exit 7"), 30, &mut result).await;
+        run_test_after_edit(&root, Some("exit 7"), 30, &CancellationToken::new(), &mut result).await;
         assert!(!result.ok);
         assert!(result.content.contains("Post-edit check `exit 7` failed"));
         assert!(result.content.contains("exit 7"));
@@ -4327,7 +4338,7 @@ mod test_after_edit_tests {
     async fn empty_test_after_edit_command_is_noop() {
         let root = temp_workspace("empty");
         let mut result = applied_result();
-        run_test_after_edit(&root, Some("   "), 30, &mut result).await;
+        run_test_after_edit(&root, Some("   "), 30, &CancellationToken::new(), &mut result).await;
         assert_eq!(result.content, "Applied: edited a.txt.");
         assert!(result.metadata.is_none());
         let _ = std::fs::remove_dir_all(root);
@@ -5178,6 +5189,50 @@ mod run_loop_tests {
         )
         .await
         .expect("run loop settles without an infrastructure error");
+    }
+
+    /// Stop during a foreground command ends the Run as cancelled at once —
+    /// before, the loop sat on the command until its own timer fired.
+    #[tokio::test]
+    async fn stop_mid_command_settles_the_run_cancelled_promptly() {
+        let (runs_dir, root) = sandbox("stop-mid-command");
+        let caller = ScriptedProviderCaller::new(vec![
+            scripted_turn(
+                "Running the long command.",
+                vec![scripted_tool_call(
+                    "call_sleep",
+                    "run_command",
+                    serde_json::json!({ "command": "sleep 60" }),
+                )],
+            ),
+            scripted_turn("unreachable", vec![]),
+        ]);
+        let sup = Arc::new(FakeSupervisor::with_run("stop-run"));
+        let request = test_request(&root, &["sleep 60"]);
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            trigger.cancel();
+        });
+        let began = std::time::Instant::now();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            run_agent_loop(
+                sup,
+                runs_dir.to_path_buf(),
+                "stop-run".to_string(),
+                request,
+                Channel::new(|_| Ok(())),
+                cancel,
+                caller,
+            ),
+        )
+        .await
+        .expect("Stop must reach the running command")
+        .expect("run loop settles without an infrastructure error");
+        assert!(began.elapsed() < std::time::Duration::from_secs(5), "took {:?}", began.elapsed());
+        assert_eq!(read_summary(&runs_dir, "stop-run").unwrap().status, "cancelled");
     }
 
     #[tokio::test]

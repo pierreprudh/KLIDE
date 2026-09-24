@@ -1473,6 +1473,9 @@ where
 /// Best-effort by construction: no repo (or a git that will not answer) means
 /// no detection, never a failed tool call. Ignored paths never appear, so a
 /// `npm install` and a build into an ignored `dist/` stay silent.
+///
+/// Stop reaches the command mid-flight: the process is killed and the Run
+/// settles as cancelled, rather than waiting out the command's timer.
 async fn run_command_announcing_artifacts<E>(
     ctx: &ToolCtx<'_>,
     root: &str,
@@ -1480,7 +1483,7 @@ async fn run_command_announcing_artifacts<E>(
     command: &str,
     timeout_secs: u64,
     emit: &mut E,
-) -> Result<ToolResult, String>
+) -> Result<ToolOutcome, String>
 where
     E: FnMut(AgentEvent) -> Result<(), String>,
 {
@@ -1493,12 +1496,15 @@ where
         (Some(top), Some(dirty)) => document_versions(root, top, dirty).await,
         _ => Default::default(),
     };
-    let result = run_command_capture_in(root, cwd, command, timeout_secs).await;
+    let result = match run_command_capture_in(root, cwd, command, timeout_secs, ctx.cancel).await {
+        tools::CommandRun::Done(result) => result,
+        tools::CommandRun::Cancelled => return Ok(ToolOutcome::Cancelled),
+    };
     let (Some(top), Some(before)) = (repo, before) else {
-        return Ok(result);
+        return Ok(ToolOutcome::Produced(result));
     };
     let Some(after) = dirty_set(&top).await else {
-        return Ok(result);
+        return Ok(ToolOutcome::Produced(result));
     };
     let new_versions = document_versions(root, &top, &after).await;
     for file in artifacts::produced_with_versions(&before, &after, &old_versions, &new_versions) {
@@ -1514,7 +1520,7 @@ where
             ts: now_ms(),
         })?;
     }
-    Ok(result)
+    Ok(ToolOutcome::Produced(result))
 }
 
 /// Fingerprint previewable documents so a second command editing an already
@@ -1583,10 +1589,18 @@ async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<S
 /// No artifact bracketing here: the dirty set is read either side of a command
 /// that *finished*, and this one has not. Whatever it leaves behind is found by
 /// the commands that come after it.
-fn start_background_command(ctx: &ToolCtx<'_>, cwd: &str, command: &str, notify: bool) -> ToolResult {
+fn start_background_command(ctx: &ToolCtx<'_>, root: &str, cwd: &str, command: &str, notify: bool) -> ToolResult {
     if notify && (ctx.request.parent_id.is_some() || ctx.request.mission_id.is_some()) {
         return ToolResult { ok: false, content: "A persistent observer must be started by the main conversation, not a child or Mission run.".into(), metadata: None };
     }
+    // The same cwd rule the foreground path applies — `workspace`, `.` and a
+    // relative directory mean what they mean there, and a missing one fails
+    // with the same words instead of a raw spawn error.
+    let cwd = match tools::resolve_command_dir(root, cwd) {
+        Ok(dir) => dir.to_string_lossy().into_owned(),
+        Err(message) => return ToolResult { ok: false, content: message, metadata: None },
+    };
+    let cwd = cwd.as_str();
     let started = if notify { background::spawn_observer(ctx.id, cwd, command) } else { background::spawn(ctx.id, cwd, command) };
     if let Ok(shell) = &started {
         if notify { ctx.sup.watch_background(ctx.id, &shell.id, ctx.request); }
@@ -1764,21 +1778,12 @@ where
         project_ok || full_auto,
     ) {
         permission::Precheck::Execute => {
-            return Ok(ToolOutcome::Produced(
-                if background {
-                    start_background_command(ctx, &cwd, &command, notify)
-                } else {
-                    run_command_announcing_artifacts(
-                        ctx,
-                        root_value,
-                        &cwd,
-                        &command,
-                        timeout_secs,
-                        emit,
-                    )
-                    .await?
-                },
-            ));
+            return if background {
+                Ok(ToolOutcome::Produced(start_background_command(ctx, root_value, &cwd, &command, notify)))
+            } else {
+                run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit)
+                    .await
+            };
         }
         permission::Precheck::AutoReject(msg) => {
             return Ok(ToolOutcome::Produced(ToolResult {
@@ -1843,11 +1848,11 @@ where
 
     let result = match decision {
         permission::GateDecision::Approved { .. } if background => {
-            start_background_command(ctx, &cwd, &command, notify)
+            start_background_command(ctx, root_value, &cwd, &command, notify)
         }
         permission::GateDecision::Approved { .. } => {
-            run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit)
-                .await?
+            return run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit)
+                .await;
         }
         _ => ToolResult {
             ok: false,
@@ -2212,6 +2217,7 @@ Do not propose it again — take a different approach or ask the user what they'
                     root,
                     ctx.request.test_after_edit_command.as_deref(),
                     timeout_secs,
+                    ctx.cancel,
                     &mut tool_result,
                 )
                 .await;
