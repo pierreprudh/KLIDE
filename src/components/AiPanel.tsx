@@ -2207,6 +2207,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // the conversation column is centred in the space to its left instead of
   // under it (see `focusGutterLeft` / `focusGutterRight`).
   const [planSlot, setPlanSlot] = useState<TodoStripSlot>("none");
+  const [observerSidebarTarget, setObserverSidebarTarget] = useState<HTMLDivElement | null>(null);
+  const [githubPresence, setGithubPresence] = useState({ runId: "", present: false });
+  const onGithubPresence = useCallback((runId: string, present: boolean) => {
+    setGithubPresence(previous => previous.runId === runId && previous.present === present ? previous : { runId, present });
+  }, []);
 
   function forceStickToBottom() {
     stickToBottomRef.current = true;
@@ -3187,6 +3192,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     resultUp: latestCompletion !== undefined,
     questionUp: pendingQuestion !== null,
     visualUp: latestVisuals !== null,
+    observerUp: githubPresence.runId === currentId && githubPresence.present,
     hidden: sidePanelHidden,
     canvasWidth,
   });
@@ -4837,7 +4843,10 @@ This user request requires workspace inspection. Before answering, you MUST call
           );
         }))}
         </ObserverConnections>
-        <ConversationObservers key={currentId} runId={currentId} onFollowup={() => {
+        <ConversationObservers key={currentId} runId={currentId}
+          onGithubPresence={onGithubPresence}
+          sidebar={variant === "focus" ? { target: observerSidebarTarget, folded: column.planFolded, onUnfold: () => setSidePanelHidden(false) } : undefined}
+          onFollowup={() => {
           if (processingQueueRef.current || reattachRef.current) return false;
           followConversationRun(currentId, provider);
           return true;
@@ -5096,6 +5105,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               own resting state is that icon. The card draws that mark itself
               when the column is folded; a second pill here drew the same
               result twice. */}
+          <div ref={setObserverSidebarTarget} className="github-observer-sidebar-slot" />
           {latestCompletion && (
             <CompletionCard
               variant="island"

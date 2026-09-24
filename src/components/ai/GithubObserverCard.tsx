@@ -1,5 +1,6 @@
 import { LinkMark } from "../linkMark";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Observer } from "../../agent/observers";
 import { githubObserverLabel, githubObserverDetail, readGithubObserver, type GithubObserver } from "../../agent/githubObserver";
 import { openGitPr } from "../../gitNavigation";
@@ -8,7 +9,9 @@ import { notify } from "../../toast";
 
 /** Polls only while mounted. The native observer still owns the completion
  * notification, including when the user navigates away from this conversation. */
-export function GithubObserverCard({ observer, runId, onStop }: { observer: Observer; runId: string; onStop: () => void }) {
+export type ObserverSidebar = { target: HTMLElement | null; folded: boolean; onUnfold: () => void };
+
+export function GithubObserverCard({ observer, runId, onStop, sidebar }: { observer: Observer; runId: string; onStop: () => void; sidebar?: ObserverSidebar }) {
   const [watch, setWatch] = useState<GithubObserver | null>(null);
   const [stale, setStale] = useState(false);
   const running = observer.status.state === "running";
@@ -36,7 +39,7 @@ export function GithubObserverCard({ observer, runId, onStop }: { observer: Obse
   const openOnline = () => {
     if (watch) void openExternal(watch.prUrl || watch.url).catch(error => notify(String(error), { tone: "error" }));
   };
-  return <section className="github-observer" aria-label="GitHub Actions observer">
+  const card = (inSidebar: boolean) => <section className={`github-observer${inSidebar ? " github-observer-sidebar" : ""}`} aria-label={inSidebar ? "GitHub Actions in side panel" : "GitHub Actions observer"}>
     <LinkMark site="github" size={36} />
     <div style={{ minWidth: 0 }}>
       <div className="github-observer-line" role="status" aria-live="polite">
@@ -51,4 +54,11 @@ export function GithubObserverCard({ observer, runId, onStop }: { observer: Obse
       </div>
     </div>
   </section>;
+  return <>
+    {card(false)}
+    {sidebar?.target && createPortal(sidebar.folded
+      ? <button type="button" className="github-observer-mark" onClick={sidebar.onUnfold}
+          aria-label={`Show GitHub watcher — ${label}`} title={label}><LinkMark site="github" size={22} /></button>
+      : card(true), sidebar.target)}
+  </>;
 }

@@ -1,4 +1,4 @@
-import { GithubObserverCard } from "./GithubObserverCard";
+import { GithubObserverCard, type ObserverSidebar } from "./GithubObserverCard";
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { createListenerScope } from "../../tauriEvents";
@@ -9,14 +9,18 @@ import { useElapsed } from "./WorkingRow";
 
 /** A conversation can be idle while its observers are working. These rows
  * stay separate from the reply's Working row, so sending remains available. */
-export function ConversationObservers({ runId, onFollowup }: {
+export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPresence }: {
   runId: string;
+  sidebar?: ObserverSidebar;
+  onGithubPresence?: (runId: string, present: boolean) => void;
   /** False means a local turn is still cleaning up; try after it releases. */
   onFollowup: () => boolean;
 }) {
   const [observers, setObservers] = useState<Observer[]>([]);
   const follow = useRef(onFollowup);
   follow.current = onFollowup;
+  const hasGithub = observers.some(observer => observer.githubWatch);
+  useEffect(() => { onGithubPresence?.(runId, hasGithub); }, [runId, hasGithub, onGithubPresence]);
   useEffect(() => {
     setObservers([]);
     let alive = true;
@@ -46,15 +50,15 @@ export function ConversationObservers({ runId, onFollowup }: {
 
   if (!observers.length) return null;
   return <div aria-label="Background observers" style={{ margin: "12px 0", color: "var(--fg-subtle)", fontSize: 12 }}>
-    {observers.map((observer) => <ObserverRow key={observer.id} observer={observer} runId={runId} onStopped={() => void listObservers(runId).then(setObservers)} />)}
+    {observers.map((observer) => <ObserverRow key={observer.id} observer={observer} runId={runId} sidebar={sidebar} onStopped={() => void listObservers(runId).then(setObservers)} />)}
   </div>;
 }
 
-function ObserverRow({ observer, runId, onStopped }: { observer: Observer; runId: string; onStopped: () => void }) {
+function ObserverRow({ observer, runId, onStopped, sidebar }: { observer: Observer; runId: string; onStopped: () => void; sidebar?: ObserverSidebar }) {
   const [hovered, setHovered] = useState(false);
   const elapsed = useElapsed(observer.startedMs);
   const running = observer.status.state === "running";
-  if (observer.githubWatch) return <GithubObserverCard observer={observer} runId={runId} onStop={() => {
+  if (observer.githubWatch) return <GithubObserverCard observer={observer} runId={runId} sidebar={sidebar} onStop={() => {
     void stopObserver(runId, observer.id).then(onStopped).catch(error => notify(String(error), { tone: "error" }));
   }} />;
   return <div
