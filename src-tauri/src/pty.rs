@@ -412,6 +412,7 @@ impl SessionHosting for DaemonHost<'_> {
                 resume_session_id: spec.resume_session_id.clone(),
                 mission_link: spec.mission_link.clone(),
                 detect_session_id: spec.detect_session_id,
+                coord_secret_sha256: spec.coord_secret_sha256.clone(),
             },
         )? {
             DaemonResponse::Ok => {
@@ -723,6 +724,11 @@ impl PtyEventSink for TauriSink {
             outcome.stop_requested,
         ) {
             eprintln!("coordination could not settle Delegate {session_id}: {error}");
+        }
+        // Revoke the session's bridge secret with its binding: a child that
+        // somehow outlived its PTY has nothing left to present.
+        if let Some(path) = session_secret_path(&self.app, session_id) {
+            let _ = std::fs::remove_file(path);
         }
         // Forget its hook status and tell the frontend so boards can flip the
         // run from running → done.
@@ -1065,6 +1071,14 @@ pub fn delegate_pty_spawn(
         _ => None,
     };
 
+    // Only a session whose child was actually told about the bridge has a
+    // secret worth recording.
+    let coord_secret_sha256 = mcp.as_ref().and_then(|_| {
+        app.state::<crate::coordination_bridge::CoordinationBridgeState>()
+            .session(&session_id)
+            .map(|bound| bound.secret_sha256)
+    });
+
     // Everything decidable without an AppHandle — the adapter-vs-custom-CLI
     // command, the one-shot Mission branch, and the Mission-link validation —
     // is `spawn_spec_for`'s job (and tested there, not here).
@@ -1085,6 +1099,7 @@ pub fn delegate_pty_spawn(
         } else {
             None
         },
+        coord_secret_sha256,
         mcp,
     })?;
 
@@ -1156,14 +1171,92 @@ fn recover_bridge_session(
 ) -> Option<crate::coordination_bridge::BridgeSession> {
     let dir = scrollback_dir(app)?;
     let meta = pty_host::read_scrollback_meta(&dir, session_id)?;
-    if meta.ended_ms.is_some() {
+    let live = all_live_ids(
+        app.state::<SessionHost>().live_ids(),
+        &daemon_live_rows(app),
+    );
+    recoverable_session(&meta, session_id, &live)
+}
+
+/// The rule for rebuilding a binding from a spawn record, without an
+/// AppHandle. The record must be this session's, still running in a host,
+/// never have recorded an exit, and carry its secret's hash — a session
+/// spawned before per-session secrets cannot prove who it is, so it is not
+/// recovered (its CLI is told to restart). The bridge still checks the
+/// presented secret and the journal before it remembers the result.
+fn recoverable_session(
+    meta: &pty_host::ScrollbackMeta,
+    session_id: &str,
+    live: &HashSet<String>,
+) -> Option<crate::coordination_bridge::BridgeSession> {
+    if meta.session_id != session_id || meta.ended_ms.is_some() || !live.contains(session_id) {
         return None;
     }
     Some(crate::coordination_bridge::BridgeSession {
         run_id: convo_id_for(session_id, &meta.provider),
-        workspace_root: meta.cwd?,
+        workspace_root: meta.cwd.clone()?,
         terminal: meta.mission_link.is_some(),
+        secret_sha256: meta.coord_secret_sha256.clone().filter(|h| !h.is_empty())?,
     })
+}
+
+/// Bring the bridge up at boot, so the endpoint file names this process's
+/// port before any surviving Delegate calls — otherwise a CLI the ptyd daemon
+/// kept alive reads the previous run's dead port until something new spawns.
+pub fn init_coordination_bridge(app: &tauri::AppHandle) {
+    let Some(endpoint) = endpoint_path(app) else {
+        return;
+    };
+    let store = app.state::<crate::coordination::CoordinationStoreState>();
+    if let Err(error) = app
+        .state::<crate::coordination_bridge::CoordinationBridgeState>()
+        .ensure_server(&endpoint, store.inner().clone(), bridge_hooks(app))
+    {
+        eprintln!("coordination bridge startup: {error}");
+    }
+}
+
+/// Where a session's MCP config files and secret live.
+fn mcp_config_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("delegate-mcp"))
+}
+
+/// Filesystem-safe stem for every file one session writes there.
+fn mcp_file_stem(session_id: &str) -> String {
+    session_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect()
+}
+
+fn session_secret_path(app: &tauri::AppHandle, session_id: &str) -> Option<PathBuf> {
+    mcp_config_dir(app).map(|d| d.join(format!("{}.secret", mcp_file_stem(session_id))))
+}
+
+/// The secret this session's MCP child will present, as (file, sha256). A
+/// session already bound whose file still holds the bound secret keeps it —
+/// a headless Focus turn re-wiring beside a live PTY must not rotate the
+/// PTY child's credential — otherwise a fresh one is minted and written 0600.
+fn session_secret(
+    app: &tauri::AppHandle,
+    session_id: &str,
+) -> Result<(PathBuf, String), String> {
+    let path = session_secret_path(app, session_id).ok_or("no app data dir")?;
+    let bound = app
+        .state::<crate::coordination_bridge::CoordinationBridgeState>()
+        .session(session_id);
+    if let (Some(bound), Ok(existing)) = (bound, std::fs::read_to_string(&path)) {
+        if crate::coordination_bridge::secret_sha256(&existing) == bound.secret_sha256 {
+            return Ok((path, bound.secret_sha256));
+        }
+    }
+    let secret = crate::coordination_bridge::mint_session_secret()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create the MCP config dir: {e}"))?;
+    }
+    crate::durable::write_atomic_private(&path, secret.as_bytes())?;
+    Ok((path, crate::coordination_bridge::secret_sha256(&secret)))
 }
 
 /// A Delegate's coordination Run id is its conversation id — the same id the
@@ -1193,6 +1286,13 @@ pub(crate) fn wire_coordination(
     let store = app.state::<crate::coordination::CoordinationStoreState>();
     let bridge = app.state::<crate::coordination_bridge::CoordinationBridgeState>();
     let run_id = delegate_run_id(session_id, provider);
+    let (secret_path, secret_sha256) = match session_secret(app, session_id) {
+        Ok(secret) => secret,
+        Err(error) => {
+            wiring_failed(app, session_id, format!("could not mint the session secret: {error}"));
+            return None;
+        }
+    };
     if let Err(error) = crate::coordination_bridge::register_delegate(
         store.inner(),
         &bridge_hooks(app),
@@ -1205,6 +1305,7 @@ pub(crate) fn wire_coordination(
             parent_run_id,
             mission_id,
             mission_task_id,
+            secret_sha256: &secret_sha256,
         },
     ) {
         wiring_failed(app, session_id, format!("could not register the Run: {error}"));
@@ -1218,7 +1319,7 @@ pub(crate) fn wire_coordination(
         wiring_failed(app, session_id, format!("the bridge could not start: {error}"));
         return None;
     }
-    match mcp_wiring_for(app, adapter, session_id, &endpoint) {
+    match mcp_wiring_for(app, adapter, session_id, &endpoint, &secret_path) {
         Ok(wiring) => wiring,
         Err(reason) => {
             wiring_failed(app, session_id, reason);
@@ -1247,32 +1348,29 @@ fn mcp_wiring_for(
     adapter: &dyn delegate::Delegate,
     session_id: &str,
     endpoint: &std::path::Path,
+    secret_path: &std::path::Path,
 ) -> Result<Option<delegate::McpWiring>, String> {
     let exe = std::env::current_exe().map_err(|e| format!("no path to the Klide binary: {e}"))?;
-    let config_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("no app data dir: {e}"))?
-        .join("delegate-mcp");
+    let config_dir = mcp_config_dir(app).ok_or("no app data dir")?;
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("could not create the MCP config dir: {e}"))?;
-    let file_stem: String = session_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect();
     let Some(wiring) = adapter.mcp_wiring(&delegate::McpServerSpec {
         command: exe.to_string_lossy().to_string(),
         args: vec!["mcp".to_string(), "coordination".to_string()],
         endpoint_path: endpoint.to_string_lossy().to_string(),
         session_id: session_id.to_string(),
+        secret_path: secret_path.to_string_lossy().to_string(),
         config_dir: config_dir.to_string_lossy().to_string(),
-        file_stem,
+        file_stem: mcp_file_stem(session_id),
     }) else {
         // This CLI has no MCP client Klide configures (omp): not a failure.
         return Ok(None);
     };
+    // Private and atomic: a CLI never reads half a config, and nothing in it
+    // is anyone else's business.
     for (path, content) in &wiring.files {
-        std::fs::write(path, content).map_err(|e| format!("could not write {path}: {e}"))?;
+        crate::durable::write_atomic_private(std::path::Path::new(path), content.as_bytes())
+            .map_err(|e| format!("could not write {path}: {e}"))?;
     }
     Ok(Some(wiring))
 }
@@ -1629,6 +1727,52 @@ mod tests {
     //! stop/resize skipped the daemon whenever the persistence toggle was off.
     use super::*;
 
+    fn secret_meta(session_id: &str) -> pty_host::ScrollbackMeta {
+        pty_host::ScrollbackMeta {
+            session_id: session_id.to_string(),
+            provider: "claude-code".to_string(),
+            cwd: Some("/tmp/ws".to_string()),
+            task: None,
+            model: None,
+            resume_session_id: None,
+            mission_link: None,
+            started_ms: 1,
+            ended_ms: None,
+            exit_outcome: None,
+            coord_secret_sha256: Some("ab12".to_string()),
+        }
+    }
+
+    /// What a restarted app may rebuild from a spawn record: only a session
+    /// still running somewhere, whose record is its own and carries the hash
+    /// its child's secret must match.
+    #[test]
+    fn a_spawn_record_recovers_only_a_live_session_with_a_secret_hash() {
+        let id = "convo-1:claude-code";
+        let live: HashSet<String> = [id.to_string()].into();
+        let session = recoverable_session(&secret_meta(id), id, &live).expect("recoverable");
+        assert_eq!(session.run_id, "convo-1");
+        assert_eq!(session.workspace_root, "/tmp/ws");
+        assert_eq!(session.secret_sha256, "ab12");
+
+        let mut pre_upgrade = secret_meta(id);
+        pre_upgrade.coord_secret_sha256 = None;
+        assert!(recoverable_session(&pre_upgrade, id, &live).is_none(), "no hash");
+        assert!(
+            recoverable_session(&secret_meta("convo-2:claude-code"), id, &live).is_none(),
+            "another session's record"
+        );
+        assert!(recoverable_session(&secret_meta(id), id, &HashSet::new()).is_none(), "not live");
+        let mut ended = secret_meta(id);
+        ended.ended_ms = Some(2);
+        assert!(recoverable_session(&ended, id, &live).is_none(), "recorded an exit");
+    }
+
+    #[test]
+    fn every_file_a_session_writes_shares_one_safe_stem() {
+        assert_eq!(mcp_file_stem("convo/1:claude-code"), "convo-1-claude-code");
+    }
+
     fn row(session_id: &str, provider: &str) -> LiveSessionRow {
         LiveSessionRow {
             session_id: session_id.to_string(),
@@ -1953,6 +2097,7 @@ mod tests {
             resume_session_id: None,
             mission_link: None,
             detect_session_id: true,
+            coord_secret_sha256: None,
         }
     }
 

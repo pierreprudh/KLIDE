@@ -432,6 +432,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
             resume_session_id,
             mission_link,
             detect_session_id,
+            coord_secret_sha256,
         } => {
             state.log(&format!("spawn {session_id} ({provider})"));
             let result = state.host.spawn(
@@ -446,6 +447,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
                     resume_session_id,
                     mission_link,
                     detect_session_id,
+                    coord_secret_sha256,
                 },
                 Some(state.scroll_dir()),
                 Arc::new(BroadcastSink {
@@ -777,6 +779,7 @@ mod tests {
             resume_session_id: None,
             mission_link: None,
             detect_session_id: false,
+            coord_secret_sha256: None,
         }) {
             Response::Ok => {}
             Response::Err { message } => panic!("spawn failed: {message}"),

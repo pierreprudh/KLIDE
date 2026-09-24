@@ -81,6 +81,10 @@ pub struct McpServerSpec {
     pub endpoint_path: String,
     /// The PTY session id this server speaks for.
     pub session_id: String,
+    /// The 0600 file holding this session's bridge secret. A path, never the
+    /// secret: config files here are world-readable and Codex's `-c` overrides
+    /// sit in argv, where `ps` shows them.
+    pub secret_path: String,
     pub config_dir: String,
     /// Filesystem-safe stem for any config file this session writes.
     pub file_stem: String,
@@ -90,10 +94,11 @@ impl McpServerSpec {
     /// The environment the MCP server itself needs. It goes in the server's own
     /// `env` block because MCP clients hand a stdio child a filtered
     /// environment rather than the CLI's.
-    fn env_pairs(&self) -> [(&'static str, &str); 2] {
+    fn env_pairs(&self) -> [(&'static str, &str); 3] {
         [
             (crate::mcp_server::ENV_ENDPOINT, self.endpoint_path.as_str()),
             (crate::mcp_server::ENV_SESSION, self.session_id.as_str()),
+            (crate::mcp_server::ENV_SECRET_FILE, self.secret_path.as_str()),
         ]
     }
 

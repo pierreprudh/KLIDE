@@ -847,6 +847,9 @@ pub fn run() {
             // the smoke boot so a release check never touches live sessions.
             if !smoke_test_mode() {
                 pty::init_daemon_bridge(handle.clone());
+                // And republish the coordination bridge's endpoint, so those
+                // sessions' agent tools reach this process, not the last one.
+                pty::init_coordination_bridge(handle);
             }
 
             // Open at a comfortable fraction of the display the window lands on,

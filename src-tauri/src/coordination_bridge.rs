@@ -19,6 +19,12 @@
 //! status hook server takes, and the rule `coordination_apply_command`
 //! documents for every adapter.
 //!
+//! The token is shared by every child this app starts, so it cannot say which
+//! session is calling. Each session therefore carries its own secret too
+//! ([`SECRET_HEADER`]), minted when it is wired and read by the child from a
+//! 0600 file; the bridge keeps only its sha256. A child that learns another
+//! session's id still cannot speak on that session's line.
+//!
 //! Nothing durable may hold a port. A Delegate PTY is hosted by the ptyd
 //! daemon and outlives the app process, so a restart gives the bridge a new
 //! ephemeral port and an empty session map while the CLI is still running and
@@ -40,6 +46,7 @@ use crate::coordination::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,6 +55,12 @@ pub const MAX_WAIT_SECONDS: u64 = 120;
 const DEFAULT_WAIT_SECONDS: u64 = 30;
 const WAIT_POLL: Duration = Duration::from_millis(400);
 const MAX_BODY_BYTES: usize = 256 * 1024;
+/// Requests being served at once. Each may block in a two-minute wait, so the
+/// bound is on threads, not on work; past it the bridge answers 503.
+pub const MAX_IN_FLIGHT: usize = 64;
+/// tiny_http reads a body this small into memory before handing the request
+/// over, so dropping such a request never touches the socket again.
+const BUFFERED_BODY_BYTES: usize = 1024;
 
 /// What one bound Delegate session acts as. Filled by the app at spawn time
 /// (pty.rs), read by the bridge on every request.
@@ -59,6 +72,52 @@ pub struct BridgeSession {
     /// interactive conversation can be reopened (`--resume`) and so, like a
     /// Harness thread between turns, only ever rests in `waiting`.
     pub terminal: bool,
+    /// sha256 (hex) of the secret this session's MCP child presents on every
+    /// call. The app token only proves "some child Klide started"; this proves
+    /// *which* one, so knowing another session's id is not enough to act as it.
+    /// The secret itself lives only in a 0600 file the child reads.
+    pub secret_sha256: String,
+}
+
+/// The header an MCP child carries its session secret in. Never the URL: a
+/// URL ends up in logs and error messages.
+pub const SECRET_HEADER: &str = "X-Klide-Session-Secret";
+
+/// A fresh per-session secret: 32 bytes from the OS RNG, URL-safe base64 —
+/// the same recipe as the status hook token, twice the length.
+pub fn mint_session_secret() -> Result<String, String> {
+    use base64::Engine;
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| format!("OS RNG unavailable: {e}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// What the app keeps of a secret: its sha256, hex. Enough to check one, not
+/// to present one — so the scrollback meta can carry it across a restart.
+pub fn secret_sha256(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(secret.trim().as_bytes()))
+}
+
+/// Constant-time equality, so a caller cannot learn a credential a byte at a
+/// time from how long a rejection took.
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Both sides hashed first, so the comparison is fixed-length whatever was sent.
+fn same_token(presented: &str, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    same_bytes(&Sha256::digest(presented), &Sha256::digest(expected))
+}
+
+fn secret_matches(presented: Option<&str>, session: &BridgeSession) -> bool {
+    match presented {
+        Some(secret) if !session.secret_sha256.is_empty() => {
+            same_bytes(secret_sha256(secret).as_bytes(), session.secret_sha256.as_bytes())
+        }
+        _ => false,
+    }
 }
 
 pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
@@ -528,6 +587,9 @@ fn execute_inner(
 pub struct BridgeServer {
     pub port: u16,
     pub token: String,
+    /// Requests holding a serving thread right now (tests watch it).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub in_flight: Arc<AtomicUsize>,
 }
 
 /// The whole app holds one session map and (lazily) one bridge server, the
@@ -580,6 +642,7 @@ impl CoordinationBridgeState {
                 self.sessions.clone(),
                 store,
                 Arc::new(hooks),
+                MAX_IN_FLIGHT,
             )?);
         }
         let s = server.as_ref().unwrap();
@@ -626,13 +689,18 @@ pub fn bridge_url(endpoint: &BridgeEndpoint, session_id: &str) -> String {
     )
 }
 
-/// Bind 127.0.0.1 on an ephemeral port. Unlike the status hook server, each
-/// request gets its own thread: an `agent_wait` blocks for up to two minutes
-/// and must not hold up a peer's `agent_send` on the same port.
+/// Bind 127.0.0.1 on an ephemeral port. Unlike the status hook server, an
+/// authenticated request gets its own thread: an `agent_wait` blocks for up to
+/// two minutes and must not hold up a peer's `agent_send` on the same port.
+///
+/// The accept loop authenticates from the request line and headers alone —
+/// the body is never read for a caller that has not proved which session it
+/// is — and at most `max_in_flight` requests hold a thread at once.
 pub fn start_bridge_server(
     sessions: SessionMap,
     store: CoordinationStoreState,
     hooks: Arc<BridgeHooks>,
+    max_in_flight: usize,
 ) -> Result<BridgeServer, String> {
     let server = tiny_http::Server::http("127.0.0.1:0")
         .map_err(|e| format!("bind coordination bridge: {e}"))?;
@@ -643,101 +711,267 @@ pub fn start_bridge_server(
         .ok_or_else(|| "coordination bridge has no IP port".to_string())?;
     let token = crate::delegate::status::fresh_token()?;
     let thread_token = token.clone();
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let counter = in_flight.clone();
     std::thread::spawn(move || {
-        for mut request in server.incoming_requests() {
-            let sessions = sessions.clone();
+        for request in server.incoming_requests() {
+            // Dropping a tiny_http request drains its unread body into one
+            // buffer the size the client *declared* — so a request claiming a
+            // huge body is never dropped normally: it is answered and parked.
+            if request.body_length().is_some_and(|n| n > MAX_BODY_BYTES) {
+                abandon(request, 413, BridgeResponse::err("Bridge request too large."));
+                continue;
+            }
+            let secret = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv(SECRET_HEADER))
+                .map(|h| h.value.as_str().to_string());
+            let authenticated = authenticate(
+                request.method().as_str(),
+                request.url(),
+                secret.as_deref(),
+                &thread_token,
+                &sessions,
+                &store,
+                &hooks,
+            );
+            let Some(slot) = Slot::take(&counter, max_in_flight) else {
+                answer(request, 503, BridgeResponse::err("The coordination bridge is busy; retry shortly."), None);
+                continue;
+            };
+            let session = match authenticated {
+                Ok(session) => session,
+                Err((code, response)) => {
+                    answer(request, code, response, Some(slot));
+                    continue;
+                }
+            };
             let store = store.clone();
             let hooks = hooks.clone();
-            let token = thread_token.clone();
             std::thread::spawn(move || {
-                let method = request.method().to_string();
-                let url = request.url().to_string();
+                let _slot = slot;
+                let mut request = request;
                 let mut body = String::new();
                 use std::io::Read;
                 let _ = request
                     .as_reader()
                     .take(MAX_BODY_BYTES as u64)
                     .read_to_string(&mut body);
-                let (code, payload) =
-                    handle_bridge_request(&method, &url, &body, &token, &sessions, &store, &hooks);
-                let response = tiny_http::Response::from_string(payload)
-                    .with_status_code(code)
-                    .with_header(
-                        tiny_http::Header::from_bytes(
-                            &b"Content-Type"[..],
-                            &b"application/json"[..],
-                        )
-                        .unwrap(),
-                    );
-                let _ = request.respond(response);
+                let (code, response) = dispatch(&session, &body, &store, &hooks);
+                let _ = request.respond(json_response(code, &response));
             });
         }
     });
-    Ok(BridgeServer { port, token })
+    Ok(BridgeServer {
+        port,
+        token,
+        in_flight,
+    })
+}
+
+/// One serving thread, returned to the pool when dropped.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(counter: &Arc<AtomicUsize>, max: usize) -> Option<Slot> {
+        counter
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < max).then_some(n + 1))
+            .ok()
+            .map(|_| Slot(counter.clone()))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn json_response(code: u16, response: &BridgeResponse) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    let payload = serde_json::to_string(response).unwrap_or_else(|_| "{\"ok\":false}".to_string());
+    tiny_http::Response::from_string(payload)
+        .with_status_code(code)
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+        )
+}
+
+/// Whether tiny_http already holds this request's whole body in memory, so
+/// answering and dropping it on the accept thread cannot block on the socket.
+fn body_is_buffered(request: &tiny_http::Request) -> bool {
+    let expects_continue = request.headers().iter().any(|h| h.field.equiv("Expect"));
+    match request.body_length() {
+        None | Some(0) => true,
+        Some(n) => n <= BUFFERED_BODY_BYTES && !expects_continue,
+    }
+}
+
+/// Answer a request the bridge will not serve, without reading its body. A
+/// buffered one is answered right here; one with body bytes still on the
+/// socket is answered on a counted thread (dropping it drains them), and with
+/// no thread free it is parked rather than let a stalled client hold the
+/// accept loop.
+fn answer(request: tiny_http::Request, code: u16, response: BridgeResponse, slot: Option<Slot>) {
+    if body_is_buffered(&request) {
+        let _ = request.respond(json_response(code, &response));
+        return;
+    }
+    match slot {
+        Some(slot) => {
+            std::thread::spawn(move || {
+                let _slot = slot;
+                let _ = request.respond(json_response(code, &response));
+            });
+        }
+        None => abandon(request, code, response),
+    }
+}
+
+/// Write the answer, then leak the connection instead of dropping it: tiny_http
+/// would otherwise drain the declared body into one allocation of that size,
+/// and a claimed exabyte aborts the app. A hostile request costs one parked
+/// connection, never the process. No Klide client ever gets here.
+fn abandon(request: tiny_http::Request, code: u16, response: BridgeResponse) {
+    let stream = request.upgrade("klide-abandoned", json_response(code, &response));
+    std::mem::forget(stream);
 }
 
 /// Serve one `POST /coord/<token>/<session_id>` carrying a [`BridgeRequest`].
 /// Returns the HTTP status and a JSON [`BridgeResponse`] body. Pure apart
 /// from the journal, so tests drive it without a socket.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub fn handle_bridge_request(
     method: &str,
     url: &str,
+    secret: Option<&str>,
     body: &str,
     token: &str,
     sessions: &SessionMap,
     store: &CoordinationStoreState,
     hooks: &BridgeHooks,
 ) -> (u16, String) {
-    let respond = |code: u16, response: BridgeResponse| {
-        (
-            code,
-            serde_json::to_string(&response).unwrap_or_else(|_| "{\"ok\":false}".to_string()),
-        )
+    let (code, response) = match authenticate(method, url, secret, token, sessions, store, hooks) {
+        Ok(session) => dispatch(&session, body, store, hooks),
+        Err(rejected) => rejected,
     };
+    (
+        code,
+        serde_json::to_string(&response).unwrap_or_else(|_| "{\"ok\":false}".to_string()),
+    )
+}
+
+const RESTART_HINT: &str =
+    "Restart the Delegate from Klide to restore its agent tools.";
+
+/// Who is calling, from the request line and the secret header only. The app
+/// token says the caller is a child of this app; the session secret says which
+/// child. A session this process never bound is rebuilt through
+/// [`BridgeHooks::resolve_session`] — and remembered only once the caller has
+/// proved it with that session's own secret and the journal still has the Run
+/// open.
+pub fn authenticate(
+    method: &str,
+    url: &str,
+    secret: Option<&str>,
+    token: &str,
+    sessions: &SessionMap,
+    store: &CoordinationStoreState,
+    hooks: &BridgeHooks,
+) -> Result<BridgeSession, (u16, BridgeResponse)> {
     if method != "POST" {
-        return respond(405, BridgeResponse::err("POST only."));
+        return Err((405, BridgeResponse::err("POST only.")));
     }
     let path = url.split('?').next().unwrap_or(url);
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     if segments.len() < 3 || segments[0] != "coord" {
-        return respond(404, BridgeResponse::err("Unknown bridge path."));
+        return Err((404, BridgeResponse::err("Unknown bridge path.")));
     }
-    if segments[1] != token {
-        return respond(403, BridgeResponse::err("Bridge token rejected."));
+    if !same_token(segments[1], token) {
+        return Err((403, BridgeResponse::err("Bridge token rejected.")));
     }
     // The session id is `{convoId}:{provider}` and may itself hold separators.
     let session_id = segments[2..].join("/");
-    // Bound in this process, or rebuilt from disk for a session that outlived
-    // the app. The guard is dropped before the hook runs — it takes the same
-    // lock to remember what it found.
-    let bound = sessions.lock().unwrap().get(&session_id).cloned();
-    let session = match bound {
-        Some(session) => session,
-        None => match (hooks.resolve_session)(&session_id) {
-            Some(recovered) => {
-                sessions
-                    .lock()
-                    .unwrap()
-                    .insert(session_id.clone(), recovered.clone());
-                recovered
-            }
-            None => {
-                return respond(
-                    404,
-                    BridgeResponse::err(
-                        "This Delegate session is not bound to a coordination Run.",
-                    ),
-                )
-            }
-        },
+    let refused = || {
+        (
+            401,
+            BridgeResponse::err(format!(
+                "This Delegate session did not present its own coordination secret. {RESTART_HINT}"
+            )),
+        )
     };
+    // The guard is dropped before the hook runs — it takes the same lock to
+    // remember what it found.
+    let bound = sessions.lock().unwrap().get(&session_id).cloned();
+    if let Some(session) = bound {
+        return if secret_matches(secret, &session) {
+            Ok(session)
+        } else {
+            Err(refused())
+        };
+    }
+    let Some(recovered) = (hooks.resolve_session)(&session_id) else {
+        return Err((
+            404,
+            BridgeResponse::err(format!(
+                "This Delegate session is not bound to a coordination Run. {RESTART_HINT}"
+            )),
+        ));
+    };
+    if !secret_matches(secret, &recovered) {
+        return Err(refused());
+    }
+    if !run_is_open(store, &recovered) {
+        return Err((
+            404,
+            BridgeResponse::err(format!(
+                "This Delegate session's Run has ended. {RESTART_HINT}"
+            )),
+        ));
+    }
+    sessions
+        .lock()
+        .unwrap()
+        .insert(session_id, recovered.clone());
+    Ok(recovered)
+}
+
+/// A recovered session may act only as a Run the journal still has open:
+/// registered, and not settled as done, failed, or cancelled.
+fn run_is_open(store: &CoordinationStoreState, session: &BridgeSession) -> bool {
+    coordination::read_snapshot(store, &session.workspace_root)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .runs
+                .into_iter()
+                .find(|run| run.registration.run_id == session.run_id)
+        })
+        .is_some_and(|run| {
+            !matches!(
+                run.state,
+                CoordinationRunState::Done
+                    | CoordinationRunState::Failed
+                    | CoordinationRunState::Cancelled
+            )
+        })
+}
+
+/// Run one authenticated request's body as `session`.
+pub fn dispatch(
+    session: &BridgeSession,
+    body: &str,
+    store: &CoordinationStoreState,
+    hooks: &BridgeHooks,
+) -> (u16, BridgeResponse) {
     let request: BridgeRequest = match serde_json::from_str(body) {
         Ok(request) => request,
-        Err(e) => return respond(400, BridgeResponse::err(format!("Bad bridge request: {e}"))),
+        Err(e) => return (400, BridgeResponse::err(format!("Bad bridge request: {e}"))),
     };
-    let response = execute(store, hooks, &session, request);
+    let response = execute(store, hooks, session, request);
     let code = if response.ok { 200 } else { 422 };
-    respond(code, response)
+    (code, response)
 }
 
 // ── Delegate lifecycle → journal ────────────────────────────────────────
@@ -751,6 +985,8 @@ pub struct DelegateRegistration<'a> {
     pub parent_run_id: Option<&'a str>,
     pub mission_id: Option<&'a str>,
     pub mission_task_id: Option<&'a str>,
+    /// sha256 of the secret minted for this session (see [`mint_session_secret`]).
+    pub secret_sha256: &'a str,
 }
 
 /// Register the Delegate as a coordination Run and bind its session, so the
@@ -827,6 +1063,7 @@ pub fn register_delegate(
             run_id: reg.run_id.to_string(),
             workspace_root: reg.workspace_root.to_string(),
             terminal: reg.mission_id.is_some(),
+            secret_sha256: reg.secret_sha256.to_string(),
         },
     );
     Ok(())
@@ -910,6 +1147,9 @@ fn set_state(
 mod tests {
     use super::*;
 
+    /// The secret every test session is minted with, unless a test says otherwise.
+    const SECRET: &str = "secret-of-convo-1";
+
     fn sandbox(label: &str) -> (std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!(
             "klide-bridge-{label}-{}-{}",
@@ -956,6 +1196,7 @@ mod tests {
                 parent_run_id: None,
                 mission_id: None,
                 mission_task_id: None,
+                secret_sha256: &secret_sha256(SECRET),
             },
         )
         .unwrap();
@@ -1031,6 +1272,7 @@ mod tests {
                 parent_run_id: None,
                 mission_id: None,
                 mission_task_id: None,
+                secret_sha256: &secret_sha256(SECRET),
             },
         )
         .expect("reopening an existing Run is not an error");
@@ -1082,6 +1324,7 @@ mod tests {
                 parent_run_id: None,
                 mission_id: None,
                 mission_task_id: None,
+                secret_sha256: &secret_sha256(SECRET),
             },
         )
         .unwrap();
@@ -1544,6 +1787,7 @@ mod tests {
                 parent_run_id: None,
                 mission_id: None,
                 mission_task_id: None,
+                secret_sha256: &secret_sha256(SECRET),
             },
         )
         .unwrap();
@@ -1567,6 +1811,7 @@ mod tests {
                 parent_run_id: None,
                 mission_id: Some("m1"),
                 mission_task_id: Some("t1"),
+                secret_sha256: &secret_sha256(SECRET),
             },
         )
         .unwrap();
@@ -1583,22 +1828,22 @@ mod tests {
         let sessions = bridge.sessions.clone();
         let list = r#"{"op":"list"}"#;
         let (code, _) =
-            handle_bridge_request("GET", "/coord/tok/convo-1:claude-code", list, "tok", &sessions, &store, &hooks);
+            handle_bridge_request("GET", "/coord/tok/convo-1:claude-code", Some(SECRET), list, "tok", &sessions, &store, &hooks);
         assert_eq!(code, 405);
         let (code, _) =
-            handle_bridge_request("POST", "/coord/nope/convo-1:claude-code", list, "tok", &sessions, &store, &hooks);
+            handle_bridge_request("POST", "/coord/nope/convo-1:claude-code", Some(SECRET), list, "tok", &sessions, &store, &hooks);
         assert_eq!(code, 403);
         let (code, body) =
-            handle_bridge_request("POST", "/coord/tok/stranger:codex", list, "tok", &sessions, &store, &hooks);
+            handle_bridge_request("POST", "/coord/tok/stranger:codex", Some(SECRET), list, "tok", &sessions, &store, &hooks);
         assert_eq!(code, 404);
         assert!(body.contains("not bound"));
         let (code, _) =
-            handle_bridge_request("POST", "/coord/tok/convo-1:claude-code", "{", "tok", &sessions, &store, &hooks);
+            handle_bridge_request("POST", "/coord/tok/convo-1:claude-code", Some(SECRET), "{", "tok", &sessions, &store, &hooks);
         assert_eq!(code, 400);
         // A request cannot smuggle an actor: the op vocabulary has no such field.
         let smuggled = r#"{"op":"send","from":{"type":"run","runId":"run_kit"},"toRunId":"run_kit","body":"hi"}"#;
         let (code, body) =
-            handle_bridge_request("POST", "/coord/tok/convo-1:claude-code", smuggled, "tok", &sessions, &store, &hooks);
+            handle_bridge_request("POST", "/coord/tok/convo-1:claude-code", Some(SECRET), smuggled, "tok", &sessions, &store, &hooks);
         assert_eq!(code, 200, "{body}");
         let snapshot = coordination::read_snapshot(&store, &root).unwrap();
         let envelope = &snapshot.envelopes.last().unwrap().envelope;
@@ -1609,7 +1854,7 @@ mod tests {
             }
         );
         let (code, body) =
-            handle_bridge_request("POST", "/coord/tok/convo-1:claude-code", r#"{"op":"read_result","runId":""}"#, "tok", &sessions, &store, &hooks);
+            handle_bridge_request("POST", "/coord/tok/convo-1:claude-code", Some(SECRET), r#"{"op":"read_result","runId":""}"#, "tok", &sessions, &store, &hooks);
         assert_eq!(code, 422);
         assert!(body.contains("requires runId"));
         let _ = std::fs::remove_dir_all(dir);
@@ -1636,6 +1881,7 @@ mod tests {
                     run_id: "convo-1".to_string(),
                     workspace_root: hooks_root.clone(),
                     terminal: false,
+                    secret_sha256: secret_sha256(SECRET),
                 })
             }),
         };
@@ -1664,6 +1910,7 @@ mod tests {
             let (code, body) = handle_bridge_request(
                 "POST",
                 "/coord/tok/convo-1:claude-code",
+                Some(SECRET),
                 list,
                 "tok",
                 &sessions,
@@ -1686,6 +1933,7 @@ mod tests {
         let (code, body) = handle_bridge_request(
             "POST",
             "/coord/tok/stranger:codex",
+            Some(SECRET),
             list,
             "tok",
             &sessions,
@@ -1704,6 +1952,7 @@ mod tests {
             bridge.sessions.clone(),
             store.clone(),
             Arc::new(BridgeHooks::silent()),
+            MAX_IN_FLIGHT,
         )
         .unwrap();
         let url = bridge_url(
@@ -1713,9 +1962,10 @@ mod tests {
             },
             "convo-1:claude-code",
         );
-        let client = reqwest::blocking::Client::new();
+        let client = test_client();
         let response: BridgeResponse = client
             .post(&url)
+            .header(SECRET_HEADER, SECRET)
             .json(&BridgeRequest::List)
             .send()
             .unwrap()
@@ -1723,6 +1973,293 @@ mod tests {
             .unwrap();
         assert!(response.ok);
         assert_eq!(response.value.unwrap()["runs"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Every socket test talks through a client that cannot hang the suite.
+    fn test_client() -> reqwest::blocking::Client {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .unwrap()
+    }
+
+    fn second_session(store: &CoordinationStoreState, bridge: &CoordinationBridgeState, root: &str) {
+        register_delegate(
+            store,
+            &BridgeHooks::silent(),
+            bridge,
+            DelegateRegistration {
+                session_id: "convo-2:codex",
+                run_id: "convo-2",
+                workspace_root: root,
+                task: None,
+                parent_run_id: None,
+                mission_id: None,
+                mission_task_id: None,
+                secret_sha256: &secret_sha256("secret-of-convo-2"),
+            },
+        )
+        .unwrap();
+    }
+
+    /// The loophole this credential closes: every MCP child knows the app
+    /// token, so before it a child could post to any other session's path and
+    /// act as that Run. Now the path names a session and only that session's
+    /// own secret opens it.
+    #[test]
+    fn a_session_answers_only_to_its_own_secret() {
+        let (dir, root) = sandbox("own-secret");
+        let (store, bridge, _session) = bound(&root);
+        second_session(&store, &bridge, &root);
+        let hooks = BridgeHooks::silent();
+        let sessions = bridge.sessions.clone();
+        let send = r#"{"op":"send","toRunId":"run_kit","body":"as whoever I like"}"#;
+        let before = coordination::read_snapshot(&store, &root).unwrap().envelopes.len();
+        for secret in [None, Some("guess"), Some("secret-of-convo-2"), Some("")] {
+            let (code, body) = handle_bridge_request(
+                "POST",
+                "/coord/tok/convo-1:claude-code",
+                secret,
+                send,
+                "tok",
+                &sessions,
+                &store,
+                &hooks,
+            );
+            assert_eq!(code, 401, "{secret:?}: {body}");
+            assert!(body.contains("Restart the Delegate"), "{body}");
+        }
+        assert_eq!(
+            coordination::read_snapshot(&store, &root).unwrap().envelopes.len(),
+            before,
+            "a refused call writes nothing"
+        );
+        // Each session's own secret still opens its own path, as itself.
+        for (path, secret, me) in [
+            ("/coord/tok/convo-1:claude-code", SECRET, "convo-1"),
+            ("/coord/tok/convo-2:codex", "secret-of-convo-2", "convo-2"),
+        ] {
+            let (code, body) =
+                handle_bridge_request("POST", path, Some(secret), send, "tok", &sessions, &store, &hooks);
+            assert_eq!(code, 200, "{body}");
+            let snapshot = coordination::read_snapshot(&store, &root).unwrap();
+            assert_eq!(
+                snapshot.envelopes.last().unwrap().envelope.from,
+                CoordinationActor::Run { run_id: me.into() }
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// After a restart the map is empty and the disk vouches for a session by
+    /// its secret's hash. A caller who names that session without its secret
+    /// must not get the binding — nor leave it behind for the next caller.
+    #[test]
+    fn a_recovered_session_is_remembered_only_for_its_own_secret() {
+        let (dir, root) = sandbox("recover-secret");
+        let store = CoordinationStoreState::default();
+        harness_peer(&store, &root, "convo-1");
+        let hooks_root = root.clone();
+        let hooks = BridgeHooks {
+            orchestrate: None,
+            on_change: Box::new(|_, _| {}),
+            is_live: Box::new(|_| false),
+            resolve_session: Box::new(move |_| {
+                Some(BridgeSession {
+                    run_id: "convo-1".to_string(),
+                    workspace_root: hooks_root.clone(),
+                    terminal: false,
+                    secret_sha256: secret_sha256(SECRET),
+                })
+            }),
+        };
+        let sessions: SessionMap = Default::default();
+        let list = r#"{"op":"list"}"#;
+        let path = "/coord/tok/convo-1:claude-code";
+        for secret in [None, Some("secret-of-convo-2")] {
+            let (code, body) =
+                handle_bridge_request("POST", path, secret, list, "tok", &sessions, &store, &hooks);
+            assert_eq!(code, 401, "{body}");
+            assert!(sessions.lock().unwrap().is_empty(), "nothing was bound");
+        }
+        let (code, body) =
+            handle_bridge_request("POST", path, Some(SECRET), list, "tok", &sessions, &store, &hooks);
+        assert_eq!(code, 200, "{body}");
+        assert!(sessions.lock().unwrap().contains_key("convo-1:claude-code"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A settled Run stays settled: its secret proves who is calling, not that
+    /// the Run may act again.
+    #[test]
+    fn a_recovered_session_whose_run_has_ended_is_not_bound() {
+        let (dir, root) = sandbox("recover-ended");
+        let store = CoordinationStoreState::default();
+        harness_peer(&store, &root, "attempt-7");
+        coordination::apply_coordination_command(
+            &store,
+            &root,
+            CoordinationCommand::SetRunState {
+                actor: CoordinationActor::Run { run_id: "attempt-7".into() },
+                run_id: "attempt-7".into(),
+                state: CoordinationRunState::Done,
+                reason: None,
+            },
+        )
+        .unwrap();
+        let hooks_root = root.clone();
+        let hooks = BridgeHooks {
+            orchestrate: None,
+            on_change: Box::new(|_, _| {}),
+            is_live: Box::new(|_| false),
+            resolve_session: Box::new(move |_| {
+                Some(BridgeSession {
+                    run_id: "attempt-7".to_string(),
+                    workspace_root: hooks_root.clone(),
+                    terminal: true,
+                    secret_sha256: secret_sha256(SECRET),
+                })
+            }),
+        };
+        let sessions: SessionMap = Default::default();
+        let (code, body) = handle_bridge_request(
+            "POST",
+            "/coord/tok/attempt-7:codex",
+            Some(SECRET),
+            r#"{"op":"list"}"#,
+            "tok",
+            &sessions,
+            &store,
+            &hooks,
+        );
+        assert_eq!(code, 404, "{body}");
+        assert!(body.contains("has ended"), "{body}");
+        assert!(sessions.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_bridge_serves_at_most_its_cap_at_once() {
+        let (dir, root) = sandbox("cap");
+        let (store, bridge, _session) = bound(&root);
+        let server = start_bridge_server(
+            bridge.sessions.clone(),
+            store.clone(),
+            Arc::new(BridgeHooks::silent()),
+            2,
+        )
+        .unwrap();
+        let url = bridge_url(
+            &BridgeEndpoint {
+                port: server.port,
+                token: server.token.clone(),
+            },
+            "convo-1:claude-code",
+        );
+        let wait = BridgeRequest::Wait {
+            from_run_id: None,
+            reply_to: None,
+            timeout_seconds: Some(3),
+        };
+        let blocked: Vec<_> = (0..2)
+            .map(|_| {
+                let (url, wait) = (url.clone(), wait.clone());
+                std::thread::spawn(move || {
+                    test_client()
+                        .post(&url)
+                        .header(SECRET_HEADER, SECRET)
+                        .json(&wait)
+                        .send()
+                        .unwrap()
+                        .status()
+                        .as_u16()
+                })
+            })
+            .collect();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while server.in_flight.load(Ordering::SeqCst) < 2 {
+            assert!(Instant::now() < deadline, "the two waits never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let third = test_client()
+            .post(&url)
+            .header(SECRET_HEADER, SECRET)
+            .json(&wait)
+            .send()
+            .unwrap();
+        assert_eq!(third.status().as_u16(), 503);
+        for waiter in blocked {
+            assert_eq!(waiter.join().unwrap(), 200);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.in_flight.load(Ordering::SeqCst) != 0 {
+            assert!(Instant::now() < deadline, "slots come back");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Raw HTTP, so the test controls exactly what is (not) sent after the
+    /// headers.
+    fn raw_status(port: u16, head: &str) -> (String, std::net::TcpStream) {
+        use std::io::{BufRead, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).unwrap();
+        stream.write_all(head.as_bytes()).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        (line, stream)
+    }
+
+    /// A rejected caller is answered from its headers: the body is never
+    /// awaited, a claimed-huge body is never buffered, and neither holds up
+    /// the next caller.
+    #[test]
+    fn a_rejected_caller_is_answered_without_reading_its_body() {
+        let (dir, root) = sandbox("no-body");
+        let (store, bridge, _session) = bound(&root);
+        let server = start_bridge_server(
+            bridge.sessions.clone(),
+            store.clone(),
+            Arc::new(BridgeHooks::silent()),
+            MAX_IN_FLIGHT,
+        )
+        .unwrap();
+        let port = server.port;
+        let path = "/coord/nope/convo-1:claude-code";
+        // Declares an exabyte and sends none of it.
+        let (line, _huge) = raw_status(
+            port,
+            &format!("POST {path} HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000000000000000\r\n\r\n"),
+        );
+        assert!(line.contains(" 413"), "{line}");
+        // Declares more than tiny_http buffers and never sends it.
+        let (line, _stalled) = raw_status(
+            port,
+            &format!("POST {path} HTTP/1.1\r\nHost: x\r\nContent-Length: 4096\r\n\r\n"),
+        );
+        assert!(line.contains(" 403"), "{line}");
+        // Both callers still hold their connections open; the door still works.
+        let url = bridge_url(
+            &BridgeEndpoint {
+                port,
+                token: server.token.clone(),
+            },
+            "convo-1:claude-code",
+        );
+        let ok: BridgeResponse = test_client()
+            .post(&url)
+            .header(SECRET_HEADER, SECRET)
+            .json(&BridgeRequest::List)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert!(ok.ok, "{ok:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

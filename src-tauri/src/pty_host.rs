@@ -186,6 +186,11 @@ pub struct ScrollbackMeta {
     /// the hosting process disappeared before it could observe a real exit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_outcome: Option<PtyExitOutcome>,
+    /// sha256 of the secret this spawn's MCP child presents to the bridge.
+    /// `None` for a session with no coordination wiring — or one spawned
+    /// before per-session secrets, which the bridge will not recover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coord_secret_sha256: Option<String>,
 }
 
 /// Session ids contain `:` (and whatever a convo id holds) — flatten to a
@@ -276,6 +281,8 @@ fn upsert_scrollback_meta(dir: &Path, meta: ScrollbackMeta) {
             started_ms: prev.started_ms.min(meta.started_ms),
             ended_ms: None,
             exit_outcome: None,
+            // Never inherited: each spawn has its own secret, or none.
+            coord_secret_sha256: meta.coord_secret_sha256,
         },
         None => meta,
     };
@@ -415,6 +422,9 @@ pub struct SpawnSpec {
     /// same registry (`delegate::lookup`) at spawn — a bool travels the
     /// daemon wire, a closure cannot.
     pub detect_session_id: bool,
+    /// sha256 of the session's coordination-bridge secret, persisted in the
+    /// meta so the bridge can recognise the child after an app restart.
+    pub coord_secret_sha256: Option<String>,
 }
 
 struct HostedSession {
@@ -594,6 +604,7 @@ impl SessionHost {
                     started_ms,
                     ended_ms: None,
                     exit_outcome: None,
+                    coord_secret_sha256: spec.coord_secret_sha256.clone(),
                 },
             );
         }
@@ -954,6 +965,46 @@ mod tests {
 
     // ── Scrollback persistence ────────────────────────────────────────────
 
+    struct NullSink;
+
+    impl PtyEventSink for NullSink {
+        fn chunk(&self, _: &str, _: &str, _: u64) {}
+        fn exit(&self, _: &str, _: &PtyExitOutcome) {}
+        fn external_id(&self, _: &str, _: &str) {}
+    }
+
+    /// The bridge recognises a child after an app restart by the hash in its
+    /// spawn record, so a spawn must write it there.
+    #[test]
+    fn a_spawn_records_its_coordination_secret_hash() {
+        let dir = temp_scroll_dir("secret-hash");
+        let sid = "convo-5:claude-code";
+        let host = SessionHost::default();
+        host.spawn(
+            SpawnSpec {
+                session_id: sid.to_string(),
+                provider: "claude-code".to_string(),
+                cwd: None,
+                command: "exit 0".to_string(),
+                env: Vec::new(),
+                task: None,
+                model: None,
+                resume_session_id: None,
+                mission_link: None,
+                detect_session_id: false,
+                coord_secret_sha256: Some("feedface".to_string()),
+            },
+            Some(dir.clone()),
+            Arc::new(NullSink),
+        )
+        .unwrap();
+        assert_eq!(meta_for(&dir, sid).coord_secret_sha256.as_deref(), Some("feedface"));
+        // A later spawn without wiring must not inherit the old hash.
+        upsert_scrollback_meta(&dir, spawn_meta(sid, "claude-code", 9_000));
+        assert!(meta_for(&dir, sid).coord_secret_sha256.is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
     fn temp_scroll_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "klide-scrollback-{name}-{}-{}",
@@ -981,6 +1032,7 @@ mod tests {
             started_ms,
             ended_ms: None,
             exit_outcome: None,
+            coord_secret_sha256: None,
         }
     }
 
