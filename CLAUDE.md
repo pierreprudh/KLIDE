@@ -524,17 +524,26 @@ There are two doors onto that one journal, and no third:
   `OPENCODE_CONFIG`). The MCP child owns nothing: it relays each call over
   loopback to `coordination_bridge.rs` in the app, which looks the PTY session
   up in a map filled at spawn to learn which Run id and Workspace the call acts
-  as. No tool argument can name an actor or a journal path. The bridge is a
-  separate listener from the status hook server because an `agent_wait` blocks
-  for up to two minutes; each request gets its own thread.
+  as. No tool argument can name an actor or a journal path. The app token
+  only proves a caller is some child of this app; each session also proves
+  *which* child with its own secret, minted at wiring time into a 0600 file
+  the child is told the path of (never the value — MCP configs and Codex's
+  argv are readable), and checked against the sha256 the bridge keeps. The
+  bridge is a separate listener from the status hook server because an
+  `agent_wait` blocks for up to two minutes; an authenticated request gets its
+  own thread, at most 64 at once, and nothing reads a body before the caller
+  has proved its session.
 
 Nothing durable holds a port. A Delegate PTY is hosted by the ptyd daemon and
 outlives the app, so the child is told a *path* and a session id, never a URL:
 it reads the live port and token from `coordination-endpoint.json` in the app
 data dir on every call, and the bridge rebuilds a session it never bound from
-that session's scrollback metadata (`BridgeHooks::resolve_session`). A restart
-therefore keeps a running CLI's agent tools working, and a session that
-recorded an exit is never recovered.
+that session's scrollback metadata (`BridgeHooks::resolve_session`), which
+records the secret's hash, not the secret. The bridge starts at boot so the
+endpoint file is fresh before a surviving CLI calls. A restart therefore keeps
+a running CLI's agent tools working; a session that recorded an exit, whose
+Run the journal has settled, or that was spawned before per-session secrets
+is never recovered (the last is told to restart).
 
 A Delegate registers as a `delegate` Run in `delegate_pty_spawn`, its status
 hooks move its state, and PTY exit settles it. A Focus conversation on a
