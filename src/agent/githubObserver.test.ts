@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { githubObserverLabel, githubObserverDetail, type GithubObserver } from "./githubObserver";
+import { githubObserverLabel, githubObserverDetail, githubObserverDuration, type GithubObserver } from "./githubObserver";
 const run = { status: "completed", conclusion: "success", prState: "open" } as GithubObserver;
+it("uses the elapsed span of parallel checks and hides unavailable durations", () => {
+  const job = { name: "test", status: "completed", conclusion: "success", startedAt: "2026-09-24T10:00:00Z", completedAt: "2026-09-24T10:02:43Z" };
+  const watch = { ...run, jobs: [job, { ...job, completedAt: "2026-09-24T10:01:00Z" }] };
+  expect(githubObserverDuration(watch)).toBe("2m 43s");
+  expect(githubObserverDuration({ ...watch, status: "in_progress" })).toBeNull();
+  expect(githubObserverDuration({ ...run, jobs: [{ ...job, completedAt: null }] })).toBeNull();
+  expect(githubObserverDuration({ ...run, jobs: [] })).toBeNull();
+});
 describe("GitHub observer outcomes", () => {
   it("never treats a cancelled, skipped, or neutral run as a pass", () => {
     expect(githubObserverLabel({ ...run, conclusion: "cancelled" })).toBe("Checks cancelled");

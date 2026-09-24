@@ -1173,7 +1173,7 @@ pub fn ci_watch_status(cwd: &str, target: CiWatchTarget) -> Result<serde_json::V
     let attempt = run["run_attempt"].as_u64().ok_or("Missing run attempt")?;
     let jobs_endpoint = format!("{endpoint}/attempts/{attempt}/jobs?per_page=100");
     let pages: Vec<serde_json::Value> = serde_json::from_str(&gh_output(cwd, &["api", &jobs_endpoint, "--paginate", "--slurp"])?) .map_err(|e| e.to_string())?;
-    let jobs: Vec<_> = pages.iter().flat_map(|page| page["jobs"].as_array().into_iter().flatten()).map(|j| serde_json::json!({"name":j["name"],"status":j["status"],"conclusion":j["conclusion"]})).collect();
+    let jobs: Vec<_> = pages.iter().flat_map(|page| page["jobs"].as_array().into_iter().flatten()).map(|j| serde_json::json!({"name":j["name"],"status":j["status"],"conclusion":j["conclusion"],"startedAt":j["started_at"],"completedAt":j["completed_at"]})).collect();
     let mut pr_number = run["pull_requests"].as_array().and_then(|prs| prs.first()).and_then(|p| p["number"].as_u64());
     // GitHub sometimes omits pull_requests (including after merge). Ask for
     // PRs associated with the exact SHA and require a unique branch/repo match.
