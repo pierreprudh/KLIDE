@@ -2,7 +2,7 @@ import { LinkMark } from "../linkMark";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Observer } from "../../agent/observers";
-import { githubObserverLabel, githubObserverDetail, readGithubObserver, type GithubObserver } from "../../agent/githubObserver";
+import { githubObserverLabel, githubObserverDetail, githubObserverDuration, readGithubObserver, type GithubObserver } from "../../agent/githubObserver";
 import { openGitPr } from "../../gitNavigation";
 import { openExternal } from "../../externalLink";
 import { notify } from "../../toast";
@@ -38,6 +38,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
   const label = stopped ? "Watching stopped" : stale ? "Status unavailable" : watch ? githubObserverLabel(watch) : "Checking GitHub…";
   const prLabel = watch?.prNumber ? `PR #${watch.prNumber}` : `Run #${observer.githubWatch?.runId}`;
   const detail = watch && !stale && !stopped ? githubObserverDetail(watch) : "";
+  const duration = watch && !stale && !stopped ? githubObserverDuration(watch) : null;
   const state = watch?.prState === "merged" ? "PR merged" : watch?.prState === "closed" ? "PR closed" : watch?.prHeadSha && watch.prHeadSha !== watch.headSha ? "Earlier commit" : "";
   const tone = label === "Checks failed" ? "failed" : label === "Checks passed" || state === "PR merged" ? "passed" : "neutral";
   const openOnline = () => {
@@ -49,7 +50,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
     <div className="github-observer-content">
       <div className="github-observer-line" role="status" aria-live="polite">
         <span className="github-observer-status">{label}{detail && <small className="github-observer-detail">{detail}</small>}</span>
-        <span className="github-observer-state">{state}</span>
+        <span className="github-observer-state">{state}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
       </div>
       <div className="github-observer-actions">
         {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)}>Open in Git panel ↗</button>}
