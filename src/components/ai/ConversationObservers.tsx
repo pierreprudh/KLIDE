@@ -8,6 +8,7 @@ import { DotGridLoader } from "./icons";
 import { useElapsed } from "./WorkingRow";
 import { createPortal } from "react-dom";
 import type { Msg } from "./types";
+import { mergeObserverCards } from "../../agent/observerCards";
 
 export function observerMessageIndex(msgs: Msg[], id: string): number | null {
   const start = msgs.findIndex(msg => msg.role === "tool" && msg.toolName === "run_command" && msg.content.startsWith("Watching `") && msg.content.includes(` as \`${id}\`.`));
@@ -31,13 +32,13 @@ export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPres
   /** False means a local turn is still cleaning up; try after it releases. */
   onFollowup: () => boolean;
 }) {
-  const [observers, setObservers] = useState<Observer[]>([]);
+  const [observers, setObservers] = useState<Observer[]>(() => mergeObserverCards(runId, []));
   const follow = useRef(onFollowup);
   follow.current = onFollowup;
   const hasGithub = observers.some(observer => observer.githubWatch);
   useEffect(() => { onGithubPresence?.(runId, hasGithub); }, [runId, hasGithub, onGithubPresence]);
   useEffect(() => {
-    setObservers([]);
+    setObservers(mergeObserverCards(runId, []));
     let alive = true;
     let pending = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -54,7 +55,7 @@ export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPres
       try {
         const rows = await listObservers(runId);
         if (!alive) return;
-        setObservers(rows);
+        setObservers(mergeObserverCards(runId, rows));
         if (pending && follow.current()) pending = false;
       } catch { /* Browser previews have no native observer registry. */ }
       if (alive) timer = setTimeout(() => void refresh(), 1000);

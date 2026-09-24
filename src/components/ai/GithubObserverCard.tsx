@@ -6,15 +6,16 @@ import { githubObserverLabel, githubObserverDetail, githubObserverDuration, read
 import { openGitPr } from "../../gitNavigation";
 import { openExternal } from "../../externalLink";
 import { notify } from "../../toast";
+import { readObserverCards, saveObserverCard } from "../../agent/observerCards";
 
 /** Polls only while mounted. The native observer still owns the completion
  * notification, including when the user navigates away from this conversation. */
 export type ObserverSidebar = { target: HTMLElement | null; folded: boolean; onUnfold: () => void };
 
 export function GithubObserverCard({ observer, runId, onStop, sidebar }: { observer: Observer; runId: string; onStop: () => void; sidebar?: ObserverSidebar }) {
-  const [watch, setWatch] = useState<GithubObserver | null>(null);
+  const [watch, setWatch] = useState<GithubObserver | null>(() => readObserverCards(runId).find(card => card.observer.id === observer.id)?.watch ?? null);
   const [stale, setStale] = useState(false);
-  const running = observer.status.state === "running";
+  const running = !observer.restored && observer.status.state === "running";
   const stopped = observer.status.state === "signalled";
   useEffect(() => {
     let alive = true;
@@ -25,6 +26,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
         const next = await readGithubObserver(runId, observer.id);
         if (!alive) return;
         setWatch(next); setStale(false);
+        saveObserverCard(runId, observer, next);
         if (!stopped && (running || next.status !== "completed") && (running || retries++ < 3)) timer = setTimeout(refresh, 8000);
       } catch {
         if (!alive) return;
@@ -32,10 +34,10 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
         if (!stopped && (running || retries++ < 3)) timer = setTimeout(refresh, 15000);
       }
     }
-    if (!stopped) void refresh();
+    if (!stopped && !observer.restored) void refresh();
     return () => { alive = false; clearTimeout(timer); };
-  }, [runId, observer.id, running, stopped]);
-  const label = stopped ? "Watching stopped" : stale ? "Status unavailable" : watch ? githubObserverLabel(watch) : "Checking GitHub…";
+  }, [runId, observer.id, observer.restored, running, stopped]);
+  const label = stopped ? "Watching stopped" : stale ? "Status unavailable" : watch ? githubObserverLabel(watch) : observer.restored ? "Status unavailable" : "Checking GitHub…";
   const prLabel = watch?.prNumber ? `PR #${watch.prNumber}` : `Run #${observer.githubWatch?.runId}`;
   const detail = watch && !stale && !stopped ? githubObserverDetail(watch) : "";
   const duration = watch && !stale && !stopped ? githubObserverDuration(watch) : null;
@@ -50,7 +52,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
     <div className="github-observer-content">
       <div className="github-observer-line" role="status" aria-live="polite">
         <span className="github-observer-status">{label}{detail && <small className="github-observer-detail">{detail}</small>}</span>
-        <span className="github-observer-state">{state}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
+        <span className="github-observer-state">{state}{observer.restored && <small className="github-observer-detail" title="Saved GitHub status; the original watcher is no longer running">Last known</small>}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
       </div>
       <div className="github-observer-actions">
         {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)}>Open in Git panel ↗</button>}
