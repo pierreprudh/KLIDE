@@ -22,15 +22,15 @@ function Preview() {
   return <main style={{ padding: "40px 20px", maxWidth: 1200, margin: "auto", fontFamily: "var(--font-ui)", color: "var(--fg)" }}>
     <p>Production card · simulated GitHub data</p>
     <nav>{["running", "passed", "failed"].map(value => <button key={value} onClick={() => { state = value; setMode(value); }}>{value}</button>)}</nav>
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 24, marginTop: 24 }}>
-    <div style={{ height: 440, overflowY: "auto", paddingRight: 8 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 24, marginTop: 24 }}>
+    <div style={{ maxHeight: 440, overflowY: "auto" }}>
     <p>I’m watching PR #120. You can keep working here.</p>
     <GithubObserverCard key={mode} runId="preview" sidebar={{ target: sidebarTarget, folded, onUnfold: () => setFolded(false) }} observer={{ id: "fixture", command: "gh run watch 35927357206 --exit-status", githubWatch: { runId: 35927357206, repo: null }, status: mode === "stopped" ? { state: "signalled" } : mode === "running" ? { state: "running" } : { state: "exited", code: mode === "failed" ? 1 : 0 }, startedMs: Date.now(), endedMs: null, notifyOnExit: true }} onStop={() => setMode("stopped")} />
     <p role="status">{destination}</p>
     <button onClick={() => setContinued(true)}>Continue conversation</button>
     {continued && <div style={{ height: 600, paddingTop: 100 }}>More conversation… scroll here while the watcher stays on the right.</div>}
     </div>
-    <aside aria-label="Conversation side panel"><button onClick={() => setFolded(value => !value)}>{folded ? "Open side panel" : "Fold side panel"}</button><div ref={setSidebarTarget} className="github-observer-sidebar-slot" style={{ marginTop: 16 }} /></aside>
+    <aside aria-label="Conversation side panel" style={{ width: 280 }}><button onClick={() => setFolded(value => !value)}>{folded ? "Open side panel" : "Fold side panel"}</button><div ref={setSidebarTarget} className="github-observer-sidebar-slot" style={{ marginTop: 16 }} /></aside>
     </div>
   </main>;
 }
