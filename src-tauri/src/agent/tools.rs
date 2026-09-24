@@ -13,6 +13,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
+use tokio_util::sync::CancellationToken;
 
 // ── Per-run file snapshot store (omp's `#tag` staleness guard, lite) ──────
 // Records the content hash of every file the model has read or written, keyed
@@ -1965,12 +1966,40 @@ fn truncate_middle(body: &str, max_bytes: usize) -> String {
 /// chatty build can't blow the context window. The result is `ok: true` only on
 /// a zero exit so the model can tell success from failure.
 ///
-/// Convenience wrapper that runs in the workspace root. Production paths call
-/// `run_command_capture_in` with an explicit cwd (dynamic tools may set one);
-/// this root-cwd form is used by the eval harness and tool tests.
+/// Convenience wrapper that runs in the workspace root with nothing able to
+/// cancel it. Production paths call `run_command_capture_in` with an explicit
+/// cwd and the Run's cancellation; this form is used by the eval harness and
+/// tool tests.
 #[allow(dead_code)]
 pub async fn run_command_capture(root: &str, command: &str, timeout_secs: u64) -> ToolResult {
-    run_command_capture_in(root, root, command, timeout_secs).await
+    match run_command_capture_in(root, root, command, timeout_secs, &CancellationToken::new()).await {
+        CommandRun::Done(result) => result,
+        // Unreachable: nobody holds this token.
+        CommandRun::Cancelled => err("Command was cancelled.".to_string()),
+    }
+}
+
+/// How a foreground command ended, as the Command arm needs to know it: a
+/// result for the model, or the Run's Stop — which is the loop's to settle,
+/// not a tool result to hand back.
+#[derive(Debug)]
+pub enum CommandRun {
+    Done(ToolResult),
+    Cancelled,
+}
+
+/// Where each foreground stream is kept while the command runs. Generous — the
+/// model only ever sees `MAX_OUTPUT` of it — but a bound: `yes` cannot take the
+/// app's memory with it any more.
+const FOREGROUND_CAPTURE: usize = 4 * 1024 * 1024;
+
+/// Resolve a command's cwd against the workspace — the one rule both the
+/// foreground and background paths use, with the error text they share.
+pub fn resolve_command_dir(root: &str, cwd: &str) -> Result<PathBuf, String> {
+    // Go through Workspace so the run dir honors the same root invariant the
+    // file tools use (and fails clearly if no workspace is open).
+    let ws = Workspace::new(root).map_err(|e| format!("Cannot run command: {e}"))?;
+    resolve_command_cwd(&ws, cwd).map_err(|e| format!("Cannot run command: {e}"))
 }
 
 pub async fn run_command_capture_in(
@@ -1978,79 +2007,91 @@ pub async fn run_command_capture_in(
     cwd: &str,
     command: &str,
     timeout_secs: u64,
-) -> ToolResult {
-    const MAX_OUTPUT: usize = 16_000;
-    // Go through Workspace so the run dir honors the same root invariant the
-    // file tools use (and fails clearly if no workspace is open).
-    let ws = match Workspace::new(root) {
-        Ok(ws) => ws,
-        Err(e) => return err(format!("Cannot run command: {e}")),
-    };
-    let cwd = match resolve_command_cwd(&ws, cwd) {
+    cancel: &CancellationToken,
+) -> CommandRun {
+    let cwd = match resolve_command_dir(root, cwd) {
         Ok(cwd) => cwd,
-        Err(e) => return err(format!("Cannot run command: {e}")),
+        Err(e) => return CommandRun::Done(err(e)),
     };
-    // `kill_on_drop(true)` + a timeout around `wait_with_output` means a command
-    // that never exits (a dev server, a watch task, an interactive prompt) is
-    // killed when the timeout future is dropped — the run can't hang forever.
-    let spawned = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn();
-    let child = match spawned {
-        Ok(c) => c,
-        Err(e) => return err(format!("Failed to run command: {e}")),
+    // A command that never exits (a dev server, a watch task, an interactive
+    // prompt) is stopped by the timer, and Stop reaches it mid-command — both
+    // kill its whole process group, so a `cmd &` inside it goes too.
+    let process = match super::process::spawn(super::process::SpawnSpec {
+        command,
+        cwd: &cwd,
+        capture: super::process::Capture::Split { cap_each: FOREGROUND_CAPTURE },
+    }) {
+        Ok(process) => process,
+        Err(e) => return CommandRun::Done(err(e.replace("Failed to start command", "Failed to run command"))),
     };
-    let output = match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        child.wait_with_output(),
-    )
-    .await
-    {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return err(format!("Failed to run command: {e}")),
-        Err(_) => {
-            return err(format!(
+    let waited = process
+        .wait_until(std::time::Duration::from_secs(timeout_secs), cancel)
+        .await;
+    let code = match waited {
+        super::process::Waited::Cancelled => return CommandRun::Cancelled,
+        super::process::Waited::TimedOut => {
+            // What it printed before the timer is often the reason it hung (a
+            // prompt, a stuck test) — hand it back instead of throwing it away.
+            let body = format_command_output(&process);
+            let mut content = format!(
                 "Command timed out after {timeout_secs}s and was stopped. \
                  If it legitimately needs longer, raise the command timeout in \
                  Settings → Harness; otherwise run a faster, non-interactive command."
-            ))
+            );
+            if let Some(body) = body {
+                content.push_str("\n\nOutput before it was stopped:\n");
+                content.push_str(&body);
+            }
+            return CommandRun::Done(err(content));
         }
+        super::process::Waited::Exited(finished) => match finished.exit {
+            super::process::Exit::Code(code) => Some(code),
+            super::process::Exit::Signalled => None,
+        },
     };
-    let code = output.status.code();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut body = String::new();
-    if !stdout.trim().is_empty() {
-        body.push_str(stdout.trim_end());
-    }
-    if !stderr.trim().is_empty() {
-        if !body.is_empty() {
-            body.push('\n');
-        }
-        body.push_str("stderr:\n");
-        body.push_str(stderr.trim_end());
-    }
-    if body.is_empty() {
-        body.push_str("(no output)");
-    }
-    if body.len() > MAX_OUTPUT {
-        body = truncate_middle(&body, MAX_OUTPUT);
-    }
+    let body = format_command_output(&process).unwrap_or_else(|| "(no output)".to_string());
     let header = match code {
         Some(0) => "Command succeeded (exit 0).".to_string(),
         Some(c) => format!("Command failed (exit {c})."),
         None => "Command terminated by a signal.".to_string(),
     };
-    ToolResult {
+    CommandRun::Done(ToolResult {
         ok: code == Some(0),
         content: format!("{header}\n\n{body}"),
         metadata: None,
+    })
+}
+
+/// stdout, then stderr under its own heading, cut to what the model can use.
+/// `None` when the command printed nothing.
+fn format_command_output(process: &super::process::ProcessHandle) -> Option<String> {
+    const MAX_OUTPUT: usize = 16_000;
+    let (stdout, stderr) = process.split_output();
+    let mut body = String::new();
+    let dropped = stdout.dropped + stderr.dropped;
+    if dropped > 0 {
+        // The capture ring let go of the oldest bytes. Say so rather than let
+        // the head of the output read as the start of the command's.
+        body.push_str(&format!("({dropped} bytes of earlier output not retained)\n"));
     }
+    let printed = body.len();
+    if !stdout.text.trim().is_empty() {
+        body.push_str(stdout.text.trim_end());
+    }
+    if !stderr.text.trim().is_empty() {
+        if body.len() > printed {
+            body.push('\n');
+        }
+        body.push_str("stderr:\n");
+        body.push_str(stderr.text.trim_end());
+    }
+    if body.is_empty() {
+        return None;
+    }
+    if body.len() > MAX_OUTPUT {
+        body = truncate_middle(&body, MAX_OUTPUT);
+    }
+    Some(body)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -3959,6 +4000,83 @@ mod tests {
             "timeout surfaced: {}",
             slow.content
         );
+    }
+
+    fn command_test_root(tag: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("klide-runcmd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.to_string_lossy().into_owned()
+    }
+
+    /// What a hung command printed is usually why it hung. The timeout result
+    /// keeps it instead of reporting only that the timer fired.
+    #[tokio::test]
+    async fn timed_out_result_includes_partial_output() {
+        let root = command_test_root("timeout-tail");
+        let slow = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            run_command_capture(&root, "echo waiting-for-input; sleep 30", 1),
+        )
+        .await
+        .expect("the timer must stop the command");
+        assert!(!slow.ok);
+        assert!(slow.content.starts_with("Command timed out after 1s and was stopped."));
+        assert!(slow.content.contains("waiting-for-input"), "tail kept: {}", slow.content);
+    }
+
+    /// Stop mid-command returns at once as a cancellation, not as a result the
+    /// model would read after the command's own timer.
+    #[tokio::test]
+    async fn cancelled_command_returns_promptly_as_cancelled() {
+        let root = command_test_root("cancel");
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            trigger.cancel();
+        });
+        let began = std::time::Instant::now();
+        let run = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            run_command_capture_in(&root, &root, "sleep 60", 120, &cancel),
+        )
+        .await
+        .expect("Stop must reach a running command");
+        assert!(matches!(run, CommandRun::Cancelled), "{run:?}");
+        assert!(began.elapsed() < std::time::Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn overflowing_output_says_how_much_was_not_retained() {
+        let root = command_test_root("overflow");
+        let big = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_command_capture(&root, "yes | head -c 6000000", 20),
+        )
+        .await
+        .expect("bounded output must not hang");
+        assert!(big.ok, "{}", &big.content[..200.min(big.content.len())]);
+        let dropped = 6_000_000 - FOREGROUND_CAPTURE;
+        assert!(
+            big.content.contains(&format!("({dropped} bytes of earlier output not retained)")),
+            "{}",
+            &big.content[..200.min(big.content.len())]
+        );
+        assert!(big.content.len() < 17_000);
+    }
+
+    /// Background and foreground resolve a cwd through one rule, so a missing
+    /// directory fails with the same words on both paths.
+    #[tokio::test]
+    async fn missing_cwd_fails_with_the_shared_message() {
+        let root = command_test_root("cwd");
+        let resolved = resolve_command_dir(&root, "no-such-dir").unwrap_err();
+        assert!(resolved.starts_with("Cannot run command:"), "{resolved}");
+        let fg = run_command_capture_in(&root, "no-such-dir", "true", 5, &CancellationToken::new()).await;
+        let CommandRun::Done(fg) = fg else { panic!("not cancelled") };
+        assert_eq!(fg.content, resolved);
+        assert!(resolve_command_dir(&root, "workspace").unwrap().is_dir());
     }
 
     /// The verdict of a command lives at the end of its output. A head-only cut
