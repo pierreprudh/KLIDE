@@ -1,6 +1,7 @@
 mod approval_store;
 mod artifacts;
 mod background;
+mod process;
 mod observers;
 mod command_allowlist;
 mod conversation_search;
