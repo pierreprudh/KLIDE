@@ -15,13 +15,23 @@ let state = "running";
 function Preview() {
   const [mode, setMode] = useState("running");
   const [destination, setDestination] = useState("");
+  const [sidebarTarget, setSidebarTarget] = useState<HTMLDivElement | null>(null);
+  const [folded, setFolded] = useState(false);
+  const [continued, setContinued] = useState(false);
   registerGitOpener(target => setDestination(`Git panel · PR #${target.pr}`));
-  return <main style={{ padding: "40px 20px", maxWidth: 720, margin: "auto", fontFamily: "var(--font-ui)", color: "var(--fg)" }}>
+  return <main style={{ padding: "40px 20px", maxWidth: 1200, margin: "auto", fontFamily: "var(--font-ui)", color: "var(--fg)" }}>
     <p>Production card · simulated GitHub data</p>
     <nav>{["running", "passed", "failed"].map(value => <button key={value} onClick={() => { state = value; setMode(value); }}>{value}</button>)}</nav>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 24, marginTop: 24 }}>
+    <div style={{ height: 440, overflowY: "auto", paddingRight: 8 }}>
     <p>I’m watching PR #120. You can keep working here.</p>
-    <GithubObserverCard key={mode} runId="preview" observer={{ id: "fixture", command: "gh run watch 35927357206 --exit-status", githubWatch: { runId: 35927357206, repo: null }, status: mode === "stopped" ? { state: "signalled" } : mode === "running" ? { state: "running" } : { state: "exited", code: mode === "failed" ? 1 : 0 }, startedMs: Date.now(), endedMs: null, notifyOnExit: true }} onStop={() => setMode("stopped")} />
+    <GithubObserverCard key={mode} runId="preview" sidebar={{ target: sidebarTarget, folded, onUnfold: () => setFolded(false) }} observer={{ id: "fixture", command: "gh run watch 35927357206 --exit-status", githubWatch: { runId: 35927357206, repo: null }, status: mode === "stopped" ? { state: "signalled" } : mode === "running" ? { state: "running" } : { state: "exited", code: mode === "failed" ? 1 : 0 }, startedMs: Date.now(), endedMs: null, notifyOnExit: true }} onStop={() => setMode("stopped")} />
     <p role="status">{destination}</p>
+    <button onClick={() => setContinued(true)}>Continue conversation</button>
+    {continued && <div style={{ height: 600, paddingTop: 100 }}>More conversation… scroll here while the watcher stays on the right.</div>}
+    </div>
+    <aside aria-label="Conversation side panel"><button onClick={() => setFolded(value => !value)}>{folded ? "Open side panel" : "Fold side panel"}</button><div ref={setSidebarTarget} className="github-observer-sidebar-slot" style={{ marginTop: 16 }} /></aside>
+    </div>
   </main>;
 }
 createRoot(document.getElementById("root")!).render(<Preview />);

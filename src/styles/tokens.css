@@ -9059,7 +9059,12 @@ button:focus-visible .menu-leadout {
 }
 
 /* A conversation's GitHub observer: identity, status, and two destinations. */
-.github-observer { display:flex; align-items:center; gap:17px; padding:18px 21px; margin:10px 0; border:1px solid var(--border); border-radius:16px; background:var(--bg-elevated); max-width:560px; }
+.github-observer { display:flex; align-items:center; gap:17px; padding:18px 21px; margin:10px 0; border:1px solid var(--border); border-radius:16px; background:var(--bg-elevated); width:100%; min-width:0; box-sizing:border-box; }
+.github-observer-sidebar-slot { display:flex; flex-direction:column; gap:10px; flex-shrink:0; }
+.github-observer-sidebar-slot:empty { display:none; }
+.github-observer-sidebar { pointer-events:auto; margin:0; padding:14px; gap:12px; }
+.github-observer-sidebar .github-observer-line { overflow-wrap:anywhere; }
+.github-observer-mark { pointer-events:auto; align-self:flex-end; display:grid; place-items:center; width:44px; height:44px; border:1px solid var(--border); border-radius:14px; background:var(--bg-elevated); cursor:pointer; }
 .github-observer-logo { width:36px; height:36px; flex-shrink:0; }
 .github-observer-line { display:flex; align-items:center; flex-wrap:wrap; gap:9px; font-size:13px; color:var(--fg); }
 .github-observer-meta { color:var(--fg-dim); font-size:12px; }

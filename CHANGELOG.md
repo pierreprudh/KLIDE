@@ -2,6 +2,7 @@
 
 ## GitHub observer cards (2026-09-24)
 
+- Watcher cards fill the conversation width and also stay in Focus's right-side panel, sharing the same live status. Closing the panel leaves a GitHub icon to reopen the watcher.
 - Plain `gh run watch <id> --exit-status` observers now show a compact GitHub card in the conversation, refreshing the pinned run's checks every eight seconds while visible. Completion still wakes the original conversation through the native observer.
 - Cards link to GitHub and open the associated PR directly in Git Review. Failed checks, unavailable status, and results from older PR commits are distinct from success. Completed cards retain no command logs and remain available for the app session (up to eight recent completed GitHub observers per conversation).
 
