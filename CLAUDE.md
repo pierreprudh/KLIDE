@@ -461,8 +461,10 @@ process exit. Approval freezes the worker kind, provider, model, and
 diff-review policy into each task Markdown file. A one-at-a-time Rust Mission
 supervisor selects an unattempted ready task, starts its Harness Run
 headlessly, and re-enters after validation; rejected attempts park for
-explicit retry. The tier-board only observes events and reattaches to operator
-pauses. After a process restart, Rust validates terminal orphan summaries and
+explicit retry. That supervisor is the only dispatcher: an operator's Run or
+retry (`mission_request_task`) is a request it takes on its next pass, refused
+while any attempt of the Mission is running or awaiting review. The
+tier-board only observes events and reattaches to operator pauses. After a process restart, Rust validates terminal orphan summaries and
 marks ambiguous missing/non-terminal Runs `attempt_interrupted` without
 replaying them. The Board/Graph switch reads and edits the same task Markdown
 dependencies; Rust rejects dependency cycles at the write boundary

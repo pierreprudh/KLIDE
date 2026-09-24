@@ -74,7 +74,8 @@ evidence, not as a clean checkout. Review the actual branch/files before merging
 - Under the Mission writer lock, the attachment is persisted before launching.
   A repeated dispatch returns the latest existing attempt, including a failed
   attempt. It never silently retries or starts another paid worker. Intentional
-  retries remain in Mission Control.
+  retries remain in Mission Control, where Run is a request to the supervisor
+  (`mission_request_task`), not a second dispatcher.
 - A newly dispatched worker records the coordinator as its parent in both the
   Harness and Delegate launch paths.
 - A coordinator in a linked worktree uses Missions authored there when present;
