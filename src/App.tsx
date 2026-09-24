@@ -1432,7 +1432,9 @@ function App() {
     const root = referencedDocumentRoots.current.get(path) ?? workspaceRoot;
     if (!root) return;
     try {
-      await openArtifactInApp(root, path);
+      if (await openArtifactInApp(root, path) === "reveal") {
+        notify("Shown in Finder — Klide does not launch executables");
+      }
     } catch (err) {
       notify(`Unable to open ${path}: ${errMessage(err)}`, { tone: "error" });
     }
@@ -4122,7 +4124,9 @@ function App() {
             setSpreadsheetContext({ panelId, id: Date.now(), text });
           }}
           onClose={() => setSpreadsheet(null)} onOpenExternal={(path) => {
-            void openArtifactInApp(spreadsheet.root, path).catch(error => notify(`Unable to open ${path}: ${errMessage(error)}`, { tone: "error" }));
+            void openArtifactInApp(spreadsheet.root, path).then(opened => {
+              if (opened === "reveal") notify("Shown in Finder — Klide does not launch executables");
+            }).catch(error => notify(`Unable to open ${path}: ${errMessage(error)}`, { tone: "error" }));
           }} />
       )}
       <ToastHost />

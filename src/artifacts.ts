@@ -9,6 +9,10 @@ import { isSpreadsheetPath } from "./spreadsheets/paths";
  *
  * Text goes to the Artifact Inspector. Workbooks have an interactive sheet
  * surface; other documents use the preview viewer and the system-app handoff.
+ *
+ * This module only picks a surface. Whether a file may leave the app at all —
+ * opened in its app, shown in Finder, or refused because macOS would run it —
+ * is `src-tauri/src/documents.rs`'s call, made when `open_entry` is invoked.
  */
 
 /** Extensions the inspector can show as text. Deliberately a list rather than
@@ -39,7 +43,11 @@ export function artifactOpensIn(path: string): ArtifactTarget {
  *  accessible name — "open" is vague when half of these leave the app. */
 export function artifactActionLabel(path: string): string {
   const name = path.split("/").pop() || path;
-  return artifactOpensIn(path) === "spreadsheet" ? `Open ${name} in spreadsheet` : artifactOpensIn(path) === "inspector" ? `Read ${name}` : `Open ${name} in its app`;
+  const target = artifactOpensIn(path);
+  if (target === "spreadsheet") return `Open ${name} in spreadsheet`;
+  if (target === "inspector") return `Read ${name}`;
+  // No extension names no app: Rust shows such a file in Finder instead.
+  return name.lastIndexOf(".") <= 0 ? `Show ${name} in Finder` : `Open ${name} in its app`;
 }
 
 /** Images the webview draws itself; a deck, a PDF or a spreadsheet is drawn by
@@ -49,18 +57,14 @@ export type ArtifactPreview = "image" | "quicklook" | "none";
 
 const PICTURES = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp"]);
 
-/** Text the inspector reads that is nonetheless worth a picture: a page a run
- *  wrote is judged by how it renders, not by its source, and Quick Look draws
- *  it in ~150 ms. */
-const RENDERED_TEXT = new Set(["html", "htm"]);
-
 export function artifactPreview(path: string): ArtifactPreview {
   if (/\.sheet\.json$/i.test(path)) return "none";
   const name = path.split("/").pop() ?? path;
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return "none";
   const extension = name.slice(dot + 1).toLowerCase();
-  if (RENDERED_TEXT.has(extension)) return "quicklook";
+  // A page (HTML included) reads as source: Rust never hands one to Quick
+  // Look, which would load whatever the page references.
   if (artifactOpensIn(path) === "inspector") return "none";
   return PICTURES.has(extension) ? "image" : "quicklook";
 }
@@ -82,9 +86,14 @@ export function loadArtifactPreview(workspaceRoot: string, path: string, size = 
     });
 }
 
-/** Hand the file to the application the machine opens it with. */
-export function openArtifactInApp(workspaceRoot: string, path: string): Promise<void> {
-  return invoke("open_entry", {
+/** What Rust did with the file: handed it to its app, or — for a folder or a
+ *  kind it does not know — showed it in Finder. A refusal is a rejection. */
+export type OpenedAs = "open" | "reveal";
+
+/** Hand the file to the application the machine opens it with, when Rust
+ *  agrees it is a document. */
+export function openArtifactInApp(workspaceRoot: string, path: string): Promise<OpenedAs> {
+  return invoke<OpenedAs>("open_entry", {
     workspaceRoot,
     path: workspacePath(workspaceRoot, path),
   });
