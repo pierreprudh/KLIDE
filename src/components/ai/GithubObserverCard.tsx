@@ -48,8 +48,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
     <span className="github-observer-pr">{prLabel}</span>
     <div className="github-observer-content">
       <div className="github-observer-line" role="status" aria-live="polite">
-        <span className="github-observer-status">{label}</span>
-        <span className="github-observer-detail">{detail}</span>
+        <span className="github-observer-status">{label}{detail && <small className="github-observer-detail">{detail}</small>}</span>
         <span className="github-observer-state">{state}</span>
       </div>
       <div className="github-observer-actions">
