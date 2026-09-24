@@ -47,19 +47,22 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
     if (watch) void openExternal(watch.prUrl || watch.url).catch(error => notify(String(error), { tone: "error" }));
   };
   const card = (inSidebar: boolean) => <section className={`github-observer github-observer-${tone}${inSidebar ? " github-observer-sidebar" : ""}`} aria-label={inSidebar ? "GitHub Actions in side panel" : "GitHub Actions observer"}>
-    <LinkMark site="github" size={36} />
-    <span className="github-observer-pr">{prLabel}</span>
+    <div className="github-observer-identity">
+      <LinkMark site="github" size={36} />
+      <span className="github-observer-pr">{prLabel}</span>
+    </div>
     <div className="github-observer-content">
+      <span className={`github-observer-indicator${watch?.status !== "completed" && !stopped && !observer.restored ? " klide-spin" : ""}`} aria-hidden="true">{tone === "passed" ? "✓" : tone === "failed" ? "!" : ""}</span>
       <div className="github-observer-line" role="status" aria-live="polite">
         <span className="github-observer-status">{label}{detail && <small className="github-observer-detail">{detail}</small>}</span>
         <span className="github-observer-state">{state}{observer.restored && <small className="github-observer-detail" title="Saved GitHub status; the original watcher is no longer running">Last known</small>}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
       </div>
+    </div>
       <div className="github-observer-actions">
+        {watch && <button className="github-observer-action github-observer-online" onClick={openOnline}>Open in GitHub ↗</button>}
         {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)}>Open in Git panel ↗</button>}
-        {watch && <button className="github-observer-action github-observer-online" onClick={openOnline}>View online ↗</button>}
         {running && <button onClick={onStop} className="github-observer-action github-observer-stop">Stop</button>}
       </div>
-    </div>
   </section>;
   return <>
     {card(false)}
