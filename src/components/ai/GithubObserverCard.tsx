@@ -6,6 +6,7 @@ import { githubObserverLabel, githubObserverDetail, githubObserverDuration, read
 import { openGitPr } from "../../gitNavigation";
 import { openExternal } from "../../externalLink";
 import { notify } from "../../toast";
+import { DotGridLoader } from "./icons";
 import { readObserverCards, saveObserverCard } from "../../agent/observerCards";
 
 /** Polls only while mounted. The native observer still owns the completion
@@ -52,16 +53,18 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
       <span className="github-observer-pr">{prLabel}</span>
     </div>
     <div className="github-observer-content">
-      <span className={`github-observer-indicator${watch?.status !== "completed" && !stopped && !observer.restored ? " klide-spin" : ""}`} aria-hidden="true">{tone === "passed" ? "✓" : tone === "failed" ? "!" : ""}</span>
+      {watch?.status !== "completed" && !stopped && !observer.restored
+        ? <DotGridLoader size={18} label="Checking GitHub" />
+        : <span className="github-observer-indicator" aria-hidden="true">{tone === "passed" ? "✓" : tone === "failed" ? "!" : ""}</span>}
       <div className="github-observer-line" role="status" aria-live="polite">
         <span className="github-observer-status">{label}{detail && <small className="github-observer-detail">{detail}</small>}</span>
         <span className="github-observer-state">{state}{observer.restored && <small className="github-observer-detail" title="Saved GitHub status; the original watcher is no longer running">Last known</small>}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
       </div>
+      {running && <button onClick={onStop} className="github-observer-action github-observer-stop">Stop</button>}
     </div>
       <div className="github-observer-actions">
         {watch && <button className="github-observer-action github-observer-online" onClick={openOnline}>Open in GitHub ↗</button>}
         {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)}>Open in Git panel ↗</button>}
-        {running && <button onClick={onStop} className="github-observer-action github-observer-stop">Stop</button>}
       </div>
   </section>;
   return <>
