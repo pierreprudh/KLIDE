@@ -27,6 +27,12 @@ export type MarkdownOptions = {
   // screen keeps its DOM node) and each new span resolves in through
   // `.ai-word-in`. Off by default: a finished message is plain text.
   streaming?: boolean;
+  // Draw `html` / `svg` fences (and bare `<svg>` blocks) as pictures. Off by
+  // default: a visual is markup rendered into the app's own document, so only
+  // a surface that shows the assistant's answer opts in. A PR body, a commit
+  // message, a tool result or a delegate transcript was written by someone
+  // else and stays source.
+  visuals?: boolean;
 };
 
 /** One visual a message holds: a closed `html` / `svg` (…) fence whose markup
@@ -1193,8 +1199,10 @@ export function renderMarkdown(text: string, options?: MarkdownOptions): MdNode[
   // A streaming tail changes on every tick and would only churn the cache; a
   // `renderTool` hook makes the output depend on the caller, not the text.
   const cacheable = !options?.streaming && !options?.renderTool;
+  // The same text parses differently with visuals on, so the flag is part of the key.
+  const key = options?.visuals ? `visuals\0${text}` : text;
   if (cacheable) {
-    const hit = PARSE_CACHE.get(text);
+    const hit = PARSE_CACHE.get(key);
     if (hit) return hit;
   }
   const out = parseMarkdown(text, options);
@@ -1203,7 +1211,7 @@ export function renderMarkdown(text: string, options?: MarkdownOptions): MdNode[
       const oldest = PARSE_CACHE.keys().next().value;
       if (oldest !== undefined) PARSE_CACHE.delete(oldest);
     }
-    PARSE_CACHE.set(text, out);
+    PARSE_CACHE.set(key, out);
   }
   return out;
 }
@@ -1272,7 +1280,8 @@ function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
   // Split on ``` so every odd-indexed segment is a code block and every
   // even-indexed segment is prose. Render code blocks first so their
   // contents (which can contain their own ```) are not interpreted again.
-  const segments = fenceBareMarkup(text, options?.streaming === true).split("```");
+  const visuals = options?.visuals === true;
+  const segments = (visuals ? fenceBareMarkup(text, options?.streaming === true) : text).split("```");
   const out: MdNode[] = [];
   segments.forEach((seg, idx) => {
     if (idx % 2 === 1) {
@@ -1288,7 +1297,7 @@ function parseMarkdown(text: string, options?: MarkdownOptions): MdNode[] {
       // half-written, so it stays source until the closing fence arrives.
       const closed = idx < segments.length - 1;
       out.push(
-        VISUAL_LANGS.has(lang.toLowerCase())
+        visuals && VISUAL_LANGS.has(lang.toLowerCase())
           ? <VisualBlock key={`code-${idx}`} code={code} lang={lang} closed={closed} />
           : <CodeBlock key={`code-${idx}`} code={code} lang={lang} />,
       );

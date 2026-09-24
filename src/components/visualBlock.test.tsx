@@ -6,7 +6,7 @@ import { renderMarkdown } from "./markdown";
 // in an `html` fence has to reach the conversation as a picture, and what it
 // writes in a `ts` fence has to stay source.
 function render(markdown: string): string {
-  return renderToStaticMarkup(<>{renderMarkdown(markdown)}</>);
+  return renderToStaticMarkup(<>{renderMarkdown(markdown, { visuals: true })}</>);
 }
 
 describe("the inline visualizer", () => {
@@ -75,7 +75,7 @@ describe("the inline visualizer", () => {
   });
 
   it("holds a bare <svg> as source while it is still streaming", () => {
-    const html = renderToStaticMarkup(<>{renderMarkdown("<svg viewBox=\"0 0 10 10\"><circle", { streaming: true })}</>);
+    const html = renderToStaticMarkup(<>{renderMarkdown("<svg viewBox=\"0 0 10 10\"><circle", { streaming: true, visuals: true })}</>);
     expect(html).toContain(">Preview<");
     expect(html).toContain("&lt;svg");
   });
@@ -95,5 +95,28 @@ describe("the inline visualizer", () => {
     const ids = [...html.matchAll(/id="arrow-([A-Za-z0-9]+)"/g)].map((m) => m[1]);
     expect(ids).toHaveLength(2);
     expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
+// A visual is markup joining the app's document. Only the assistant's own
+// answer opts in; a PR body, a commit message or a delegate transcript was
+// written by someone else and is shown as what it is — source.
+describe("where a visual may draw", () => {
+  const plain = (markdown: string) => renderToStaticMarkup(<>{renderMarkdown(markdown)}</>);
+
+  it("keeps an html fence and a bare <svg> line as source by default", () => {
+    const fenced = plain("```html\n<div class=\"card\">hi</div>\n```");
+    expect(fenced).toContain("&lt;div");
+    expect(fenced).not.toContain(">Code<");
+    const bare = plain("Look:\n\n<svg viewBox=\"0 0 10 10\"><circle r=\"4\"/></svg>\n\nDone.");
+    expect(bare).not.toContain("<circle");
+    expect(bare).toContain("&lt;svg");
+  });
+
+  it("does not share a parse between the two readings of one text", () => {
+    const text = "```svg\n<svg viewBox=\"0 0 1 1\"><rect/></svg>\n```";
+    expect(plain(text)).not.toContain("<rect");
+    expect(render(text)).toContain("<rect");
+    expect(plain(text)).not.toContain("<rect");
   });
 });
