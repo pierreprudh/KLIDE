@@ -965,11 +965,13 @@ mod tests {
 
     // ── Scrollback persistence ────────────────────────────────────────────
 
-    struct NullSink;
+    struct ExitSink(std::sync::mpsc::Sender<()>);
 
-    impl PtyEventSink for NullSink {
+    impl PtyEventSink for ExitSink {
         fn chunk(&self, _: &str, _: &str, _: u64) {}
-        fn exit(&self, _: &str, _: &PtyExitOutcome) {}
+        fn exit(&self, _: &str, _: &PtyExitOutcome) {
+            let _ = self.0.send(());
+        }
         fn external_id(&self, _: &str, _: &str) {}
     }
 
@@ -978,6 +980,7 @@ mod tests {
     #[test]
     fn a_spawn_records_its_coordination_secret_hash() {
         let dir = temp_scroll_dir("secret-hash");
+        let (exited, exit) = std::sync::mpsc::channel();
         let sid = "convo-5:claude-code";
         let host = SessionHost::default();
         host.spawn(
@@ -995,10 +998,13 @@ mod tests {
                 coord_secret_sha256: Some("feedface".to_string()),
             },
             Some(dir.clone()),
-            Arc::new(NullSink),
+            Arc::new(ExitSink(exited)),
         )
         .unwrap();
         assert_eq!(meta_for(&dir, sid).coord_secret_sha256.as_deref(), Some("feedface"));
+        // Wait for the exit handler to finish writing the first spawn's meta
+        // before simulating a later spawn on the same session id.
+        exit.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         // A later spawn without wiring must not inherit the old hash.
         upsert_scrollback_meta(&dir, spawn_meta(sid, "claude-code", 9_000));
         assert!(meta_for(&dir, sid).coord_secret_sha256.is_none());

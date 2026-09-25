@@ -2211,14 +2211,11 @@ async fn run_agent_loop(
         // command output, and it never rides a turn that runs commands unasked.
         // It stays pending for the observer's own Plan follow-up.
         let completions = if turn == 0 {
-            let ctx = ToolCtx {
-                sup,
-                id: id.as_str(),
-                request: &request,
-                cancel: &cancel,
-                runs_dir: runs_dir.as_path(),
-            };
-            if permission::full_auto(&ctx) {
+            let full_auto = with_run_handle(sup, &id, |h| {
+                h.subject.full_auto(h.trust.commands_policy())
+            })
+            .unwrap_or(true);
+            if full_auto {
                 Vec::new()
             } else {
                 background::completions(&id)
@@ -5513,7 +5510,7 @@ mod run_loop_tests {
         let mut request = test_request(&root, &[]);
         request.auto_approve_commands = Some(true);
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Working on it.", vec![])]);
-        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        drive_loop(Arc::new(FakeSupervisor::for_request(id, &request)), &runs_dir, id, request, caller.clone()).await;
         let seen = caller.seen_messages.lock().unwrap();
         assert!(!seen[0].iter().any(|m| m.to_string().contains("ignore previous instructions")));
         drop(seen);
