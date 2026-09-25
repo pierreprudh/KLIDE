@@ -16,6 +16,7 @@
 use crate::agent::transcripts::{now_ms, validate_run_id};
 use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -26,15 +27,20 @@ const MAX_REASON_BYTES: usize = 4 * 1024;
 const MAX_REFERENCE_BYTES: usize = 2 * 1024;
 const MAX_EVENTS_PER_READ: usize = 1_000;
 
-/// One app-process writer keeps read → validate → append atomic. Embedded MCP
-/// and socket adapters terminate in this process and therefore share the same
-/// gate. The journal remains the only durable authority across restarts.
-/// The gate is `Arc`-shared so the Tauri commands can hand a clone to
+/// The journal store. Read → validate → append is one step under an
+/// exclusive lock on `.klide/coordination/events.lock`, and that lock is an
+/// OS file lock, so it holds across processes too — a dev build and an
+/// installed Klide on one repository, or the embedded MCP children of either,
+/// can never hand out the same `seq`. Each Workspace's fold is memoised and
+/// advanced by the lines appended since, instead of re-read from byte zero on
+/// every call. The journal remains the only durable authority across
+/// restarts; the memo is just where this process stopped reading.
+/// The map is `Arc`-shared so the Tauri commands can hand a clone to
 /// `spawn_blocking`: folding the journal is file IO and must never run on the
 /// main thread (the same rule `git.rs` and `storage.rs` follow).
 #[derive(Clone, Default)]
 pub struct CoordinationStoreState {
-    write_gate: Arc<Mutex<()>>,
+    journals: Arc<Mutex<HashMap<PathBuf, Arc<Journal>>>>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1126,6 +1132,7 @@ fn apply_event(
     Ok(())
 }
 
+#[cfg(test)]
 fn fold_events(events: &[CoordinationEventLine]) -> Result<CoordinationSnapshot, String> {
     let mut snapshot = CoordinationSnapshot {
         schema_version: COORDINATION_SCHEMA_VERSION,
@@ -1206,68 +1213,6 @@ fn coordination_dir(workspace_root: &str, create: bool) -> Result<Option<PathBuf
 
 fn events_path(dir: &Path) -> PathBuf {
     dir.join("events.jsonl")
-}
-
-fn read_events_unlocked(workspace_root: &str) -> Result<Vec<CoordinationEventLine>, String> {
-    let Some(dir) = coordination_dir(workspace_root, false)? else {
-        return Ok(Vec::new());
-    };
-    let path = events_path(&dir);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Unable to read coordination journal: {e}"))?;
-    let lines: Vec<&str> = raw.lines().collect();
-    let last_index = lines.len().saturating_sub(1);
-    let mut events = Vec::new();
-    for (index, text) in lines.iter().enumerate() {
-        if text.trim().is_empty() {
-            continue;
-        }
-        let line: CoordinationEventLine = match serde_json::from_str(text) {
-            Ok(line) => line,
-            Err(e) if index == last_index => {
-                // The one crash artefact `durable::append_line` can leave: a
-                // final line written but not flushed. Same policy as the run
-                // Transcript — tolerate it, say so, never guess past anything
-                // earlier. The next accepted command trims it under the write
-                // gate (`repair_torn_tail`) before appending, so the file
-                // never carries interior corruption.
-                eprintln!(
-                    "klide: coordination journal {path:?} ends in a torn line ({e}); \
-                     dropping the final partial event."
-                );
-                break;
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Coordination journal {path:?} is corrupt at line {}: {e}. Klide will not guess past durable inter-agent state.",
-                    index + 1
-                ));
-            }
-        };
-        if line.schema_version != COORDINATION_SCHEMA_VERSION {
-            return Err(format!(
-                "Coordination journal {path:?} line {} has unsupported schemaVersion {} (expected {COORDINATION_SCHEMA_VERSION}).",
-                index + 1,
-                line.schema_version
-            ));
-        }
-        let expected = events.len() as u64;
-        if line.seq != expected {
-            return Err(format!(
-                "Coordination journal {path:?} line {} breaks sequence ordering (expected seq {expected}, found {}).",
-                index + 1,
-                line.seq
-            ));
-        }
-        events.push(line);
-    }
-    // Validate semantic references and transitions during every replay, not
-    // only when this build authored the event.
-    let _ = fold_events(&events)?;
-    Ok(events)
 }
 
 fn idempotent_event(
@@ -1598,37 +1543,327 @@ fn event_for_command(
     }
 }
 
+/// Where a journal file stood the last time this process folded it. Equal
+/// stamps mean nothing moved; the same inode at least as long as what was
+/// consumed means someone appended. Anything else (a repair's rename, a
+/// truncation) is a different file and folds from the start. The stamp is
+/// only a fast path: correctness comes from the lock and the strict `seq`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct JournalStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+
+impl JournalStamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        let inode = {
+            use std::os::unix::fs::MetadataExt;
+            meta.ino()
+        };
+        #[cfg(not(unix))]
+        let inode = 0;
+        Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            inode,
+        }
+    }
+}
+
+/// This process's fold of one journal. `consumed` is the byte offset just past
+/// the last complete line folded, so a torn tail is never cached: the next
+/// refresh looks at it again, and only a writer (under the exclusive lock)
+/// ever removes or terminates it.
+struct JournalMemo {
+    events: Vec<CoordinationEventLine>,
+    snapshot: CoordinationSnapshot,
+    consumed: u64,
+    /// Physical lines inside `consumed`, blank ones included, so an error
+    /// names the same line number a full read would.
+    lines: usize,
+    stamp: Option<JournalStamp>,
+}
+
+impl JournalMemo {
+    fn new() -> Self {
+        Self {
+            events: Vec::new(),
+            snapshot: CoordinationSnapshot {
+                schema_version: COORDINATION_SCHEMA_VERSION,
+                ..CoordinationSnapshot::default()
+            },
+            consumed: 0,
+            lines: 0,
+            stamp: None,
+        }
+    }
+
+    /// Bring the fold up to the file on disk. The caller holds the journal
+    /// lock (shared or exclusive), so no other process appends or renames
+    /// while this reads. A failed refresh forgets the memo, so the next one
+    /// starts from a full read instead of trusting a half-advanced fold.
+    fn refresh(&mut self, path: &Path) -> Result<(), String> {
+        let result = self.refresh_inner(path);
+        if result.is_err() {
+            *self = Self::new();
+        }
+        result
+    }
+
+    fn refresh_inner(&mut self, path: &Path) -> Result<(), String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if self.stamp.is_some() || self.consumed > 0 {
+                    *self = Self::new();
+                }
+                return Ok(());
+            }
+            Err(e) => return Err(format!("Unable to read coordination journal: {e}")),
+        };
+        let meta = file
+            .metadata()
+            .map_err(|e| format!("Unable to read coordination journal: {e}"))?;
+        let stamp = JournalStamp::of(&meta);
+        if self.stamp == Some(stamp) {
+            return Ok(());
+        }
+        let appended = self
+            .stamp
+            .is_some_and(|previous| previous.inode == stamp.inode)
+            && stamp.len >= self.consumed;
+        if !appended {
+            *self = Self::new();
+        }
+        file.seek(SeekFrom::Start(self.consumed))
+            .map_err(|e| format!("Unable to read coordination journal: {e}"))?;
+        let mut raw = Vec::new();
+        file.take(stamp.len - self.consumed)
+            .read_to_end(&mut raw)
+            .map_err(|e| format!("Unable to read coordination journal: {e}"))?;
+        let complete = raw
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let text = std::str::from_utf8(&raw[..complete]).map_err(|e| {
+            format!("Coordination journal {path:?} is not valid UTF-8: {e}")
+        })?;
+        let tail = &raw[complete..];
+        let segments: Vec<&str> = text.split_terminator('\n').collect();
+        let last_index = segments.len().saturating_sub(1);
+        let mut folded = self.snapshot.clone();
+        let mut offset = self.consumed;
+        let mut lines = self.lines;
+        for (index, segment) in segments.iter().enumerate() {
+            let line_number = lines + 1;
+            let text = segment.strip_suffix('\r').unwrap_or(segment);
+            if text.trim().is_empty() {
+                offset += segment.len() as u64 + 1;
+                lines += 1;
+                continue;
+            }
+            let line: CoordinationEventLine = match serde_json::from_str(text) {
+                Ok(line) => line,
+                Err(e) if index == last_index && tail.is_empty() => {
+                    // The one crash artefact `durable::append_line` can leave:
+                    // a final line written but not flushed. Same policy as the
+                    // run Transcript — tolerate it, say so, never guess past
+                    // anything earlier. It stays outside `consumed`, and the
+                    // next accepted command trims it under the exclusive lock
+                    // (`repair_torn_tail`) before appending, so the file never
+                    // carries interior corruption.
+                    eprintln!(
+                        "klide: coordination journal {path:?} ends in a torn line ({e}); \
+                         dropping the final partial event."
+                    );
+                    break;
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Coordination journal {path:?} is corrupt at line {line_number}: {e}. Klide will not guess past durable inter-agent state."
+                    ));
+                }
+            };
+            if line.schema_version != COORDINATION_SCHEMA_VERSION {
+                return Err(format!(
+                    "Coordination journal {path:?} line {line_number} has unsupported schemaVersion {} (expected {COORDINATION_SCHEMA_VERSION}).",
+                    line.schema_version
+                ));
+            }
+            let expected = self.events.len() as u64;
+            if line.seq != expected {
+                return Err(format!(
+                    "Coordination journal {path:?} line {line_number} breaks sequence ordering (expected seq {expected}, found {}).",
+                    line.seq
+                ));
+            }
+            // Validate semantic references and transitions on every fold, not
+            // only when this build authored the event.
+            apply_event(&mut folded, &line).map_err(|error| {
+                format!(
+                    "Coordination event seq {} violates the domain contract: {error}",
+                    line.seq
+                )
+            })?;
+            self.events.push(line);
+            offset += segment.len() as u64 + 1;
+            lines += 1;
+        }
+        if !tail.is_empty() && serde_json::from_slice::<CoordinationEventLine>(tail).is_err() {
+            eprintln!(
+                "klide: coordination journal {path:?} ends in a torn line; \
+                 dropping the final partial event."
+            );
+        }
+        self.snapshot = folded;
+        self.consumed = offset;
+        self.lines = lines;
+        self.stamp = Some(stamp);
+        Ok(())
+    }
+}
+
+/// One Workspace's journal as this process sees it: the memoised fold, and a
+/// wake for anyone waiting on it. The wake carries the next `seq`; it moves
+/// when this process appends, or when a refresh finds another process did.
+/// Async waiters (the Harness) watch `changed`; the bridge's request threads
+/// are plain threads, so they block on `announced` + `wake` instead of
+/// entering a runtime.
+struct Journal {
+    memo: Mutex<JournalMemo>,
+    changed: tokio::sync::watch::Sender<u64>,
+    announced: Mutex<u64>,
+    wake: std::sync::Condvar,
+}
+
+impl Journal {
+    fn new() -> Self {
+        Self {
+            memo: Mutex::new(JournalMemo::new()),
+            changed: tokio::sync::watch::Sender::new(0),
+            announced: Mutex::new(0),
+            wake: std::sync::Condvar::new(),
+        }
+    }
+
+    fn memo(&self) -> Result<std::sync::MutexGuard<'_, JournalMemo>, String> {
+        self.memo
+            .lock()
+            .map_err(|_| "Coordination store lock is poisoned.".to_string())
+    }
+
+    fn announce(&self, next_seq: u64) {
+        self.changed.send_if_modified(|current| {
+            if *current == next_seq {
+                return false;
+            }
+            *current = next_seq;
+            true
+        });
+        if let Ok(mut announced) = self.announced.lock() {
+            if *announced != next_seq {
+                *announced = next_seq;
+                self.wake.notify_all();
+            }
+        }
+    }
+}
+
+impl CoordinationStoreState {
+    /// The journal a Workspace resolves to. Keyed by the effective checkout's
+    /// `.klide/coordination`, so a linked worktree and its main checkout share
+    /// one memo and one wake — exactly as they share one file.
+    fn journal(&self, workspace_root: &str) -> Result<Arc<Journal>, String> {
+        let key = effective_workspace(workspace_root)?
+            .root()
+            .join(".klide/coordination");
+        let mut journals = self
+            .journals
+            .lock()
+            .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
+        Ok(journals
+            .entry(key)
+            .or_insert_with(|| Arc::new(Journal::new()))
+            .clone())
+    }
+}
+
+/// Take the cross-process journal lock. It lives on its own file, never on
+/// `events.jsonl`: `repair_torn_tail` renames the journal, and a lock held on
+/// the old inode would guard nothing. The lock file is never deleted. Dropping
+/// the returned handle releases the lock.
+fn lock_journal(dir: &Path, exclusive: bool) -> Result<std::fs::File, String> {
+    let path = dir.join("events.lock");
+    let existed = path.exists();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| format!("Unable to open coordination lock: {e}"))?;
+    if !existed {
+        crate::durable::set_private(&path);
+    }
+    let locked = if exclusive {
+        file.lock()
+    } else {
+        file.lock_shared()
+    };
+    locked.map_err(|e| format!("Unable to lock coordination journal: {e}"))?;
+    Ok(file)
+}
+
+/// A full, strict read of a journal with no memo — what every fold used to be.
+#[cfg(test)]
+fn read_events_unlocked(workspace_root: &str) -> Result<Vec<CoordinationEventLine>, String> {
+    let Some(dir) = coordination_dir(workspace_root, false)? else {
+        return Ok(Vec::new());
+    };
+    let mut memo = JournalMemo::new();
+    memo.refresh(&events_path(&dir))?;
+    Ok(memo.events)
+}
+
 /// Readers tolerate a torn final line; the writer removes it. Appending after
 /// a half line would leave it in the middle of the file, where the strict
-/// reader rightly refuses it. Runs under the write gate, so no other writer in
-/// this process can interleave, and the trimmed prefix is replaced atomically.
-fn repair_torn_tail(workspace_root: &str) -> Result<(), String> {
-    let Some(dir) = coordination_dir(workspace_root, false)? else {
+/// reader rightly refuses it. Runs under the exclusive journal lock on a
+/// freshly refreshed memo, so everything past `consumed` is exactly the
+/// unfolded tail. A tail that is a whole event missing only its newline is
+/// terminated rather than dropped; anything else is trimmed. The replacement
+/// is atomic and stays private: the journal holds conversation content.
+fn repair_torn_tail(memo: &mut JournalMemo, path: &Path) -> Result<(), String> {
+    let Some(stamp) = memo.stamp else {
         return Ok(());
     };
-    let path = events_path(&dir);
-    if !path.exists() {
+    if stamp.len <= memo.consumed {
         return Ok(());
     }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Unable to read coordination journal: {e}"))?;
-    let trimmed = raw.trim_end_matches(['\n', '\r']);
-    let Some(last) = trimmed.rsplit('\n').next() else {
-        return Ok(());
-    };
-    if last.trim().is_empty() || serde_json::from_str::<CoordinationEventLine>(last).is_ok() {
-        return Ok(());
+    let raw = std::fs::read(path).map_err(|e| format!("Unable to read coordination journal: {e}"))?;
+    let keep = (memo.consumed as usize).min(raw.len());
+    let mut repaired = raw[..keep].to_vec();
+    let tail = &raw[keep..];
+    let tail_text = String::from_utf8_lossy(tail);
+    let tail_text = tail_text.trim_end_matches(['\n', '\r']);
+    if !tail_text.trim().is_empty()
+        && serde_json::from_str::<CoordinationEventLine>(tail_text).is_ok()
+    {
+        eprintln!(
+            "klide: coordination journal {path:?} ended without a newline; terminating the final event before append."
+        );
+        repaired.extend_from_slice(tail_text.as_bytes());
+        repaired.push(b'\n');
+    } else {
+        eprintln!(
+            "klide: coordination journal {path:?} had a torn final line; trimming it before append."
+        );
     }
-    let keep = trimmed.len() - last.len();
-    let mut prefix = raw[..keep].to_string();
-    if !prefix.is_empty() && !prefix.ends_with('\n') {
-        prefix.push('\n');
-    }
-    eprintln!(
-        "klide: coordination journal {path:?} had a torn final line; trimming it before append."
-    );
-    crate::durable::write_atomic(&path, prefix.as_bytes())
-        .map_err(|e| format!("Unable to repair coordination journal: {e}"))
+    crate::durable::write_atomic_private(path, &repaired)
+        .map_err(|e| format!("Unable to repair coordination journal: {e}"))?;
+    memo.refresh(path)
 }
 
 pub(crate) fn apply_coordination_command(
@@ -1636,37 +1871,66 @@ pub(crate) fn apply_coordination_command(
     workspace_root: &str,
     command: CoordinationCommand,
 ) -> Result<CoordinationCommandOutcome, String> {
-    let _guard = state
-        .write_gate
-        .lock()
-        .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
-    repair_torn_tail(workspace_root)?;
-    let events = read_events_unlocked(workspace_root)?;
-    let snapshot = fold_events(&events)?;
-    if idempotent_event(&snapshot, &command)? {
+    let journal = state.journal(workspace_root)?;
+    let mut memo = journal.memo()?;
+    let dir = match coordination_dir(workspace_root, false)? {
+        Some(dir) => dir,
+        None => {
+            // Nothing has been written here yet. A command the empty journal
+            // refuses must not leave a `.klide/` behind, so check it first;
+            // the real decision is made again under the lock below.
+            *memo = JournalMemo::new();
+            event_for_command(&memo.snapshot, command.clone(), now_ms())?;
+            coordination_dir(workspace_root, true)?
+                .ok_or_else(|| "Unable to resolve coordination directory.".to_string())?
+        }
+    };
+    let path = events_path(&dir);
+    // Exclusive across processes: a dev build and an installed Klide on one
+    // repository are two writers, and read → validate → append must be one
+    // step for both or two of them hand out the same `seq`.
+    let _lock = lock_journal(&dir, true)?;
+    memo.refresh(&path)?;
+    repair_torn_tail(&mut memo, &path)?;
+    journal.announce(memo.snapshot.next_seq);
+    if idempotent_event(&memo.snapshot, &command)? {
         return Ok(CoordinationCommandOutcome {
             appended: None,
-            snapshot,
+            snapshot: memo.snapshot.clone(),
         });
     }
 
     let ts = now_ms();
-    let event = event_for_command(&snapshot, command, ts)?;
+    let event = event_for_command(&memo.snapshot, command, ts)?;
     let line = CoordinationEventLine {
         schema_version: COORDINATION_SCHEMA_VERSION,
-        seq: snapshot.next_seq,
+        seq: memo.snapshot.next_seq,
         ts,
         event,
     };
-    let mut next_snapshot = snapshot;
+    let mut next_snapshot = memo.snapshot.clone();
     apply_event(&mut next_snapshot, &line)?;
 
-    let dir = coordination_dir(workspace_root, true)?
-        .ok_or_else(|| "Unable to resolve coordination directory.".to_string())?;
     let encoded = serde_json::to_string(&line)
         .map_err(|e| format!("Unable to encode coordination event: {e}"))?;
-    crate::durable::append_line(&events_path(&dir), &encoded)
-        .map_err(|e| format!("Unable to append coordination event: {e}"))?;
+    if let Err(e) = crate::durable::append_line(&path, &encoded) {
+        // Some bytes may have landed. Forget the memo so the next command
+        // refreshes from the file and repairs whatever tail is there.
+        *memo = JournalMemo::new();
+        return Err(format!("Unable to append coordination event: {e}"));
+    }
+
+    // Fold forward in place: nobody else can have written while the
+    // exclusive lock is held, so the file is exactly the old fold plus this
+    // line.
+    memo.consumed += encoded.len() as u64 + 1;
+    memo.lines += 1;
+    memo.stamp = std::fs::metadata(&path)
+        .ok()
+        .map(|meta| JournalStamp::of(&meta));
+    memo.events.push(line.clone());
+    memo.snapshot = next_snapshot.clone();
+    journal.announce(next_snapshot.next_seq);
 
     Ok(CoordinationCommandOutcome {
         appended: Some(line),
@@ -1674,15 +1938,65 @@ pub(crate) fn apply_coordination_command(
     })
 }
 
+/// Refresh a journal's memo under the shared lock and hand the guard back.
+/// The shared lock keeps a writer in another process from renaming the file
+/// between this reader's stat and its read. `None` means the Workspace has no
+/// coordination directory yet, which reads as the empty journal.
+fn refreshed_memo<'a>(
+    journal: &'a Journal,
+    workspace_root: &str,
+) -> Result<std::sync::MutexGuard<'a, JournalMemo>, String> {
+    let mut memo = journal.memo()?;
+    let Some(dir) = coordination_dir(workspace_root, false)? else {
+        *memo = JournalMemo::new();
+        return Ok(memo);
+    };
+    let _lock = lock_journal(&dir, false)?;
+    memo.refresh(&events_path(&dir))?;
+    journal.announce(memo.snapshot.next_seq);
+    Ok(memo)
+}
+
 pub(crate) fn read_snapshot(
     state: &CoordinationStoreState,
     workspace_root: &str,
 ) -> Result<CoordinationSnapshot, String> {
-    let _guard = state
-        .write_gate
+    let journal = state.journal(workspace_root)?;
+    let memo = refreshed_memo(&journal, workspace_root)?;
+    Ok(memo.snapshot.clone())
+}
+
+/// A wake for waiters on one Workspace's journal. The value is the next `seq`;
+/// `changed()` resolves when a command in this process appends, or when any
+/// read here notices another process did. Another process's append on its own
+/// wakes nobody here, so a waiter keeps a slow floor poll as well.
+pub(crate) fn subscribe_changes(
+    state: &CoordinationStoreState,
+    workspace_root: &str,
+) -> Result<tokio::sync::watch::Receiver<u64>, String> {
+    Ok(state.journal(workspace_root)?.changed.subscribe())
+}
+
+/// The blocking twin of [`subscribe_changes`] for plain threads: return once
+/// this process has announced a next `seq` other than `seen_next_seq` (the
+/// cursor of the snapshot the caller last read), or after `limit`. A move that
+/// landed between that read and this call returns at once.
+pub(crate) fn wait_for_change(
+    state: &CoordinationStoreState,
+    workspace_root: &str,
+    seen_next_seq: u64,
+    limit: std::time::Duration,
+) -> Result<(), String> {
+    let journal = state.journal(workspace_root)?;
+    let announced = journal
+        .announced
         .lock()
         .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
-    fold_events(&read_events_unlocked(workspace_root)?)
+    let _ = journal
+        .wake
+        .wait_timeout_while(announced, limit, |next| *next == seen_next_seq)
+        .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
+    Ok(())
 }
 
 /// Run a journal fold off the main thread. Sync Tauri commands execute on the
@@ -1762,16 +2076,16 @@ pub async fn coordination_events(
 ) -> Result<Vec<CoordinationEventLine>, String> {
     let state = state.inner().clone();
     blocking(move || {
-        let _guard = state
-            .write_gate
-            .lock()
-            .map_err(|_| "Coordination store lock is poisoned.".to_string())?;
+        let journal = state.journal(&workspace_root)?;
+        let memo = refreshed_memo(&journal, &workspace_root)?;
         let from = from_seq.unwrap_or(0);
         let limit = limit.unwrap_or(200).clamp(1, MAX_EVENTS_PER_READ);
-        Ok(read_events_unlocked(&workspace_root)?
-            .into_iter()
+        Ok(memo
+            .events
+            .iter()
             .filter(|line| line.seq >= from)
             .take(limit)
+            .cloned()
             .collect())
     })
     .await
@@ -2810,6 +3124,235 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    /// Run `body` on its own thread and fail — rather than hang the suite —
+    /// if it has not finished within `limit`.
+    fn within<T: Send + 'static>(
+        limit: std::time::Duration,
+        body: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(body());
+        });
+        rx.recv_timeout(limit)
+            .expect("coordination test body hung or panicked")
+    }
+
+    fn event_line(seq: u64, run_id: &str) -> String {
+        serde_json::to_string(&CoordinationEventLine {
+            schema_version: COORDINATION_SCHEMA_VERSION,
+            seq,
+            ts: now_ms(),
+            event: CoordinationEvent::RunRegistered {
+                registration: registration(run_id, None),
+                state: CoordinationRunState::Queued,
+            },
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn two_stores_on_one_journal_keep_seq_monotonic() {
+        // Two stores stand in for two processes (a dev build and an installed
+        // Klide on one repository): they share no memory, only the file.
+        let root = temp_workspace("two-stores");
+        register(&CoordinationStoreState::default(), &root, "run_seed", None);
+        let root_text = root.to_str().unwrap().to_string();
+        within(std::time::Duration::from_secs(120), move || {
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let writers: Vec<_> = ["a", "b"]
+                .into_iter()
+                .map(|side| {
+                    let barrier = barrier.clone();
+                    let root = root_text.clone();
+                    std::thread::spawn(move || {
+                        let store = CoordinationStoreState::default();
+                        barrier.wait();
+                        for index in 0..50 {
+                            apply_coordination_command(
+                                &store,
+                                &root,
+                                CoordinationCommand::RegisterRun {
+                                    registration: registration(
+                                        &format!("run_{side}_{index}"),
+                                        None,
+                                    ),
+                                    initial_state: None,
+                                },
+                            )
+                            .unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for writer in writers {
+                writer.join().expect("writer thread");
+            }
+        });
+        let events = read_events_unlocked(root.to_str().unwrap()).unwrap();
+        assert_eq!(events.len(), 101);
+        assert!(events
+            .iter()
+            .enumerate()
+            .all(|(index, line)| line.seq == index as u64));
+    }
+
+    #[test]
+    fn a_foreign_lock_holder_blocks_the_writer_until_it_lets_go() {
+        let root = temp_workspace("lock-held");
+        register(&CoordinationStoreState::default(), &root, "run_one", None);
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".klide/coordination/events.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let root_text = root.to_str().unwrap().to_string();
+        std::thread::spawn(move || {
+            let outcome = apply_coordination_command(
+                &CoordinationStoreState::default(),
+                &root_text,
+                CoordinationCommand::RegisterRun {
+                    registration: registration("run_two", None),
+                    initial_state: None,
+                },
+            );
+            let _ = tx.send(outcome);
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(),
+            "the writer appended while another process held the journal lock"
+        );
+        lock.unlock().unwrap();
+        let outcome = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("writer never resumed after the lock was released")
+            .unwrap();
+        assert_eq!(outcome.appended.unwrap().seq, 1);
+    }
+
+    #[test]
+    fn memo_folds_forward_after_a_foreign_append() {
+        let root = temp_workspace("fold-forward");
+        let here = CoordinationStoreState::default();
+        let there = CoordinationStoreState::default();
+        register(&here, &root, "run_one", None);
+        assert_eq!(read_snapshot(&here, root.to_str().unwrap()).unwrap().next_seq, 1);
+        register(&there, &root, "run_two", None);
+        let snapshot = read_snapshot(&here, root.to_str().unwrap()).unwrap();
+        assert_eq!(snapshot.next_seq, 2);
+        assert!(find_run(&snapshot, "run_two").is_some());
+
+        // The strict reader's rules hold for the lines folded forward too.
+        let path = root.join(".klide/coordination/events.jsonl");
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, format!("{}\n", event_line(5, "run_gap")).as_bytes())
+            .unwrap();
+        let error = read_snapshot(&here, root.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("expected seq 2, found 5"), "got: {error}");
+    }
+
+    #[test]
+    fn memo_invalidates_when_the_journal_inode_changes() {
+        let root = temp_workspace("inode");
+        let state = CoordinationStoreState::default();
+        register(&state, &root, "run_one", None);
+        register(&state, &root, "run_two", None);
+        let path = root.join(".klide/coordination/events.jsonl");
+        // A different file, longer than what was consumed, published by
+        // rename: reading forward from the old offset would land mid-line.
+        let first = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let replacement = format!(
+            "{first}\n{}\n",
+            event_line(1, "run_replacement_with_a_much_longer_identity")
+        );
+        crate::durable::write_atomic(&path, replacement.as_bytes()).unwrap();
+        let snapshot = read_snapshot(&state, root.to_str().unwrap()).unwrap();
+        assert_eq!(snapshot.next_seq, 2);
+        assert!(find_run(&snapshot, "run_two").is_none());
+        assert!(find_run(&snapshot, "run_replacement_with_a_much_longer_identity").is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn torn_tail_repair_keeps_the_journal_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_workspace("torn-private");
+        let state = CoordinationStoreState::default();
+        register(&state, &root, "run_one", None);
+        let path = root.join(".klide/coordination/events.jsonl");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, b"{\"schemaVersion\":1,\"seq\":1,\"ev").unwrap();
+        drop(file);
+
+        register(&state, &root, "run_two", None);
+        assert_eq!(mode(&path), 0o600, "the repair published a world-readable journal");
+        assert_eq!(read_events_unlocked(root.to_str().unwrap()).unwrap().len(), 2);
+        assert_eq!(mode(&root.join(".klide/coordination/events.lock")), 0o600);
+    }
+
+    #[test]
+    fn an_unterminated_final_event_is_terminated_before_append() {
+        // A whole event missing only its newline used to pass the repair, and
+        // the next append glued itself onto the same line.
+        let root = temp_workspace("unterminated");
+        let dir = root.join(".klide/coordination");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("events.jsonl"), event_line(0, "run_one")).unwrap();
+        let state = CoordinationStoreState::default();
+        register(&state, &root, "run_two", None);
+        let events = read_events_unlocked(root.to_str().unwrap()).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].seq, 1);
+    }
+
+    #[test]
+    fn apply_wakes_a_waiting_reader() {
+        let root = temp_workspace("wake");
+        let state = CoordinationStoreState::default();
+        let mut changes = subscribe_changes(&state, root.to_str().unwrap()).unwrap();
+        let writer = state.clone();
+        let root_text = root.to_str().unwrap().to_string();
+        let woke = within(std::time::Duration::from_secs(30), move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let wait = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    changes.changed(),
+                );
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    apply_coordination_command(
+                        &writer,
+                        &root_text,
+                        CoordinationCommand::RegisterRun {
+                            registration: registration("run_one", None),
+                            initial_state: None,
+                        },
+                    )
+                    .unwrap();
+                });
+                wait.await.map(|changed| {
+                    changed.unwrap();
+                    *changes.borrow()
+                })
+            })
+        });
+        assert_eq!(woke.expect("no wake within 10 s"), 1);
     }
 
     #[test]

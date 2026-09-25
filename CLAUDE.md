@@ -291,7 +291,7 @@ Klide/
     │   ├── pty_wire.rs           Portable ptyd wire vocabulary — Request/Response/Event
     │   ├── pty_frame.rs          UTF-8 framing for PTY reads — a character split across reads stays whole
     │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, effort + MCP wiring
-    │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one writer gate, replayed snapshot
+    │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — start a connector's stdio server, handshake, list tools, kill it (a probe, not a session)

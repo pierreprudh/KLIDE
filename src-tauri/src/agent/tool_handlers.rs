@@ -781,6 +781,15 @@ async fn wait_for_coordination_messages(
 ) -> Result<Option<Vec<CoordinationEnvelopeSnapshot>>, ToolOutcome> {
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Paused);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_seconds);
+    // Subscribed before the first read, so mail landing between a read and
+    // the wait below still wakes it. The floor only matters for an append by
+    // another Klide process, which wakes nobody here.
+    let mut changes = ctx.sup.coordination_changes(workspace_root);
+    let floor = if changes.is_some() {
+        std::time::Duration::from_secs(2)
+    } else {
+        std::time::Duration::from_millis(250)
+    };
     loop {
         let inbox = match load_coordination_inbox(ctx.sup, workspace_root, ctx.id) {
             Ok(inbox) => inbox,
@@ -810,18 +819,27 @@ async fn wait_for_coordination_messages(
             set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
             return Ok(None);
         }
-        let pause = std::cmp::min(
-            std::time::Duration::from_millis(250),
-            deadline.saturating_duration_since(now),
-        );
+        let pause = std::cmp::min(floor, deadline.saturating_duration_since(now));
         tokio::select! {
             _ = ctx.cancel.cancelled() => {
                 set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
                 return Err(ToolOutcome::Cancelled);
             }
+            _ = journal_moved(&mut changes) => {}
             _ = tokio::time::sleep(pause) => {}
         }
     }
+}
+
+/// Resolves when the journal wake fires; never, when there is no wake (or its
+/// sender is gone), so the select above falls back to its timer.
+async fn journal_moved(changes: &mut Option<tokio::sync::watch::Receiver<u64>>) {
+    if let Some(receiver) = changes {
+        if receiver.changed().await.is_ok() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await
 }
 
 /// Native coordination Tools. The current Run id is always the actor; no Tool
