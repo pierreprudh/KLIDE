@@ -268,14 +268,22 @@ async fn ai_subscription_status(provider: String) -> Result<cli::AiConnectionSta
     .await
 }
 
-#[tauri::command]
-fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
-    let mode = match mode.as_str() {
+fn agent_mode_from_wire(mode: &str) -> agent::types::AgentMode {
+    match mode {
         "plan" => agent::types::AgentMode::Plan,
         "goal" => agent::types::AgentMode::Goal,
         _ => agent::types::AgentMode::Chat,
-    };
-    agent::tools::list_tools(&mode, &[])
+    }
+}
+
+#[tauri::command]
+fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
+    agent::tools::list_tools(&agent_mode_from_wire(&mode))
+}
+
+#[tauri::command]
+fn ai_tool_catalog(mode: String) -> Vec<agent::tools::ToolCatalogEntry> {
+    agent::tools::tool_catalog(&agent_mode_from_wire(&mode))
 }
 
 // ── Find in files ───────────────────────────────────────────────────────
@@ -960,6 +968,7 @@ pub fn run() {
             models::ai_model_reflection_levels,
             models::ai_count_tokens,
             ai_list_tools,
+            ai_tool_catalog,
             search_in_files,
             ai_provider_key_status,
             ai_set_provider_key,
@@ -1168,6 +1177,7 @@ mod blocking_door_tests {
         // lib.rs — pure or a table lookup
         "ai_model_pricing",
         "ai_list_tools",
+        "ai_tool_catalog",
         // lib.rs — a small JSON read; user-driven, not polled
         "accounts_list",
         // lib.rs — hand off to the opener plugin / native menu

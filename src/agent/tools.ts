@@ -9,9 +9,45 @@ export type AgentToolCall = { id?: string; name: string; args: any; childRunId?:
 
 let cachedTools: Record<string, any[] | undefined> = {};
 let cachedAllTools: any[] | undefined;
+let cachedCatalogs: Partial<Record<AgentMode, ToolCatalogEntry[]>> = {};
+
+/** One built-in Tool with the capability the Harness gates it by. Mirrors
+ *  `ToolCatalogEntry` in src-tauri/src/agent/tools.rs. */
+export type ToolCatalogEntry = { name: string; description: string; capability: string };
+
+/** The built-in Tools a Run in `mode` may call. Read a Tool's trust effect
+ *  from its `capability` here, never from a list of names. */
+export async function toolCatalog(mode: AgentMode): Promise<ToolCatalogEntry[]> {
+    const cached = cachedCatalogs[mode];
+    if (cached) return cached;
+    try {
+        const catalog = await invoke<ToolCatalogEntry[]>("ai_tool_catalog", { mode });
+        cachedCatalogs[mode] = catalog;
+        return catalog;
+    } catch {
+        return [];
+    }
+}
+
+/** The Tools a run in `mode` starts with turned off. Settings stores a toggle
+ *  as `<mode>.<tool>`, which applies to that Mode only; a bare key applies to
+ *  every Mode. Returns bare Tool names. */
+export function disabledToolsFor(mode: AgentMode, overrides?: Record<string, boolean>): string[] {
+    const disabled = new Set<string>();
+    for (const [key, enabled] of Object.entries(overrides ?? {})) {
+        if (enabled !== false) continue;
+        const dot = key.indexOf(".");
+        const prefix = dot < 0 ? "" : key.slice(0, dot);
+        if (prefix === "chat" || prefix === "plan" || prefix === "goal") {
+            if (prefix === mode) disabled.add(key.slice(dot + 1));
+        } else {
+            disabled.add(key);
+        }
+    }
+    return [...disabled];
+}
 
 export async function toolsForMode(mode: AgentMode): Promise<any[] | undefined> {
-    if (mode === "chat") return undefined;
     const key = mode;
     if (cachedTools[key]) return cachedTools[key];
     try {
@@ -41,6 +77,7 @@ export async function listAllTools(): Promise<any[]> {
 export function clearToolCache() {
     cachedTools = {};
     cachedAllTools = undefined;
+    cachedCatalogs = {};
 }
 
 export function parseToolCallsFromChunk(raw: any): AgentToolCall[] {

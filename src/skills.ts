@@ -10,7 +10,7 @@
 // webview can't read arbitrary home-directory paths on its own.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listAllTools } from "./agent/tools";
+import { listAllTools, toolCatalog } from "./agent/tools";
 
 export type Skill = {
   id: string;
@@ -33,7 +33,7 @@ export type Skill = {
 // `SKILL_TOOLS` is a static fallback that covers the four tools that
 // have existed since v0.1, so the UI stays useful even before the
 // async fetch resolves. Call `getAvailableTools()` for the live list.
-export const SKILL_TOOLS: { id: string; label: string; description: string }[] = [
+export const SKILL_TOOLS: AvailableTool[] = [
   { id: "read_file", label: "Read file", description: "Read the contents of a file." },
   { id: "list_dir", label: "List directory", description: "List files and folders." },
   { id: "glob", label: "Glob", description: "Find workspace files matching a pattern (e.g. src/**/*.ts)." },
@@ -58,12 +58,15 @@ export const ALL_TOOL_IDS = SKILL_TOOLS.map((t) => t.id);
 // shape but pulls the canonical descriptions from the agent harness so we
 // never drift. Falls back to the static SKILL_TOOLS list if the IPC call
 // is unavailable.
-export async function getAvailableTools(): Promise<{ id: string; label: string; description: string }[]> {
+export type AvailableTool = { id: string; label: string; description: string; capability?: string };
+
+export async function getAvailableTools(): Promise<AvailableTool[]> {
   try {
-    const raw = await listAllTools();
+    const [raw, catalog] = await Promise.all([listAllTools(), toolCatalog("goal")]);
     if (!Array.isArray(raw) || raw.length === 0) return SKILL_TOOLS;
+    const capabilityOf = new Map(catalog.map((entry) => [entry.name, entry.capability]));
     const mapped = raw
-      .map((t: any) => {
+      .map((t: any): AvailableTool | null => {
         const fn = t?.function;
         if (!fn || typeof fn.name !== "string") return null;
         const id = fn.name;
@@ -71,9 +74,11 @@ export async function getAvailableTools(): Promise<{ id: string; label: string; 
           id,
           label: humanizeToolId(id),
           description: typeof fn.description === "string" ? fn.description : "",
+          // A name the registry doesn't list is a dynamic tool: shell-backed.
+          capability: capabilityOf.get(id) ?? "run_command",
         };
       })
-      .filter((x: { id: string; label: string; description: string } | null): x is { id: string; label: string; description: string } => x !== null);
+      .filter((x): x is AvailableTool => x !== null);
     return mapped.length > 0 ? mapped : SKILL_TOOLS;
   } catch {
     return SKILL_TOOLS;

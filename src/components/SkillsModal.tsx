@@ -17,6 +17,7 @@ import {
   type Skill,
   genSkillId,
   SKILL_TOOLS,
+  type AvailableTool,
   getAvailableTools,
   installSkill,
   uninstallSkill,
@@ -41,7 +42,7 @@ type Draft = {
   tools: string[];
 };
 
-type ToolEntry = { id: string; label: string; description: string };
+type ToolEntry = AvailableTool;
 
 /* ------------------------------------------------------------------ icons */
 
@@ -1100,7 +1101,27 @@ function SkillForm({
 
 /* ----------------------------------------------------------- Tools & MCP ---*/
 
-const WRITE_TOOL_IDS = new Set(["write_file", "create_file", "create_skill"]);
+/** Section heading per capability, in the order the inventory lists them. */
+const CAPABILITY_GROUPS: { capability: string; label: string }[] = [
+  { capability: "read_workspace", label: "Read-only" },
+  { capability: "read_conversation_history", label: "Conversation history" },
+  { capability: "read_project_memory", label: "Project memory" },
+  { capability: "update_plan_state", label: "Plan state" },
+  { capability: "write_workspace", label: "Write · diff review" },
+  { capability: "run_command", label: "Command · approval" },
+  { capability: "manage_background_shell", label: "Background shell" },
+  { capability: "network", label: "Network · approval" },
+  { capability: "pause_for_user", label: "Pause" },
+  { capability: "coordinate_agents", label: "Coordination" },
+];
+
+function capabilityLabel(capability: string | undefined): string {
+  return CAPABILITY_GROUPS.find((group) => group.capability === capability)?.label ?? "Other";
+}
+
+const groupHeading = {
+  padding: "16px 6px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600,
+} as const;
 
 function ToolsView({
   skills, selectedTool, setSelectedTool, tools, connectors,
@@ -1116,8 +1137,14 @@ function ToolsView({
 }) {
   const tool = tools.find((t) => t.id === selectedTool) ?? tools[0];
   const usedBy = tool ? skills.filter((s) => s.tools.includes(tool.id)) : [];
-  const readOnly = tools.filter((t) => !WRITE_TOOL_IDS.has(t.id));
-  const write = tools.filter((t) => WRITE_TOOL_IDS.has(t.id));
+  const known = new Set(CAPABILITY_GROUPS.map((group) => group.capability));
+  const groups = [
+    ...CAPABILITY_GROUPS.map(({ capability, label }) => ({
+      label,
+      tools: tools.filter((t) => t.capability === capability),
+    })),
+    { label: "Other", tools: tools.filter((t) => !t.capability || !known.has(t.capability)) },
+  ].filter((group) => group.tools.length > 0);
   return (
     <>
       <aside
@@ -1128,16 +1155,16 @@ function ToolsView({
           display: "flex", flexDirection: "column", minHeight: 0,
         }}
       >
-        <div style={{ padding: "12px 12px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
-          Read-only · {readOnly.length}
-        </div>
         <div style={{ flex: 1, overflow: "auto", padding: "0 8px 8px", minHeight: 0 }}>
-          {readOnly.map((t) => toolButton(t, selectedTool, setSelectedTool))}
-          <div style={{ padding: "16px 6px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
-            Write · diff review · {write.length}
-          </div>
-          {write.map((t) => toolButton(t, selectedTool, setSelectedTool))}
-          <div style={{ padding: "16px 6px 8px", fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-subtle)", fontWeight: 600 }}>
+          {groups.map((group, idx) => (
+            <div key={group.label}>
+              <div style={idx === 0 ? { ...groupHeading, paddingTop: 12 } : groupHeading}>
+                {group.label} · {group.tools.length}
+              </div>
+              {group.tools.map((t) => toolButton(t, selectedTool, setSelectedTool))}
+            </div>
+          ))}
+          <div style={groupHeading}>
             Connectors · {connectors.length}
           </div>
           <div style={{ padding: "4px 6px 8px", fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.55 }}>
@@ -1171,8 +1198,8 @@ function ToolsView({
               <h2 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "var(--fg-strong)", fontFamily: "var(--font-mono)", letterSpacing: "-0.01em" }}>
                 {tool.id}
               </h2>
-              <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", color: WRITE_TOOL_IDS.has(tool.id) ? "var(--warning)" : "var(--fg-subtle)" }}>
-                {WRITE_TOOL_IDS.has(tool.id) ? "Write" : "Read-only"}
+              <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", color: tool.capability === "write_workspace" ? "var(--warning)" : "var(--fg-subtle)" }}>
+                {capabilityLabel(tool.capability)}
               </span>
             </div>
             <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 18 }}>

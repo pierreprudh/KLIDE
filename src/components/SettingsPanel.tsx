@@ -18,7 +18,8 @@ import {
 import { sortReflectionLevels } from "../reflectionLevels";
 import { THEMES } from "../theme";
 import { ProviderLogo } from "./ai/icons";
-import type { ProviderId } from "../agent/types";
+import type { AgentMode, ProviderId } from "../agent/types";
+import { toolCatalog, type ToolCatalogEntry } from "../agent/tools";
 import { PROVIDER_GROUPS, DEFAULT_MODELS } from "../agent/providers";
 import { ModelPicker } from "./ai/ModelPicker";
 import { DEFAULT_ADVISOR_PROVIDER, DEFAULT_ADVISOR_MODEL } from "../agent/advisor";
@@ -297,6 +298,26 @@ function RegionEditor({
 // consult uses your CLI subscription — no API key needed. Switching provider
 // seeds its default model and refetches the real model list (`ai_provider_models`);
 // the model is chosen from the same premium ModelPicker the AI panel uses.
+const TOOL_TOGGLE_MODES: AgentMode[] = ["chat", "plan", "goal"];
+
+/** Each mode's built-in Tools, from the registry — the toggles offer exactly
+ *  what a run in that mode can call. */
+function useToolCatalogs(): Partial<Record<AgentMode, ToolCatalogEntry[]>> {
+  const [catalogs, setCatalogs] = useState<Partial<Record<AgentMode, ToolCatalogEntry[]>>>({});
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(TOOL_TOGGLE_MODES.map(async (mode) => [mode, await toolCatalog(mode)] as const)).then(
+      (entries) => {
+        if (!cancelled) setCatalogs(Object.fromEntries(entries));
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return catalogs;
+}
+
 function AdvisorControl({
   provider,
   model,
@@ -399,6 +420,7 @@ export function SettingsPanel({
   const [showAskerAvatar, onShowAskerAvatarChange] = useSetting(SETTINGS.showAskerAvatar);
   const isSectionId = (value: string | null | undefined): value is SectionId =>
     sections.some((section) => section.id === value);
+  const toolCatalogs = useToolCatalogs();
   const [settingsProvider, setSettingsProvider] = useState<ProviderId>(
     () => (localStorage.getItem("klide.provider") as ProviderId) || "ollama"
   );
@@ -1587,13 +1609,13 @@ export function SettingsPanel({
                     <p style={{ margin: "0 0 14px", color: "var(--fg-subtle)", fontSize: 12.5, lineHeight: 1.45 }}>
                       Choose which tools each run mode can call. Disabled tools are hidden from the model entirely.
                     </p>
-                    {(["plan", "goal"] as const).map((mode, idx) => (
-                      <div key={mode} style={{ marginBottom: idx === 0 ? 16 : 0 }}>
+                    {TOOL_TOGGLE_MODES.map((mode, idx) => (
+                      <div key={mode} style={{ marginBottom: idx < TOOL_TOGGLE_MODES.length - 1 ? 16 : 0 }}>
                         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0, color: "var(--fg-dim)", marginBottom: 8 }}>
                           {mode.charAt(0).toUpperCase() + mode.slice(1)} mode
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {(["read_file","list_dir","glob","grep","get_git_status","get_git_diff","clean_context","web_search","web_fetch","write_file","create_file","create_skill"] as const).map((tool) => {
+                          {(toolCatalogs[mode] ?? []).map(({ name: tool }) => {
                             const key = `${mode}.${tool}`;
                             const enabled = (harnessSettings?.toolOverrides ?? {})[key] !== false;
                             return (

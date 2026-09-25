@@ -3,6 +3,7 @@ mod spreadsheets;
 use super::conversation_search;
 use super::todo;
 use super::glob_match::wildcard_match;
+use super::permission::GateSubject;
 use super::types::{AgentMode, DiffProposal, ToolResult};
 use crate::workspace::{
     is_sensitive_path, Access, Workspace, AGENT_MAX_READ_BYTES, AGENT_MAX_WRITE_BYTES,
@@ -65,6 +66,8 @@ pub const ADVISOR_TOOL: &str = "consult_advisor";
 /// The builtin shell-command tool name. Every other command-capability tool
 /// is a dynamic tool from `.agents/tools.json`.
 pub const RUN_COMMAND_TOOL: &str = "run_command";
+/// Launches a Mission from inside a Run — a Goal-only coordination tool.
+pub const MISSION_ORCHESTRATE_TOOL: &str = "mission_orchestrate";
 
 /// Which Pause ceremony a Pause entry runs. Tool identity is registry data:
 /// the run loop dispatches on this, never on a tool-name literal.
@@ -1127,43 +1130,34 @@ fn registry() -> Vec<ToolEntry> {
     ]
 }
 
-pub fn list_tools(mode: &AgentMode, disabled: &[String]) -> Vec<serde_json::Value> {
-    list_tools_for_workspace(mode, disabled, None)
+pub fn list_tools(mode: &AgentMode) -> Vec<serde_json::Value> {
+    list_tools_for_workspace(&GateSubject::for_mode(mode.clone()), None)
 }
 
+/// The schemas a Run is offered: exactly the Tools its Gate subject permits,
+/// so what the model sees and what dispatch lets through cannot disagree.
 pub fn list_tools_for_workspace(
-    mode: &AgentMode,
-    disabled: &[String],
+    subject: &GateSubject,
     workspace_root: Option<&str>,
 ) -> Vec<serde_json::Value> {
-    let reg = registry();
-    let mut tools: Vec<serde_json::Value> = reg
-        .iter()
+    let mut tools: Vec<serde_json::Value> = registry()
+        .into_iter()
         .filter(|e| {
             let name = e.schema["function"]["name"].as_str().unwrap_or("");
-            let mission_ok = !schema_has_name(&e.schema, "mission_orchestrate") || matches!(mode, AgentMode::Goal);
-            let kind_ok = mission_ok && tool_allowed_in_mode(mode, e.kind)
-                // consult_advisor is a side-effect-free Pause tool — escalating
-                // a hard decision to a stronger model is as useful while
-                // planning as while executing. Offer it in Plan too, even
-                // though other Pause tools stay Goal-only.
-                || (matches!(mode, AgentMode::Plan) && name == ADVISOR_TOOL);
-            if !kind_ok {
-                return false;
-            }
-            !disabled.iter().any(|d| d == name)
+            subject.permits(name, Some(e.kind)).is_ok()
         })
-        .map(|e| e.schema.clone())
+        .map(|e| e.schema)
         .collect();
     // Dynamic tools are shell-backed command tools. They are Goal-only and go
     // through the same permission gate as run_command; Plan stays read-only.
-    if mode == &AgentMode::Goal {
+    if tool_allowed_in_mode(&subject.mode, ToolKind::Command) {
         tools.extend(
             load_dynamic_tools(workspace_root)
                 .into_iter()
                 .filter(|schema| {
                     let name = schema["function"]["name"].as_str().unwrap_or("");
-                    !disabled.iter().any(|d| d == name) && find_builtin_tool_kind(name).is_none()
+                    find_builtin_tool_kind(name).is_none()
+                        && subject.permits(name, Some(ToolKind::Command)).is_ok()
                 }),
         );
     }
@@ -1171,16 +1165,44 @@ pub fn list_tools_for_workspace(
 }
 
 pub fn schemas_for_mode(
-    mode: &AgentMode,
-    disabled: &[String],
+    subject: &GateSubject,
     workspace_root: Option<&str>,
 ) -> Option<Vec<serde_json::Value>> {
-    let tools = list_tools_for_workspace(mode, disabled, workspace_root);
+    let tools = list_tools_for_workspace(subject, workspace_root);
     if tools.is_empty() {
         None
     } else {
         Some(tools)
     }
+}
+
+/// One built-in Tool as a settings or inventory surface shows it: what it is
+/// called, what it does, and the capability the Harness gates it by.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ToolCatalogEntry {
+    pub name: String,
+    pub description: String,
+    pub capability: &'static str,
+}
+
+/// The built-in Tools a Run in `mode` may call, with their capability. A
+/// surface reads trust effects from here rather than keeping its own list of
+/// names; provider schemas stay exactly what `list_tools` returns.
+pub fn tool_catalog(mode: &AgentMode) -> Vec<ToolCatalogEntry> {
+    let subject = GateSubject::for_mode(mode.clone());
+    registry()
+        .into_iter()
+        .filter_map(|e| {
+            let function = &e.schema["function"];
+            let name = function["name"].as_str()?;
+            subject.permits(name, Some(e.kind)).ok()?;
+            Some(ToolCatalogEntry {
+                name: name.to_string(),
+                description: function["description"].as_str().unwrap_or("").to_string(),
+                capability: e.kind.capability().wire(),
+            })
+        })
+        .collect()
 }
 
 fn find_builtin_tool_kind(name: &str) -> Option<ToolKind> {
@@ -4027,7 +4049,7 @@ mod tests {
             r#"{"tools":[{"name":"workspace_probe","description":"Probe","command":"pwd","cwd":"workspace"}]}"#,
         );
 
-        let plan = list_tools_for_workspace(&AgentMode::Plan, &[], Some(&root));
+        let plan = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Plan), Some(&root));
         assert!(
             !plan
                 .iter()
@@ -4035,7 +4057,7 @@ mod tests {
             "Plan mode must not advertise shell-backed dynamic tools"
         );
 
-        let goal = list_tools_for_workspace(&AgentMode::Goal, &[], Some(&root));
+        let goal = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Goal), Some(&root));
         assert!(
             goal.iter()
                 .any(|schema| schema["function"]["name"] == "workspace_probe"),
@@ -4099,7 +4121,7 @@ mod tests {
             &AgentMode::Plan,
             ToolKind::ProjectMemory
         ));
-        let plan = list_tools_for_workspace(&AgentMode::Plan, &[], Some(&root));
+        let plan = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Plan), Some(&root));
         assert!(
             plan.iter()
                 .any(|schema| schema["function"]["name"] == "update_todo_list"),
@@ -4147,7 +4169,7 @@ mod tests {
         };
         assert!(matches!(
             crate::agent::run_core::plan_tool_step(
-                &AgentMode::Plan,
+                &GateSubject::for_mode(AgentMode::Plan),
                 &advisor_call,
                 Some(ToolKind::Pause)
             ),
@@ -4163,7 +4185,7 @@ mod tests {
     /// its Mode, and those tools only append to the reviewed journal.
     #[test]
     fn chat_mode_exposes_only_coordination_tools_so_an_advisor_cannot_recurse() {
-        let names: Vec<String> = list_tools_for_workspace(&AgentMode::Chat, &[], None)
+        let names: Vec<String> = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Chat), None)
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap().to_string())
             .collect();
@@ -4175,7 +4197,7 @@ mod tests {
                 "Chat exposes nothing but coordination tools, got {name}"
             );
         }
-        assert!(schemas_for_mode(&AgentMode::Chat, &[], None).is_some());
+        assert!(schemas_for_mode(&GateSubject::for_mode(AgentMode::Chat), None).is_some());
     }
 
     #[test]
@@ -4616,6 +4638,18 @@ mod tests {
     }
 
     #[test]
+    fn the_tool_catalog_names_each_tools_capability() {
+        let goal = tool_catalog(&AgentMode::Goal);
+        let write = goal.iter().find(|e| e.name == "write_file").expect("write_file in Goal");
+        assert_eq!(write.capability, "write_workspace");
+        assert!(!write.description.is_empty());
+        let chat = tool_catalog(&AgentMode::Chat);
+        assert!(!chat.is_empty(), "Chat carries the coordination tools");
+        assert!(chat.iter().all(|e| e.capability == "coordinate_agents"));
+        assert!(tool_catalog(&AgentMode::Plan).iter().all(|e| e.name != "write_file"));
+    }
+
+    #[test]
     fn interactive_tool_names_are_every_pause_tool_and_only_those() {
         let interactive = interactive_tool_names();
 
@@ -4707,7 +4741,7 @@ mod tests {
 
     #[test]
     fn run_command_offers_background_without_making_it_required() {
-        let schemas = schemas_for_mode(&AgentMode::Goal, &[], None).expect("Goal has tools");
+        let schemas = schemas_for_mode(&GateSubject::for_mode(AgentMode::Goal), None).expect("Goal has tools");
         let run = schemas
             .iter()
             .find(|s| s["function"]["name"] == "run_command")

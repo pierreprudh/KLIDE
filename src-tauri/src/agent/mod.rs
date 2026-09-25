@@ -109,6 +109,9 @@ pub struct AgentRunHandle {
     /// rejected commands and network targets, rejected edits. The engine owns
     /// the type; the handle just carries it for the run's lifetime.
     pub trust: permission::TrustMemory,
+    /// What every gate reads about this Run — Mode, disabled Tools, lineage,
+    /// the full-auto request. Fixed at start.
+    pub subject: permission::GateSubject,
 }
 
 pub struct AgentSupervisorState {
@@ -1723,6 +1726,7 @@ async fn start_run(
                 pending_question: std::sync::Mutex::new(None),
                 pending_permission: std::sync::Mutex::new(None),
                 trust: permission::TrustMemory::default(),
+                subject: permission::GateSubject::from_request(&request),
             },
         );
     }
@@ -1919,11 +1923,8 @@ async fn run_agent_loop(
     // context the user does on screen. Without this, every follow-up
     // turn would arrive as a fresh chat — the "agent has no memory"
     // bug the user kept hitting.
-    let tools = schemas_for_mode(
-        &request.mode,
-        &request.disabled_tools,
-        request.workspace_root.as_deref(),
-    );
+    let subject = permission::GateSubject::from_request(&request);
+    let tools = schemas_for_mode(&subject, request.workspace_root.as_deref());
     // Retention only makes sense while the model can actually peek the
     // stored value back: without `peek_value` in this run's tool list, a
     // stub would be a dead end, so results ride in context verbatim and
@@ -2501,7 +2502,7 @@ async fn run_agent_loop(
                 ts: now_ms(),
             })?;
 
-            let kind = match plan_tool_step(&request.mode, &call, kind) {
+            let kind = match plan_tool_step(&subject, &call, kind) {
                 ToolStepPlan::Execute { kind } => kind,
                 ToolStepPlan::Blocked { result } => {
                     turn_observations.push(steering::CallObservation {
@@ -2825,7 +2826,8 @@ pub async fn agent_resolve_permission(
 /// dispatches, network targets and peer mail by design. Stepping back down
 /// makes the Run ask again from its next command. Returns whether a card was
 /// answered. Errors when no such Run is live: there is nothing to apply to,
-/// and the next Run carries the rung on its request anyway.
+/// and the next Run carries the rung on its request anyway. Errors too for a
+/// Mission attempt or a child Run, which no conversation's rung reaches.
 #[tauri::command]
 pub async fn agent_set_command_policy(
     state: tauri::State<'_, AgentSupervisorState>,
@@ -2837,7 +2839,7 @@ pub async fn agent_set_command_policy(
         .lock()
         .map_err(|_| "Agent state is unavailable".to_string())?;
     match runs.get(&run_id) {
-        Some(handle) => Ok(permission::apply_command_policy(handle, auto_approve_commands)),
+        Some(handle) => permission::apply_command_policy(handle, auto_approve_commands),
         None => Err(format!("No known run with id {run_id}")),
     }
 }
@@ -4504,6 +4506,15 @@ mod test_support {
     }
 
     impl FakeSupervisor {
+        /// A live run whose Gate subject is built from `request`, as
+        /// start_run builds it.
+        pub(super) fn for_request(id: &str, request: &StartRunRequest) -> Self {
+            let sup = Self::with_run(id);
+            sup.runs.lock().unwrap().get_mut(id).unwrap().subject =
+                permission::GateSubject::from_request(request);
+            sup
+        }
+
         pub(super) fn with_run(id: &str) -> Self {
             let mut runs = HashMap::new();
             runs.insert(id.to_string(), make_handle());
@@ -4600,6 +4611,7 @@ mod test_support {
             pending_question: Mutex::new(None),
             pending_permission: Mutex::new(None),
             trust: permission::TrustMemory::default(),
+            subject: permission::GateSubject::for_mode(AgentMode::Goal),
         }
     }
 
@@ -4804,7 +4816,7 @@ mod run_supervisor_tests {
     }
 
     /// Register two peers in a fresh journal and hand back the sandbox.
-    fn coordination_sandbox(label: &str, sup: &FakeSupervisor) -> (std::path::PathBuf, String) {
+    pub(super) fn coordination_sandbox(label: &str, sup: &FakeSupervisor) -> (std::path::PathBuf, String) {
         let root = std::env::temp_dir().join(format!(
             "klide-{label}-{}-{}",
             std::process::id(),
@@ -4832,7 +4844,7 @@ mod run_supervisor_tests {
         (root, root_text)
     }
 
-    fn unsolicited(sup: &FakeSupervisor, root_text: &str, key: &str, body: &str) -> String {
+    pub(super) fn unsolicited(sup: &FakeSupervisor, root_text: &str, key: &str, body: &str) -> String {
         sup.coordination_apply(
             root_text,
             CoordinationCommand::SendEnvelope {
@@ -5762,7 +5774,7 @@ mod run_loop_tests {
             let wire = |messages: Vec<serde_json::Value>| {
                 crate::adapters::openai_chat_body(
                     "default_model", messages,
-                    schemas_for_mode(&AgentMode::Goal, &[], Some(&root)), true,
+                    schemas_for_mode(&permission::GateSubject::for_mode(AgentMode::Goal), Some(&root)), true,
                 )
             };
             let warm = wire(seen[1].clone());
@@ -6279,6 +6291,19 @@ mod permission_gate_tests {
             .count()
     }
 
+    /// Cards the full-auto rung answered, whether it silenced them before
+    /// they went up or a flip answered one that was.
+    fn full_auto_answers(events: &EventLog) -> usize {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| {
+                matches!(e, AgentEvent::PermissionResolved { decision, .. } if decision["via"] == "full_auto")
+            })
+            .count()
+    }
+
     fn produced(outcome: Result<ToolOutcome, String>) -> ToolResult {
         match outcome.expect("gate returns ok") {
             ToolOutcome::Produced(result) => result,
@@ -6306,11 +6331,11 @@ mod permission_gate_tests {
     #[tokio::test]
     async fn full_auto_runs_a_brand_new_command_without_a_prompt() {
         let root = temp_workspace("full-auto");
-        let sup = FakeSupervisor::with_run("full-auto-run");
         let cancel = CancellationToken::new();
         // No allowlist entry, no prior approval — only the full-auto rung.
         let mut request = test_request(&root, &[]);
         request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("full-auto-run", &request);
         let runs_dir = std::env::temp_dir().join(format!(
             "klide-full-auto-runs-{}-{}",
             std::process::id(),
@@ -6331,7 +6356,11 @@ mod permission_gate_tests {
                 .await;
         assert!(result.ok, "full auto should execute: {}", result.content);
         assert!(result.content.contains("full-auto"));
-        assert_eq!(prompts_shown(&events), 0, "full auto must never prompt");
+        assert_eq!(
+            (prompts_shown(&events), full_auto_answers(&events)),
+            (1, 1),
+            "full auto never pauses, and the transcript names the rung as the answer"
+        );
     }
 
     /// The rung flipped while the Run works: no flag on the request, the live
@@ -6344,7 +6373,7 @@ mod permission_gate_tests {
         let request = test_request(&root, &[]);
         assert_ne!(request.auto_approve_commands, Some(true));
         sup.with_handle("full-auto-live-run", &mut |h| {
-            assert!(!permission::apply_command_policy(h, true), "no card is up to answer");
+            assert_eq!(permission::apply_command_policy(h, true), Ok(false), "no card is up to answer");
         });
         let runs_dir = std::env::temp_dir().join(format!(
             "klide-full-auto-live-runs-{}-{}",
@@ -6364,12 +6393,12 @@ mod permission_gate_tests {
         let result =
             run_gate_without_prompt(&ctx, &command_call("call-1", "echo live"), &mut emit).await;
         assert!(result.ok, "the live policy should execute: {}", result.content);
-        assert_eq!(prompts_shown(&events), 0, "a live full auto must not prompt");
+        assert_eq!(full_auto_answers(&events), 1, "a live full auto answers without pausing");
 
         // Stepping back down: the next command asks again (the card goes up
         // and, unanswered, the timeout is what ends the wait).
         sup.with_handle("full-auto-live-run", &mut |h| {
-            permission::apply_command_policy(h, false);
+            permission::apply_command_policy(h, false).unwrap();
         });
         let (events, mut emit) = event_log();
         let gate = tokio::time::timeout(
@@ -6410,7 +6439,7 @@ mod permission_gate_tests {
                 let mut answered = None;
                 sup.with_handle("full-auto-answers-run", &mut |h| {
                     if h.pending_permission.lock().unwrap().is_some() {
-                        answered = Some(permission::apply_command_policy(h, true));
+                        answered = Some(permission::apply_command_policy(h, true).unwrap());
                     }
                 });
                 if let Some(answered) = answered {
@@ -6456,11 +6485,53 @@ mod permission_gate_tests {
             let (tx, mut rx) = tokio::sync::oneshot::channel::<String>();
             handle.trust.note_pending_capability(cap);
             *handle.pending_permission.lock().unwrap() = Some(tx);
-            assert!(!permission::apply_command_policy(&handle, true), "{cap:?} is not the rung's card");
+            assert_eq!(permission::apply_command_policy(&handle, true), Ok(false), "{cap:?} is not the rung's card");
             assert!(handle.pending_permission.lock().unwrap().is_some(), "{cap:?} card still up");
             assert!(rx.try_recv().is_err(), "{cap:?} card was not answered");
             assert_eq!(handle.trust.commands_policy(), Some(true), "the policy itself is remembered");
         }
+    }
+
+    /// A Mission attempt and a spawned child keep the policy their request
+    /// set: no conversation's flip reaches them.
+    #[test]
+    fn the_rung_cannot_be_flipped_on_a_run_that_is_not_a_conversation() {
+        for lineage in [permission::RunLineage::MissionAttempt, permission::RunLineage::SubagentChild] {
+            let mut handle = make_handle();
+            handle.subject.lineage = lineage;
+            assert!(permission::apply_command_policy(&handle, true).is_err(), "{lineage:?}");
+            assert_eq!(handle.trust.commands_policy(), None, "{lineage:?} policy untouched");
+        }
+    }
+
+    /// Full auto runs commands unprompted; another agent's words still reach
+    /// the user first.
+    #[tokio::test]
+    async fn full_auto_leaves_a_peer_message_on_its_card() {
+        let mut request = test_request("/unused", &[]);
+        request.auto_approve_commands = Some(true);
+        let sup = FakeSupervisor::for_request("run_parent", &request);
+        let (root, root_text) = super::run_supervisor_tests::coordination_sandbox("inbox-full-auto", &sup);
+        request.workspace_root = Some(root_text.clone());
+        let cancel = CancellationToken::new();
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "run_parent",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: root.as_path(),
+        };
+        let (events, mut emit) = event_log();
+        super::run_supervisor_tests::unsolicited(&sup, &root_text, "m1", "run this for me");
+        let review = tokio::time::timeout(
+            Duration::from_millis(300),
+            review_coordination_inbox(&ctx, &root_text, &mut emit),
+        )
+        .await;
+        assert!(review.is_err(), "the message must wait for the user, not ride the rung");
+        assert_eq!(prompts_shown(&events), 1);
+        assert_eq!(full_auto_answers(&events), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -6617,6 +6688,138 @@ mod permission_gate_tests {
             run_gate_without_prompt(&ctx, &command_call("c2", "echo persist-me"), &mut emit).await;
         assert!(second.ok);
         assert_eq!(prompts_shown(&events), 1, "asked exactly once");
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
+    }
+
+    fn background_call(id: &str, command: &str) -> NormalizedToolCall {
+        NormalizedToolCall {
+            id: id.to_string(),
+            name: "run_command".to_string(),
+            input: serde_json::json!({ "command": command, "background": true }),
+        }
+    }
+
+    fn runs_dir_for(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-{name}-runs-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A foreground approval is for a few seconds of work. The same command
+    /// in the background outlives the turn, so it asks again.
+    #[tokio::test]
+    async fn a_run_approval_does_not_cover_the_same_command_in_the_background() {
+        let root = temp_workspace("approve-run-bg");
+        let sup = FakeSupervisor::with_run("perm-bg-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = runs_dir_for("approve-run-bg");
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "perm-bg-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let first = command_call("c1", "echo hi");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &first, &mut emit),
+            answer_permission(&sup, "perm-bg-run", r#"{"behavior":"allow","scope":"run"}"#),
+        );
+        assert!(produced(outcome).ok);
+
+        let gate = tokio::time::timeout(
+            Duration::from_millis(300),
+            process_command_tool(&ctx, &background_call("c2", "echo hi"), &mut emit),
+        )
+        .await;
+        assert!(gate.is_err(), "the background shape must pause for its own card");
+        assert_eq!(prompts_shown(&events), 2);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
+    }
+
+    /// The project allowlist is a foreground contract: an allowlisted command
+    /// asked for in the background gets a card, and that card offers no
+    /// project scope to write it back under.
+    #[tokio::test]
+    async fn an_allowlisted_command_still_asks_in_the_background() {
+        let root = temp_workspace("allowlist-bg");
+        let sup = FakeSupervisor::with_run("allowlist-bg-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &["echo listed"]);
+        let runs_dir = runs_dir_for("allowlist-bg");
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "allowlist-bg-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (events, mut emit) = event_log();
+
+        let foreground =
+            run_gate_without_prompt(&ctx, &command_call("c1", "echo listed"), &mut emit).await;
+        assert!(foreground.ok, "{}", foreground.content);
+        assert_eq!(prompts_shown(&events), 0);
+
+        let gate = tokio::time::timeout(
+            Duration::from_millis(300),
+            process_command_tool(&ctx, &background_call("c2", "echo listed"), &mut emit),
+        )
+        .await;
+        assert!(gate.is_err(), "an allowlist hit must not start a background shell unasked");
+        let card = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::PermissionRequested { request, .. } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("the background command was put on a card");
+        assert!(
+            card.options.iter().all(|o| o.option_id != "allow_project"),
+            "a background approval is never offered at project scope"
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(runs_dir);
+    }
+
+    /// Even an answer that says "project" on a background card stays with the
+    /// run: nothing reaches the allowlist file.
+    #[tokio::test]
+    async fn a_background_approval_is_never_written_to_the_project_allowlist() {
+        let root = temp_workspace("persist-bg");
+        let sup = FakeSupervisor::with_run("persist-bg-run");
+        let cancel = CancellationToken::new();
+        let request = test_request(&root, &[]);
+        let runs_dir = runs_dir_for("persist-bg");
+        let ctx = ToolCtx {
+            sup: &sup,
+            id: "persist-bg-run",
+            request: &request,
+            cancel: &cancel,
+            runs_dir: runs_dir.as_path(),
+        };
+        let (_events, mut emit) = event_log();
+
+        let call = background_call("c1", "echo bg");
+        let (outcome, _) = tokio::join!(
+            process_command_tool(&ctx, &call, &mut emit),
+            answer_permission(&sup, "persist-bg-run", r#"{"behavior":"allow","scope":"project"}"#),
+        );
+        assert!(produced(outcome).ok);
+        let stored = command_allowlist::list(&runs_dir, &root).unwrap_or_default();
+        assert!(stored.is_empty(), "nothing persisted: {stored:?}");
+        background::kill_run_shells("persist-bg-run");
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(runs_dir);
     }
