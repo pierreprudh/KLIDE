@@ -1,5 +1,6 @@
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
+import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
@@ -4072,12 +4073,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // Letting a peer's message in should not leave it waiting for the user to
   // find something else to say: start a turn with no words of the user's own,
   // so the Run reads it now. Only when the conversation is idle — a live turn
-  // reaches the boundary on its own. Chat has no coordination, so a Chat
-  // picker wakes as Plan, the quietest mode that can read the inbox.
+  // reaches the boundary on its own. The wake keeps the thread's own Mode:
+  // Chat reads its inbox too, and a peer's message never earns more tools.
   async function wakeForInbox() {
     if (streaming || queueRef.current.length > 0 || reattachRef.current) return;
-    const current = agentModeRef.current;
-    const mode: AgentMode = current === "chat" ? "plan" : current;
+    const mode = wakeTurnMode(agentModeRef.current);
     const modelInspection = await activateModelInspectionForSend();
     enqueueTurn({
       clientId: genId(),

@@ -894,8 +894,8 @@ fn registry() -> Vec<ToolEntry> {
                 serde_json::json!({
                     "toRunId": { "type": "string", "description": "Exact target Run id returned by agent_list." },
                     "body": { "type": "string", "description": "The semantic message to deliver." },
-                    "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Message kind. Defaults to instruction." },
-                    "replyTo": { "type": "string", "description": "Envelope id being answered. You must be its original recipient and send back to its original sender." },
+                    "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Message kind. Defaults to instruction, or answer when replyTo is set." },
+                    "replyTo": { "type": "string", "description": "Envelope id being answered. A reply is kind answer, one per message; you must be its original recipient and send back to its original sender." },
                     "correlationId": { "type": "string", "description": "Optional stable id grouping a multi-message exchange." },
                     "idempotencyKey": { "type": "string", "description": "Optional retry key. Reusing it with different intent is rejected." },
                     "waitForReply": { "type": "boolean", "description": "When true, wait for a reply to this exact envelope before returning." },

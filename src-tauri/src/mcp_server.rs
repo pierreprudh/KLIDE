@@ -103,8 +103,8 @@ pub fn tool_list() -> Value {
                 "properties": {
                     "toRunId": { "type": "string", "description": "Exact target Run id from agent_list." },
                     "body": { "type": "string", "description": "The message." },
-                    "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Defaults to instruction." },
-                    "replyTo": { "type": "string", "description": "Envelope id being answered. You must be its original recipient and send back to its original sender." },
+                    "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Defaults to instruction, or answer when replyTo is set." },
+                    "replyTo": { "type": "string", "description": "Envelope id being answered. A reply is kind answer, one per message; you must be its original recipient and send back to its original sender." },
                     "correlationId": { "type": "string", "description": "Optional id grouping a multi-message exchange." },
                     "idempotencyKey": { "type": "string", "description": "Optional retry key." },
                     "waitForReply": { "type": "boolean", "description": "Wait for a reply to this exact message before returning." },

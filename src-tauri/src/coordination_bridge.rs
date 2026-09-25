@@ -179,8 +179,10 @@ fn apply(
     Ok(outcome)
 }
 
-fn parse_kind(kind: Option<&str>) -> Result<CoordinationEnvelopeKind, String> {
+/// A reply is an answer: with `replyTo` set, an omitted kind means answer.
+fn parse_kind(kind: Option<&str>, is_reply: bool) -> Result<CoordinationEnvelopeKind, String> {
     match kind.map(str::trim).filter(|k| !k.is_empty()) {
+        None if is_reply => Ok(CoordinationEnvelopeKind::Answer),
         None | Some("instruction") => Ok(CoordinationEnvelopeKind::Instruction),
         Some("question") => Ok(CoordinationEnvelopeKind::Question),
         Some("answer") => Ok(CoordinationEnvelopeKind::Answer),
@@ -210,38 +212,10 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn kind_label(kind: CoordinationEnvelopeKind) -> &'static str {
-    match kind {
-        CoordinationEnvelopeKind::Instruction => "instruction",
-        CoordinationEnvelopeKind::Question => "question",
-        CoordinationEnvelopeKind::Answer => "answer",
-        CoordinationEnvelopeKind::Progress => "progress",
-        CoordinationEnvelopeKind::Handoff => "handoff",
-    }
-}
-
-fn actor_label(actor: &CoordinationActor) -> String {
-    match actor {
-        CoordinationActor::Operator => "operator".to_string(),
-        CoordinationActor::Run { run_id } => format!("@{run_id}"),
-    }
-}
-
-/// The same fixed prose the Harness hands its model for delivered mail, so a
-/// Delegate and a Harness Run read peers' words in one shape.
-pub fn messages_text(inbox: &[CoordinationEnvelopeSnapshot]) -> String {
-    let mut text = String::from("Coordination messages received:");
-    for entry in inbox {
-        let envelope = &entry.envelope;
-        text.push_str(&format!(
-            "\n\n[{} {} from {}]\n{}",
-            kind_label(envelope.kind),
-            envelope.id,
-            actor_label(&envelope.from),
-            envelope.body
-        ));
-    }
-    text
+/// The same fenced delivery the Harness hands its model, so a Delegate and a
+/// Harness Run read peers' words in one shape — preamble included.
+pub fn messages_text(inbox: &[CoordinationEnvelopeSnapshot]) -> Result<String, String> {
+    crate::agent::delivery::render_mail(inbox)
 }
 
 /// Block until a matching accepted envelope arrives for `run_id`, or the
@@ -385,7 +359,7 @@ fn execute_inner(
             if target.is_empty() || body.is_empty() {
                 return Err("agent_send requires non-empty toRunId and body.".into());
             }
-            let kind = parse_kind(kind.as_deref())?;
+            let kind = parse_kind(kind.as_deref(), non_empty(reply_to.clone()).is_some())?;
             let idempotency_key = non_empty(idempotency_key);
             let outcome = apply(
                 store,
@@ -466,7 +440,7 @@ fn execute_inner(
             )? {
                 Some(messages) => Ok(serde_json::json!({
                     "messages": messages,
-                    "text": messages_text(&messages),
+                    "text": messages_text(&messages)?,
                 })),
                 None => Ok(serde_json::json!({
                     "messages": [],

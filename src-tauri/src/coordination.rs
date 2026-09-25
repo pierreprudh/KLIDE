@@ -395,16 +395,9 @@ pub fn send_receipt(
             text.push_str(" No reply arrived within the wait window; the message remains recorded.")
         }
         CoordinationReplyStatus::Received => {
-            for reply in &replies {
-                let sender = match &reply.envelope.from {
-                    CoordinationActor::Operator => "operator".to_string(),
-                    CoordinationActor::Run { run_id } => format!("@{run_id}"),
-                };
-                text.push_str(&format!(
-                    "\n\n[reply {} from {sender}]\n{}",
-                    reply.envelope.id, reply.envelope.body
-                ));
-            }
+            // A reply is another agent's words: fenced like every delivery.
+            text.push_str("\n\n");
+            text.push_str(&crate::agent::delivery::render_mail(&replies)?);
         }
     }
     Ok(CoordinationSendReceipt {
@@ -1493,6 +1486,26 @@ fn event_for_command(
                             .into(),
                     );
                 }
+                // A Run's reply skips its recipient's review because it was
+                // invited, so it is held to what was invited: one answer.
+                // Anything more is a new message, and a new message is
+                // reviewed. The operator stays exempt.
+                if let Some(author) = from.run_id() {
+                    if kind != CoordinationEnvelopeKind::Answer {
+                        return Err("A reply is an answer; set kind to answer or send a new \
+                                    message without replyTo."
+                            .into());
+                    }
+                    let answered = snapshot.envelopes.iter().any(|entry| {
+                        entry.envelope.reply_to.as_deref() == Some(id.as_str())
+                            && entry.envelope.from.run_id() == Some(author)
+                    });
+                    if answered {
+                        return Err(
+                            "Already answered; send a new message (it will be reviewed).".into(),
+                        );
+                    }
+                }
             }
             Ok(CoordinationEvent::EnvelopeQueued {
                 envelope: CoordinationEnvelope {
@@ -1956,6 +1969,149 @@ mod tests {
             },
         };
         apply_event(&mut historical, &legacy).expect("older journals remain readable");
+    }
+
+    fn reply(
+        state: &CoordinationStoreState,
+        root: &Path,
+        from: CoordinationActor,
+        to: &str,
+        kind: CoordinationEnvelopeKind,
+        reply_to: &str,
+    ) -> Result<CoordinationCommandOutcome, String> {
+        apply_coordination_command(
+            state,
+            root.to_str().unwrap(),
+            CoordinationCommand::SendEnvelope {
+                from,
+                to_run_id: to.into(),
+                kind,
+                body: "Here is what I found.".into(),
+                reply_to: Some(reply_to.into()),
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            },
+        )
+    }
+
+    fn run(id: &str) -> CoordinationActor {
+        CoordinationActor::Run { run_id: id.into() }
+    }
+
+    /// A question invites one answer past the asker's review. A second
+    /// solicited "answer" would be a free, unreviewed channel into the asker.
+    #[test]
+    fn a_second_answer_to_one_question_is_rejected_without_appending() {
+        let root = temp_workspace("second-answer");
+        let state = CoordinationStoreState::default();
+        for id in ["run_a", "run_b"] {
+            register(&state, &root, id, None);
+        }
+        let asked = send(&state, &root, run("run_a"), "run_b", None).unwrap();
+        let question = asked.snapshot.envelopes[0].envelope.id.clone();
+        let first = reply(&state, &root, run("run_b"), "run_a", CoordinationEnvelopeKind::Answer, &question)
+            .unwrap();
+        assert_eq!(
+            first.snapshot.envelopes.last().unwrap().delivery_state,
+            CoordinationDeliveryState::Accepted
+        );
+        let before = read_snapshot(&state, root.to_str().unwrap()).unwrap();
+        let second = reply(&state, &root, run("run_b"), "run_a", CoordinationEnvelopeKind::Answer, &question);
+        assert_eq!(
+            second.unwrap_err(),
+            "Already answered; send a new message (it will be reviewed)."
+        );
+        assert_eq!(read_snapshot(&state, root.to_str().unwrap()).unwrap(), before);
+        // The unsolicited route is still open, and it is reviewed.
+        let follow_up = send(&state, &root, run("run_b"), "run_a", None).unwrap();
+        assert_eq!(
+            follow_up.snapshot.envelopes.last().unwrap().delivery_state,
+            CoordinationDeliveryState::Queued
+        );
+    }
+
+    #[test]
+    fn a_reply_must_carry_kind_answer() {
+        let root = temp_workspace("reply-kind");
+        let state = CoordinationStoreState::default();
+        for id in ["run_a", "run_b"] {
+            register(&state, &root, id, None);
+        }
+        let asked = send(&state, &root, run("run_a"), "run_b", None).unwrap();
+        let question = asked.snapshot.envelopes[0].envelope.id.clone();
+        let before = read_snapshot(&state, root.to_str().unwrap()).unwrap();
+        for kind in [
+            CoordinationEnvelopeKind::Instruction,
+            CoordinationEnvelopeKind::Question,
+            CoordinationEnvelopeKind::Progress,
+            CoordinationEnvelopeKind::Handoff,
+        ] {
+            let result = reply(&state, &root, run("run_b"), "run_a", kind, &question);
+            assert!(result.unwrap_err().starts_with("A reply is an answer"), "{kind:?}");
+        }
+        assert_eq!(read_snapshot(&state, root.to_str().unwrap()).unwrap(), before);
+        // The operator answering on a Run's behalf is exempt from both rules.
+        for _ in 0..2 {
+            reply(
+                &state,
+                &root,
+                CoordinationActor::Operator,
+                "run_a",
+                CoordinationEnvelopeKind::Instruction,
+                &question,
+            )
+            .expect("operator-authored replies keep their kind and count");
+        }
+    }
+
+    #[test]
+    fn journals_with_repeated_solicited_answers_still_replay() {
+        let mut snapshot = CoordinationSnapshot::default();
+        let envelope = |id: &str, from: &str, to: &str, kind, reply_to: Option<&str>| {
+            CoordinationEvent::EnvelopeQueued {
+                envelope: CoordinationEnvelope {
+                    id: id.into(),
+                    from: run(from),
+                    to_run_id: to.into(),
+                    kind,
+                    body: "Historical".into(),
+                    reply_to: reply_to.map(str::to_string),
+                    correlation_id: None,
+                    idempotency_key: None,
+                    source_refs: vec![],
+                    created_at_ms: 0,
+                },
+            }
+        };
+        let events = [
+            CoordinationEvent::RunRegistered {
+                registration: registration("run_a", None),
+                state: CoordinationRunState::Working,
+            },
+            CoordinationEvent::RunRegistered {
+                registration: registration("run_b", None),
+                state: CoordinationRunState::Working,
+            },
+            envelope("env_q", "run_a", "run_b", CoordinationEnvelopeKind::Question, None),
+            envelope("env_1", "run_b", "run_a", CoordinationEnvelopeKind::Answer, Some("env_q")),
+            envelope("env_2", "run_b", "run_a", CoordinationEnvelopeKind::Progress, Some("env_q")),
+        ];
+        for (seq, event) in events.into_iter().enumerate() {
+            let line = CoordinationEventLine {
+                schema_version: COORDINATION_SCHEMA_VERSION,
+                seq: seq as u64,
+                ts: 0,
+                event,
+            };
+            apply_event(&mut snapshot, &line).expect("history replays under its own rules");
+        }
+        assert_eq!(snapshot.envelopes.len(), 3);
+        assert_eq!(
+            snapshot.envelopes[2].delivery_state,
+            CoordinationDeliveryState::Accepted,
+            "the fold is unchanged: only new commands meet the stronger check"
+        );
     }
 
     #[test]

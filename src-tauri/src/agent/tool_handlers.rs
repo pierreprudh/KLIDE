@@ -750,13 +750,18 @@ fn coordination_timeout_seconds(input: &serde_json::Value) -> u64 {
         .clamp(1, 120)
 }
 
+/// A reply is an answer: with `replyTo` set, an omitted kind means answer.
 fn coordination_envelope_kind(
     input: &serde_json::Value,
 ) -> Result<CoordinationEnvelopeKind, String> {
+    let is_reply = input
+        .get("replyTo")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.trim().is_empty());
     match input
         .get("kind")
         .and_then(|value| value.as_str())
-        .unwrap_or("instruction")
+        .unwrap_or(if is_reply { "answer" } else { "instruction" })
     {
         "instruction" => Ok(CoordinationEnvelopeKind::Instruction),
         "question" => Ok(CoordinationEnvelopeKind::Question),
@@ -765,21 +770,6 @@ fn coordination_envelope_kind(
         "handoff" => Ok(CoordinationEnvelopeKind::Handoff),
         other => Err(format!("Unknown coordination message kind `{other}`.")),
     }
-}
-
-fn coordination_messages_text(inbox: &[CoordinationEnvelopeSnapshot]) -> String {
-    let mut text = String::from("Coordination messages received:");
-    for entry in inbox {
-        let envelope = &entry.envelope;
-        text.push_str(&format!(
-            "\n\n- envelopeId: {}\n  kind: {}\n  from: {}\n  body: {}",
-            envelope.id,
-            coordination_kind_label(envelope.kind),
-            coordination_actor_label(&envelope.from),
-            envelope.body
-        ));
-    }
-    text
 }
 
 async fn wait_for_coordination_messages(
@@ -1093,7 +1083,10 @@ where
             {
                 Ok(Some(messages)) => ToolOutcome::Produced(ToolResult {
                     ok: true,
-                    content: coordination_messages_text(&messages),
+                    content: match delivery::render_mail(&messages) {
+                        Ok(text) => text,
+                        Err(error) => return Ok(coordination_tool_error(error)),
+                    },
                     metadata: Some(serde_json::json!({ "messages": messages })),
                 }),
                 Ok(None) => ToolOutcome::Produced(ToolResult {

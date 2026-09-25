@@ -305,6 +305,7 @@ Klide/
     │       ├── artifacts.rs       What a command left behind — the dirty set bracketed around a run_command
     │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints
+    │       ├── delivery.rs        Everything the operator didn't type (peer mail, observer completions) — one nonce-fenced renderer
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts
     │       ├── glob_match.rs      Shared */? matcher (glob tool + command allowlist)
     │       ├── permission.rs      Permission engine — classify, prompt, remember, persist
@@ -502,6 +503,8 @@ wrote to B, only B may use that Envelope's `replyTo` to answer A, so knowing an
 id never lets a third Run enter the exchange or inherit its auto-accept.
 Operator-authored mail has no Run address to reverse onto, so only its
 recipient may answer it, and the trusted operator may answer on a Run's behalf.
+A Run's reply is kind `answer`, one per envelope; a second is rejected and goes
+as a new, reviewed message.
 And what a send reports is read from the journal, never asserted: `send_receipt`
 returns the Envelope's actual delivery state — including when an idempotent
 retry appended nothing — and reports separately whether this call waited for and
@@ -514,7 +517,10 @@ There are two doors onto that one journal, and no third:
 - **Harness Runs** call the native Tools `agent_list` / `agent_send` /
   `agent_wait` / `agent_cancel` / `agent_read_result` (`agent/tools.rs`); the
   actor is always `ctx.id`, and delivery happens at the turn boundary as a
-  `user` turn labelled as agent mail. Every Mode is on the plane: Chat carries
+  `user` turn placed before the operator's message. Every door (boundary,
+  `agent_wait`, send receipts, the Delegate bridge) renders mail and observer
+  completions through `agent/delivery.rs`: one preamble, each item fenced by a
+  per-delivery random nonce a body cannot close. Every Mode is on the plane: Chat carries
   the coordination tools and nothing else (no files, shell, or memory), so any
   conversation with a Workspace can be addressed and can answer.
 - **Delegate CLIs** (Claude Code, Codex, OpenCode) get the same operations as
