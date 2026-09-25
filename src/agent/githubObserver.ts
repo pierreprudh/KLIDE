@@ -6,6 +6,9 @@ export type GithubObserver = {
   jobs: { name: string; status: string; conclusion: string | null; startedAt?: string | null; completedAt?: string | null }[];
 };
 export const readGithubObserver = (runId: string, shellId: string): Promise<GithubObserver> => invoke("agent_observer_github", { runId, shellId });
+export function githubObserverNeedsRefresh(watch: GithubObserver): boolean {
+  return watch.status !== "completed" || (watch.prNumber !== null && watch.prState !== "merged" && watch.prState !== "closed");
+}
 /** Wall-clock span of this attempt's jobs; parallel jobs are not summed. */
 export function githubObserverDuration(watch: GithubObserver): string | null {
   if (watch.status !== "completed" || !watch.jobs.length) return null;

@@ -2,7 +2,7 @@ import { LinkMark } from "../linkMark";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Observer } from "../../agent/observers";
-import { githubObserverLabel, githubObserverDetail, githubObserverDuration, readGithubObserver, type GithubObserver } from "../../agent/githubObserver";
+import { githubObserverLabel, githubObserverDetail, githubObserverDuration, githubObserverNeedsRefresh, readGithubObserver, type GithubObserver } from "../../agent/githubObserver";
 import { openGitPr } from "../../gitNavigation";
 import { openExternal } from "../../externalLink";
 import { notify } from "../../toast";
@@ -28,7 +28,10 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
         if (!alive) return;
         setWatch(next); setStale(false);
         saveObserverCard(runId, observer, next);
-        if (!stopped && (running || next.status !== "completed") && (running || retries++ < 3)) timer = setTimeout(refresh, 8000);
+        retries = 0;
+        // CI completion is not PR completion: keep the same card fresh until
+        // the PR is merged/closed, even after the shell watcher has exited.
+        if (!stopped && (running || githubObserverNeedsRefresh(next))) timer = setTimeout(refresh, next.status === "completed" ? 15000 : 8000);
       } catch {
         if (!alive) return;
         setStale(true);
