@@ -374,7 +374,7 @@ mod tests {
                 "codex",
                 "codex -m 'gpt-6-astra' -c model_reasoning_effort='max' 'fix the bug'",
             ),
-            ("claude-code", "claude --model 'gpt-6-astra' 'fix the bug'"),
+            ("claude-code", "claude --model 'gpt-6-astra' --effort 'max' 'fix the bug'"),
             ("opencode", "opencode run -m 'gpt-6-astra' 'fix the bug'"),
             ("omp", "omp --model 'gpt-6-astra' 'fix the bug'"),
         ];

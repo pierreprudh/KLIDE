@@ -1212,6 +1212,7 @@ pub(crate) async fn dispatch(
                 adapter,
                 label,
                 model,
+                reflection_level,
                 messages,
                 workspace_root,
                 run_id,

@@ -73,6 +73,7 @@ pub async fn run_subscription_chat(
     adapter: &dyn Delegate,
     label: &str,
     model: String,
+    effort: Option<String>,
     messages: Vec<serde_json::Value>,
     workspace_root: Option<String>,
     run_id: Option<String>,
@@ -115,6 +116,7 @@ pub async fn run_subscription_chat(
     // is most of what the user wants to see.
     let spec = ChatSpec {
         model,
+        effort: effort.as_deref(),
         resume: resume.as_deref(),
         mcp: mcp.as_ref(),
         allowed_commands: &allowed_commands,

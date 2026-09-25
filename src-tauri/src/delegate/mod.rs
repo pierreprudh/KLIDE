@@ -23,6 +23,7 @@ pub mod status;
 
 pub use chat::run_subscription_chat;
 pub use claude_code::ClaudeCode;
+pub use claude_code::EFFORT_LEVELS as CLAUDE_EFFORT_LEVELS;
 pub use codex::Codex;
 pub use omp::Omp;
 pub use opencode::OpenCode;
@@ -47,6 +48,8 @@ pub struct ChatSpec<'a> {
     /// Empty means "no model picked" — the adapter omits its model flag so the
     /// CLI uses its own default.
     pub model: &'a str,
+    /// Selected reasoning effort; absent leaves the CLI default unchanged.
+    pub effort: Option<&'a str>,
     /// A session this conversation already opened, to continue instead of
     /// replacing. See [`Delegate::resumes_sessions`].
     pub resume: Option<&'a str>,
@@ -149,7 +152,7 @@ pub trait Delegate: Sync {
     /// CLI that has such a switch. The default is `None`: most CLIs don't take
     /// one from Klide, and inventing a flag would just make the launch fail.
     /// `level` arrives trimmed, non-empty, and — because the picker is fed by
-    /// `models::codex_reasoning_levels` — already one the CLI published.
+    /// `models::resolve_reflection_levels` — already one the CLI supports.
     fn effort_arg(&self, _level: &str) -> Option<String> {
         None
     }
@@ -589,6 +592,19 @@ mod tests {
     }
 
     #[test]
+    fn claude_effort_survives_launch_and_resume() {
+        for level in ["low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(ClaudeCode.spawn_command(Some("task"), None, None, Some(level)),
+                format!("claude --effort '{level}' 'task'"));
+            assert_eq!(ClaudeCode.spawn_command(None, Some("sonnet"), Some("session"), Some(level)),
+                format!("claude --resume 'session' --model 'sonnet' --effort '{level}'"));
+        }
+        for level in ["", "  ", "ultra", "high'; echo bad"] {
+            assert_eq!(ClaudeCode.spawn_command(None, None, None, Some(level)), "claude");
+        }
+    }
+
+    #[test]
     fn claude_resume() {
         let cmd = ClaudeCode.spawn_command(None, None, Some("abc-123"), None);
         assert_eq!(cmd, "claude --resume 'abc-123'");
@@ -601,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn only_codex_takes_a_reasoning_effort() {
+    fn codex_takes_a_reasoning_effort() {
         // Codex has no effort flag: `-c key=value` overrides one config key
         // for this launch, which is how the picker's choice reaches the CLI
         // without rewriting the user's ~/.codex/config.toml.
@@ -610,10 +626,9 @@ mod tests {
             cmd,
             "codex -m 'gpt-6-astra' -c model_reasoning_effort='high' 'write tests'"
         );
-        // Every other CLI takes no such switch, so a level that reaches them
-        // (a stale per-model setting, say) must not invent a flag.
+        // CLIs without a switch ignore stale per-model settings instead
+        // of inventing an unsupported flag.
         for cmd in [
-            ClaudeCode.spawn_command(Some("t"), None, None, Some("high")),
             OpenCode.spawn_command(Some("t"), None, None, Some("high")),
             Omp.spawn_command(Some("t"), None, None, Some("high")),
         ] {

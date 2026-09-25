@@ -866,6 +866,7 @@ mod chain {
 
         // The real argument builder, including the --allowedTools grant.
         let spec = ChatSpec {
+            effort: None,
             model: "sonnet",
             resume: None,
             mcp: Some(&wiring),

@@ -22,15 +22,9 @@ them.
 
 ## v0.5.1 — Release hardening and publishing
 
-- [ ] Give Claude Code its reasoning-effort dial. PR #97 landed per-model
-  effort levels read from each CLI and concluded that only Codex takes one —
-  that is wrong. `claude --effort <level>` accepts `low, medium, high, xhigh,
-  max` (confirmed 2026-09-11 against claude 2.0.x: an invalid value prints the
-  valid set), and Claude Code transcripts already record `effort` and
-  `perTurnEffort` per message. The fix is one `effort_arg` impl in
-  `delegate/claude_code.rs` plus a level set in `resolve_reflection_levels`;
-  the seam and its tests are already there. Note the vocabulary is the CLI's,
-  not a model's — unlike Codex, whose set comes from its manifest per model.
+- [x] Give Claude Code its reasoning-effort dial: low, medium, high, xhigh,
+  and max, carried into terminal launch/resume and Focus headless turns.
+  Unsupported or absent values leave the CLI default unchanged.
 - [ ] Dogfood the spreadsheet path in the app: create, inspect, revise, reject
   a proposal, and roll a workbook back from a checkpoint — on a small local
   model as well as a hosted one. The Tools shipped in 0.6.3 with Rust and

@@ -44,6 +44,13 @@ fn allowed_tools_args(commands: &[String], klide_mcp: bool) -> Vec<String> {
     args
 }
 
+pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+fn supported_effort(level: &str) -> Option<&str> {
+    let level = level.trim();
+    EFFORT_LEVELS.contains(&level).then_some(level)
+}
+
 impl Delegate for ClaudeCode {
     fn id(&self) -> &'static str {
         "claude-code"
@@ -55,6 +62,10 @@ impl Delegate for ClaudeCode {
 
     fn model_arg(&self, model: &str) -> String {
         format!(" --model {}", shell_quote(model))
+    }
+
+    fn effort_arg(&self, level: &str) -> Option<String> {
+        supported_effort(level).map(|level| format!(" --effort {}", shell_quote(level)))
     }
 
     /// `--mcp-config <file>` adds servers for this invocation only, on top of
@@ -122,6 +133,9 @@ impl Delegate for ClaudeCode {
         match args.iter().position(|a| a == "--output-format") {
             Some(flag) if flag + 1 < args.len() => args[flag + 1] = "stream-json".to_string(),
             _ => args.extend(["--output-format".to_string(), "stream-json".to_string()]),
+        }
+        if let Some(level) = spec.effort.and_then(supported_effort) {
+            args.extend(["--effort".to_string(), level.to_string()]);
         }
         args.push("--verbose".into());
         // Without this the CLI emits each assistant block only once complete, so
@@ -1058,7 +1072,25 @@ mod tests {
 
     /// One turn's terms, with only what a test cares about spelled out.
     fn spec<'a>(model: &'a str, resume: Option<&'a str>, allowed: &'a [String]) -> ChatSpec<'a> {
-        ChatSpec { model, resume, mcp: None, allowed_commands: allowed }
+        ChatSpec { model, effort: None, resume, mcp: None, allowed_commands: allowed }
+    }
+
+    #[test]
+    fn headless_effort_survives_new_and_resumed_turns() {
+        for resume in [None, Some("session")] {
+            for level in ["low", "medium", "high", "xhigh", "max"] {
+                let turn = ChatSpec { effort: Some(level), ..spec("sonnet", resume, &[]) };
+                let args = ClaudeCode.chat_stream_args("/tmp/ws", &turn).unwrap();
+                let at = args.iter().position(|a| a == "--effort").unwrap();
+                assert_eq!(args[at + 1], level);
+                assert_eq!(args.contains(&"--resume".to_string()), resume.is_some());
+            }
+            for effort in [None, Some(""), Some("ultra")] {
+                let turn = ChatSpec { effort, ..spec("", resume, &[]) };
+                let args = ClaudeCode.chat_stream_args("/tmp/ws", &turn).unwrap();
+                assert!(!args.contains(&"--effort".to_string()));
+            }
+        }
     }
 
     #[test]
@@ -1066,13 +1098,13 @@ mod tests {
         // A `-p` turn has nobody to answer Claude Code's permission prompt, so
         // without this the model calls agent_list and gets "not granted yet".
         let wiring = McpWiring::default();
-        let with_mcp = ChatSpec { model: "", resume: None, mcp: Some(&wiring), allowed_commands: &[] };
+        let with_mcp = ChatSpec { effort: None, model: "", resume: None, mcp: Some(&wiring), allowed_commands: &[] };
         let args = ClaudeCode.chat_stream_args("/tmp/ws", &with_mcp).unwrap();
         let at = args.iter().position(|a| a == "--allowedTools").expect("flag");
         assert_eq!(args[at + 1], "mcp__klide");
         // Alongside approved commands, never instead of them.
         let allowed = vec!["npm test".to_string()];
-        let both = ChatSpec { model: "", resume: None, mcp: Some(&wiring), allowed_commands: &allowed };
+        let both = ChatSpec { effort: None, model: "", resume: None, mcp: Some(&wiring), allowed_commands: &allowed };
         let args = ClaudeCode.chat_stream_args("/tmp/ws", &both).unwrap();
         let at = args.iter().position(|a| a == "--allowedTools").expect("flag");
         assert_eq!(&args[at + 1..at + 3], ["Bash(npm test)", "mcp__klide"]);

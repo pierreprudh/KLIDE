@@ -1,5 +1,9 @@
 # Changelog
 
+## Claude Code effort (2026-09-26)
+
+- Claude Code now offers low, medium, high, xhigh, and max reasoning effort in the existing picker. The selection reaches both terminal launch/resume and Focus chat turns.
+
 ## GitHub observer cards (2026-09-24)
 
 - Watcher cards fill the conversation width and also stay in Focus's right-side panel, sharing the same live status. Closing the panel leaves a GitHub icon to reopen the watcher.
