@@ -2833,7 +2833,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     }
     if (ta.clientWidth === 0) return;
     ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+    // A long paste grows the box up to 40% of the window (never below the
+    // old 160px) before it scrolls, so the text you pasted is readable.
+    const cap = Math.max(160, Math.round(window.innerHeight * 0.4));
+    ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
   }, []);
 
   useEffect(() => {
@@ -5344,7 +5347,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
-            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
+            style={{ width: "100%", minHeight: 40, maxHeight: "max(168px, 40vh)", resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
           />
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>
