@@ -277,6 +277,7 @@ Klide/
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
     │   ├── memory.rs             Project Memory schema, Markdown I/O, and local retrieval
     │   ├── spreadsheet.rs        File persistence for the sheet surface — containment, size, conflict checks
+    │   ├── documents.rs          Open / Reveal / Refuse — what may leave the app, by kind, mode bits and header
     │   ├── run_documents.rs      Recover read-only document references from older transcripts
     │   ├── preview.rs            A picture of what Klide can't render (deck, PDF) via macOS `qlmanage`
     │   ├── storage.rs            Where the runs dir lives — user-choosable folder, validated moves, cache accounting
@@ -421,7 +422,8 @@ fidelity are out, and the limits are written down in
 open, and `agent_run_document_references` recovers files an older transcript
 only mentions, without claiming the run created them. What a *command* left
 behind is a separate question, answered by bracketing the workspace's dirty set
-around the command (`agent/artifacts.rs`).
+around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
+/ Refuse; the webview only picks a surface.
 
 ### Where the product is (v0.6.5 shipped)
 

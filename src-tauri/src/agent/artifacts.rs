@@ -116,14 +116,20 @@ pub(crate) fn produced(
 
 /// A repeated edit can leave Git status unchanged (?? → ?? or M → M).
 /// Compare document contents as well, without re-announcing untouched files.
+///
+/// A file that is executable by its name alone — a `.command`, a script, a
+/// path inside an `.app` — is not announced at all: an announced file is an
+/// offer to open it, and `documents.rs` would refuse that open anyway.
 pub(crate) fn produced_with_versions(
     before: &BTreeMap<String, String>, after: &BTreeMap<String, String>,
     old_versions: &BTreeMap<String, String>, new_versions: &BTreeMap<String, String>,
 ) -> Vec<Produced> {
+    let announced = |path: &str| !crate::documents::executable_by_name(std::path::Path::new(path));
     let mut files: BTreeMap<String, Produced> = produced(before, after).into_iter()
+        .filter(|file| announced(&file.path))
         .map(|file| (file.path.clone(), file)).collect();
     for (path, version) in new_versions {
-        if old_versions.get(path).is_some_and(|old| old != version) {
+        if announced(path) && old_versions.get(path).is_some_and(|old| old != version) {
             files.entry(path.clone()).or_insert(Produced {path: path.clone(), created: false});
         }
     }
@@ -146,6 +152,14 @@ mod tests {
         new.insert("budget.xlsx".into(), "two".into()); new.insert("deck.pptx".into(), "two".into());
         let files = produced_with_versions(&dirty, &dirty, &old, &new);
         assert_eq!(files, vec![Produced {path:"budget.xlsx".into(),created:false}, Produced {path:"deck.pptx".into(),created:false}]);
+    }
+
+    #[test]
+    fn a_script_a_command_left_behind_is_not_announced() {
+        let before = set("");
+        let after = set("?? out/deploy.command\n?? out/run.sh\n?? Tool.app/Contents/MacOS/Tool\n?? decks/Q3.pptx\n");
+        let files = produced_with_versions(&before, &after, &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(files, vec![Produced { path: "decks/Q3.pptx".into(), created: true }]);
     }
 
     #[test]
