@@ -5,6 +5,7 @@ export type ThemeId =
   | "cursor-dark"
   | "vscode-dark"
   | "github-light"
+  | "cerulean"
   | "solarized-dark";
 
 export type ThemeMeta = {
@@ -57,6 +58,13 @@ export const THEMES: ThemeMeta[] = [
     description: "Clean white workspace with crisp blue UI states.",
     isDark: false,
     swatches: ["#FFFFFF", "#F6F8FA", "#0969DA", "#24292F"],
+  },
+  {
+    id: "cerulean",
+    name: "Cerulean",
+    description: "White canvas, grey sidebar, blue only where something is highlighted.",
+    isDark: false,
+    swatches: ["#FFFEFC", "#F7F6F2", "#2596BE", "#1C1B18"],
   },
   {
     id: "solarized-dark",
@@ -217,6 +225,27 @@ const TERMINAL_ANSI: Record<ThemeId, TerminalAnsi> = {
     brightCyan: "#3192AA",
     brightWhite: "#24292F",
   },
+  // Neutral ink with the accent as the ANSI blue; the other hues are
+  // muted so program output doesn't compete with the one blue in the chrome.
+  cerulean: {
+    selectionBackground: "#CDE6F1",
+    black: "#2D2C28",
+    red: "#B5524B",
+    green: "#3E8A5F",
+    yellow: "#A57A22",
+    blue: "#1E80A3",
+    magenta: "#8A5FA8",
+    cyan: "#2A8F92",
+    white: "#716F68",
+    brightBlack: "#9C9A92",
+    brightRed: "#C8665E",
+    brightGreen: "#52A074",
+    brightYellow: "#B98D35",
+    brightBlue: "#2596BE",
+    brightMagenta: "#9E74BB",
+    brightCyan: "#3AA5A8",
+    brightWhite: "#1C1B18",
+  },
   // Canonical Solarized palette.
   "solarized-dark": {
     selectionBackground: "#164B55",
@@ -263,6 +292,7 @@ export const MONACO_THEME_IDS: Record<ThemeId, string> = {
   "cursor-dark": "klide-monaco-midnight",
   "vscode-dark": "klide-monaco-vscode-dark",
   "github-light": "klide-monaco-github-light",
+  cerulean: "klide-monaco-cerulean",
   "solarized-dark": "klide-monaco-solarized-dark",
 };
 
@@ -470,6 +500,32 @@ export function defineKlideMonacoThemes(monaco: MonacoLike) {
         "editorGutter.background": "#FFFFFF",
         "editorIndentGuide.background1": "#D8DEE4",
         "editorIndentGuide.activeBackground1": "#C9D1D9",
+      },
+    },
+    cerulean: {
+      base: "vs",
+      inherit: true,
+      rules: [
+        { token: "comment", foreground: "8A8A92", fontStyle: "italic" },
+        { token: "keyword", foreground: "1E80A3" },
+        { token: "string", foreground: "2F8060" },
+        { token: "number", foreground: "B06A1E" },
+        { token: "type", foreground: "7358C4" },
+        { token: "function", foreground: "17698A" },
+        { token: "variable", foreground: "2A2A2F" },
+      ],
+      colors: {
+        "editor.background": "#FFFEFC",
+        "editor.foreground": "#2D2C28",
+        "editorLineNumber.foreground": "#AAA8A1",
+        "editorLineNumber.activeForeground": "#2D2C28",
+        "editorCursor.foreground": "#2596BE",
+        "editor.selectionBackground": "#CDE6F1",
+        "editor.inactiveSelectionBackground": "#E3F0F6",
+        "editor.lineHighlightBackground": "#F9F8F4",
+        "editorGutter.background": "#FFFEFC",
+        "editorIndentGuide.background1": "#ECEAE4",
+        "editorIndentGuide.activeBackground1": "#D8D5CE",
       },
     },
     "solarized-dark": {
