@@ -9,6 +9,7 @@ import { useElapsed } from "./WorkingRow";
 import { createPortal } from "react-dom";
 import type { Msg } from "./types";
 import { mergeObserverCards } from "../../agent/observerCards";
+import { LinkMark } from "../linkMark";
 
 export function observerMessageIndex(msgs: Msg[], id: string): number | null {
   const start = msgs.findIndex(msg => msg.role === "tool" && msg.toolName === "run_command" && msg.content.startsWith("Watching `") && msg.content.includes(` as \`${id}\`.`));
@@ -66,10 +67,15 @@ export function ConversationObservers({ runId, onFollowup, sidebar, onGithubPres
 
   if (!observers.length) return null;
   return <div aria-label="Background observers" style={{ margin: "12px 0", color: "var(--fg-subtle)", fontSize: 12 }}>
+    {hasGithub && sidebar?.folded && sidebar.target && createPortal(
+      <button type="button" className="github-observer-mark" onClick={sidebar.onUnfold}
+        aria-label="Show GitHub watchers" title="GitHub watchers">
+        <LinkMark site="github" size={22} />
+      </button>, sidebar.target)}
     {observers.map((observer) => {
       const index = observer.githubWatch ? observerMessageIndex(msgs, observer.id) : null;
       const target = index === null ? null : messageRoot?.querySelector<HTMLElement>(`[data-observer-slot="${index}"]`);
-      const row = <ObserverRow key={observer.id} observer={observer} runId={runId} sidebar={sidebar} onStopped={() => void listObservers(runId).then(setObservers)} />;
+      const row = <ObserverRow key={observer.id} observer={observer} runId={runId} sidebar={sidebar?.folded ? undefined : sidebar} onStopped={() => void listObservers(runId).then(setObservers)} />;
       return target ? createPortal(row, target, observer.id) : row;
     })}
   </div>;
