@@ -999,6 +999,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(meta_for(&dir, sid).coord_secret_sha256.as_deref(), Some("feedface"));
+        // Let the reader thread stamp the exit first: its read-modify-write
+        // would otherwise race the upsert below and put the old hash back.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while meta_for(&dir, sid).ended_ms.is_none() {
+            assert!(std::time::Instant::now() < deadline, "the session never recorded its exit");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         // A later spawn without wiring must not inherit the old hash.
         upsert_scrollback_meta(&dir, spawn_meta(sid, "claude-code", 9_000));
         assert!(meta_for(&dir, sid).coord_secret_sha256.is_none());

@@ -279,6 +279,13 @@ pub fn remember_write_rejection(ctx: &ToolCtx<'_>, edit_key: &str) {
 
 /// Has "Validate all" been chosen earlier in this run? Later edits then apply
 /// without pausing, exactly as if the run had started with review off.
+/// Whether this Run is on the full-auto rung right now — the live flip when
+/// its lineage lets one count, else the request's own choice.
+pub fn full_auto(ctx: &ToolCtx<'_>) -> bool {
+    with_run_handle(ctx.sup, ctx.id, |h| h.subject.full_auto(h.trust.commands_policy()))
+        .unwrap_or(ctx.request.auto_approve_commands == Some(true))
+}
+
 pub fn edits_auto_applied(ctx: &ToolCtx<'_>) -> bool {
     with_run_handle(ctx.sup, ctx.id, |h| h.trust.edits_auto_applied()).unwrap_or(false)
 }

@@ -1224,6 +1224,7 @@ mod tests {
             run_id: "convo-9".to_string(),
             workspace_root: "/tmp/ws".to_string(),
             terminal: false,
+            secret_sha256: String::new(),
         };
         bridge.bind_session("convo-9:claude-code", session);
         assert!(!bridge.release_headless_session("convo-9:claude-code", true));

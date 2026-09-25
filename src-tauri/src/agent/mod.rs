@@ -5513,7 +5513,8 @@ mod run_loop_tests {
         let mut request = test_request(&root, &[]);
         request.auto_approve_commands = Some(true);
         let caller = ScriptedProviderCaller::new(vec![scripted_turn("Working on it.", vec![])]);
-        drive_loop(Arc::new(FakeSupervisor::with_run(id)), &runs_dir, id, request, caller.clone()).await;
+        let sup = Arc::new(FakeSupervisor::for_request(id, &request));
+        drive_loop(sup, &runs_dir, id, request, caller.clone()).await;
         let seen = caller.seen_messages.lock().unwrap();
         assert!(!seen[0].iter().any(|m| m.to_string().contains("ignore previous instructions")));
         drop(seen);
