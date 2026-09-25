@@ -434,6 +434,80 @@
     0 28px 80px rgba(31, 35, 40, 0.045);
 }
 
+/* Cerulean — Codex's arrangement with one blue (#2596BE): a white canvas, a
+   warm-neutral grey rail, near-black ink a touch warm, and the accent reserved for what
+   is highlighted — the selected row, selection, focus, the cursor. Nothing
+   else is tinted: the greys lean a hair warm (never blue-grey), and the composer
+   family is plain white on a hairline instead of taking the usual 5% accent
+   warmth. Hover deepens (#1E80A3) because #2596BE is ~3.3:1 on white.
+   Lane 2 turns sage because the default muted blue would twin the accent. */
+:root[data-theme="cerulean"] {
+  --bg:           #FFFEFC;
+  --bg-elevated:  #F7F6F2;
+  --bg-hover:     rgba(28, 27, 24, 0.045);
+  --bg-selected:  rgba(37, 150, 190, 0.12);
+
+  --fg-strong:    #1C1B18;
+  --fg:           rgba(28, 27, 24, 0.84);
+  --fg-subtle:    #6B6963;
+  --fg-muted:     #6B6963;
+  --fg-dim:       rgba(28, 27, 24, 0.40);
+
+  --border:        #EAE8E2;
+  --border-strong: rgba(28, 27, 24, 0.22);
+
+  --accent:       #2596BE;
+  --accent-soft:  rgba(37, 150, 190, 0.12);
+  --accent-hover: #1E80A3;
+
+  --control-primary-bg: #1C1B18;
+  --control-primary-fg: #FFFEFC;
+  --focus-ring:   rgba(37, 150, 190, 0.32);
+
+  --success:      #3E8A66;
+  --warning:      #AE7B26;
+  --danger:       #B5524B;
+
+  --diff-add:     #2F8060;
+  --diff-remove:  #B5524B;
+  --modal-scrim:  rgba(28, 27, 24, 0.28);
+
+  --lane-2: #7FA38A;
+
+  --code-comment: rgba(28, 27, 24, 0.42);
+
+  --terminal-bg:      #F7F6F2;
+  --terminal-fg:      #1C1B18;
+  --terminal-muted:   #6B6963;
+  --terminal-border:  #EAE8E2;
+  --terminal-hover:   rgba(28, 27, 24, 0.045);
+  --terminal-cursor:  #2596BE;
+
+  --panel-glass:      color-mix(in srgb, #FFFEFC 88%, transparent);
+  --panel-border:     color-mix(in srgb, var(--border) 90%, transparent);
+  --panel-highlight:  rgba(255, 255, 255, 0.9);
+  --panel-shadow:
+    0 1px 1px rgba(28, 27, 24, 0.03),
+    0 8px 28px rgba(28, 27, 24, 0.06),
+    0 28px 80px rgba(28, 27, 24, 0.04);
+  --shadow-raised: 0 1px 2px rgba(28, 27, 24, 0.08);
+
+  /* The chatbox and everything that opens out of it: white, no accent mix. */
+  --composer-glass:       #FFFEFC;
+  --composer-border:      #E6E3DC;
+  --composer-glass-hover: #FBFAF6;
+}
+
+/* The one place the rail shows blue: the row you are on. */
+:root[data-theme="cerulean"] .klide-focus-rail {
+  --rail-fill-active: var(--accent-soft);
+}
+
+/* Hover is not a highlight — the start cards lift on a neutral hairline. */
+:root[data-theme="cerulean"] .klide-focus-home-card:hover {
+  border-color: var(--border-strong);
+}
+
 :root[data-theme="solarized-dark"] {
   --bg:           #002B36;
   --bg-elevated:  #073642;
@@ -1147,7 +1221,8 @@ textarea.klide-diff-comment-input:focus-visible {
    here it floats on the theme's own background instead of a dark gutter. */
 :root[data-theme="klide-light"] .klide-welcome,
 :root[data-theme="sage-garden"] .klide-welcome,
-:root[data-theme="github-light"] .klide-welcome {
+:root[data-theme="github-light"] .klide-welcome,
+:root[data-theme="cerulean"] .klide-welcome {
   --w-fg:          #1c1c1c;
   --w-dim:         rgba(28, 28, 28, 0.62);
   --w-faint:       rgba(28, 28, 28, 0.42);

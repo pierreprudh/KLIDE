@@ -262,6 +262,11 @@ themes:
     description: "Clean white workspace with crisp blue UI states."
     isDark: false
     swatches: ["#FFFFFF", "#F6F8FA", "#0969DA", "#24292F"]
+  - id: cerulean
+    name: "Cerulean"
+    description: "Codex's arrangement with one blue. White canvas (#FFFEFC), warm-neutral grey sidebar (#F7F6F2), near-black ink a touch warm (#1C1B18). #2596BE appears only on what is highlighted — the active rail row, selection, focus ring, cursor. The composer family is plain white on a hairline, no accent mix. Hover deepens (#1E80A3) because #2596BE is ~3.3:1 on white. Git lane 2 turns sage so it can't twin the accent."
+    isDark: false
+    swatches: ["#FFFEFC", "#F7F6F2", "#2596BE", "#1C1B18"]
   - id: solarized-dark
     name: "Solarized Dark"
     description: "Muted blue-green terminal energy for long sessions."
