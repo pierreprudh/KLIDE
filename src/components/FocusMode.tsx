@@ -1717,6 +1717,20 @@ function FocusComposer({
   const bodySpans = useMemo(() => draftSpans(draftBody, ledes), [draftBody, ledes]);
   const highlighted = bodySpans.some((s) => s.skill);
 
+  // The box grows with what you typed or pasted — up to 40% of the window,
+  // never below the stylesheet's 168px — and scrolls only past that. An empty
+  // draft hands the height back to the stylesheet's min-height.
+  useEffect(() => {
+    const ta = taEl;
+    if (!ta) return;
+    if (draftBody === "") { ta.style.height = ""; ta.style.maxHeight = ""; return; }
+    if (ta.clientWidth === 0) return;
+    const cap = Math.max(168, Math.round(window.innerHeight * 0.4));
+    ta.style.maxHeight = `${cap}px`;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
+  }, [taEl, draftBody]);
+
   function submit() {
     const text = draft.trim();
     // An attachment-only first turn is valid: a dropped screenshot is a task.
