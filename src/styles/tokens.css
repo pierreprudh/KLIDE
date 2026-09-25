@@ -9113,8 +9113,11 @@ button:focus-visible .menu-leadout {
   .github-observer-content { justify-self:start; }
   .github-observer-actions { flex-direction:column; }
 }
+.github-observer.github-observer-sidebar { grid-template-columns:1fr; padding:14px 16px 10px; gap:12px; }
+.github-observer-sidebar .github-observer-identity { gap:10px; }
 .github-observer-sidebar .github-observer-pr { font-size:14px; }
-.github-observer-sidebar .github-observer-line { gap:7px; font-size:13px; }
-.github-observer-sidebar .github-observer-actions { gap:4px; }
-.github-observer-sidebar .github-observer-content { justify-self:start; }
-.github-observer-sidebar .github-observer-content:has(.github-observer-stop) { margin-bottom:16px; }
+.github-observer-sidebar .github-observer-line { gap:4px; font-size:12px; }
+.github-observer-sidebar .github-observer-actions { display:flex; flex-direction:row; justify-content:space-between; gap:8px; border-top:1px solid var(--border); padding-top:8px; }
+.github-observer-sidebar:has(.github-observer-stop) .github-observer-actions { margin-top:0; }
+.github-observer-sidebar .github-observer-content { justify-self:stretch; gap:10px; }
+.github-observer-sidebar .github-observer-content:has(.github-observer-stop) { margin-bottom:18px; }

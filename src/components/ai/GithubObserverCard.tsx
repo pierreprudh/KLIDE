@@ -52,7 +52,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
   };
   const card = (inSidebar: boolean) => <div className="github-observer-container"><section className={`github-observer github-observer-${tone}${inSidebar ? " github-observer-sidebar" : ""}`} aria-label={inSidebar ? "GitHub Actions in side panel" : "GitHub Actions observer"}>
     <div className="github-observer-identity">
-      <LinkMark site="github" size={36} />
+      <LinkMark site="github" size={inSidebar ? 28 : 36} />
       <span className="github-observer-pr">{prLabel}</span>
     </div>
     <div className="github-observer-content">
@@ -66,8 +66,8 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
       </div>
     </div>
       <div className="github-observer-actions">
-        {watch && <button className="github-observer-action github-observer-online" onClick={openOnline}>Open in GitHub<span className="github-observer-arrow" aria-hidden="true">↗</span></button>}
-        {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)}>Open in Git panel<span className="github-observer-arrow" aria-hidden="true">↗</span></button>}
+        {watch && <button className="github-observer-action github-observer-online" onClick={openOnline} aria-label="Open in GitHub">{inSidebar ? "GitHub" : "Open in GitHub"}<span className="github-observer-arrow" aria-hidden="true">↗</span></button>}
+        {watch?.prNumber && watch.localRepo === watch.repo && <button className="github-observer-action" onClick={() => openGitPr(watch.cwd, watch.prNumber!)} aria-label="Open in Git panel">{inSidebar ? "Git panel" : "Open in Git panel"}<span className="github-observer-arrow" aria-hidden="true">↗</span></button>}
       </div>
   </section></div>;
   return <>
