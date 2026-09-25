@@ -33,6 +33,9 @@ pub const ENV_ENDPOINT: &str = "KLIDE_COORD_ENDPOINT";
 /// Which Delegate session this child speaks as. Identity is still bound in the
 /// app from its own session map; this only says which line the call came in on.
 pub const ENV_SESSION: &str = "KLIDE_COORD_SESSION";
+/// Where this session's secret lives: a 0600 file the app wrote at spawn. A
+/// path, not the secret, so it appears in no config file and no argv.
+pub const ENV_SECRET_FILE: &str = "KLIDE_COORD_SECRET_FILE";
 /// The newest revision this server implements; an older client's requested
 /// version is echoed back when we recognise it, as the spec asks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -46,11 +49,16 @@ pub trait Bridge {
 pub struct HttpBridge {
     endpoint_path: PathBuf,
     session_id: String,
+    secret_path: Option<PathBuf>,
     client: reqwest::blocking::Client,
 }
 
 impl HttpBridge {
-    pub fn new(endpoint_path: PathBuf, session_id: String) -> Result<Self, String> {
+    pub fn new(
+        endpoint_path: PathBuf,
+        session_id: String,
+        secret_path: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let client = reqwest::blocking::Client::builder()
             // A wait may legitimately block for two minutes; leave headroom.
             .timeout(std::time::Duration::from_secs(
@@ -61,6 +69,7 @@ impl HttpBridge {
         Ok(Self {
             endpoint_path,
             session_id,
+            secret_path,
             client,
         })
     }
@@ -71,9 +80,17 @@ impl Bridge for HttpBridge {
         // Resolved per call and never cached: Klide may have restarted since
         // the last one and be listening on a different port with a new token.
         let endpoint = read_endpoint(&self.endpoint_path)?;
-        let response = self
-            .client
-            .post(bridge_url(&endpoint, &self.session_id))
+        let mut post = self.client.post(bridge_url(&endpoint, &self.session_id));
+        // Read per call too. A missing file still calls: the bridge's refusal
+        // says what to do, which is more use to the model than a dead server.
+        if let Some(secret) = self
+            .secret_path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+        {
+            post = post.header(crate::coordination_bridge::SECRET_HEADER, secret.trim());
+        }
+        let response = post
             .json(request)
             .send()
             .map_err(|e| format!("Klide is not reachable: {e}"))?;
@@ -308,7 +325,13 @@ pub fn serve_main() -> ! {
     };
     let endpoint_path = PathBuf::from(required(ENV_ENDPOINT));
     let session_id = required(ENV_SESSION);
-    let bridge = match HttpBridge::new(endpoint_path, session_id) {
+    // Optional: a child started before per-session secrets still serves, and
+    // each call explains that the Delegate needs a restart.
+    let secret_path = std::env::var(ENV_SECRET_FILE)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    let bridge = match HttpBridge::new(endpoint_path, session_id, secret_path) {
         Ok(bridge) => bridge,
         Err(error) => {
             eprintln!("klide mcp coordination: {error}");
@@ -562,7 +585,7 @@ mod chain {
         CoordinationStoreState, CoordinationWorkerKind,
     };
     use crate::coordination_bridge::{
-        register_delegate, BridgeHooks, BridgeSession, CoordinationBridgeState,
+        register_delegate, secret_sha256, BridgeHooks, BridgeSession, CoordinationBridgeState,
         DelegateRegistration,
     };
 
@@ -574,7 +597,11 @@ mod chain {
         /// The file an MCP child reads to find the bridge. A path, never a
         /// port: this app's listener is ephemeral and the child outlives it.
         endpoint: std::path::PathBuf,
+        /// The 0600 file the bound session's secret lives in.
+        secret: std::path::PathBuf,
     }
+
+    const SECRET: &str = "secret-of-convo-1";
 
     impl Drop for Chain {
         fn drop(&mut self) {
@@ -622,6 +649,7 @@ mod chain {
                 parent_run_id: None,
                 mission_id: None,
                 mission_task_id: None,
+                secret_sha256: &secret_sha256(SECRET),
             },
         )
         .unwrap();
@@ -629,17 +657,20 @@ mod chain {
         bridge
             .ensure_server(&endpoint, store.clone(), BridgeHooks::silent())
             .expect("the loopback bridge starts");
+        let secret = dir.join("convo-1-claude-code.secret");
+        crate::durable::write_atomic_private(&secret, SECRET.as_bytes()).unwrap();
         Chain {
             dir,
             root,
             store,
             bridge,
             endpoint,
+            secret,
         }
     }
 
     fn child_of(c: &Chain, session_id: &str) -> HttpBridge {
-        HttpBridge::new(c.endpoint.clone(), session_id.to_string()).unwrap()
+        HttpBridge::new(c.endpoint.clone(), session_id.to_string(), Some(c.secret.clone())).unwrap()
     }
 
     #[test]
@@ -753,6 +784,27 @@ mod chain {
             .contains("not bound"));
     }
 
+    /// A child with no secret (started before this build, or its file was
+    /// revoked) still answers — with a tool error that tells the model the way
+    /// out, not a dead server.
+    #[test]
+    fn a_child_without_its_secret_gets_a_tool_error_naming_the_fix() {
+        let c = chain("no-secret");
+        for secret_path in [None, Some(c.dir.join("missing.secret"))] {
+            let bridge =
+                HttpBridge::new(c.endpoint.clone(), "convo-1:claude-code".to_string(), secret_path)
+                    .unwrap();
+            let reply = handle_message(
+                &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"agent_list","arguments":{}}}),
+                &bridge,
+            )
+            .unwrap();
+            assert_eq!(reply["result"]["isError"], true, "{reply}");
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Restart the Delegate"), "{text}");
+        }
+    }
+
     /// The whole feature, through the real CLI: Klide writes the MCP config,
     /// Claude Code starts the server itself, its model calls `agent_send`, and
     /// the envelope lands in the journal stamped with this conversation's Run
@@ -803,6 +855,7 @@ mod chain {
                 args: vec!["mcp".to_string(), "coordination".to_string()],
                 endpoint_path: c.endpoint.to_string_lossy().to_string(),
                 session_id: "convo-1:claude-code".to_string(),
+                secret_path: c.secret.to_string_lossy().to_string(),
                 config_dir: c.root.clone(),
                 file_stem: "convo-1-claude-code".to_string(),
             })
@@ -916,6 +969,7 @@ mod chain {
                             run_id: "convo-1".to_string(),
                             workspace_root: recovered_root.clone(),
                             terminal: false,
+                            secret_sha256: secret_sha256(SECRET),
                         })
                     }),
                 },
@@ -981,6 +1035,7 @@ mod chain {
             .args(["mcp", "coordination"])
             .env(ENV_ENDPOINT, &c.endpoint)
             .env(ENV_SESSION, "convo-1:claude-code")
+            .env(ENV_SECRET_FILE, &c.secret)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()

@@ -50,6 +50,10 @@ pub struct SpawnRequest {
     /// the caller (it needs the app's data dir and exe path). Its files are
     /// the caller's to write; its flags and env land in the spec here.
     pub mcp: Option<McpWiring>,
+    /// sha256 of this session's bridge secret, recorded in the scrollback meta
+    /// so a restarted app can check a surviving child without ever storing
+    /// the secret itself.
+    pub coord_secret_sha256: Option<String>,
 }
 
 /// The one cwd rule for a Delegate spawn: an empty root means "no cwd", and a
@@ -168,6 +172,7 @@ pub fn spawn_spec_for(req: SpawnRequest) -> Result<SpawnSpec, String> {
         resume_session_id: req.resume_session_id,
         mission_link,
         detect_session_id: adapter.is_some(),
+        coord_secret_sha256: req.coord_secret_sha256,
     })
 }
 
@@ -195,6 +200,7 @@ mod tests {
             hook_url: None,
             custom_cli: None,
             mcp: None,
+            coord_secret_sha256: None,
         }
     }
 
@@ -204,6 +210,7 @@ mod tests {
             args: vec!["mcp".to_string(), "coordination".to_string()],
             endpoint_path: "/data/klide/coordination-endpoint.json".to_string(),
             session_id: "convo-1:x".to_string(),
+            secret_path: "/tmp/klide-mcp/convo-1-x.secret".to_string(),
             config_dir: "/tmp/klide-mcp".to_string(),
             file_stem: "convo-1-x".to_string(),
         }
@@ -239,6 +246,34 @@ mod tests {
             "/data/klide/coordination-endpoint.json"
         );
         assert_eq!(server["env"]["KLIDE_COORD_SESSION"], "convo-1:x");
+        assert_eq!(server["env"]["KLIDE_COORD_SECRET_FILE"], "/tmp/klide-mcp/convo-1-x.secret");
+    }
+
+    /// The secret never rides the wiring: every adapter hands the child a
+    /// path to it, while config files and Codex's argv stay secret-free.
+    #[test]
+    fn no_wiring_carries_the_secret_only_its_path() {
+        let secret = "s3cr3t-value-never-in-config";
+        for provider in ["claude-code", "codex", "opencode"] {
+            let wiring = delegate::lookup(provider).unwrap().mcp_wiring(&spec()).unwrap();
+            let mut req = request(provider);
+            req.mcp = Some(wiring);
+            req.coord_secret_sha256 = Some(crate::coordination_bridge::secret_sha256(secret));
+            let files = req.mcp.as_ref().unwrap().files.clone();
+            let args = req.mcp.as_ref().unwrap().args.join(" ");
+            let spec = spawn_spec_for(req).unwrap();
+            let everything = format!("{} {args} {:?} {:?}", spec.command, spec.env, files);
+            assert!(!everything.contains(secret), "{provider}: {everything}");
+            assert!(
+                everything.contains("/tmp/klide-mcp/convo-1-x.secret"),
+                "{provider} tells the child where its secret is: {everything}"
+            );
+            assert_eq!(
+                spec.coord_secret_sha256,
+                Some(crate::coordination_bridge::secret_sha256(secret)),
+                "the spawn records only the hash"
+            );
+        }
     }
 
     #[test]
@@ -249,7 +284,7 @@ mod tests {
         let spec = spawn_spec_for(req).unwrap();
         assert_eq!(
             spec.command,
-            "codex resume 'sess-9' -c 'mcp_servers.klide.command=\"/Applications/Klide.app/Contents/MacOS/klide\"' -c 'mcp_servers.klide.args=[\"mcp\",\"coordination\"]' -c 'mcp_servers.klide.env={KLIDE_COORD_ENDPOINT=\"/data/klide/coordination-endpoint.json\",KLIDE_COORD_SESSION=\"convo-1:x\"}'"
+            "codex resume 'sess-9' -c 'mcp_servers.klide.command=\"/Applications/Klide.app/Contents/MacOS/klide\"' -c 'mcp_servers.klide.args=[\"mcp\",\"coordination\"]' -c 'mcp_servers.klide.env={KLIDE_COORD_ENDPOINT=\"/data/klide/coordination-endpoint.json\",KLIDE_COORD_SESSION=\"convo-1:x\",KLIDE_COORD_SECRET_FILE=\"/tmp/klide-mcp/convo-1-x.secret\"}'"
         );
         assert!(spec.env.is_empty());
     }
