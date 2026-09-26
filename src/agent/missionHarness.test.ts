@@ -12,6 +12,12 @@ import {
   type MissionState,
   type MissionTask,
 } from "./missionHarness";
+import {
+  compileDurableMissionBundle,
+  type DurableMissionEvent,
+  type DurableMissionTaskSpec,
+} from "./durableMissions";
+import readiness from "./fixtures/missionReadiness.json";
 
 // `missionReducer` is the TypeScript projection of the Rust-owned Mission event
 // log — the second fold of the same log (Rust's `fold_runtime` is the first).
@@ -430,4 +436,54 @@ describe("inspectMission progress", () => {
       failed: 0,
     });
   });
+});
+
+// The same table Rust's `operator_readiness_matches_the_shared_frontend_fixture`
+// reads, so the Run button and `mission_request_task` cannot drift apart.
+describe("operator readiness, shared with Rust", () => {
+  const spec = (id: string, dependencies: string[]): DurableMissionTaskSpec => ({
+    schemaVersion: 1,
+    id,
+    missionId: MISSION,
+    title: `Task ${id}`,
+    bodyMarkdown: "",
+    phase: "Build",
+    mode: "goal",
+    risk: "low",
+    writesFiles: false,
+    dependencies,
+    acceptanceCriteria: [],
+    needsRepoWideContext: false,
+    needsStrongReasoning: false,
+    needsDelegateCli: false,
+    needsVisualReview: false,
+    createdMs: 1,
+    updatedMs: 1,
+  });
+
+  for (const scenario of readiness.scenarios) {
+    it(scenario.name, () => {
+      const state = compileDurableMissionBundle({
+        mission: {
+          schemaVersion: 1,
+          id: MISSION,
+          title: "Shared readiness",
+          intent: "Pin one gate across both halves.",
+          mode: "goal",
+          taskIds: readiness.tasks.map((task) => task.id),
+          createdMs: 1,
+          updatedMs: 1,
+        },
+        tasks: readiness.tasks.map((task) => spec(task.id, task.dependencies)),
+        events: scenario.events.map((event, seq) => ({
+          schemaVersion: 1,
+          missionId: MISSION,
+          seq,
+          ts: T + seq,
+          event: event as DurableMissionEvent,
+        })),
+      });
+      expect(readyMissionTaskIds(state, MISSION)).toEqual(scenario.requestable);
+    });
+  }
 });

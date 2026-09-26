@@ -396,9 +396,24 @@ export function missionTaskReady(task: MissionTask, tasksById: Record<string, Mi
   return taskDependenciesAccepted(task, tasksById);
 }
 
+/** Invariant 4 of ADR-0002: some attempt of this Mission is running or
+ *  awaiting review, so no other Task may start beside it. */
+export function missionHasInFlightAttempt(state: MissionState, missionId: string): boolean {
+  const mission = state.missions[missionId];
+  if (!mission) return false;
+  return mission.taskIds.some((taskId) =>
+    (state.tasks[taskId]?.attempts ?? []).some(
+      (attempt) => attempt.status === "running" || attempt.status === "review"
+    )
+  );
+}
+
+/** The Tasks an operator may request now — the same gate Rust's
+ *  `operator_request_gate` applies, pinned by `fixtures/missionReadiness.json`. */
 export function readyMissionTaskIds(state: MissionState, missionId: string): string[] {
   const mission = state.missions[missionId];
   if (!mission || mission.approvedAtMs === null) return [];
+  if (missionHasInFlightAttempt(state, missionId)) return [];
   return mission.taskIds.filter((taskId) => {
     const task = state.tasks[taskId];
     return task ? missionTaskReady(task, state.tasks) : false;

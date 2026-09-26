@@ -1,0 +1,222 @@
+{
+  "$comment": "Which Tasks an operator may request, as one table read by both halves: Rust's operator_request_gate (missions.rs tests) and TypeScript's readyMissionTaskIds (missionHarness.test.ts). Change a row here and both must agree.",
+  "tasks": [
+    {
+      "id": "a",
+      "dependencies": []
+    },
+    {
+      "id": "b",
+      "dependencies": []
+    },
+    {
+      "id": "c",
+      "dependencies": [
+        "a"
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "a plan that is not approved offers nothing",
+      "events": [],
+      "requestable": []
+    },
+    {
+      "name": "an approved plan offers every task without a pending dependency",
+      "events": [
+        {
+          "type": "plan_approved"
+        }
+      ],
+      "requestable": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "a running attempt anywhere holds every task back",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        }
+      ],
+      "requestable": []
+    },
+    {
+      "name": "an attempt awaiting review holds every task back",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        },
+        {
+          "type": "attempt_settled",
+          "taskId": "a",
+          "runId": "run-a1",
+          "exitCode": 0
+        }
+      ],
+      "requestable": []
+    },
+    {
+      "name": "a rejected task can be retried beside an untouched one",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        },
+        {
+          "type": "attempt_validation_recorded",
+          "taskId": "a",
+          "runId": "run-a1",
+          "accepted": false,
+          "validation": {
+            "status": "failed",
+            "checks": [],
+            "filesChanged": 0,
+            "commandsRun": 0,
+            "commandsFailed": 0,
+            "diffReviews": 0,
+            "permissionsApproved": 0,
+            "permissionsDenied": 0,
+            "warnings": []
+          }
+        }
+      ],
+      "requestable": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "a failed launch can be retried",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        },
+        {
+          "type": "attempt_dispatch_failed",
+          "taskId": "a",
+          "runId": "run-a1",
+          "message": "offline"
+        }
+      ],
+      "requestable": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "an interrupted attempt can be retried",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        },
+        {
+          "type": "attempt_interrupted",
+          "taskId": "a",
+          "runId": "run-a1",
+          "reason": "app restarted"
+        }
+      ],
+      "requestable": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "acceptance unlocks the dependent and retires the task",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        },
+        {
+          "type": "attempt_validation_recorded",
+          "taskId": "a",
+          "runId": "run-a1",
+          "accepted": true,
+          "validation": {
+            "status": "passed",
+            "checks": [],
+            "filesChanged": 0,
+            "commandsRun": 0,
+            "commandsFailed": 0,
+            "diffReviews": 0,
+            "permissionsApproved": 0,
+            "permissionsDenied": 0,
+            "warnings": []
+          }
+        }
+      ],
+      "requestable": [
+        "b",
+        "c"
+      ]
+    },
+    {
+      "name": "a dependent's running attempt holds the independent task back",
+      "events": [
+        {
+          "type": "plan_approved"
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "a",
+          "runId": "run-a1"
+        },
+        {
+          "type": "attempt_validation_recorded",
+          "taskId": "a",
+          "runId": "run-a1",
+          "accepted": true,
+          "validation": {
+            "status": "passed",
+            "checks": [],
+            "filesChanged": 0,
+            "commandsRun": 0,
+            "commandsFailed": 0,
+            "diffReviews": 0,
+            "permissionsApproved": 0,
+            "permissionsDenied": 0,
+            "warnings": []
+          }
+        },
+        {
+          "type": "attempt_attached",
+          "taskId": "c",
+          "runId": "run-c1"
+        }
+      ],
+      "requestable": []
+    }
+  ]
+}
