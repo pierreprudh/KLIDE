@@ -293,7 +293,7 @@ pub fn acknowledge(run_id: &str, shell_id: &str) {
         shells.retain(|_, shell| {
             if !shell.delivered { return true; }
             if crate::git::github::ci_watch_target(&shell.command).is_none() { return false; }
-            if let Ok(mut state) = shell.state.lock() { state.buffer.clear(); }
+            shell.process.clear_output();
             true
         });
         let mut completed: Vec<_> = shells.values().filter(|s| s.run_id == run_id && s.delivered).map(|s| (s.started_ms, s.id.clone())).collect();

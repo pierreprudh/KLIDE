@@ -314,6 +314,18 @@ impl ProcessHandle {
         }
     }
 
+    /// Release acknowledged output while preserving absolute reader offsets.
+    pub fn clear_output(&self) {
+        if let Ok(mut rings) = self.rings.lock() {
+            let clear = |ring: &mut Ring| {
+                ring.start = ring.end();
+                ring.buffer.clear();
+            };
+            clear(&mut rings.out);
+            if let Some(err) = rings.err.as_mut() { clear(err); }
+        }
+    }
+
     /// stdout and stderr as captured. Under merged capture stderr is empty.
     pub fn split_output(&self) -> (Captured, Captured) {
         let Ok(rings) = self.rings.lock() else {
@@ -425,6 +437,19 @@ mod tests {
 
     fn start(command: &str, capture: Capture) -> ProcessHandle {
         spawn(SpawnSpec { command, cwd: std::path::Path::new("."), capture }).unwrap()
+    }
+
+    #[tokio::test]
+    async fn clearing_acknowledged_output_preserves_reader_offsets() {
+        let handle = start("printf hello; printf error >&2", Capture::Split { cap_each: 1024 });
+        wait(&handle, Duration::from_secs(5), &CancellationToken::new()).await;
+        let (_, _, cursor) = handle.read_since(0);
+        assert_eq!(cursor, 5);
+        handle.clear_output();
+        assert_eq!(handle.read_since(cursor), (String::new(), 0, cursor));
+        let (out, err) = handle.split_output();
+        assert!(out.text.is_empty() && err.text.is_empty());
+        assert_eq!((out.dropped, err.dropped), (5, 5));
     }
 
     async fn wait(handle: &ProcessHandle, timeout: Duration, cancel: &CancellationToken) -> Waited {
