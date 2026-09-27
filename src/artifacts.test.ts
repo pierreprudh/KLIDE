@@ -41,9 +41,15 @@ describe("where a produced document opens", () => {
     expect(artifactOpensIn("config/.gitignore")).toBe("system");
   });
 
-  it("says which of the two things the row will do", () => {
+  it("says which of the things the row will do", () => {
     expect(artifactActionLabel("decks/Q3 review.pptx")).toBe("Open Q3 review.pptx in its app");
     expect(artifactActionLabel("notes/summary.md")).toBe("Read summary.md");
+  });
+
+  it("promises Finder, not an app, for a file with no extension", () => {
+    // Rust reveals what names no app; an extensionless +x file is never run.
+    expect(artifactActionLabel("build/deploy")).toBe("Show deploy in Finder");
+    expect(artifactActionLabel("config/.envrc")).toBe("Show .envrc in Finder");
   });
 
   it.each(["decks/Q3.pptx", "brief.docx", "report.pdf", "budget.xlsx"])(
@@ -53,8 +59,9 @@ describe("where a produced document opens", () => {
   it("draws a picture itself when the document is one", () => {
     expect(artifactPreview("chart.png")).toBe("image");
   });
-  it("pictures a page a run wrote, though its source still reads in the inspector", () => {
-    expect(artifactPreview("site/index.html")).toBe("quicklook");
+  it("never asks Quick Look to render a page; its source reads in the inspector", () => {
+    expect(artifactPreview("site/index.html")).toBe("none");
+    expect(artifactPreview("site/INDEX.HTM")).toBe("none");
     expect(artifactOpensIn("site/index.html")).toBe("inspector");
     expect(artifactPreview("notes.md")).toBe("none");
   });
@@ -78,9 +85,9 @@ describe("reaching the file", () => {
     });
   });
 
-  it("hands Rust an absolute path to open one", async () => {
-    invokeMock.mockResolvedValue(undefined);
-    await openArtifactInApp("/Users/p/KIDE/", "q3-demo/deck.pptx");
+  it("hands Rust an absolute path to open one, and reports what Rust did", async () => {
+    invokeMock.mockResolvedValue("reveal");
+    await expect(openArtifactInApp("/Users/p/KIDE/", "q3-demo/deck.pptx")).resolves.toBe("reveal");
     expect(invokeMock).toHaveBeenCalledWith("open_entry", {
       workspaceRoot: "/Users/p/KIDE/",
       path: "/Users/p/KIDE/q3-demo/deck.pptx",

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub(crate) mod orchestration;
 
@@ -38,6 +38,10 @@ pub struct MissionStoreState {
     /// validation/approval signal arrived while running and one more decision
     /// pass is owed before releasing the claim.
     driving: Mutex<HashMap<String, bool>>,
+    /// An operator's "run this task" is a request, never a second dispatcher.
+    /// Keyed like `driving`; the supervisor takes it out of the slot on its
+    /// next decision pass and honours it only if the gate still holds.
+    requested: Mutex<HashMap<String, String>>,
     /// Workspace activation can fire more than once in one desktop session.
     /// Restart reconciliation is a launch-time repair pass, not a poll.
     reconciled_workspaces: Mutex<HashSet<String>>,
@@ -291,11 +295,14 @@ pub struct DurableMissionBundle {
     pub events: Vec<MissionEventLine>,
 }
 
+/// A Mission directory that would not load. Reported, never skipped silently:
+/// a corrupt Mission that vanishes from the board is also uncreatable, since
+/// `do_create`'s `dir.exists()` guard refuses its id.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PreparedMissionAttempt {
-    pub run_id: String,
-    pub bundle: DurableMissionBundle,
+pub struct UnreadableMission {
+    pub dir: String,
+    pub error: String,
 }
 
 #[derive(Clone, Default)]
@@ -759,22 +766,69 @@ enum SupervisorDecision {
     Park(String),
 }
 
+/// Invariant 4 as one check: some attempt of this Mission is running or waiting
+/// on operator review. `exclude` is a coordinator that is itself an active
+/// attempt of the Mission, so it can hand work to a worker without counting
+/// against itself.
+fn mission_is_busy(runtime: &FoldedMissionRuntime, exclude: Option<&str>) -> bool {
+    runtime.tasks.values().any(|task| {
+        !task.reviewing.is_empty() || task.active.iter().any(|id| Some(id.as_str()) != exclude)
+    })
+}
+
+/// Whether an operator may ask the supervisor to run `task_id` now. The same
+/// readiness as automatic dispatch, minus the no-prior-attempt rule: an
+/// explicit request is how a rejected, failed or interrupted Task is retried
+/// (invariant 6). Nothing else in the Mission may be in flight, which also
+/// makes every earlier attempt of this Task terminal.
+fn operator_request_gate(
+    bundle: &DurableMissionBundle,
+    runtime: &FoldedMissionRuntime,
+    task_id: &str,
+) -> Result<(), String> {
+    if !runtime.approved {
+        return Err("Approve the plan before running a task.".to_string());
+    }
+    let task_runtime = runtime
+        .tasks
+        .get(task_id)
+        .ok_or_else(|| format!("Unknown Mission task `{task_id}`."))?;
+    if mission_is_busy(runtime, None) {
+        return Err(
+            "Another attempt is active or awaiting review. Wait for it to settle.".to_string(),
+        );
+    }
+    if task_runtime.accepted_run_id.is_some() {
+        return Err(format!("Task `{task_id}` already has an accepted Run."));
+    }
+    if !task_is_ready(bundle, runtime, task_id)? {
+        return Err(format!(
+            "Task `{task_id}` is not ready. Every dependency must be accepted first."
+        ));
+    }
+    Ok(())
+}
+
 /// One Mission owns one active Harness attempt at a time in this slice. The
 /// decision is pure so the accept-not-exit edge and no-automatic-retry rule are
-/// independently testable from Tauri/provider plumbing.
+/// independently testable from Tauri/provider plumbing. `requested` is an
+/// operator's explicit request, taken out of its slot for this pass: it goes
+/// first when its gate still holds, and a stale one falls through to the scan.
 fn supervisor_decision(
     bundle: &DurableMissionBundle,
     runtime: &FoldedMissionRuntime,
+    requested: Option<&str>,
 ) -> Result<SupervisorDecision, String> {
     if !runtime.approved {
         return Ok(SupervisorDecision::Wait);
     }
-    if runtime
-        .tasks
-        .values()
-        .any(|task| !task.active.is_empty() || !task.reviewing.is_empty())
-    {
+    if mission_is_busy(runtime, None) {
         return Ok(SupervisorDecision::Wait);
+    }
+    if let Some(task_id) = requested {
+        if operator_request_gate(bundle, runtime, task_id).is_ok() {
+            return Ok(SupervisorDecision::Dispatch(task_id.to_string()));
+        }
     }
     for task in &bundle.tasks {
         let task_runtime = runtime.tasks.get(&task.id).cloned().unwrap_or_default();
@@ -1142,14 +1196,6 @@ pub fn mission_create(
 }
 
 #[tauri::command]
-pub async fn mission_read(
-    workspace_root: String,
-    mission_id: String,
-) -> Result<DurableMissionBundle, String> {
-    crate::blocking::run(move || load_bundle(&workspace_root, &mission_id)).await
-}
-
-#[tauri::command]
 pub async fn mission_list(workspace_root: String) -> Result<Vec<DurableMissionBundle>, String> {
     // One Markdown + events read per Mission, on the board's tick — off the
     // main thread (blocking.rs).
@@ -1158,25 +1204,14 @@ pub async fn mission_list(workspace_root: String) -> Result<Vec<DurableMissionBu
 
 /// Synchronous body of `mission_list` — the interface the tests use.
 pub fn list_missions(workspace_root: &str) -> Result<Vec<DurableMissionBundle>, String> {
-    let root = missions_root(workspace_root)?;
-    let mut bundles = Vec::new();
-    for entry in std::fs::read_dir(root).map_err(|e| format!("Unable to list Missions: {e}"))? {
-        let entry = entry.map_err(|e| format!("Unable to read Mission entry: {e}"))?;
-        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        match load_bundle_from_dir(&entry.path()) {
-            Ok(bundle) => bundles.push(bundle),
-            // A Mission that will not load is skipped so one bad directory
-            // cannot blank the whole board — but it is never skipped silently.
-            // Without this line a corrupt Mission simply vanishes from the
-            // list, and `do_create`'s `dir.exists()` guard then refuses to
-            // recreate it: invisible *and* uncreatable.
-            Err(error) => eprintln!(
-                "klide: skipping unreadable Mission at {:?}: {error}",
-                entry.path()
-            ),
-        }
+    let (mut bundles, unreadable) = scan_missions(&missions_root(workspace_root)?)?;
+    // The board polls this list, so it logs; the operator hears about an
+    // unreadable Mission once, from restart reconciliation's toast.
+    for mission in unreadable {
+        eprintln!(
+            "klide: skipping unreadable Mission at {}: {}",
+            mission.dir, mission.error
+        );
     }
     bundles.sort_by(|a, b| {
         let a_updated = a
@@ -1194,6 +1229,31 @@ pub fn list_missions(workspace_root: &str) -> Result<Vec<DurableMissionBundle>, 
         b_updated.cmp(&a_updated)
     });
     Ok(bundles)
+}
+
+/// Every Mission directory under `root`: the ones that load, and the ones that
+/// do not. A Mission that will not load is set aside so one bad directory
+/// cannot blank the whole board or stop recovery of the others — but it is
+/// returned, never dropped (see [`UnreadableMission`]).
+fn scan_missions(
+    root: &Path,
+) -> Result<(Vec<DurableMissionBundle>, Vec<UnreadableMission>), String> {
+    let mut bundles = Vec::new();
+    let mut unreadable = Vec::new();
+    for entry in std::fs::read_dir(root).map_err(|e| format!("Unable to list Missions: {e}"))? {
+        let entry = entry.map_err(|e| format!("Unable to read Mission entry: {e}"))?;
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        match load_bundle_from_dir(&entry.path()) {
+            Ok(bundle) => bundles.push(bundle),
+            Err(error) => unreadable.push(UnreadableMission {
+                dir: entry.path().to_string_lossy().to_string(),
+                error,
+            }),
+        }
+    }
+    Ok((bundles, unreadable))
 }
 
 #[tauri::command]
@@ -1441,6 +1501,12 @@ async fn dispatch_task_for(
                 return Ok(id);
             }
         }
+        // Invariant 4 at the one place an attempt is attached, whoever asked:
+        // the supervisor's decision was made under an earlier lock, and an
+        // agent coordinator only excludes itself.
+        if mission_is_busy(&runtime, coordinator) {
+            return Err("Another Mission attempt is active or awaiting review.".to_string());
+        }
         if !task_is_ready(&bundle, &runtime, task_id)? {
             return Err(format!(
                 "Task `{task_id}` is not ready. Its plan must be approved and every dependency accepted."
@@ -1519,8 +1585,15 @@ async fn drive_mission_inner(
             .write_gate
             .lock()
             .map_err(|_| "Mission store is unavailable.".to_string())?;
+        // Taken, not peeked: a request is consumed by exactly one pass, so a
+        // stale one cannot linger and fire after the operator moved on.
+        let requested = state
+            .requested
+            .lock()
+            .map_err(|_| "Mission supervisor is unavailable.".to_string())?
+            .remove(&mission_key(workspace_root, mission_id));
         let bundle = load_bundle(workspace_root, mission_id)?;
-        supervisor_decision(&bundle, &fold_runtime(&bundle))?
+        supervisor_decision(&bundle, &fold_runtime(&bundle), requested.as_deref())?
     };
     match decision {
         SupervisorDecision::Wait => Ok(()),
@@ -1533,8 +1606,8 @@ async fn drive_mission_inner(
                     .map_err(|_| "Mission store is unavailable.".to_string())?;
                 let dir = mission_dir(workspace_root, mission_id, true)?;
                 let bundle = load_bundle_from_dir(&dir)?;
-                // Only a genuinely recorded dispatch failure parks the mission
-                // (mirrors `mission_dispatch_task`); a "not ready" race must not.
+                // Only a genuinely recorded dispatch failure parks the mission;
+                // a "not ready" race must not.
                 if dispatch_failure_should_park(&bundle, &task_id) {
                     append_lifecycle_event(
                         &dir,
@@ -1568,21 +1641,27 @@ async fn drive_mission_inner(
     }
 }
 
+/// The per-Mission key of the supervisor's in-memory slots. Callers reach the
+/// supervisor with the root in different string forms — the raw frontend
+/// string (approve / request / validation writeback) or the already-canonical
+/// form (restart reconcile). Key on the canonical root so those forms can't
+/// split into two concurrently-driving loops, which would make the loser's
+/// dispatch see "not ready" and spuriously park a mission that is in fact
+/// running normally.
+fn mission_key(workspace_root: &str, mission_id: &str) -> String {
+    let canonical_root = Workspace::new(workspace_root)
+        .map(|workspace| workspace.root().to_string_lossy().to_string())
+        .unwrap_or_else(|_| workspace_root.to_string());
+    format!("{canonical_root}\0{mission_id}")
+}
+
 pub(crate) async fn drive_mission(
     app: tauri::AppHandle,
     workspace_root: String,
     mission_id: String,
 ) -> Result<(), String> {
-    // Single-flight per (workspace, mission). Callers reach us with the root in
-    // different string forms — the raw frontend string (approve / validation
-    // writeback) or the already-canonical form (restart reconcile). Key on the
-    // canonical root so those forms can't split into two concurrently-driving
-    // loops, which would make the loser's dispatch see "not ready" and
-    // spuriously park a mission that is in fact running normally.
-    let canonical_root = Workspace::new(&workspace_root)
-        .map(|workspace| workspace.root().to_string_lossy().to_string())
-        .unwrap_or_else(|_| workspace_root.clone());
-    let key = format!("{canonical_root}\0{mission_id}");
+    // Single-flight per (workspace, mission).
+    let key = mission_key(&workspace_root, &mission_id);
     {
         let state = app.state::<MissionStoreState>();
         let mut driving = state
@@ -1646,105 +1725,34 @@ pub async fn mission_approve(
     load_bundle(&workspace_root, &mission_id)
 }
 
+/// The operator's "run this task". It does not dispatch: it checks the gate
+/// under the writer lock, leaves a request for the supervisor and wakes it, so
+/// the supervisor stays the only thing that decides what runs (ADR-0002). A
+/// wake-up that lands while the supervisor is mid-pass is coalesced into its
+/// next pass, which takes the request.
 #[tauri::command]
-pub async fn mission_dispatch_task(
+pub async fn mission_request_task(
     app: tauri::AppHandle,
+    state: tauri::State<'_, MissionStoreState>,
     workspace_root: String,
     mission_id: String,
     task_id: String,
 ) -> Result<DurableMissionBundle, String> {
-    if let Err(error) = dispatch_task(&app, &workspace_root, &mission_id, &task_id).await {
-        let state = app.state::<MissionStoreState>();
+    {
         let _guard = state
             .write_gate
             .lock()
             .map_err(|_| "Mission store is unavailable.".to_string())?;
-        let dir = mission_dir(&workspace_root, &mission_id, true)?;
-        let bundle = load_bundle_from_dir(&dir)?;
-        if !dispatch_failure_should_park(&bundle, &task_id) {
-            return Err(error);
-        }
-        append_lifecycle_event(
-            &dir,
-            &mission_id,
-            MissionEvent::MissionParked {
-                reason: format!("Task `{task_id}` could not start: {error}"),
-            },
-        )?;
+        let bundle = load_bundle(&workspace_root, &mission_id)?;
+        operator_request_gate(&bundle, &fold_runtime(&bundle), &task_id)?;
+        state
+            .requested
+            .lock()
+            .map_err(|_| "Mission supervisor is unavailable.".to_string())?
+            .insert(mission_key(&workspace_root, &mission_id), task_id);
     }
+    drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
     load_bundle(&workspace_root, &mission_id)
-}
-
-#[tauri::command]
-pub fn mission_prepare_attempt(
-    state: tauri::State<'_, MissionStoreState>,
-    workspace_root: String,
-    mission_id: String,
-    task_id: String,
-) -> Result<PreparedMissionAttempt, String> {
-    let _guard = state
-        .write_gate
-        .lock()
-        .map_err(|_| "Mission store is unavailable.".to_string())?;
-    let dir = mission_dir(&workspace_root, &mission_id, true)?;
-    let bundle = load_bundle_from_dir(&dir)?;
-    let runtime = fold_runtime(&bundle);
-    if !task_is_ready(&bundle, &runtime, &task_id)? {
-        return Err(format!(
-            "Task `{task_id}` is not ready. Its plan must be approved and every dependency accepted."
-        ));
-    }
-    let attempt_run_id = run_id();
-    append_event(
-        &dir,
-        &mission_id,
-        MissionEvent::AttemptAttached {
-            task_id,
-            run_id: attempt_run_id.clone(),
-        },
-    )?;
-    Ok(PreparedMissionAttempt {
-        run_id: attempt_run_id,
-        bundle: load_bundle_from_dir(&dir)?,
-    })
-}
-
-#[tauri::command]
-pub fn mission_fail_attempt_dispatch(
-    state: tauri::State<'_, MissionStoreState>,
-    workspace_root: String,
-    mission_id: String,
-    task_id: String,
-    run_id: String,
-    message: String,
-) -> Result<DurableMissionBundle, String> {
-    let _guard = state
-        .write_gate
-        .lock()
-        .map_err(|_| "Mission store is unavailable.".to_string())?;
-    validate_run_id(&run_id)?;
-    let dir = mission_dir(&workspace_root, &mission_id, true)?;
-    let bundle = load_bundle_from_dir(&dir)?;
-    let runtime = fold_runtime(&bundle);
-    let task = runtime
-        .tasks
-        .get(&task_id)
-        .ok_or_else(|| format!("Unknown Mission task `{task_id}`."))?;
-    if !task.active.contains(&run_id) {
-        return Err(format!(
-            "Run `{run_id}` is not an active attempt of task `{task_id}`."
-        ));
-    }
-    append_event(
-        &dir,
-        &mission_id,
-        MissionEvent::AttemptDispatchFailed {
-            task_id,
-            run_id,
-            message: message.chars().take(500).collect(),
-        },
-    )?;
-    load_bundle_from_dir(&dir)
 }
 
 /// Called from the Delegate PTY exit sink. Settlement is durable evidence that
@@ -1954,23 +1962,6 @@ pub async fn mission_review_attempt(
     }
     drive_mission(app, workspace_root.clone(), mission_id.clone()).await?;
     load_bundle(&workspace_root, &mission_id)
-}
-
-#[tauri::command]
-pub fn mission_validate_attempt(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, MissionStoreState>,
-    workspace_root: String,
-    mission_id: String,
-    task_id: String,
-    run_id: String,
-) -> Result<DurableMissionBundle, String> {
-    let _guard = state
-        .write_gate
-        .lock()
-        .map_err(|_| "Mission store is unavailable.".to_string())?;
-    let runs_dir = app_runs_dir(&app)?;
-    validate_attempt_from_runs_dir(&runs_dir, &workspace_root, &mission_id, &task_id, &run_id)
 }
 
 fn validate_attempt_from_runs_dir(
@@ -2217,6 +2208,35 @@ fn mission_should_resume(bundle: &DurableMissionBundle) -> bool {
         )
 }
 
+/// Restart repair over one workspace's Missions, Tauri-free. Each Mission that
+/// loads is repaired by `repair`; the ones that should be driven again are
+/// returned with the ones that would not load or repair. One bad Mission is
+/// reported, and never stops the others from resuming.
+fn repair_workspace_missions(
+    canonical_root: &str,
+    mut repair: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(Vec<String>, Vec<UnreadableMission>), String> {
+    let root = PathBuf::from(canonical_root).join(".klide/missions");
+    if !root.is_dir() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let (bundles, mut unreadable) = scan_missions(&root)?;
+    let mut resume_ids = Vec::new();
+    for bundle in bundles {
+        let id = bundle.mission.id;
+        let repaired = repair(&id).and_then(|()| load_bundle(canonical_root, &id));
+        match repaired {
+            Ok(repaired) if mission_should_resume(&repaired) => resume_ids.push(id),
+            Ok(_) => {}
+            Err(error) => unreadable.push(UnreadableMission {
+                dir: root.join(&id).to_string_lossy().to_string(),
+                error,
+            }),
+        }
+    }
+    Ok((resume_ids, unreadable))
+}
+
 /// Called when the frontend activates/restores a workspace. The pass runs once
 /// per canonical workspace per desktop launch, then gives every non-terminal
 /// approved Mission one supervisor decision pass.
@@ -2238,42 +2258,36 @@ pub(crate) async fn reconcile_workspace(
     }
 
     let result = async {
-        let runs_dir = app_runs_dir(&app)?;
-        let resume_ids = {
-            let state = app.state::<MissionStoreState>();
-            let _guard = state
-                .write_gate
-                .lock()
-                .map_err(|_| "Mission store is unavailable.".to_string())?;
-            let root = PathBuf::from(&canonical_root).join(".klide/missions");
-            if !root.is_dir() {
-                return Ok(());
-            }
-            let mut mission_ids = Vec::new();
-            for entry in
-                std::fs::read_dir(root).map_err(|e| format!("Unable to list Missions: {e}"))?
-            {
-                let entry = entry.map_err(|e| format!("Unable to read Mission entry: {e}"))?;
-                if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                    continue;
-                }
-                let Ok(bundle) = load_bundle_from_dir(&entry.path()) else {
-                    continue;
-                };
-                reconcile_orphaned_attempts_from_runs_dir(
-                    &runs_dir,
-                    &canonical_root,
-                    &bundle.mission.id,
-                    |run_id| crate::agent::run_is_active(&app, run_id),
-                )?;
-                reconcile_delegate_attempts(&app, &canonical_root, &bundle.mission.id)?;
-                let repaired = load_bundle(&canonical_root, &bundle.mission.id)?;
-                if mission_should_resume(&repaired) {
-                    mission_ids.push(bundle.mission.id);
-                }
-            }
-            mission_ids
+        let (resume_ids, unreadable) = {
+            let app = app.clone();
+            let canonical_root = canonical_root.clone();
+            // A whole-workspace scan plus transcript reads: off the async
+            // workers (blocking.rs), still behind the one Mission writer.
+            crate::blocking::run(move || {
+                let runs_dir = app_runs_dir(&app)?;
+                let state = app.state::<MissionStoreState>();
+                let _guard = state
+                    .write_gate
+                    .lock()
+                    .map_err(|_| "Mission store is unavailable.".to_string())?;
+                repair_workspace_missions(&canonical_root, |mission_id| {
+                    reconcile_orphaned_attempts_from_runs_dir(
+                        &runs_dir,
+                        &canonical_root,
+                        mission_id,
+                        |run_id| crate::agent::run_is_active(&app, run_id),
+                    )?;
+                    reconcile_delegate_attempts(&app, &canonical_root, mission_id)?;
+                    Ok(())
+                })
+            })
+            .await?
         };
+        // `set_active_workspace` errors never reach the operator, so an
+        // unreadable Mission is announced as an event the app toasts.
+        if !unreadable.is_empty() {
+            let _ = app.emit("missions:unreadable", &unreadable);
+        }
 
         for mission_id in resume_ids {
             drive_mission(app.clone(), canonical_root.clone(), mission_id).await?;
@@ -2918,6 +2932,247 @@ src/agent/durableMissions.ts — update both"
         assert!(!dispatch_failure_should_park(&bundle, "implement"));
     }
 
+    /// `sample_input` with the dependency edge removed, so the two Tasks can
+    /// compete for the Mission's one attempt slot.
+    fn independent_input() -> CreateMissionInput {
+        let mut input = sample_input();
+        input.tasks[1].dependencies.clear();
+        input
+    }
+
+    fn rejected(task_id: &str, run_id: &str) -> MissionEvent {
+        MissionEvent::AttemptValidationRecorded {
+            task_id: task_id.to_string(),
+            run_id: run_id.to_string(),
+            accepted: false,
+            validation: AgentValidationSummary {
+                status: "failed".to_string(),
+                ..skipped_validation()
+            },
+        }
+    }
+
+    #[test]
+    fn operator_request_refuses_while_another_attempt_is_active() {
+        let root = temp_workspace("request-busy");
+        do_create(root.to_str().unwrap(), independent_input()).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptAttached {
+                task_id: "inspect".to_string(),
+                run_id: "run-inspect".to_string(),
+            },
+        )
+        .unwrap();
+
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        let error = operator_request_gate(&bundle, &fold_runtime(&bundle), "implement")
+            .expect_err("a second Task must not start beside a running one");
+        assert!(error.contains("active or awaiting review"), "{error}");
+
+        // Awaiting review holds the slot as firmly as running does.
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptSettled {
+                task_id: "inspect".to_string(),
+                run_id: "run-inspect".to_string(),
+                exit_code: 0,
+                signal: None,
+            },
+        )
+        .unwrap();
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        assert!(operator_request_gate(&bundle, &fold_runtime(&bundle), "implement").is_err());
+        assert!(operator_request_gate(&bundle, &fold_runtime(&bundle), "inspect").is_err());
+    }
+
+    #[test]
+    fn supervisor_dispatches_an_explicitly_requested_rejected_task_and_only_then() {
+        let root = temp_workspace("request-retry");
+        do_create(root.to_str().unwrap(), sample_input()).unwrap();
+        let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        append_event(
+            &dir,
+            "mission-one",
+            MissionEvent::AttemptAttached {
+                task_id: "inspect".to_string(),
+                run_id: "run-inspect".to_string(),
+            },
+        )
+        .unwrap();
+        append_event(&dir, "mission-one", rejected("inspect", "run-inspect")).unwrap();
+        let bundle = load_bundle_from_dir(&dir).unwrap();
+        let runtime = fold_runtime(&bundle);
+
+        assert!(matches!(
+            supervisor_decision(&bundle, &runtime, None).unwrap(),
+            SupervisorDecision::Park(_)
+        ));
+        assert_eq!(
+            supervisor_decision(&bundle, &runtime, Some("inspect")).unwrap(),
+            SupervisorDecision::Dispatch("inspect".to_string())
+        );
+        // A stale request (its dependency is not accepted) falls through to
+        // the ordinary scan rather than erroring the supervisor.
+        assert!(matches!(
+            supervisor_decision(&bundle, &runtime, Some("implement")).unwrap(),
+            SupervisorDecision::Park(_)
+        ));
+        assert!(matches!(
+            supervisor_decision(&bundle, &runtime, Some("ghost")).unwrap(),
+            SupervisorDecision::Park(_)
+        ));
+    }
+
+    #[test]
+    fn agent_dispatch_refuses_while_another_attempt_is_active() {
+        let mut runtime = FoldedMissionRuntime {
+            approved: true,
+            ..Default::default()
+        };
+        runtime.tasks.insert(
+            "lead".into(),
+            FoldedTaskRuntime {
+                attempts: vec!["coordinator".into()],
+                active: HashSet::from(["coordinator".into()]),
+                ..Default::default()
+            },
+        );
+        runtime.tasks.insert("tests".into(), FoldedTaskRuntime::default());
+        // The coordinator is itself an attempt of the Mission; it may hand work on.
+        assert!(!mission_is_busy(&runtime, Some("coordinator")));
+        // Nobody else may: not the supervisor, not a different agent.
+        assert!(mission_is_busy(&runtime, None));
+        assert!(mission_is_busy(&runtime, Some("other-agent")));
+
+        runtime.tasks.get_mut("tests").unwrap().reviewing.insert("worker".into());
+        assert!(
+            mission_is_busy(&runtime, Some("coordinator")),
+            "an attempt awaiting review blocks even the coordinator"
+        );
+    }
+
+    #[test]
+    fn scan_reports_an_unreadable_mission_and_still_resumes_the_healthy_one() {
+        let root = temp_workspace("scan-unreadable");
+        let root_str = root.to_str().unwrap();
+        do_create(root_str, sample_input()).unwrap();
+        let dir = mission_dir(root_str, "mission-one", true).unwrap();
+        append_event(&dir, "mission-one", MissionEvent::PlanApproved).unwrap();
+        let broken = root.join(".klide/missions/broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("mission.md"), "not frontmatter").unwrap();
+
+        let mut repaired = Vec::new();
+        let (resume, unreadable) = repair_workspace_missions(root_str, |id| {
+            repaired.push(id.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(repaired, vec!["mission-one".to_string()]);
+        assert_eq!(resume, vec!["mission-one".to_string()]);
+        assert_eq!(unreadable.len(), 1);
+        assert!(unreadable[0].dir.ends_with("broken"), "{:?}", unreadable[0]);
+
+        // A repair that fails is reported beside the unreadable one, not raised.
+        let (resume, unreadable) =
+            repair_workspace_missions(root_str, |_| Err("summary unreadable".into())).unwrap();
+        assert!(resume.is_empty());
+        assert_eq!(unreadable.len(), 2);
+        assert!(unreadable.iter().any(|m| m.error == "summary unreadable"));
+    }
+
+    #[test]
+    fn operator_readiness_matches_the_shared_frontend_fixture() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            tasks: Vec<FixtureTask>,
+            scenarios: Vec<Scenario>,
+        }
+        #[derive(Deserialize)]
+        struct FixtureTask {
+            id: String,
+            dependencies: Vec<String>,
+        }
+        #[derive(Deserialize)]
+        struct Scenario {
+            name: String,
+            events: Vec<MissionEvent>,
+            requestable: Vec<String>,
+        }
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../src/agent/fixtures/missionReadiness.json"))
+                .expect("parse the shared readiness fixture");
+        let template = sample_input().tasks.remove(0);
+
+        for (index, scenario) in fixture.scenarios.into_iter().enumerate() {
+            let root = temp_workspace(&format!("readiness-{index}"));
+            let mut input = sample_input();
+            input.tasks = fixture
+                .tasks
+                .iter()
+                .map(|task| CreateMissionTaskInput {
+                    id: Some(task.id.clone()),
+                    title: format!("Task {}", task.id),
+                    dependencies: task.dependencies.clone(),
+                    ..template.clone()
+                })
+                .collect();
+            do_create(root.to_str().unwrap(), input).unwrap();
+            let dir = mission_dir(root.to_str().unwrap(), "mission-one", true).unwrap();
+            for event in scenario.events {
+                append_event(&dir, "mission-one", event).unwrap();
+            }
+            let bundle = load_bundle_from_dir(&dir).unwrap();
+            let runtime = fold_runtime(&bundle);
+            let requestable: Vec<String> = bundle
+                .tasks
+                .iter()
+                .filter(|task| operator_request_gate(&bundle, &runtime, &task.id).is_ok())
+                .map(|task| task.id.clone())
+                .collect();
+            assert_eq!(requestable, scenario.requestable, "{}", scenario.name);
+        }
+    }
+
+    #[test]
+    fn every_registered_mission_command_has_a_frontend_caller() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lib = std::fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+        let wire = std::fs::read_to_string(root.join("../src/agent/durableMissions.ts"))
+            .expect("read src/agent/durableMissions.ts");
+        // Registration is what exposes a command, so read it off
+        // `generate_handler![ … ]` rather than off the definitions. A
+        // registered command nothing calls is a second, unreviewed door onto
+        // the Mission writer.
+        let start = lib.find("generate_handler!").expect("generate_handler! in lib.rs");
+        let end = lib[start..].find(']').expect("end of handler list") + start;
+        let registered: Vec<&str> = lib[start..end]
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+            .filter_map(|token| token.strip_prefix("missions::"))
+            .collect();
+        assert!(
+            registered.len() >= 5,
+            "only found {} mission commands — the parse is wrong, not the code",
+            registered.len()
+        );
+        let uncalled: Vec<&str> = registered
+            .iter()
+            .copied()
+            .filter(|command| !wire.contains(&format!("\"{command}\"")))
+            .collect();
+        assert!(
+            uncalled.is_empty(),
+            "registered but never invoked from src/agent/durableMissions.ts: {uncalled:?} — \
+             call it there or unregister it"
+        );
+    }
+
     #[test]
     fn supervisor_dispatches_one_task_waits_and_never_auto_retries_rejection() {
         let root = temp_workspace("supervisor-decision");
@@ -2927,7 +3182,7 @@ src/agent/durableMissions.ts — update both"
 
         let bundle = load_bundle_from_dir(&dir).unwrap();
         assert_eq!(
-            supervisor_decision(&bundle, &fold_runtime(&bundle)).unwrap(),
+            supervisor_decision(&bundle, &fold_runtime(&bundle), None).unwrap(),
             SupervisorDecision::Dispatch("inspect".to_string())
         );
 
@@ -2942,7 +3197,7 @@ src/agent/durableMissions.ts — update both"
         .unwrap();
         let bundle = load_bundle_from_dir(&dir).unwrap();
         assert_eq!(
-            supervisor_decision(&bundle, &fold_runtime(&bundle)).unwrap(),
+            supervisor_decision(&bundle, &fold_runtime(&bundle), None).unwrap(),
             SupervisorDecision::Wait
         );
 
@@ -2962,7 +3217,7 @@ src/agent/durableMissions.ts — update both"
         .unwrap();
         let bundle = load_bundle_from_dir(&dir).unwrap();
         assert!(matches!(
-            supervisor_decision(&bundle, &fold_runtime(&bundle)).unwrap(),
+            supervisor_decision(&bundle, &fold_runtime(&bundle), None).unwrap(),
             SupervisorDecision::Park(_)
         ));
     }
@@ -3003,7 +3258,7 @@ src/agent/durableMissions.ts — update both"
         assert!(!task_is_ready(&bundle, &runtime, "inspect").unwrap());
         assert!(!task_is_ready(&bundle, &runtime, "implement").unwrap());
         assert_eq!(
-            supervisor_decision(&bundle, &runtime).unwrap(),
+            supervisor_decision(&bundle, &runtime, None).unwrap(),
             SupervisorDecision::Wait
         );
 
@@ -3028,7 +3283,7 @@ src/agent/durableMissions.ts — update both"
         .unwrap();
         let accepted = load_bundle_from_dir(&dir).unwrap();
         assert_eq!(
-            supervisor_decision(&accepted, &fold_runtime(&accepted)).unwrap(),
+            supervisor_decision(&accepted, &fold_runtime(&accepted), None).unwrap(),
             SupervisorDecision::Dispatch("implement".to_string())
         );
     }
@@ -3067,7 +3322,7 @@ src/agent/durableMissions.ts — update both"
                 SupervisorDecision::Complete
             };
             assert_eq!(
-                supervisor_decision(&bundle, &fold_runtime(&bundle)).unwrap(),
+                supervisor_decision(&bundle, &fold_runtime(&bundle), None).unwrap(),
                 expected
             );
         }
@@ -3129,7 +3384,7 @@ src/agent/durableMissions.ts — update both"
         let runtime = fold_runtime(&bundle);
         assert!(runtime.tasks["inspect"].active.is_empty());
         assert!(matches!(
-            supervisor_decision(&bundle, &runtime).unwrap(),
+            supervisor_decision(&bundle, &runtime, None).unwrap(),
             SupervisorDecision::Park(_)
         ));
         assert_eq!(
@@ -3186,7 +3441,7 @@ src/agent/durableMissions.ts — update both"
             Some("run-finished-before-restart")
         );
         assert_eq!(
-            supervisor_decision(&bundle, &runtime).unwrap(),
+            supervisor_decision(&bundle, &runtime, None).unwrap(),
             SupervisorDecision::Dispatch("implement".to_string())
         );
     }

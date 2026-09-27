@@ -84,11 +84,7 @@ pub(super) fn existing_attempt(
     if let Some(id) = task.attempts.last() {
         return Ok(Some(id.clone()));
     }
-    if runtime
-        .tasks
-        .values()
-        .any(|t| !t.reviewing.is_empty() || t.active.iter().any(|id| id != actor))
-    {
+    if mission_is_busy(runtime, Some(actor)) {
         return Err("Another Mission attempt is active or awaiting review.".into());
     }
     Ok(None)

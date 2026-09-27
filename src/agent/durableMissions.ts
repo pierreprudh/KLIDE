@@ -172,6 +172,12 @@ export type DurableMissionBundle = {
  * state and the one-time announcement) must read the log the same way, so the
  * reading lives here rather than twice in the component.
  */
+/** Emitted once per workspace activation for each Mission directory that
+ *  would not load or repair (`missions:unreadable`). Such a Mission is off the
+ *  board and its id cannot be reused, so the operator must hear about it. */
+export type UnreadableMission = { dir: string; error: string };
+export const MISSIONS_UNREADABLE_EVENT = "missions:unreadable";
+
 export function terminalOutcome(
   events: DurableMissionEventLine[],
 ): DurableMissionEventLine | null {
@@ -336,12 +342,16 @@ export async function approveDurableMission(
   return invoke<DurableMissionBundle>("mission_approve", { workspaceRoot, missionId, input });
 }
 
-export async function dispatchDurableMissionTask(
+/** Ask the Rust supervisor to run one Task next — the operator's retry and
+ *  "run this now". It is a request, not a dispatch: Rust refuses it while any
+ *  attempt of the Mission is running or awaiting review, and the supervisor
+ *  stays the only thing that starts a Run (ADR-0002). */
+export async function requestDurableMissionTask(
   workspaceRoot: string,
   missionId: string,
   taskId: string
 ): Promise<DurableMissionBundle> {
-  return invoke<DurableMissionBundle>("mission_dispatch_task", {
+  return invoke<DurableMissionBundle>("mission_request_task", {
     workspaceRoot,
     missionId,
     taskId,

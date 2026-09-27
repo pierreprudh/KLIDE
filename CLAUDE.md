@@ -277,6 +277,7 @@ Klide/
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
     │   ├── memory.rs             Project Memory schema, Markdown I/O, and local retrieval
     │   ├── spreadsheet.rs        File persistence for the sheet surface — containment, size, conflict checks
+    │   ├── documents.rs          Open / Reveal / Refuse — what may leave the app, by kind, mode bits and header
     │   ├── run_documents.rs      Recover read-only document references from older transcripts
     │   ├── preview.rs            A picture of what Klide can't render (deck, PDF) via macOS `qlmanage`
     │   ├── storage.rs            Where the runs dir lives — user-choosable folder, validated moves, cache accounting
@@ -422,7 +423,8 @@ fidelity are out, and the limits are written down in
 open, and `agent_run_document_references` recovers files an older transcript
 only mentions, without claiming the run created them. What a *command* left
 behind is a separate question, answered by bracketing the workspace's dirty set
-around the command (`agent/artifacts.rs`).
+around the command (`agent/artifacts.rs`). `documents.rs` decides Open / Reveal
+/ Refuse; the webview only picks a surface.
 
 ### Where the product is (v0.6.5 shipped)
 
@@ -463,8 +465,10 @@ process exit. Approval freezes the worker kind, provider, model, and
 diff-review policy into each task Markdown file. A one-at-a-time Rust Mission
 supervisor selects an unattempted ready task, starts its Harness Run
 headlessly, and re-enters after validation; rejected attempts park for
-explicit retry. The tier-board only observes events and reattaches to operator
-pauses. After a process restart, Rust validates terminal orphan summaries and
+explicit retry. That supervisor is the only dispatcher: an operator's Run or
+retry (`mission_request_task`) is a request it takes on its next pass, refused
+while any attempt of the Mission is running or awaiting review. The
+tier-board only observes events and reattaches to operator pauses. After a process restart, Rust validates terminal orphan summaries and
 marks ambiguous missing/non-terminal Runs `attempt_interrupted` without
 replaying them. The Board/Graph switch reads and edits the same task Markdown
 dependencies; Rust rejects dependency cycles at the write boundary
