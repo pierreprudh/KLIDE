@@ -9196,3 +9196,9 @@ button:focus-visible .menu-leadout {
 .github-observer-sidebar:has(.github-observer-stop) .github-observer-actions { margin-top:0; }
 .github-observer-sidebar .github-observer-content { justify-self:stretch; gap:10px; }
 .github-observer-sidebar .github-observer-content:has(.github-observer-stop) { margin-bottom:18px; }
+.github-observer-state > :first-child { margin-left:0; }
+/* Side panel: the check sits in the logo's 28px column so status text lines
+   up under "PR #n", and the hover arrow takes no width, so both actions reach
+   the divider's ends. */
+.github-observer-sidebar .github-observer-content > :first-child { margin-inline:5px; }
+.github-observer-sidebar .github-observer-arrow { width:0; margin-left:4px; margin-right:-4px; }

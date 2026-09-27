@@ -61,7 +61,7 @@ export function GithubObserverCard({ observer, runId, onStop, sidebar }: { obser
         : <span className="github-observer-indicator" aria-hidden="true">{tone === "passed" ? "✓" : tone === "failed" ? "!" : ""}</span>}
       <div className="github-observer-line" role="status" aria-live="polite">
         <span className="github-observer-status">{label}{detail && <small className="github-observer-detail">{detail}</small>}</span>
-        <span className="github-observer-state">{state}{observer.restored && <small className="github-observer-detail" title="Saved GitHub status; the original watcher is no longer running">Last known</small>}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
+        <span className="github-observer-state">{state && <span>{state}</span>}{observer.restored && <small className="github-observer-detail" title="Saved GitHub status; the original watcher is no longer running">Last known</small>}{duration && <small className="github-observer-detail" title="Checks duration, from first job started to last job finished" aria-label={`Checks took ${duration}`}>{duration}</small>}</span>
       {running && <button onClick={onStop} className="github-observer-action github-observer-stop">Stop</button>}
       </div>
     </div>
