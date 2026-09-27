@@ -29,7 +29,7 @@ import {
   approveDurableMission,
   compileDurableMissionBundle,
   createDurableMission,
-  dispatchDurableMissionTask,
+  requestDurableMissionTask,
   listDurableMissions,
   plannedTaskToSpecInput,
   reviewDurableMissionAttempt,
@@ -1109,12 +1109,12 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
         });
         setDurableBundle(approved);
       }
-      const dispatched = await dispatchDurableMissionTask(
+      const requested = await requestDurableMissionTask(
         workspaceRoot,
         durableBundle.mission.id,
         taskId
       );
-      setDurableBundle(dispatched);
+      setDurableBundle(requested);
       setMissionOn(true);
     } catch (error) {
       notify(`Couldn't run task — ${error instanceof Error ? error.message : String(error)}`, { tone: "warn" });
@@ -1381,7 +1381,9 @@ export function OrchestratorConsole({ workspaceRoot = null }: { workspaceRoot?: 
                       const durableSpec = durableBundle?.tasks.find((task) => task.id === t.taskId);
                       const lastAttempt = row?.lastAttempt ?? null;
                       const status: MissionTaskStatus = row?.status ?? "queued";
-                      const canRunReal = !!workspaceRoot && !!durableBundle && status !== "running" && status !== "review" && status !== "validating" && !missionOn;
+                      // `ready` is the same gate Rust applies to a request: nothing else
+                      // in the Mission in flight, dependencies accepted.
+                      const canRunReal = !!workspaceRoot && !!durableBundle && !!row?.ready && status !== "validating" && !missionOn;
                       const ov = overrides[t.taskId] ?? null;
                       const isOpen = expanded === t.taskId;
                       const effWorker = ov ? providerName(ov.provider) : WORKER_LABEL[r.assignment.workerKind];
