@@ -5,7 +5,12 @@
 //   1. Your connectors     — what Klide has, and whether each one starts.
 //   2. Available to import — the servers already configured in Claude Code,
 //                            Codex and OpenCode, read from their own config.
-//   3. Add a connector     — the escape hatch for a server no other tool knows.
+//   3. Add a connector     — the escape hatch for a server no other tool knows:
+//                            a command, or a URL for a remote server.
+//
+// GitHub gets one more door: "Connect GitHub" adds GitHub's own remote server,
+// signed in as the account Klide already uses (`connectors::github_preset`), so
+// the most common connector needs no token and no config file at all.
 //
 // The import block is the point. Anyone who would use this page has already
 // typed these commands into another tool's JSON; asking them to type them a
@@ -27,13 +32,15 @@
 // badges, no status dots; the styles live under `.klide-connector-*` in
 // tokens.css.
 //
-// One honesty rule runs through it: a connector's tools are *listed*, not yet
-// callable — the Harness tool registry is the next slice — and the page says so
-// once, plainly, rather than implying a capability that isn't wired.
+// What the assistant may do with them is said once, plainly, in the footnote:
+// read-only tools run as asked, anything that can change something asks first
+// (`agent/connector_tools.rs`).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  addGithubConnector,
   discoverConnectors,
+  isRemote,
   listConnectors,
   probeConnector,
   removeConnector,
@@ -41,7 +48,7 @@ import {
   type Connector,
   type Discovered,
   type Probe,
-  type StdioServer,
+  type ServerSpec,
 } from "../../ipc/connectors";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
@@ -58,17 +65,27 @@ type Check =
 /** Where a connector came from, in words rather than a badge. */
 const ORIGIN_LABEL: Record<string, string> = {
   manual: "Added here",
+  preset: "Signed in as your GitHub account",
   "claude-code": "From Claude Code",
   codex: "From Codex",
   opencode: "From OpenCode",
   workspace: "From this project",
 };
 
-/** `npx -y linear-mcp` — the same thing a config file would hold. Display
- *  only; the split that produced it happened when the connector was saved. */
-function commandLine(server: StdioServer): string {
-  return [server.command, ...server.args].join(" ");
+/** `npx -y linear-mcp`, or a remote server's URL — the same thing a config
+ *  file would hold. Display only; the split that produced it happened when the
+ *  connector was saved. */
+function commandLine(server: ServerSpec): string {
+  return isRemote(server) ? server.url : [server.command, ...server.args].join(" ");
 }
+
+/** The names — never the values — of what a connector is handed: a program's
+ *  environment, a remote server's headers. */
+function configKeys(server: ServerSpec): string[] {
+  return Object.keys(isRemote(server) ? server.headers : server.env);
+}
+
+const isUrl = (line: string) => /^https?:\/\//i.test(line.trim());
 
 /** One command line → program + argv. Whitespace-separated, with quoted spans
  *  kept whole, so a path with a space survives. Not a shell: nothing expands,
@@ -156,6 +173,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
   const [checks, setChecks] = useState<Record<string, Check>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [connectingGithub, setConnectingGithub] = useState(false);
   /** A check in flight owns its row; a second click is ignored rather than
    *  spawning the same server twice. */
   const inFlight = useRef(new Set<string>());
@@ -188,7 +206,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     inFlight.current.add(connector.id);
     setChecks((prev) => ({ ...prev, [connector.id]: { state: "checking" } }));
     try {
-      const probe = await probeConnector(connector.server);
+      const probe = await probeConnector(connector.server, workspaceRoot);
       setChecks((prev) => ({ ...prev, [connector.id]: { state: "ok", probe } }));
     } catch (e) {
       setChecks((prev) => ({
@@ -198,7 +216,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     } finally {
       inFlight.current.delete(connector.id);
     }
-  }, []);
+  }, [workspaceRoot]);
 
   /** One at a time: each check may be an `npx` that downloads a package, and
    *  five of those at once is a stalled machine, not a faster page. */
@@ -227,6 +245,20 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     }
   }
 
+  /** Rust connects before it saves, so the one failure worth explaining — no
+   *  GitHub login — lands here, on the button, with the fix in its words. */
+  async function connectGithub() {
+    setConnectingGithub(true);
+    try {
+      setConnectors(await addGithubConnector());
+      notify("GitHub connected", { tone: "success" });
+    } catch (e) {
+      notify(errMessage(e), { tone: "error" });
+    } finally {
+      setConnectingGithub(false);
+    }
+  }
+
   async function importOne(candidate: Discovered) {
     await save({
       id: candidate.id,
@@ -240,6 +272,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
 
   const importable = useMemo(() => found.filter((f) => !f.alreadyAdded), [found]);
   const busy = connectors.some((c) => checks[c.id]?.state === "checking");
+  const hasGithub = connectors.some((c) => c.id === "github");
 
   // "2 of 3 on · 14 tools seen" — the facts worth knowing before reading rows.
   const summary = useMemo(() => {
@@ -262,11 +295,18 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
           title="Your connectors"
           note={summary ?? "MCP servers Klide can start."}
           action={
-            connectors.length > 0 ? (
-              <Verb onClick={() => void checkAll()} disabled={busy}>
-                {busy ? "Checking…" : "Check all"}
-              </Verb>
-            ) : null
+            <div style={{ display: "flex", gap: 14 }}>
+              {!hasGithub && (
+                <Verb onClick={() => void connectGithub()} disabled={connectingGithub}>
+                  {connectingGithub ? "Connecting…" : "Connect GitHub"}
+                </Verb>
+              )}
+              {connectors.length > 0 && (
+                <Verb onClick={() => void checkAll()} disabled={busy}>
+                  {busy ? "Checking…" : "Check all"}
+                </Verb>
+              )}
+            </div>
           }
         />
         <Panel>
@@ -274,8 +314,8 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
             <GlideHighlight glide={ledger.glide} />
             {connectors.length === 0 ? (
               <Empty>
-                None yet. Klide reads the MCP servers you already configured in
-                Claude Code, Codex and OpenCode — import one below.
+                None yet. Connect GitHub in one click, or import the MCP servers
+                you already configured in Claude Code, Codex and OpenCode below.
               </Empty>
             ) : (
               connectors.map((connector, i) => (
@@ -301,9 +341,10 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
           </div>
         </Panel>
         <FootNote>
-          A connector's tools are listed here, but the assistant can't call them
-          yet — wiring them into the Rust harness is the next step. Klide's own{" "}
-          <CodeText>klide mcp coordination</CodeText> server is the opposite
+          In Plan and Goal, the assistant can use every enabled connector. Tools
+          a server marks read-only run as asked; anything that can change
+          something — open a PR, comment on an issue — asks you first. Klide's
+          own <CodeText>klide mcp coordination</CodeText> server is the opposite
           direction: what delegate CLIs use to reach back into Klide.
         </FootNote>
       </section>
@@ -358,7 +399,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         <Head
           index="03"
           title="Add a connector"
-          note="Any stdio MCP server — the command runs directly, never through a shell."
+          note="A command Klide starts — never through a shell — or a remote server's URL."
           action={
             !adding ? <Verb onClick={() => setAdding(true)}>Add manually</Verb> : null
           }
@@ -399,7 +440,7 @@ function ConnectorRow({
   /** Hover/focus handlers from the list's glide. */
   rowProps: { onMouseEnter: (e: { currentTarget: HTMLElement }) => void; onFocus: (e: { currentTarget: HTMLElement }) => void };
 }) {
-  const env = Object.keys(connector.server.env);
+  const env = configKeys(connector.server);
   return (
     <div>
       <div
@@ -500,7 +541,7 @@ function CheckDetail({ check }: { check: Check }) {
           {probe.serverVersion && ` ${probe.serverVersion}`}
         </span>
         <span>MCP {probe.protocolVersion || "unknown"}</span>
-        <span>started in {(probe.elapsedMs / 1000).toFixed(1)}s</span>
+        <span>ready in {(probe.elapsedMs / 1000).toFixed(1)}s</span>
       </div>
       {probe.tools.length === 0 ? (
         <Quiet>It started, but advertises no tools.</Quiet>
@@ -568,16 +609,20 @@ function AddForm({
   const [line, setLine] = useState("");
   const [env, setEnv] = useState("");
 
+  const remote = isUrl(line);
+
   function submit() {
     const { command, args } = splitCommand(line);
     if (!label.trim() || !command) {
-      notify("A connector needs a name and a command", { tone: "warn" });
+      notify("A connector needs a name and a command or URL", { tone: "warn" });
       return;
     }
     onAdd({
       id: label,
       label: label.trim(),
-      server: { command, args, env: parseEnv(env), cwd: null },
+      server: remote
+        ? { url: line.trim(), headers: parseEnv(env) }
+        : { command, args, env: parseEnv(env), cwd: null },
       enabled: true,
       origin: "manual",
     });
@@ -589,16 +634,19 @@ function AddForm({
         <Field label="Name">
           <Input value={label} onChange={setLabel} placeholder="Linear" autoFocus />
         </Field>
-        <Field label="Command">
+        <Field label="Command or URL">
           <Input value={line} onChange={setLine} placeholder="npx -y linear-mcp" mono />
         </Field>
-        <Field label="Environment" hint="one KEY=value per line, optional">
+        <Field
+          label={remote ? "Headers" : "Environment"}
+          hint={remote ? "one Name=value per line; a value may be ${VAR}" : "one KEY=value per line, optional"}
+        >
           <textarea
             value={env}
             onChange={(e) => setEnv(e.target.value)}
             rows={3}
             spellCheck={false}
-            placeholder="LINEAR_API_KEY=lin_api_…"
+            placeholder={remote ? "Authorization=Bearer ${LINEAR_TOKEN}" : "LINEAR_API_KEY=lin_api_…"}
             className="klide-field"
             style={{
               width: "100%",

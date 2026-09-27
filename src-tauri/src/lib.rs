@@ -7,6 +7,7 @@ mod cli_update;
 mod agent;
 mod coordination;
 mod connectors;
+mod connector_pool;
 mod coordination_bridge;
 mod custom_cli;
 mod custom_providers;
@@ -858,6 +859,9 @@ pub fn run() {
                 // And republish the coordination bridge's endpoint, so those
                 // sessions' agent tools reach this process, not the last one.
                 pty::init_coordination_bridge(handle);
+                // Start enabled connectors now, so the first Run doesn't wait
+                // on an `npx` cold start.
+                connector_pool::warm();
             }
 
             // Open at a comfortable fraction of the display the window lands on,
@@ -999,6 +1003,8 @@ pub fn run() {
             connectors::connectors_remove,
             connectors::connectors_discover,
             connectors::connectors_probe,
+            connectors::connectors_add_github,
+            connectors::connectors_status,
             agent::agent_start_run,
             agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
@@ -1071,7 +1077,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_, event| {
-            if matches!(event, tauri::RunEvent::Exit) { agent::shutdown_observers(); }
+            if matches!(event, tauri::RunEvent::Exit) {
+                agent::shutdown_observers();
+                connector_pool::shutdown();
+            }
         });
 }
 

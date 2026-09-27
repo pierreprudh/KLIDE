@@ -304,6 +304,22 @@ fn account_token(login: &str) -> Option<String> {
     token
 }
 
+/// The token Klide acts on GitHub with: the pinned account's own, else gh's
+/// active login — the same identity `apply_account_env` gives a `gh` command,
+/// for a caller that talks to GitHub without `gh` (the GitHub connector).
+pub(crate) fn klide_token() -> Option<String> {
+    if let Some(token) = pinned_account().and_then(|login| account_token(&login)) {
+        return Some(token);
+    }
+    Command::new(gh_bin())
+        .args(["auth", "token"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
 /// Point a `gh` (or `git`) command at the pinned account, if there is one.
 /// Shared so PR creation and pushes act as the same account the avatar shows.
 pub(crate) fn apply_account_env(command: &mut Command) {

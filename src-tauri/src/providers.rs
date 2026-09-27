@@ -729,7 +729,7 @@ fn reference_search_summary(scope: Option<&std::path::Path>) -> String {
 
 /// Resolve a `${VAR}` reference: process environment first, then a `.env`
 /// file (project, then global). No path touches the keychain, so no prompt.
-fn resolve_reference(reference: &str, scope: Option<&std::path::Path>) -> Option<String> {
+pub(crate) fn resolve_reference(reference: &str, scope: Option<&std::path::Path>) -> Option<String> {
     let name = reference_var_name(reference)?;
     env_var(name).or_else(|| dotenv_lookup(name, scope))
 }
