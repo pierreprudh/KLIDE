@@ -1,0 +1,125 @@
+import { useEffect, useMemo, useState } from "react";
+
+import { claudeCodeSettings } from "../../ipc/delegateCommands";
+import { Select, Toggle } from "../settings/controls";
+import { configCommand, configLabel, currentConfigValue, type ConfigOption } from "./cliConfig";
+
+type Props = {
+  options: ConfigOption[];
+  workspaceRoot: string | null;
+  /** Sends the one `/config key=value …` message; the CLI's reply confirms. */
+  onApply: (message: string) => void;
+  disabled?: boolean;
+};
+
+const UNKNOWN = "—";
+
+/** Claude Code's `/config` answer drawn as the menu its terminal app shows:
+ *  one row per setting the CLI printed, the current value where its files
+ *  say, and one Apply that sends every change in a single message. */
+export function CliConfigCard({ options, workspaceRoot, onApply, disabled = false }: Props) {
+  const [current, setCurrent] = useState<Record<string, unknown>>({});
+  const [staged, setStaged] = useState<Record<string, string>>({});
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    if (!workspaceRoot) return;
+    let alive = true;
+    void claudeCodeSettings(workspaceRoot).then((s) => { if (alive) setCurrent(s); }).catch(() => {});
+    return () => { alive = false; };
+  }, [workspaceRoot]);
+
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? options.filter((o) => o.key.toLowerCase().includes(q) || configLabel(o.key).toLowerCase().includes(q)) : options;
+  }, [filter, options]);
+
+  const stage = (key: string, value: string) => setStaged((prev) => {
+    const next = { ...prev };
+    if (value === (currentConfigValue(current, key) ?? "")) delete next[key];
+    else next[key] = value;
+    return next;
+  });
+  const message = configCommand(staged);
+  const count = Object.keys(staged).length;
+
+  return (
+    <section
+      aria-label="Claude Code settings"
+      style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-elevated)", margin: "2px 0 4px", overflow: "hidden" }}
+    >
+      <header style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Claude Code settings</div>
+          <div style={{ color: "var(--fg-subtle)", fontSize: 12 }}>Saved to Claude Code's own config</div>
+        </div>
+        <input
+          className="klide-field"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter"
+          aria-label="Filter settings"
+          style={{ width: 150, height: 28, padding: "0 10px", fontSize: 12 }}
+        />
+      </header>
+      <div style={{ maxHeight: 360, overflowY: "auto", padding: "4px 0" }}>
+        {shown.map((option) => {
+          const known = currentConfigValue(current, option.key);
+          const value = staged[option.key] ?? known ?? "";
+          const changed = option.key in staged;
+          return (
+            <div key={option.key} style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 38, padding: "3px 14px" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: changed ? "var(--accent)" : "var(--fg)" }}>{configLabel(option.key)}</div>
+                <div style={{ fontSize: 11, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>{option.key}</div>
+              </div>
+              {!option.settable ? (
+                <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>Terminal only</span>
+              ) : option.choices === null ? (
+                <input
+                  className="klide-field"
+                  value={value}
+                  disabled={disabled}
+                  onChange={(e) => stage(option.key, e.target.value)}
+                  aria-label={configLabel(option.key)}
+                  style={{ width: 180, height: 28, padding: "0 10px", fontSize: 12 }}
+                />
+              ) : isBoolean(option.choices) && (known !== null || changed) ? (
+                <Toggle checked={value === "true"} onChange={(on) => stage(option.key, String(on))} label={configLabel(option.key)} />
+              ) : (
+                <Select
+                  value={value || UNKNOWN}
+                  onChange={(next) => { if (next !== UNKNOWN) stage(option.key, next); }}
+                  options={value ? option.choices : [UNKNOWN, ...option.choices]}
+                  label={configLabel(option.key)}
+                />
+              )}
+            </div>
+          );
+        })}
+        {shown.length === 0 && <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--fg-subtle)" }}>No setting matches.</div>}
+      </div>
+      <footer style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 14, padding: "10px 14px", borderTop: "1px solid var(--border)" }}>
+        {count > 0 && (
+          <button type="button" onClick={() => setStaged({})} style={textButton("var(--fg-subtle)")}>Reset</button>
+        )}
+        <button
+          type="button"
+          disabled={disabled || !message}
+          onClick={() => { if (message) { onApply(message); setCurrent((prev) => ({ ...prev, ...staged })); setStaged({}); } }}
+          style={textButton(message && !disabled ? "var(--accent)" : "var(--fg-dim)", !!message && !disabled)}
+        >
+          {count > 0 ? `Apply ${count} change${count === 1 ? "" : "s"}` : "Apply"}
+        </button>
+      </footer>
+    </section>
+  );
+}
+
+function isBoolean(choices: string[]): boolean {
+  return choices.length === 2 && choices.includes("true") && choices.includes("false");
+}
+
+function textButton(color: string, enabled = true) {
+  return { font: "inherit", fontSize: 12, fontWeight: 500, border: 0, background: "none", padding: "4px 0", color, cursor: enabled ? "pointer" : "default" } as const;
+}

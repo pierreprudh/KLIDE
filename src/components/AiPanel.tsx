@@ -127,6 +127,8 @@ import { buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
+import { CliConfigCard } from "./ai/CliConfigCard";
+import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
@@ -4798,7 +4800,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                   ? (m.delegateHeadless
                     ? <WorkingSince since={previous?.role === "user" ? previous.ts : undefined} />
                     : <AssistantPlaceholderLoader />)
-                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
+                  : !isStreamingActive && m.role === "assistant" && parseConfigUsage(m.content)
+                    // Claude Code's `/config` usage is a menu in its terminal
+                    // app; headless it is a list, so draw the menu here.
+                    ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions

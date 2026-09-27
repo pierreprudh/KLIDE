@@ -122,6 +122,35 @@ pub async fn cli_commands(adapter: &dyn Delegate, cwd: &str) -> Result<CliComman
     Ok(commands)
 }
 
+/// Claude Code's current settings, as far as its own files say — for marking
+/// the chosen value in the composer's `/config` card. `/config` itself can
+/// only set, never read back, so this reads the four files it writes, later
+/// ones winning: `~/.claude.json`, `~/.claude/settings.json`, then the
+/// project's `.claude/settings.json` and `.claude/settings.local.json`.
+///
+/// Top-level scalars only, keyed exactly as found. A setting the CLI stores
+/// under another name simply has no current value; nothing here maps names.
+pub fn claude_code_settings(home: &str, cwd: &str) -> HashMap<String, serde_json::Value> {
+    let cwd = super::normalize_path(cwd);
+    let files = [
+        format!("{home}/.claude.json"),
+        format!("{home}/.claude/settings.json"),
+        format!("{cwd}/.claude/settings.json"),
+        format!("{cwd}/.claude/settings.local.json"),
+    ];
+    let mut out = HashMap::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        for (key, value) in map {
+            if matches!(value, serde_json::Value::Bool(_) | serde_json::Value::String(_) | serde_json::Value::Number(_)) {
+                out.insert(key, value);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +171,22 @@ mod tests {
         assert_eq!(leading_command("codex", cwd, "/compact"), None);
         // The workspace key ignores a trailing slash.
         assert_eq!(leading_command("claude-code", &format!("{cwd}/"), "/compact"), Some("compact".into()));
+    }
+
+    #[test]
+    fn settings_read_later_files_over_earlier_ones_and_keep_scalars_only() {
+        let root = std::env::temp_dir().join(format!("klide-cc-settings-{}", std::process::id()));
+        let (home, ws) = (root.join("home"), root.join("ws"));
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::create_dir_all(ws.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"theme":"dark","autoConnectIde":true,"projects":{}}"#).unwrap();
+        std::fs::write(home.join(".claude/settings.json"), r#"{"model":"opus","verbose":false}"#).unwrap();
+        std::fs::write(ws.join(".claude/settings.local.json"), r#"{"model":"sonnet"}"#).unwrap();
+        let got = claude_code_settings(home.to_str().unwrap(), ws.to_str().unwrap());
+        assert_eq!(got.get("theme"), Some(&serde_json::json!("dark")));
+        assert_eq!(got.get("verbose"), Some(&serde_json::json!(false)));
+        assert_eq!(got.get("model"), Some(&serde_json::json!("sonnet")));
+        assert!(!got.contains_key("projects"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

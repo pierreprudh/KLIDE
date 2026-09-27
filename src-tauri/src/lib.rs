@@ -657,6 +657,17 @@ async fn delegate_slash_commands(provider: String, workspace_root: String) -> Re
     delegate::cli_commands(adapter, &workspace_root).await
 }
 
+/// Claude Code's current settings for the `/config` card (see
+/// `delegate::claude_code_settings`).
+#[tauri::command]
+async fn claude_code_settings(workspace_root: String) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
+    blocking::run(move || {
+        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+        Ok(delegate::claude_code_settings(&home, &workspace_root))
+    })
+    .await
+}
+
 /// True when the process was launched by the bundle verification script
 /// (scripts/verify-bundle.sh) rather than by a user.
 fn smoke_test_mode() -> bool {
@@ -980,6 +991,7 @@ pub fn run() {
             read_agent_run,
             read_opencode_run,
             delegate_slash_commands,
+            claude_code_settings,
             models::ai_provider_models,
             models::ai_provider_credits,
             models::ai_provider_model_meta,

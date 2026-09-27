@@ -23,7 +23,7 @@ mod runs;
 pub mod status;
 
 pub use chat::run_subscription_chat;
-pub use cli_commands::{cli_commands, CliCommands};
+pub use cli_commands::{claude_code_settings, cli_commands, CliCommands};
 pub use claude_code::ClaudeCode;
 pub use claude_code::EFFORT_LEVELS as CLAUDE_EFFORT_LEVELS;
 pub use codex::Codex;
