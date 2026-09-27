@@ -13,6 +13,18 @@ describe("canvas column geometry", () => {
     expect(g.showClose).toBe(false);
   });
 
+  it("reserves space for a watcher alone and keeps its reopen mark when folded", () => {
+    const open = columnGeometry({ ...roomy, observerUp: true });
+    expect(open.cardsUp).toBe(true);
+    expect(open.inset).toBe(COLUMN_MAX + 36);
+    expect(open.showClose).toBe(true);
+    const folded = columnGeometry({ ...roomy, observerUp: true, hidden: true });
+    expect(folded.planFolded).toBe(true);
+    expect(folded.marksUp).toBe(true);
+    expect(folded.inset).toBe(76);
+    expect(columnGeometry({ ...roomy, observerUp: false }).inset).toBe(0);
+  });
+
   it("takes the column's width for a card", () => {
     const g = columnGeometry({ ...roomy, planSlot: "card" });
     expect(g.cardsUp).toBe(true);

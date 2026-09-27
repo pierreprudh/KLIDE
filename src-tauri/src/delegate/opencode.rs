@@ -775,7 +775,7 @@ mod tests {
         let args = OpenCode
             .chat_stream_args(
                 "/tmp/ws",
-                &ChatSpec { model: "", resume: Some("ses_fef0"), mcp: None, allowed_commands: &[] },
+                &ChatSpec { effort: None, model: "", resume: Some("ses_fef0"), mcp: None, allowed_commands: &[] },
             )
             .unwrap();
         // `-s <id>`, never `--continue`: the last session is the wrong one as
@@ -789,7 +789,7 @@ mod tests {
         let args = OpenCode
             .chat_stream_args(
                 "/tmp/ws",
-                &ChatSpec { model: "minimax/minimax-m3", resume: None, mcp: None, allowed_commands: &[] },
+                &ChatSpec { effort: None, model: "minimax/minimax-m3", resume: None, mcp: None, allowed_commands: &[] },
             )
             .unwrap();
         assert_eq!(

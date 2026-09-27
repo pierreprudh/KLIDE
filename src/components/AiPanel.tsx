@@ -1,5 +1,6 @@
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
+import { wakeTurnMode } from "./ai/wake";
 import { ArtifactOutputRows, ArtifactOutputSelection } from "./ai/ArtifactOutputPicker";
 import { artifactPrompt, type ArtifactOutput } from "./ai/artifactOutput";
 import {
@@ -35,9 +36,11 @@ import {
   storedReflectionLevel,
 } from "../reflectionLevels";
 import { usePortalMenu } from "../hooks/usePortalMenu";
+import { usePresence } from "../hooks/usePresence";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
-import { errMessage, providerFailureMessage } from "../errors";
+import { errMessage, providerFailureMessage, RunBusyError } from "../errors";
+import { nextBusyWait } from "./ai/runBusyRetry";
 import { InlineDiffReview } from "./InlineDiffReview";
 import { InlineCommandReview } from "./InlineCommandReview";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -46,11 +49,11 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunStatus, isActiveRunStatus, reattachAgentRun, type RunReattachment } from "../agent/client";
+import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunStatus, isActiveRunStatus, isRunBusyError, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
 import { serviceAdvisorConsult } from "../agent/advisorConsult";
-import { toolsForMode } from "../agent/tools";
+import { disabledToolsFor, toolsForMode } from "../agent/tools";
 import { readWorkspaceTextFile, workspacePathExists } from "../workspaceFs";
 import { listWorkspaceFiles } from "./ai/workspaceFiles";
 import { TodoStrip, type TodoStripSlot } from "./TodoStrip";
@@ -1350,7 +1353,7 @@ export function AiPanel({
   } = usePortalMenu<{ top?: number; bottom?: number; left: number; maxHeight: number }>({
     computePos: (rect) => {
       const pad = 8;
-      const width = 200; // menu minWidth — used for the viewport clamp
+      const width = 236; // menu width — used for the viewport clamp
       if (variant === "focus") {
         return {
           bottom: Math.round(window.innerHeight - rect.top + 6),
@@ -1366,6 +1369,12 @@ export function AiPanel({
     },
     closeOnOutsideClick: true,
   });
+  // The menu plays a short leave animation after closing; closing clears the
+  // position, so the last one is held for that window.
+  const providerPresence = usePresence(providerOpen, 150);
+  const lastProviderMenuPos = useRef(providerMenuPos);
+  if (providerMenuPos) lastProviderMenuPos.current = providerMenuPos;
+  const shownProviderMenuPos = providerMenuPos ?? (providerPresence.leaving ? lastProviderMenuPos.current : null);
   // Self-hosted endpoints, read from the shared store. It refreshes on mount
   // and whenever the picker opens (so endpoints added in Settings show up
   // without a panel reload), and it publishes changes — a rename in Settings
@@ -1855,11 +1864,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       }
       const tools = await toolsForMode(effectiveMode);
       if (cancelled) return;
-      const disabled = new Set(
-        Object.entries(harnessSettings?.toolOverrides ?? {})
-          .filter(([, enabled]) => enabled === false)
-          .map(([name]) => name)
-      );
+      const disabled = new Set(disabledToolsFor(effectiveMode, harnessSettings?.toolOverrides));
       const activeTools = (tools ?? []).filter((tool) => {
         const name = tool?.function?.name ?? tool?.name;
         return typeof name !== "string" || !disabled.has(name);
@@ -2199,6 +2204,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // the conversation column is centred in the space to its left instead of
   // under it (see `focusGutterLeft` / `focusGutterRight`).
   const [planSlot, setPlanSlot] = useState<TodoStripSlot>("none");
+  const [observerSidebarTarget, setObserverSidebarTarget] = useState<HTMLDivElement | null>(null);
+  const [githubPresence, setGithubPresence] = useState({ runId: "", present: false });
+  const onGithubPresence = useCallback((runId: string, present: boolean) => {
+    setGithubPresence(previous => previous.runId === runId && previous.present === present ? previous : { runId, present });
+  }, []);
 
   function forceStickToBottom() {
     stickToBottomRef.current = true;
@@ -2823,7 +2833,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     }
     if (ta.clientWidth === 0) return;
     ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+    // A long paste grows the box up to 40% of the window (never below the
+    // old 160px) before it scrolls, so the text you pasted is readable.
+    const cap = Math.max(160, Math.round(window.innerHeight * 0.4));
+    ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
   }, []);
 
   useEffect(() => {
@@ -3179,6 +3192,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     resultUp: latestCompletion !== undefined,
     questionUp: pendingQuestion !== null,
     visualUp: latestVisuals !== null,
+    observerUp: githubPresence.runId === currentId && githubPresence.present,
     hidden: sidePanelHidden,
     canvasWidth,
   });
@@ -3503,8 +3517,7 @@ This user request requires workspace inspection. Before answering, you MUST call
 
     try {
       const toolsAvailable = turn.modelSupportsTools;
-      const overrides = harnessSettings?.toolOverrides;
-      const disabledTools = overrides ? Object.keys(overrides).filter((k) => overrides[k] === false) : undefined;
+      const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
       let systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
         ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
 
@@ -3548,7 +3561,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         text: turn.text, attachments: turn.attachments,
         context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
         systemPrompt,
-        disabledTools: disabledTools && disabledTools.length > 0 ? disabledTools : undefined,
+        disabledTools: disabledTools.length > 0 ? disabledTools : undefined,
         numCtx,
         numPredict,
         reflectionLevel,
@@ -3562,18 +3575,33 @@ This user request requires workspace inspection. Before answering, you MUST call
         // renderer's storage, so an `auto` turn carries them along.
         preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
       }, handleEvent);
+      // The user message wears `queued` while it waits on a busy Run, and
+      // `running` again once its own Run has started.
+      const markUser = (queueState: "queued" | "running") => {
+        const next = [...msgsRef.current];
+        const user = next[userIndex];
+        if (user?.role !== "user" || user.queueState === queueState) return;
+        next[userIndex] = { ...user, queueState };
+        commit(next);
+      };
       let session;
-      for (;;) {
+      const busySince = Date.now();
+      for (let attempt = 0; ; attempt++) {
         if (queueGenerationRef.current !== generation) return;
         try { session = await startSession(); break; }
         catch (error) {
           // A completion-triggered reply may win the atomic backend guard
-          // between our queue check and dispatch. Preserve this user's turn.
-          if (!String(error).includes("A run is already active for this conversation")) throw error;
+          // between our queue check and dispatch. Preserve this user's turn —
+          // for a while (runBusyRetry.ts), then say so and hand it back.
+          if (!isRunBusyError(error)) throw error;
           viewBehind.reason = "region-detached";
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          const wait = nextBusyWait(attempt, Date.now() - busySince);
+          if (wait === null) throw new RunBusyError();
+          markUser("queued");
+          await new Promise((resolve) => setTimeout(resolve, wait));
         }
       }
+      markUser("running");
       activeHarnessRunRef.current = session.runId;
       try { await session.done; } finally { activeHarnessRunRef.current = null; }
       if (harnessError) throw harnessError;
@@ -4043,12 +4071,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // Letting a peer's message in should not leave it waiting for the user to
   // find something else to say: start a turn with no words of the user's own,
   // so the Run reads it now. Only when the conversation is idle — a live turn
-  // reaches the boundary on its own. Chat has no coordination, so a Chat
-  // picker wakes as Plan, the quietest mode that can read the inbox.
+  // reaches the boundary on its own. The wake keeps the thread's own Mode:
+  // Chat reads its inbox too, and a peer's message never earns more tools.
   async function wakeForInbox() {
     if (streaming || queueRef.current.length > 0 || reattachRef.current) return;
-    const current = agentModeRef.current;
-    const mode: AgentMode = current === "chat" ? "plan" : current;
+    const mode = wakeTurnMode(agentModeRef.current);
     const modelInspection = await activateModelInspectionForSend();
     enqueueTurn({
       clientId: genId(),
@@ -4118,30 +4145,32 @@ This user request requires workspace inspection. Before answering, you MUST call
         <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{providerName(provider)}</span>
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--fg-dim)" }}><path d="M6 9l6 6 6-6" /></svg>
       </button>
-      {providerOpen && providerMenuPos && createPortal(
-        <div ref={providerMenuRef} role="menu" className="popover-enter menu-scroll menu-glass" style={{ position: "fixed", top: providerMenuPos.top, bottom: providerMenuPos.bottom, left: providerMenuPos.left, minWidth: 200, maxHeight: providerMenuPos.maxHeight, overflowY: "auto", overscrollBehavior: "contain", padding: 5, zIndex: Z.popover }}>
+      {providerPresence.mounted && shownProviderMenuPos && createPortal(
+        <div ref={providerMenuRef} role="menu" className="picker-menu menu-scroll menu-glass" data-leaving={providerPresence.leaving} style={{ transformOrigin: shownProviderMenuPos.bottom !== undefined ? "bottom left" : "top left", position: "fixed", top: shownProviderMenuPos.top, bottom: shownProviderMenuPos.bottom, left: shownProviderMenuPos.left, width: 236, maxHeight: shownProviderMenuPos.maxHeight, overflowY: "auto", overscrollBehavior: "contain", padding: 5, zIndex: Z.popover }}>
+          {/* Drawn to the Focus start stage's picker (FocusMode InlineMenu):
+              plain eyebrows with a fold chevron, roomy logo rows, the active
+              row carried by its fill and weight. Rows that can't run yet
+              (unavailable providers) are left out, as they are there. */}
           {providerGroupsForSurface.map((group) => {
+            const items = group.items.filter((it) => it.available);
+            if (items.length === 0) return null;
             const expanded = expandedGroups.has(group.label);
-            const hasActive = group.items.some((it) => it.id === provider);
+            const hasActive = items.some((it) => it.id === provider);
             // A whole stack with no keys anywhere reads as quiet as its rows.
-            const stackKeyless = group.items.every((it) => keylessProviders.has(it.id));
+            const stackKeyless = items.every((it) => keylessProviders.has(it.id));
             return (
-            <div key={group.label} style={{ marginBottom: 2 }}>
+            <div key={group.label}>
               <button type="button" onClick={() => toggleGroup(group.label)} aria-expanded={expanded}
-                /* The card itself is frosted now, so this sticky eyebrow only
-                   has to mask the rows scrolling under it — a nested
-                   backdrop-filter would be a second blur over the first and
-                   renders muddy in the webview. A near-opaque elevated fill
-                   does the masking instead. */
-                style={{ position: "sticky", top: 0, zIndex: 1, width: "100%", display: "flex", alignItems: "center", gap: 6, background: "color-mix(in srgb, var(--bg-elevated) 92%, transparent)", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)", padding: "6px 8px 5px", textAlign: "left", opacity: stackKeyless ? 0.5 : 1, transition: "color 120ms ease, opacity var(--motion-fast) var(--ease-out)" }}
-                onMouseEnter={(e) => { if (!(!expanded && hasActive)) e.currentTarget.style.color = "var(--fg-subtle)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)"; }}>
-                <span style={{ display: "grid", placeItems: "center", flexShrink: 0, transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 140ms cubic-bezier(0.4, 0, 0.2, 1)" }}>
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, background: "transparent", border: "none", cursor: "pointer", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: !expanded && hasActive ? "var(--fg-strong)" : "var(--fg-dim)", padding: "7px 9px 3px", textAlign: "left", opacity: stackKeyless ? 0.5 : 1, transition: "color var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out)" }}>
+                <span className="picker-stack-chevron" data-open={expanded}>
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                 </span>
-                <span style={{ flex: 1 }}>{group.label}</span>
+                {group.label}
               </button>
-              {expanded && group.items.map((item) => {
+              {/* Rows stay mounted inside the fold so a stack closes as smoothly as it opens. */}
+              <div className="picker-stack-body" data-open={expanded ? "true" : "false"} inert={!expanded}>
+              <div>
+              {items.map((item) => {
                 const active = item.id === provider;
                 // No key Rust can resolve → the row can't run. Quiet it and
                 // (when the host wired Settings) send the click to API keys
@@ -4149,26 +4178,26 @@ This user request requires workspace inspection. Before answering, you MUST call
                 const keyless = item.available && keylessProviders.has(item.id);
                 const routesToSettings = keyless && !!onOpenSettingsSection;
                 return (
-                  <button key={item.id} role="menuitem" disabled={!item.available}
+                  <button key={item.id} role="menuitem"
                     title={keyless ? `${item.name} has no API key — open Settings` : undefined}
                     onClick={() => {
-                      if (!item.available) return;
                       if (routesToSettings) { closeProviderMenu(); onOpenSettingsSection?.("api"); return; }
                       selectProvider(item.id);
                     }}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-sm)", background: active ? "var(--menu-row-active)" : "transparent", color: item.available ? "var(--fg-strong)" : "var(--fg-dim)", cursor: item.available ? "pointer" : "default", fontSize: 12, textAlign: "left", transition: "background 120ms ease" }}
-                    onMouseEnter={(e) => { if (item.available && !active) e.currentTarget.style.background = "var(--menu-row-hover)"; }}
+                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 9px", border: "none", borderRadius: "var(--radius-sm)", background: active ? "var(--menu-row-active)" : "transparent", color: "var(--fg-strong)", cursor: "pointer", fontSize: 12, fontWeight: active ? 550 : 500, textAlign: "left", transition: "background var(--motion-fast) var(--ease-out)" }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "var(--menu-row-hover)"; }}
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
-                    <span style={{ display: "grid", placeItems: "center", flexShrink: 0, color: item.available ? "var(--fg-subtle)" : "var(--fg-dim)", opacity: keyless ? 0.4 : 1 }}><ProviderLogo id={item.id} size={15} /></span>
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: keyless ? 0.45 : 1 }}>{item.name}</span>
+                    <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0, color: "var(--fg-subtle)", opacity: keyless ? 0.4 : 1 }}><ProviderLogo id={item.id} size={17} /></span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: keyless ? 0.45 : 1 }}>{item.name}</span>
                     {routesToSettings && (
                       /* Leads out to Settings rather than choosing anything. */
                       <svg className="menu-leadout" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><path d="M7 17 17 7" /><path d="M8 7h9v9" /></svg>
                     )}
-                    {active && !routesToSettings && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg-subtle)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5" /></svg>}
                   </button>
                 );
               })}
+              </div>
+              </div>
             </div>
             );
           })}
@@ -4740,7 +4769,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             }
           }
           return (
-            <div key={i} data-observer-row={i} className="ai-msg-in" style={{ display: "flex", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
+            <div key={i} data-observer-row={i} className="ai-msg-in" style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: isResponseStart ? "14px 0 8px" : "3px 0", opacity: dimmed ? 0.4 : undefined, transition: "opacity var(--motion-med) var(--ease-out)" }}>
               {isResponseStart ? (
                 // A brand mark is worn bare — no disc, no ring, no tile, the
                 // rule every other pairing in the app follows. Klide's own mark
@@ -4808,11 +4837,15 @@ This user request requires workspace inspection. Before answering, you MUST call
                   </>
                 )}
               </div>
+              <div data-observer-slot={i} className="github-observer-message-slot" />
             </div>
           );
         }))}
         </ObserverConnections>
-        <ConversationObservers key={currentId} runId={currentId} onFollowup={() => {
+        <ConversationObservers key={currentId} runId={currentId} msgs={msgs} messageRoot={scrollRef.current}
+          onGithubPresence={onGithubPresence}
+          sidebar={variant === "focus" ? { target: observerSidebarTarget, folded: column.planFolded, onUnfold: () => setSidePanelHidden(false) } : undefined}
+          onFollowup={() => {
           if (processingQueueRef.current || reattachRef.current) return false;
           followConversationRun(currentId, provider);
           return true;
@@ -5071,6 +5104,7 @@ This user request requires workspace inspection. Before answering, you MUST call
               own resting state is that icon. The card draws that mark itself
               when the column is folded; a second pill here drew the same
               result twice. */}
+          <div ref={setObserverSidebarTarget} className="github-observer-sidebar-slot" />
           {latestCompletion && (
             <CompletionCard
               variant="island"
@@ -5314,7 +5348,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
-            style={{ width: "100%", minHeight: 40, maxHeight: 168, resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
+            style={{ width: "100%", minHeight: 40, maxHeight: "max(168px, 40vh)", resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
           />
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: width < 360 ? 4 : 6, padding: "6px 8px", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", flexWrap: "nowrap" }}>

@@ -5,9 +5,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { errMessage, providerFailureMessage } from "./errors";
+import { errMessage, providerFailureMessage, RunBusyError } from "./errors";
 
 describe("providerFailureMessage", () => {
+  it("says a busy Run is busy, without blaming the provider", () => {
+    expect(providerFailureMessage(new RunBusyError(), "Anthropic")).toBe(
+      "This conversation's Run is still busy — stop it or wait, then send again.",
+    );
+  });
+
   it("tells a stale CLI to update instead of blaming credentials", () => {
     const message = providerFailureMessage(
       new Error("The 'gpt-5.6-sol' model requires a newer version of Codex."),

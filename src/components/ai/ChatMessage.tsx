@@ -1429,7 +1429,8 @@ function MessageBodyImpl({ m, active = false, hideThinking, workspaceRoot, resul
         )}
         {visibleContent && (
           <div style={{ marginBottom: m.toolCalls?.length ? 4 : 0, fontSize: 14, lineHeight: 1.6 }}>
-            {renderMarkdown(visibleContent, { streaming: active })}
+            {/* The assistant's own answer is the one surface that draws. */}
+            {renderMarkdown(visibleContent, { streaming: active, visuals: true })}
           </div>
         )}
         {(() => {

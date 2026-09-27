@@ -1,6 +1,32 @@
 # Changelog
 
+## Claude Code effort (2026-09-26)
+
+- Claude Code now offers low, medium, high, xhigh, and max reasoning effort in the existing picker. The selection reaches both terminal launch/resume and Focus chat turns.
+
+## GitHub observer cards (2026-09-24)
+
+- Watcher cards fill the conversation width and also stay in Focus's right-side panel, sharing the same live status. Closing the panel leaves a GitHub icon to reopen the watcher.
+- Plain `gh run watch <id> --exit-status` observers now show a compact GitHub card in the conversation, refreshing the pinned run's checks every eight seconds while visible. Completion still wakes the original conversation through the native observer.
+- Cards link to GitHub and open the associated PR directly in Git Review. Failed checks, unavailable status, and results from older PR commits are distinct from success. Completed cards retain no command logs and remain available for the app session (up to eight recent completed GitHub observers per conversation).
+
+
 Notable changes per milestone. Dates are completion dates.
+
+## Unreleased
+
+### Permission
+
+- **Settings → Harness → Tools per mode now takes effect.** The toggles were
+  saved as `goal.write_file` and sent verbatim, which matched no Tool, so every
+  toggle was dead. A turned-off Tool is now neither offered nor dispatched, the
+  chips come from the Tool registry per mode (Chat included), and the Skills
+  inventory groups Tools by the capability Rust records.
+- **Approving a command does not approve it in the background.** A background
+  or watched command asks on its own card; the project allowlist covers
+  foreground commands only, and full auto is recorded as full auto.
+- **Full auto no longer lets another agent's messages in unreviewed**, and a
+  Mission attempt or child Run can no longer be flipped by a conversation's rung.
 
 ## v0.6.5 — Shells, Watchers, Links (2026-09-23)
 

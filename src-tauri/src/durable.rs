@@ -144,7 +144,7 @@ pub fn is_tmp_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn set_private(path: &Path) {
+pub(crate) fn set_private(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

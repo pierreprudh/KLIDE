@@ -750,13 +750,18 @@ fn coordination_timeout_seconds(input: &serde_json::Value) -> u64 {
         .clamp(1, 120)
 }
 
+/// A reply is an answer: with `replyTo` set, an omitted kind means answer.
 fn coordination_envelope_kind(
     input: &serde_json::Value,
 ) -> Result<CoordinationEnvelopeKind, String> {
+    let is_reply = input
+        .get("replyTo")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.trim().is_empty());
     match input
         .get("kind")
         .and_then(|value| value.as_str())
-        .unwrap_or("instruction")
+        .unwrap_or(if is_reply { "answer" } else { "instruction" })
     {
         "instruction" => Ok(CoordinationEnvelopeKind::Instruction),
         "question" => Ok(CoordinationEnvelopeKind::Question),
@@ -765,21 +770,6 @@ fn coordination_envelope_kind(
         "handoff" => Ok(CoordinationEnvelopeKind::Handoff),
         other => Err(format!("Unknown coordination message kind `{other}`.")),
     }
-}
-
-fn coordination_messages_text(inbox: &[CoordinationEnvelopeSnapshot]) -> String {
-    let mut text = String::from("Coordination messages received:");
-    for entry in inbox {
-        let envelope = &entry.envelope;
-        text.push_str(&format!(
-            "\n\n- envelopeId: {}\n  kind: {}\n  from: {}\n  body: {}",
-            envelope.id,
-            coordination_kind_label(envelope.kind),
-            coordination_actor_label(&envelope.from),
-            envelope.body
-        ));
-    }
-    text
 }
 
 async fn wait_for_coordination_messages(
@@ -791,6 +781,15 @@ async fn wait_for_coordination_messages(
 ) -> Result<Option<Vec<CoordinationEnvelopeSnapshot>>, ToolOutcome> {
     set_run_status(ctx.sup, ctx.id, AgentRunStatus::Paused);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_seconds);
+    // Subscribed before the first read, so mail landing between a read and
+    // the wait below still wakes it. The floor only matters for an append by
+    // another Klide process, which wakes nobody here.
+    let mut changes = ctx.sup.coordination_changes(workspace_root);
+    let floor = if changes.is_some() {
+        std::time::Duration::from_secs(2)
+    } else {
+        std::time::Duration::from_millis(250)
+    };
     loop {
         let inbox = match load_coordination_inbox(ctx.sup, workspace_root, ctx.id) {
             Ok(inbox) => inbox,
@@ -820,18 +819,27 @@ async fn wait_for_coordination_messages(
             set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
             return Ok(None);
         }
-        let pause = std::cmp::min(
-            std::time::Duration::from_millis(250),
-            deadline.saturating_duration_since(now),
-        );
+        let pause = std::cmp::min(floor, deadline.saturating_duration_since(now));
         tokio::select! {
             _ = ctx.cancel.cancelled() => {
                 set_run_status(ctx.sup, ctx.id, AgentRunStatus::Running);
                 return Err(ToolOutcome::Cancelled);
             }
+            _ = journal_moved(&mut changes) => {}
             _ = tokio::time::sleep(pause) => {}
         }
     }
+}
+
+/// Resolves when the journal wake fires; never, when there is no wake (or its
+/// sender is gone), so the select above falls back to its timer.
+async fn journal_moved(changes: &mut Option<tokio::sync::watch::Receiver<u64>>) {
+    if let Some(receiver) = changes {
+        if receiver.changed().await.is_ok() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await
 }
 
 /// Native coordination Tools. The current Run id is always the actor; no Tool
@@ -1093,7 +1101,10 @@ where
             {
                 Ok(Some(messages)) => ToolOutcome::Produced(ToolResult {
                     ok: true,
-                    content: coordination_messages_text(&messages),
+                    content: match delivery::render_mail(&messages) {
+                        Ok(text) => text,
+                        Err(error) => return Ok(coordination_tool_error(error)),
+                    },
                     metadata: Some(serde_json::json!({ "messages": messages })),
                 }),
                 Ok(None) => ToolOutcome::Produced(ToolResult {
@@ -1380,7 +1391,8 @@ pub(super) fn message_gate_options() -> Vec<PermissionOption> {
 /// same card as a shell command, and the answer is written to the journal as
 /// an accept or a decline. "For this run" is remembered per sending peer, so
 /// a peer once welcomed keeps talking without a prompt and a peer once refused
-/// is declined silently. Full auto accepts everything, as it runs commands.
+/// is declined silently. The full-auto rung does not reach this card: it
+/// silences commands, never another agent's words.
 /// Returns `true` when the user cancelled the run while a card was up.
 pub(super) async fn review_coordination_inbox<E>(
     ctx: &ToolCtx<'_>,
@@ -1392,7 +1404,6 @@ where
 {
     let snapshot = ctx.sup.coordination_snapshot(workspace_root)?;
     let awaiting = crate::coordination::awaiting_review_for(&snapshot, ctx.id)?;
-    let full_auto = permission::full_auto(ctx);
     for entry in awaiting {
         let envelope = &entry.envelope;
         let peer = match &envelope.from {
@@ -1400,8 +1411,8 @@ where
             CoordinationActor::Operator => "operator",
         };
         let accept =
-            match permission::precheck(ctx, permission::Capability::Message, peer, full_auto) {
-                permission::Precheck::Execute => true,
+            match permission::precheck(ctx, permission::Capability::Message, peer, false) {
+                permission::Precheck::Execute(_) => true,
                 permission::Precheck::AutoReject(_) => false,
                 permission::Precheck::Ask => {
                     let peer_label = snapshot
@@ -1443,7 +1454,7 @@ where
                         permission::GateDecision::Cancelled => return Ok(true),
                         decision => decision,
                     };
-                    permission::record(ctx, permission::Capability::Message, peer, peer, &decision);
+                    permission::record(ctx, permission::Capability::Message, peer, None, &decision);
                     matches!(decision, permission::GateDecision::Approved { .. })
                 }
             };
@@ -1583,6 +1594,24 @@ async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<S
         .then(|| artifacts::parse_porcelain(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// A race member's checkout: a linked worktree on a `klide/race-*` branch
+/// (`src/agent/race.ts` names them). Any linked worktree is not enough — a
+/// user can open one as their project. Read from the worktree's own HEAD file,
+/// no git process.
+fn is_race_worktree(root: &str) -> bool {
+    if crate::delegate::worktree_label(root).is_none() {
+        return false;
+    }
+    let root = std::path::Path::new(root);
+    let Some(gitdir) = std::fs::read_to_string(root.join(".git")).ok().and_then(|pointer| {
+        pointer.lines().find_map(|l| l.trim().strip_prefix("gitdir:").map(|p| p.trim().to_string()))
+    }) else {
+        return false;
+    };
+    std::fs::read_to_string(root.join(gitdir).join("HEAD"))
+        .is_ok_and(|head| head.trim().starts_with("ref: refs/heads/klide/race-"))
+}
+
 /// Start an approved command in the background and tell the model how to get
 /// back to it.
 ///
@@ -1592,6 +1621,9 @@ async fn dirty_set(top: &std::path::Path) -> Option<std::collections::BTreeMap<S
 fn start_background_command(ctx: &ToolCtx<'_>, root: &str, cwd: &str, command: &str, notify: bool) -> ToolResult {
     if notify && (ctx.request.parent_id.is_some() || ctx.request.mission_id.is_some()) {
         return ToolResult { ok: false, content: "A persistent observer must be started by the main conversation, not a child or Mission run.".into(), metadata: None };
+    }
+    if notify && ctx.request.workspace_root.as_deref().is_some_and(is_race_worktree) {
+        return ToolResult { ok: false, content: "A persistent observer cannot be started in a race worktree: merging the race removes the checkout it would watch.".into(), metadata: None };
     }
     // The same cwd rule the foreground path applies — `workspace`, `.` and a
     // relative directory mean what they mean there, and a missing one fails
@@ -1747,53 +1779,31 @@ where
         return Ok(ToolOutcome::Produced(ToolResult { ok: false, content: "notifyOnExit requires background: true.".into(), metadata: None }));
     }
 
-    let approval_key = if cwd == root_value {
-        command.clone()
-    } else {
-        format!("{cwd} :: {command}")
+    let shape = match (background, notify) {
+        (false, _) => permission::CommandShape::Foreground,
+        (true, false) => permission::CommandShape::Background,
+        (true, true) => permission::CommandShape::Watch,
     };
+    let key = permission::CommandKey::new(root_value, &cwd, &command, shape);
+    let approval_key = key.to_string();
+    let foreground = shape == permission::CommandShape::Foreground;
     let preflight = preflight_command(root_value, &cwd, &command);
     // Wildcard allowlist rules are intentionally narrower than exact approvals:
     // if a wildcard command references outside-workspace paths, ask again so the
     // path is visible to the user instead of hidden behind a broad pattern. That
     // nuance is command-specific, so the project verdict is computed here and
-    // handed to the engine as a plain bool.
-    let matched_rule =
-        command_allowlist::match_rule(&ctx.request.command_allowlist, &command, &approval_key);
-    let project_ok = matched_rule
-        .as_ref()
-        .map(|rule| rule.exact || preflight.external_paths.is_empty())
-        .unwrap_or(false);
-    // The full-auto rung: the user chose to run this conversation's commands
-    // without prompts. Same trust as a project-allowlist hit, but scoped to
-    // the run — nothing is persisted, a flip while the Run works counts from
-    // its next command, and a rejection remembered from before the user
-    // escalated no longer blocks (escalating IS the override).
-    let full_auto = permission::full_auto(ctx);
-
-    match permission::precheck(
-        ctx,
-        permission::Capability::Command,
-        &approval_key,
-        project_ok || full_auto,
-    ) {
-        permission::Precheck::Execute => {
-            return if background {
-                Ok(ToolOutcome::Produced(start_background_command(ctx, root_value, &cwd, &command, notify)))
-            } else {
-                run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit)
-                    .await
-            };
-        }
-        permission::Precheck::AutoReject(msg) => {
-            return Ok(ToolOutcome::Produced(ToolResult {
-                ok: false,
-                content: msg.to_string(),
-                metadata: None,
-            }));
-        }
-        permission::Precheck::Ask => {}
-    }
+    // handed to the engine as a plain bool. The allowlist approves foreground
+    // commands; a rule that matches a background one still asks.
+    let matched_rule = command_allowlist::match_rule(
+        &ctx.request.command_allowlist,
+        &command,
+        &key.foreground_key(),
+    );
+    let project_ok = foreground
+        && matched_rule
+            .as_ref()
+            .map(|rule| rule.exact || preflight.external_paths.is_empty())
+            .unwrap_or(false);
 
     let external_paths = preflight.external_paths.clone();
     let mut permission_reason = reason;
@@ -1817,6 +1827,14 @@ where
             " It runs in the background with no time limit and is stopped when this run ends."
         });
     }
+    let options = if foreground {
+        standard_gate_options("Approve for this run", "Approve for this project")
+    } else {
+        standard_gate_options("Approve for this run", "")
+            .into_iter()
+            .filter(|option| option.option_id != "allow_project")
+            .collect()
+    };
 
     let perm = PermissionRequest {
         id: permission::request_id(ctx, call),
@@ -1831,8 +1849,29 @@ where
         }),
         summary: permission_summary,
         reason: permission_reason,
-        options: standard_gate_options("Approve for this run", "Approve for this project"),
+        options,
     };
+
+    match permission::precheck(ctx, permission::Capability::Command, &approval_key, project_ok) {
+        permission::Precheck::Execute(trusted) => {
+            if trusted == permission::Trusted::FullAuto {
+                permission::record_full_auto(ctx, call, perm, emit)?;
+            }
+            return if background {
+                Ok(ToolOutcome::Produced(start_background_command(ctx, root_value, &cwd, &command, notify)))
+            } else {
+                run_command_announcing_artifacts(ctx, root_value, &cwd, &command, timeout_secs, emit).await
+            };
+        }
+        permission::Precheck::AutoReject(msg) => {
+            return Ok(ToolOutcome::Produced(ToolResult {
+                ok: false,
+                content: msg.to_string(),
+                metadata: None,
+            }));
+        }
+        permission::Precheck::Ask => {}
+    }
 
     let decision = match permission::run_gate(ctx, call, Some(permission::Capability::Command), perm, emit).await? {
         permission::GateDecision::Cancelled => return Ok(ToolOutcome::Cancelled),
@@ -1842,7 +1881,7 @@ where
         ctx,
         permission::Capability::Command,
         &approval_key,
-        &command,
+        foreground.then_some(command.as_str()),
         &decision,
     );
 
@@ -1995,7 +2034,7 @@ where
         network_allowlist::is_allowed(ctx.runs_dir, root_value, &target).unwrap_or(false);
 
     match permission::precheck(ctx, permission::Capability::Network, &target, project_ok) {
-        permission::Precheck::Execute => {
+        permission::Precheck::Execute(_) => {
             return Ok(ToolOutcome::Produced(
                 execute_network_tool(root_value, call, ctx.id).await,
             ));
@@ -2032,7 +2071,7 @@ where
         ctx,
         permission::Capability::Network,
         &target,
-        &target,
+        Some(&target),
         &decision,
     );
 
@@ -2286,5 +2325,26 @@ mod artifact_revision_tests {
         assert!(!files[0].created);
         assert!(artifacts::produced_with_versions(&dirty, &dirty, &after, &after).is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod race_worktree_tests {
+    use super::*;
+    #[test]
+    fn only_a_worktree_on_a_race_branch_is_a_race_worktree() {
+        let base = std::env::temp_dir().join(format!("klide-race-worktree-{}-{}", std::process::id(), now_ms()));
+        let admin = base.join("repo/.git/worktrees/member");
+        let checkout = base.join("member");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::write(checkout.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        let root = checkout.to_str().unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/klide/race-m1x-2\n").unwrap();
+        assert!(is_race_worktree(root));
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/feature-login\n").unwrap();
+        assert!(!is_race_worktree(root), "a worktree the user opened is not a race member");
+        assert!(!is_race_worktree(base.join("repo").to_str().unwrap()));
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

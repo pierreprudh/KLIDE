@@ -55,6 +55,10 @@ pub enum Request {
         /// own session id (`delegate::lookup(provider)` — the daemon links
         /// the same crate, so the detector runs in-process here too).
         detect_session_id: bool,
+        /// sha256 of the session's bridge secret, for its scrollback meta.
+        /// Defaulted so an older app talking to a newer daemon still spawns.
+        #[serde(default)]
+        coord_secret_sha256: Option<String>,
     },
     Write {
         session_id: String,

@@ -38,6 +38,8 @@ export type ColumnInput = {
    *  The caller gates it on `showsVisuals`: a narrow canvas keeps the drawing
    *  in the chat alone. */
   visualUp?: boolean;
+  /** A conversation-owned GitHub observer remains reachable as chat scrolls. */
+  observerUp?: boolean;
   /** The reader closed the column. A question overrides it: that card holds
    *  the run, and hiding it strands the run with no way to answer. */
   hidden: boolean;
@@ -70,7 +72,7 @@ export function showsVisuals(canvasWidth: number): boolean {
   return canvasWidth === 0 || canvasWidth - PROSE_MIN - COLUMN_MARGINS >= COLUMN_MAX;
 }
 
-export function columnGeometry({ planSlot, resultUp, questionUp, visualUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
+export function columnGeometry({ planSlot, resultUp, questionUp, visualUp = false, observerUp = false, hidden, canvasWidth }: ColumnInput): ColumnGeometry {
   // A question is never hidden, so it also un-hides everything beside it: a
   // reader answering one should see the plan it came from.
   const closed = hidden && !questionUp;
@@ -82,8 +84,8 @@ export function columnGeometry({ planSlot, resultUp, questionUp, visualUp = fals
   // is its mark. So the column is "open" whenever it holds anything the reader
   // has not folded away, and the corner keeps the marks either way — a
   // finished run never vanishes from the top right.
-  const cardsUp = !closed && (planSlot === "card" || questionUp || resultUp || visualUp);
-  const marksUp = !cardsUp && (planSlot !== "none" || resultUp || visualUp);
+  const cardsUp = !closed && (planSlot === "card" || questionUp || resultUp || visualUp || observerUp);
+  const marksUp = !cardsUp && (planSlot !== "none" || resultUp || visualUp || observerUp);
 
   return {
     width,

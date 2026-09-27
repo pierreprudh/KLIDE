@@ -1112,11 +1112,14 @@ async fn resolve_reflection_levels(
     model: &str,
 ) -> Result<Vec<String>, String> {
     // A Delegate CLI reasons on its own terms, so the levels are the CLI's,
-    // not Klide's. Codex publishes a per-model set in its manifest; the other
-    // CLIs take no effort switch from Klide, so they get no dial.
+    // not Klide's. Codex publishes a per-model set in its manifest; Claude
+    // Code accepts a CLI-wide vocabulary.
     if crate::delegate::lookup(provider).is_some() {
         if provider == "codex" {
             return Ok(codex_reasoning_levels(model).unwrap_or_default());
+        }
+        if provider == "claude-code" {
+            return Ok(crate::delegate::CLAUDE_EFFORT_LEVELS.iter().map(|s| s.to_string()).collect());
         }
         return Ok(Vec::new());
     }
@@ -1678,12 +1681,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_effort_levels_are_cli_wide() {
+        for model in ["default", "sonnet", "opus"] {
+            assert_eq!(resolve_reflection_levels(&ReflectionProbeCache::default(), "claude-code", model).await.unwrap(),
+                vec!["low", "medium", "high", "xhigh", "max"]);
+        }
+    }
+
+    #[tokio::test]
     async fn delegate_clis_without_an_effort_switch_get_no_dial() {
-        // Only Codex publishes a set. Offering the others a level would write
-        // a setting nothing reads — and their spawn commands drop it anyway
-        // (see `only_codex_takes_a_reasoning_effort` in delegate/mod.rs).
+        // These adapters have no effort switch; keep their dial hidden.
         let cache = ReflectionProbeCache::default();
-        for provider in ["claude-code", "opencode", "omp"] {
+        for provider in ["opencode", "omp"] {
             assert!(
                 resolve_reflection_levels(&cache, provider, "any-model")
                     .await

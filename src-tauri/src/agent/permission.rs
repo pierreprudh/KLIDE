@@ -12,9 +12,10 @@
 //! shared here. The handlers keep only what is genuinely theirs: parsing the
 //! tool call into an invocation, and running the approved command.
 
-use super::tools::NormalizedToolCall;
+use super::tools::{self, NormalizedToolCall, ToolKind};
 use super::transcripts::now_ms;
-use super::types::{AgentEvent, AgentRunStatus, PermissionRequest};
+use super::types::{AgentEvent, AgentMode, AgentRunStatus, PermissionRequest, StartRunRequest};
+use std::collections::HashSet;
 use super::{command_allowlist, network_allowlist};
 use super::{pause_for_user, with_run_handle, PauseOutcome, ToolCtx};
 
@@ -29,6 +30,118 @@ pub enum Capability {
     Command,
     Network,
     Message,
+}
+
+/// Where a Run came from. The full-auto rung is a conversation's choice: a
+/// Mission attempt or a spawned child takes whatever its request said at start
+/// and no live flip reaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunLineage {
+    Conversation,
+    MissionAttempt,
+    SubagentChild,
+}
+
+/// Why a Tool call is refused before it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockReason {
+    /// The Tool's capability is outside the Run's Mode.
+    Mode(ToolKind),
+    /// The Tool is turned off for this Run — by a Settings toggle, or by a
+    /// caller with no surface to host it (a headless attempt, a child).
+    Disabled,
+}
+
+/// The facts about a Run that every gate reads: which Mode it is in, which
+/// Tools are off, where it came from, and whether its request chose full auto.
+/// Built once from the request, so the schemas the model is offered and the
+/// dispatch-time check answer from the same place.
+#[derive(Clone, Debug)]
+pub struct GateSubject {
+    pub mode: AgentMode,
+    /// Bare Tool names, already narrowed to this Mode.
+    pub disabled: HashSet<String>,
+    pub lineage: RunLineage,
+    pub requested_full_auto: bool,
+}
+
+impl GateSubject {
+    /// A conversation Run in `mode` with nothing turned off.
+    pub fn for_mode(mode: AgentMode) -> Self {
+        Self {
+            mode,
+            disabled: HashSet::new(),
+            lineage: RunLineage::Conversation,
+            requested_full_auto: false,
+        }
+    }
+
+    /// Settings store a toggle as `<mode>.<tool>`; headless callers send bare
+    /// names. A prefixed entry applies only to its own Mode, a bare one to
+    /// every Mode.
+    pub fn from_request(request: &StartRunRequest) -> Self {
+        let mode_prefix = match request.mode {
+            AgentMode::Chat => "chat",
+            AgentMode::Plan => "plan",
+            AgentMode::Goal => "goal",
+        };
+        let disabled = request
+            .disabled_tools
+            .iter()
+            .filter_map(|entry| match entry.split_once('.') {
+                Some((prefix, name)) if matches!(prefix, "chat" | "plan" | "goal") => {
+                    (prefix == mode_prefix).then(|| name.to_string())
+                }
+                _ => Some(entry.clone()),
+            })
+            .collect();
+        let lineage = if request.parent_id.is_some() {
+            RunLineage::SubagentChild
+        } else if request.mission_id.is_some() {
+            RunLineage::MissionAttempt
+        } else {
+            RunLineage::Conversation
+        };
+        Self {
+            mode: request.mode.clone(),
+            disabled,
+            lineage,
+            requested_full_auto: request.auto_approve_commands == Some(true),
+        }
+    }
+
+    /// May this Tool run in this Run at all? `kind` is `None` for a name the
+    /// registry does not know; that call goes on to the unknown-tool path.
+    pub fn permits(&self, name: &str, kind: Option<ToolKind>) -> Result<(), BlockReason> {
+        if self.disabled.contains(name) {
+            return Err(BlockReason::Disabled);
+        }
+        // consult_advisor is side-effect free, so Plan may escalate too.
+        if name == tools::ADVISOR_TOOL && self.mode != AgentMode::Chat {
+            return Ok(());
+        }
+        let Some(kind) = kind else { return Ok(()) };
+        let mission_ok = name != tools::MISSION_ORCHESTRATE_TOOL || self.mode == AgentMode::Goal;
+        if mission_ok && tools::tool_allowed_in_mode(&self.mode, kind) {
+            Ok(())
+        } else {
+            Err(BlockReason::Mode(kind))
+        }
+    }
+
+    /// Is the run on the full-auto rung right now? `live` is the rung flipped
+    /// while the Run works, which only a conversation honors.
+    pub fn full_auto(&self, live: Option<bool>) -> bool {
+        match (self.lineage, live) {
+            (RunLineage::Conversation, Some(live)) => live,
+            _ => self.requested_full_auto,
+        }
+    }
+
+    /// The rung silences commands and nothing else.
+    pub fn rung_covers(&self, cap: Capability) -> bool {
+        cap == Capability::Command
+    }
 }
 
 /// Everything the engine remembers about this run's approvals and rejections,
@@ -174,15 +287,6 @@ pub fn remember_edits_auto_apply(ctx: &ToolCtx<'_>) {
     with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_edits_auto_apply());
 }
 
-/// Is this run on the full-auto rung right now? The live override wins over
-/// what the run request said at start: a rung flipped while the Run works
-/// applies to its next command, not only to the next Run.
-pub fn full_auto(ctx: &ToolCtx<'_>) -> bool {
-    with_run_handle(ctx.sup, ctx.id, |h| h.trust.commands_policy())
-        .flatten()
-        .unwrap_or(ctx.request.auto_approve_commands == Some(true))
-}
-
 /// The decision a command card receives when the rung silences it, so the
 /// transcript says the policy answered, not the user.
 pub const FULL_AUTO_DECISION: &str = "{\"behavior\":\"allow\",\"scope\":\"once\",\"via\":\"full_auto\"}";
@@ -191,27 +295,96 @@ pub const FULL_AUTO_DECISION: &str = "{\"behavior\":\"allow\",\"scope\":\"once\"
 /// is full auto and a *command* card is up, answer that card. Returns whether
 /// a card was answered. Any other pending card — a dispatch, a network target,
 /// a peer's message — is left for the user, as the full-auto rung excludes
-/// them by design.
-pub fn apply_command_policy(handle: &super::AgentRunHandle, auto_approve: bool) -> bool {
+/// them by design. Refused for a Mission attempt or a spawned child: the rung
+/// is a conversation's, and theirs was fixed by the request that started them.
+pub fn apply_command_policy(
+    handle: &super::AgentRunHandle,
+    auto_approve: bool,
+) -> Result<bool, String> {
+    if handle.subject.lineage != RunLineage::Conversation {
+        return Err(format!(
+            "The command policy belongs to a conversation; this Run is a {:?}.",
+            handle.subject.lineage
+        ));
+    }
     handle.trust.set_commands_policy(auto_approve);
     if !auto_approve || handle.trust.pending_capability() != Some(Capability::Command) {
-        return false;
+        return Ok(false);
     }
     let sender = handle.pending_permission.lock().unwrap().take();
-    match sender {
+    Ok(match sender {
         Some(tx) => {
             handle.trust.note_pending_capability(None);
             tx.send(FULL_AUTO_DECISION.to_string()).is_ok()
         }
         None => false,
+    })
+}
+
+/// How long an approved command lives. A background shell outlasts the turn
+/// and a watch outlasts the run, so neither is the same approval as the
+/// foreground command it spells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandShape {
+    Foreground,
+    Background,
+    Watch,
+}
+
+/// What a command approval is for: the command, where it runs, and its shape.
+/// A foreground key reads `cwd :: command` (just `command` at the Workspace
+/// root) — the spelling the project allowlist stores. The other shapes add a
+/// suffix, so a foreground approval never covers them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandKey {
+    cwd: Option<String>,
+    command: String,
+    pub shape: CommandShape,
+}
+
+impl CommandKey {
+    pub fn new(root: &str, cwd: &str, command: &str, shape: CommandShape) -> Self {
+        Self {
+            cwd: (cwd != root).then(|| cwd.to_string()),
+            command: command.to_string(),
+            shape,
+        }
     }
+
+    /// The key without its shape: what the project allowlist matches on.
+    pub fn foreground_key(&self) -> String {
+        match &self.cwd {
+            Some(cwd) => format!("{cwd} :: {}", self.command),
+            None => self.command.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for CommandKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let base = self.foreground_key();
+        match self.shape {
+            CommandShape::Foreground => write!(f, "{base}"),
+            CommandShape::Background => write!(f, "{base} [background]"),
+            CommandShape::Watch => write!(f, "{base} [watch]"),
+        }
+    }
+}
+
+/// Why a gated call may run without asking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trusted {
+    /// Approved for this run earlier.
+    Run,
+    /// The project allowlist covers it.
+    Project,
+    /// The full-auto rung silences it.
+    FullAuto,
 }
 
 /// What the pre-check concluded before any prompt is shown.
 pub enum Precheck {
-    /// Already trusted — a run-scoped approval or the project allowlist covers
-    /// it. Run it without asking.
-    Execute,
+    Execute(Trusted),
     /// Already refused this run. Return this canned message to the model so it
     /// changes course, and never re-ask for the same key.
     AutoReject(&'static str),
@@ -312,20 +485,55 @@ pub fn request_id(ctx: &ToolCtx<'_>, call: &NormalizedToolCall) -> String {
 /// Classify a capability before prompting. `run_key` is the run-scoped trust
 /// key; `project_ok` is the caller's project-allowlist verdict (kept in the
 /// handler because the command capability's wildcard/external-path nuance is
-/// command-specific). Falls back to `Ask` whenever the run handle is missing.
+/// command-specific). The full-auto rung is read here, off the Run's subject,
+/// and outranks a remembered rejection — escalating is the override. Falls
+/// back to `Ask` whenever the run handle is missing.
 pub fn precheck(ctx: &ToolCtx<'_>, cap: Capability, run_key: &str, project_ok: bool) -> Precheck {
-    let (run_ok, run_no) = with_run_handle(ctx.sup, ctx.id, |h| {
-        (h.trust.approved(cap, run_key), h.trust.rejected(cap, run_key))
+    let (run_ok, run_no, full_auto) = with_run_handle(ctx.sup, ctx.id, |h| {
+        (
+            h.trust.approved(cap, run_key),
+            h.trust.rejected(cap, run_key),
+            h.subject.rung_covers(cap) && h.subject.full_auto(h.trust.commands_policy()),
+        )
     })
-    .unwrap_or((false, false));
+    .unwrap_or((false, false, false));
 
-    if run_ok || project_ok {
-        Precheck::Execute
+    if run_ok {
+        Precheck::Execute(Trusted::Run)
+    } else if project_ok {
+        Precheck::Execute(Trusted::Project)
+    } else if full_auto {
+        Precheck::Execute(Trusted::FullAuto)
     } else if run_no {
         Precheck::AutoReject(cap.already_refused())
     } else {
         Precheck::Ask
     }
+}
+
+/// The rung answered this card before it went up. Record the same pair a flip
+/// under an open card records, so the transcript tells full auto from an
+/// allowlist hit.
+pub fn record_full_auto<E>(
+    ctx: &ToolCtx<'_>,
+    call: &NormalizedToolCall,
+    request: PermissionRequest,
+    emit: &mut E,
+) -> Result<(), String>
+where
+    E: FnMut(AgentEvent) -> Result<(), String>,
+{
+    emit(AgentEvent::PermissionRequested {
+        run_id: ctx.id.to_string(),
+        request,
+        ts: now_ms(),
+    })?;
+    emit(AgentEvent::PermissionResolved {
+        run_id: ctx.id.to_string(),
+        request_id: request_id(ctx, call),
+        decision: serde_json::from_str(FULL_AUTO_DECISION).expect("a JSON literal"),
+        ts: now_ms(),
+    })
 }
 
 /// The pause ceremony: flip to waiting, stash the permission oneshot, emit the
@@ -401,12 +609,14 @@ where
 /// Remember a gate decision. `run_key` is what the run-scoped sets and pre-check
 /// match on; `persist` is what a project-scoped approval writes to disk (they
 /// differ for commands: the run key may carry a cwd prefix, the persisted value
-/// is the bare command). A `Cancelled` decision records nothing.
+/// is the bare command). `None` keeps a project-scoped answer to this run — the
+/// project allowlist is a foreground contract, so a background command is
+/// never written to it. A `Cancelled` decision records nothing.
 pub fn record(
     ctx: &ToolCtx<'_>,
     cap: Capability,
     run_key: &str,
-    persist: &str,
+    persist: Option<&str>,
     decision: &GateDecision,
 ) {
     match decision {
@@ -415,7 +625,7 @@ pub fn record(
                 with_run_handle(ctx.sup, ctx.id, |h| h.trust.remember_approved(cap, run_key));
             }
             if scope == "project" {
-                if let Some(root) = ctx.request.workspace_root.as_deref() {
+                if let (Some(root), Some(persist)) = (ctx.request.workspace_root.as_deref(), persist) {
                     cap.persist_project(ctx.runs_dir, root, persist, pattern.as_deref());
                 }
             }
@@ -521,6 +731,77 @@ mod tests {
         // Edit keys never read as commands or network targets.
         assert!(!trust.rejected(Capability::Command, "src/a.rs::abc123"));
         assert!(!trust.rejected(Capability::Network, "src/a.rs::abc123"));
+    }
+
+    fn subject_request(mode: &str, disabled: &[&str]) -> StartRunRequest {
+        let mut request = super::super::test_support::test_request("/workspace", &[]);
+        request.mode = serde_json::from_value(serde_json::json!(mode)).unwrap();
+        request.disabled_tools = disabled.iter().map(|d| d.to_string()).collect();
+        request
+    }
+
+    #[test]
+    fn a_mode_prefixed_toggle_applies_only_to_its_own_mode() {
+        let toggles = ["goal.write_file", "plan.grep", "web_fetch"];
+        let goal = GateSubject::from_request(&subject_request("goal", &toggles));
+        assert_eq!(
+            goal.disabled,
+            HashSet::from(["write_file".to_string(), "web_fetch".to_string()])
+        );
+        let plan = GateSubject::from_request(&subject_request("plan", &toggles));
+        assert_eq!(
+            plan.disabled,
+            HashSet::from(["grep".to_string(), "web_fetch".to_string()])
+        );
+    }
+
+    #[test]
+    fn permits_refuses_a_disabled_tool_and_an_out_of_mode_one() {
+        let goal = GateSubject::from_request(&subject_request("goal", &["spawn_subagent"]));
+        assert_eq!(
+            goal.permits("spawn_subagent", Some(ToolKind::Pause)),
+            Err(BlockReason::Disabled)
+        );
+        assert_eq!(goal.permits("run_command", Some(ToolKind::Command)), Ok(()));
+        let plan = GateSubject::for_mode(AgentMode::Plan);
+        assert_eq!(
+            plan.permits("run_command", Some(ToolKind::Command)),
+            Err(BlockReason::Mode(ToolKind::Command))
+        );
+        assert_eq!(plan.permits(tools::ADVISOR_TOOL, Some(ToolKind::Pause)), Ok(()));
+        assert!(plan
+            .permits(tools::MISSION_ORCHESTRATE_TOOL, Some(ToolKind::Coordination))
+            .is_err());
+        assert_eq!(plan.permits("made_up", None), Ok(()));
+    }
+
+    #[test]
+    fn lineage_decides_whether_a_live_flip_counts() {
+        let conversation = GateSubject::from_request(&subject_request("goal", &[]));
+        assert_eq!(conversation.lineage, RunLineage::Conversation);
+        assert!(conversation.full_auto(Some(true)));
+        assert!(!conversation.full_auto(None));
+
+        let mut child_request = subject_request("goal", &[]);
+        child_request.parent_id = Some("parent".into());
+        child_request.auto_approve_commands = Some(true);
+        let child = GateSubject::from_request(&child_request);
+        assert_eq!(child.lineage, RunLineage::SubagentChild);
+        assert!(child.full_auto(Some(false)), "the request's own choice stands");
+
+        let mut attempt_request = subject_request("goal", &[]);
+        attempt_request.mission_id = Some("mission".into());
+        let attempt = GateSubject::from_request(&attempt_request);
+        assert_eq!(attempt.lineage, RunLineage::MissionAttempt);
+        assert!(!attempt.full_auto(Some(true)), "no flip reaches a Mission attempt");
+    }
+
+    #[test]
+    fn the_rung_covers_commands_only() {
+        let subject = GateSubject::for_mode(AgentMode::Goal);
+        assert!(subject.rung_covers(Capability::Command));
+        assert!(!subject.rung_covers(Capability::Network));
+        assert!(!subject.rung_covers(Capability::Message));
     }
 
     #[test]

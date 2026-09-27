@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeColor, normalizeColors, prepareVisual, safeVisualUrl, sanitizeDecls, scopeCss, withTokenFallbacks } from "./visualHtml";
+import { matchingClose, serializeCss, tokenizeCss } from "./cssTokens";
 
 const SCOPE = "kv1";
 
@@ -86,8 +87,10 @@ describe("scopeCss", () => {
     );
   });
 
-  it("keeps keyframes verbatim", () => {
-    expect(scopeCss("@keyframes in { from { opacity: 0 } to { opacity: 1 } }", SCOPE)).toContain("@keyframes in{");
+  it("keeps keyframes, renamed into the block", () => {
+    expect(scopeCss("@keyframes in { from { opacity: 0 } to { opacity: 1 } }", SCOPE)).toBe(
+      "@keyframes in-kv1{from{opacity: 0}to{opacity: 1}}",
+    );
   });
 
   it("drops the at-rules that reach outside the block", () => {
@@ -105,7 +108,7 @@ describe("sanitizeDecls", () => {
   });
 
   it("pins a fixed child to the block", () => {
-    expect(sanitizeDecls("position: fixed; inset: 0", SCOPE)).toBe("position:absolute; inset: 0");
+    expect(sanitizeDecls("position: fixed; inset: 0", SCOPE)).toBe("position: absolute; inset: 0");
   });
 });
 
@@ -424,5 +427,125 @@ describe("a page written on a dark ground", () => {
       SCOPE,
     );
     expect(css).toContain("var(--viz-warning)");
+  });
+});
+
+// Every qualified rule the browser would read out of `css`, at any depth of
+// @media / @container / @supports / @layer, with its selector text. Read with
+// the same tokenizer the sanitizer uses, which reads CSS the way WebKit does —
+// so a rule the sanitizer's own parser missed still shows up here.
+function rulesAsTheBrowserReadsThem(css: string): string[] {
+  const tokens = tokenizeCss(css);
+  const selectors: string[] = [];
+  const walk = (from: number, to: number) => {
+    let i = from;
+    while (i < to) {
+      const t = tokens[i];
+      if (t.type === "ws" || t.type === "comment" || t.type === "cdo" || t.type === "cdc") { i++; continue; }
+      let j = i;
+      while (j < to && tokens[j].type !== "{" && !(t.type === "at-keyword" && tokens[j].type === ";")) {
+        const kind = tokens[j].type;
+        const close = kind === "(" || kind === "function" || kind === "[" ? matchingClose(tokens, j) : j;
+        j = close < 0 ? to : close + 1;
+      }
+      if (j >= to) return;
+      if (tokens[j].type === ";") { i = j + 1; continue; }
+      const close = matchingClose(tokens, j);
+      const end = close < 0 ? to : close;
+      const prelude = serializeCss(tokens.slice(i, j)).trim();
+      if (t.type === "at-keyword") {
+        if (!/keyframes$/i.test(t.value)) walk(j + 1, end);
+      } else selectors.push(prelude);
+      i = end + 1;
+    }
+  };
+  walk(0, tokens.length);
+  return selectors;
+}
+
+const unscoped = (css: string) =>
+  rulesAsTheBrowserReadsThem(css)
+    .flatMap((s) => s.split(","))
+    .map((s) => s.trim())
+    .filter((s) => !s.startsWith(`.${SCOPE}`));
+
+describe("a stylesheet read the way the browser reads it", () => {
+  it("does not let a quote inside a comment hide a rule", () => {
+    const css = scopeCss("div{ /* ' */ color:red } body *{outline:5px solid red} /* ' */ }", SCOPE);
+    expect(unscoped(css)).toEqual([]);
+  });
+
+  it("does not let a newline end a string early and free what follows", () => {
+    const css = scopeCss('div{content:"\n} body *{outline:5px solid red} x:"}', SCOPE);
+    expect(unscoped(css)).toEqual([]);
+    // The declaration the browser would have dropped is dropped here too.
+    expect(css).not.toContain("content");
+  });
+
+  it("pins a fixed child however the word is spelled", () => {
+    for (const spelled of ["position:/**/fixed", "position:fi\\78 ed", "position: FIXED"]) {
+      expect(sanitizeDecls(spelled, SCOPE)).toMatch(/^position:\s*absolute$/);
+    }
+  });
+
+  it("sanitizes keyframes instead of passing them through", () => {
+    const css = scopeCss("@keyframes in { from { background: url(https://evil.example/b.gif) } to { opacity: 1 } }", SCOPE);
+    expect(css).not.toContain("evil.example");
+    expect(css).toContain("@keyframes in-kv1{");
+  });
+
+  it("names its animations so a visual cannot redefine or borrow the app's", () => {
+    expect(sanitizeDecls("animation: ai-word-in 200ms ease-out both", SCOPE)).toBe("animation: ai-word-in-kv1 200ms ease-out both");
+    expect(sanitizeDecls("animation-name: pulse, none", SCOPE)).toBe("animation-name: pulse-kv1, none");
+  });
+
+  it("never lets a fetch through an image function or an attribute", () => {
+    expect(sanitizeDecls('background: image-set("https://evil.example/x.png" 1x)', SCOPE)).toBe("");
+    expect(sanitizeDecls('background-image: src("https://evil.example/x.png")', SCOPE)).toBe("");
+    for (const attr of ["fill", "filter", "mask", "clip-path"]) {
+      const { html } = prepareVisual(`<rect ${attr}="url(https://evil.example/x#a)"/>`, SCOPE);
+      expect(html).not.toContain("evil.example");
+    }
+  });
+
+  it("drops a property it does not know", () => {
+    expect(sanitizeDecls("behavior: url(#x); color: #000", SCOPE)).toBe("color: var(--viz-ink)");
+  });
+
+  it("never writes a closing style tag, whatever a string or an escape held", () => {
+    // The serializer decodes escapes; `\3c` is a `<` it must not write back bare.
+    const { css } = prepareVisual('<style>.a::after { content: "\\3c/style><img src=x>" } .b { width: 1px \\3c /style }</style>', SCOPE);
+    expect(css).toContain(".kv1 .a::after{content:");
+    expect(css.toLowerCase()).not.toContain("</style");
+  });
+});
+
+describe("attributes that point at the document", () => {
+  it("drops the ones that clobber the DOM or reach outside the block", () => {
+    const { html } = prepareVisual(
+      '<img name="getElementById"><div is="x-evil" slot="s" contenteditable autofocus accesskey="k" popover>t</div>' +
+        '<a href="https://e.com" target="_self" rel="opener">l</a>',
+      SCOPE,
+    );
+    expect(html).not.toMatch(/\s(?:name|is|slot|contenteditable|autofocus|accesskey|popover)(?:=|[\s/>])/);
+    expect(html).not.toContain('target="_self"');
+    expect(html).not.toContain('rel="opener"');
+  });
+
+  it("reads an attribute the way the browser decodes it", () => {
+    expect(prepareVisual('<div style="position:fi&#120;ed">t</div>', SCOPE).html).toBe('<div style="position:absolute">t</div>');
+    // A reference it does not decode reaches the page as the text it checked.
+    expect(prepareVisual('<div title="a &lpar; b &amp; c">t</div>', SCOPE).html).toBe('<div title="a &amp;lpar; b &amp; c">t</div>');
+  });
+
+  it("namespaces every id reference, not only href and url()", () => {
+    const { html } = prepareVisual(
+      '<label for="n">n</label><td headers="a b"></td><svg aria-labelledby="t d" aria-describedby="d"></svg>',
+      SCOPE,
+    );
+    expect(html).toContain('for="n-kv1"');
+    expect(html).toContain('headers="a-kv1 b-kv1"');
+    expect(html).toContain('aria-labelledby="t-kv1 d-kv1"');
+    expect(html).toContain('aria-describedby="d-kv1"');
   });
 });

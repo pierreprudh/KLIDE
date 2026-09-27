@@ -291,7 +291,7 @@ Klide/
     │   ├── pty_wire.rs           Portable ptyd wire vocabulary — Request/Response/Event
     │   ├── pty_frame.rs          UTF-8 framing for PTY reads — a character split across reads stays whole
     │   ├── pty_spawn.rs          Pure Delegate spawn-spec assembly — adapter vs custom CLI, one-shot, Mission link, cwd rules, effort + MCP wiring
-    │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one writer gate, replayed snapshot
+    │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — start a connector's stdio server, handshake, list tools, kill it (a probe, not a session)
@@ -306,6 +306,7 @@ Klide/
     │       ├── process.rs         One lifecycle for every command a Run starts — process group, bounded capture, exit from wait() with a 1 s drain, cancel-aware wait (background.rs is its registry)
     │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints
+    │       ├── delivery.rs        Everything the operator didn't type (peer mail, observer completions) — one nonce-fenced renderer
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts
     │       ├── glob_match.rs      Shared */? matcher (glob tool + command allowlist)
     │       ├── permission.rs      Permission engine — classify, prompt, remember, persist
@@ -503,6 +504,8 @@ wrote to B, only B may use that Envelope's `replyTo` to answer A, so knowing an
 id never lets a third Run enter the exchange or inherit its auto-accept.
 Operator-authored mail has no Run address to reverse onto, so only its
 recipient may answer it, and the trusted operator may answer on a Run's behalf.
+A Run's reply is kind `answer`, one per envelope; a second is rejected and goes
+as a new, reviewed message.
 And what a send reports is read from the journal, never asserted: `send_receipt`
 returns the Envelope's actual delivery state — including when an idempotent
 retry appended nothing — and reports separately whether this call waited for and
@@ -515,7 +518,10 @@ There are two doors onto that one journal, and no third:
 - **Harness Runs** call the native Tools `agent_list` / `agent_send` /
   `agent_wait` / `agent_cancel` / `agent_read_result` (`agent/tools.rs`); the
   actor is always `ctx.id`, and delivery happens at the turn boundary as a
-  `user` turn labelled as agent mail. Every Mode is on the plane: Chat carries
+  `user` turn placed before the operator's message. Every door (boundary,
+  `agent_wait`, send receipts, the Delegate bridge) renders mail and observer
+  completions through `agent/delivery.rs`: one preamble, each item fenced by a
+  per-delivery random nonce a body cannot close. Every Mode is on the plane: Chat carries
   the coordination tools and nothing else (no files, shell, or memory), so any
   conversation with a Workspace can be addressed and can answer.
 - **Delegate CLIs** (Claude Code, Codex, OpenCode) get the same operations as
@@ -525,17 +531,26 @@ There are two doors onto that one journal, and no third:
   `OPENCODE_CONFIG`). The MCP child owns nothing: it relays each call over
   loopback to `coordination_bridge.rs` in the app, which looks the PTY session
   up in a map filled at spawn to learn which Run id and Workspace the call acts
-  as. No tool argument can name an actor or a journal path. The bridge is a
-  separate listener from the status hook server because an `agent_wait` blocks
-  for up to two minutes; each request gets its own thread.
+  as. No tool argument can name an actor or a journal path. The app token
+  only proves a caller is some child of this app; each session also proves
+  *which* child with its own secret, minted at wiring time into a 0600 file
+  the child is told the path of (never the value — MCP configs and Codex's
+  argv are readable), and checked against the sha256 the bridge keeps. The
+  bridge is a separate listener from the status hook server because an
+  `agent_wait` blocks for up to two minutes; an authenticated request gets its
+  own thread, at most 64 at once, and nothing reads a body before the caller
+  has proved its session.
 
 Nothing durable holds a port. A Delegate PTY is hosted by the ptyd daemon and
 outlives the app, so the child is told a *path* and a session id, never a URL:
 it reads the live port and token from `coordination-endpoint.json` in the app
 data dir on every call, and the bridge rebuilds a session it never bound from
-that session's scrollback metadata (`BridgeHooks::resolve_session`). A restart
-therefore keeps a running CLI's agent tools working, and a session that
-recorded an exit is never recovered.
+that session's scrollback metadata (`BridgeHooks::resolve_session`), which
+records the secret's hash, not the secret. The bridge starts at boot so the
+endpoint file is fresh before a surviving CLI calls. A restart therefore keeps
+a running CLI's agent tools working; a session that recorded an exit, whose
+Run the journal has settled, or that was spawned before per-session secrets
+is never recovered (the last is told to restart).
 
 A Delegate registers as a `delegate` Run in `delegate_pty_spawn`, its status
 hooks move its state, and PTY exit settles it. A Focus conversation on a

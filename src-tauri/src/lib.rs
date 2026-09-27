@@ -268,14 +268,22 @@ async fn ai_subscription_status(provider: String) -> Result<cli::AiConnectionSta
     .await
 }
 
-#[tauri::command]
-fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
-    let mode = match mode.as_str() {
+fn agent_mode_from_wire(mode: &str) -> agent::types::AgentMode {
+    match mode {
         "plan" => agent::types::AgentMode::Plan,
         "goal" => agent::types::AgentMode::Goal,
         _ => agent::types::AgentMode::Chat,
-    };
-    agent::tools::list_tools(&mode, &[])
+    }
+}
+
+#[tauri::command]
+fn ai_list_tools(mode: String) -> Vec<serde_json::Value> {
+    agent::tools::list_tools(&agent_mode_from_wire(&mode))
+}
+
+#[tauri::command]
+fn ai_tool_catalog(mode: String) -> Vec<agent::tools::ToolCatalogEntry> {
+    agent::tools::tool_catalog(&agent_mode_from_wire(&mode))
 }
 
 // ── Find in files ───────────────────────────────────────────────────────
@@ -847,6 +855,9 @@ pub fn run() {
             // the smoke boot so a release check never touches live sessions.
             if !smoke_test_mode() {
                 pty::init_daemon_bridge(handle.clone());
+                // And republish the coordination bridge's endpoint, so those
+                // sessions' agent tools reach this process, not the last one.
+                pty::init_coordination_bridge(handle);
             }
 
             // Open at a comfortable fraction of the display the window lands on,
@@ -957,6 +968,7 @@ pub fn run() {
             models::ai_model_reflection_levels,
             models::ai_count_tokens,
             ai_list_tools,
+            ai_tool_catalog,
             search_in_files,
             ai_provider_key_status,
             ai_set_provider_key,
@@ -997,7 +1009,9 @@ pub fn run() {
             agent::agent_abort_run,
             agent::agent_run_status,
             agent::agent_list_observers,
+            agent::agent_observer_github,
             agent::agent_stop_observer,
+            agent::agent_release_conversation,
             agent::agent_list_runs,
             agent::agent_run_origins,
             agent::agent_read_run,
@@ -1163,6 +1177,7 @@ mod blocking_door_tests {
         // lib.rs — pure or a table lookup
         "ai_model_pricing",
         "ai_list_tools",
+        "ai_tool_catalog",
         // lib.rs — a small JSON read; user-driven, not polled
         "accounts_list",
         // lib.rs — hand off to the opener plugin / native menu
@@ -1195,6 +1210,7 @@ mod blocking_door_tests {
         // Observer controls touch only the in-memory registry and a oneshot.
         "agent_list_observers",
         "agent_stop_observer",
+        "agent_release_conversation",
     ];
 
     const COMMAND_SOURCES: &[(&str, &str)] = &[

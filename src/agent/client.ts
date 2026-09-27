@@ -47,6 +47,12 @@ export type AgentRunSession = {
   done: Promise<void>;
 };
 
+/** The backend refused a start because this conversation's Run still holds
+ *  its handle (`start_run`'s busy guard). The Rust string is the contract. */
+export function isRunBusyError(err: unknown): boolean {
+  return String(err).includes("A run is already active for this conversation");
+}
+
 export async function startAgentRun(
   input: StartAgentRunInput,
   onEvent: (event: AgentEvent) => void
