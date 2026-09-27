@@ -14,6 +14,7 @@
 
 mod chat;
 mod chat_stream;
+mod cli_commands;
 mod claude_code;
 mod codex;
 mod omp;
@@ -22,6 +23,7 @@ mod runs;
 pub mod status;
 
 pub use chat::run_subscription_chat;
+pub use cli_commands::{cli_commands, CliCommands};
 pub use claude_code::ClaudeCode;
 pub use claude_code::EFFORT_LEVELS as CLAUDE_EFFORT_LEVELS;
 pub use codex::Codex;
@@ -270,6 +272,13 @@ pub trait Delegate: Sync {
     /// caller re-sends the full history whenever no adapter took the id.
     fn chat_stream_args(&self, _cwd: &str, _spec: &ChatSpec) -> Option<Vec<String>> {
         None
+    }
+
+    /// Whether this CLI's structured stream names the `/` commands it answers
+    /// itself ([`StreamItem::Commands`](chat_stream::StreamItem::Commands)) and
+    /// runs one sent as a headless message. Only such a CLI is probed for them.
+    fn reports_slash_commands(&self) -> bool {
+        false
     }
 
     /// Whether [`Delegate::chat_stream_args`] honours a `resume` id. The runner

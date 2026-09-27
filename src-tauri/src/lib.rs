@@ -649,6 +649,14 @@ async fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String
     .await
 }
 
+/// The `/` commands a delegate CLI answers itself in this workspace, for the
+/// composer's menu. Async and non-blocking: the one probe is a tokio child.
+#[tauri::command]
+async fn delegate_slash_commands(provider: String, workspace_root: String) -> Result<delegate::CliCommands, String> {
+    let adapter = delegate::lookup(&provider).ok_or_else(|| format!("No delegate adapter for {provider}"))?;
+    delegate::cli_commands(adapter, &workspace_root).await
+}
+
 /// True when the process was launched by the bundle verification script
 /// (scripts/verify-bundle.sh) rather than by a user.
 fn smoke_test_mode() -> bool {
@@ -971,6 +979,7 @@ pub fn run() {
             list_agent_runs,
             read_agent_run,
             read_opencode_run,
+            delegate_slash_commands,
             models::ai_provider_models,
             models::ai_provider_credits,
             models::ai_provider_model_meta,

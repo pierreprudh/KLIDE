@@ -106,9 +106,12 @@ pub async fn run_subscription_chat(
         // say everything twice. Send what is new — and if there is no new user
         // message to send, fall back to the full fold rather than an empty turn.
         .filter(|_| !latest_user_message(&messages).is_empty());
-    let prompt = match resume {
-        Some(_) => latest_user_message(&messages),
-        None => prompt_from_messages(&messages),
+    // A `/` command the CLI said it runs goes out as typed even on a cold
+    // start: folded under Klide's preamble it would reach the model as prose.
+    let cli_command = super::cli_commands::leading_command(adapter.id(), &cwd, &latest_user_message(&messages));
+    let prompt = match (&resume, &cli_command) {
+        (Some(_), _) | (None, Some(_)) => latest_user_message(&messages),
+        (None, None) => prompt_from_messages(&messages),
     };
 
     // Prefer the CLI's structured stream when it has one: the prose-only mode
@@ -129,6 +132,7 @@ pub async fn run_subscription_chat(
                 command?,
                 prompt,
                 label,
+                &cwd,
                 key.as_deref(),
                 &emitted,
                 on_chunk,
@@ -152,8 +156,9 @@ pub async fn run_subscription_chat(
                     run_cli_streaming(
                         adapter,
                         command,
-                        prompt_from_messages(&messages),
+                        if cli_command.is_some() { latest_user_message(&messages) } else { prompt_from_messages(&messages) },
                         label,
+                        &cwd,
                         key.as_deref(),
                         &emitted,
                         on_chunk,
@@ -190,6 +195,7 @@ async fn run_cli_streaming(
     mut command: TokioCommand,
     prompt: String,
     label: &str,
+    cwd: &str,
     session_key: Option<&str>,
     emitted: &AtomicBool,
     on_chunk: &Channel<StreamChunk>,
@@ -310,6 +316,10 @@ async fn run_cli_streaming(
                         if let Some(key) = session_key {
                             remember_session(key, &session);
                         }
+                    }
+                    // Every turn refreshes the composer's `/` menu for free.
+                    StreamItem::Commands(commands) => {
+                        super::cli_commands::remember(provider_id, cwd, commands);
                     }
                     // Cost is not shown here; the harness reports run cost.
                     StreamItem::Finished { .. } => {}

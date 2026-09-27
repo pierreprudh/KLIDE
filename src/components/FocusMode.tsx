@@ -64,6 +64,7 @@ import type { AgentAttachment as Attachment, AgentMode, ProviderId } from "../ag
 import type { Skill } from "../skills";
 import { stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
+import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
@@ -1563,6 +1564,7 @@ function FocusComposer({
   const [ledeIndent, setLedeIndent] = useState(0);
   // The `/` menu: open while the draft is a lone `/word`, closed otherwise.
   const [slash, setSlash] = useState<SlashQuery | null>(null);
+  const cliCommandNames = useCliSlashCommands(provider, workspaceRoot, slash !== null);
   const [slashIdx, setSlashIdx] = useState(0);
   // A mode one command pinned to the next send (/explain reads → plan). Cleared
   // when the turn leaves or the draft is emptied, so it never outlives its
@@ -1852,9 +1854,16 @@ function FocusComposer({
     requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
   });
   SLASH_COMMANDS.push(...SKILL_COMMANDS);
+  // On Claude Code the CLI's own commands join the head of the list; the
+  // message goes out as typed and the CLI answers it (`cliSlashCommands.ts`).
+  const HEAD_COMMANDS = withCliCommands(SLASH_COMMANDS, cliCommandNames, providerName(provider), (prefix) => {
+    setSlash(null);
+    setDraft(prefix);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(prefix.length, prefix.length); } });
+  });
   // Mid-sentence the built-ins stay out of the list: each of them clears the
   // draft, so offering one under a half-written task offers to delete it.
-  const slashVocabulary = slash === null ? [] : slash.head ? SLASH_COMMANDS : SKILL_COMMANDS;
+  const slashVocabulary = slash === null ? [] : slash.head ? HEAD_COMMANDS : SKILL_COMMANDS;
   const slashMatches = slash !== null ? filterSlashCommands(slashVocabulary, slash.query) : [];
   function acceptSlash(idx: number) {
     const cmd = slashMatches[idx];
