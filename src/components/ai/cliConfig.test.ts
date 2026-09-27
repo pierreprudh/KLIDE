@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configCommand, configLabel, currentConfigValue, parseConfigUsage } from "./cliConfig";
+import { configCommand, currentConfigValue, parseConfigUsage } from "./cliConfig";
 
 const USAGE = `Usage: /config key=value [key=value ...]
   autoCompact=true|false
@@ -31,11 +31,7 @@ describe("configCommand", () => {
   });
 });
 
-describe("labels and current values", () => {
-  it("reads keys as words", () => {
-    expect(configLabel("autoCompact")).toBe("Auto compact");
-    expect(configLabel("prStatus")).toBe("Pr status");
-  });
+describe("current values", () => {
   it("spells stored values the way the CLI does", () => {
     expect(currentConfigValue({ verbose: false, theme: "dark", projects: {} }, "verbose")).toBe("false");
     expect(currentConfigValue({ theme: "dark" }, "theme")).toBe("dark");

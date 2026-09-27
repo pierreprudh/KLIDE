@@ -32,14 +32,6 @@ export function parseConfigUsage(text: string): ConfigOption[] | null {
   return options.length ? options : null;
 }
 
-/** `autoCompact` → `Auto compact`, `defaultToAgentsView` → `Default to agents view`. */
-export function configLabel(key: string): string {
-  const words = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").split(" ");
-  return words
-    .map((w, i) => (w.length <= 3 && w === w.toUpperCase() ? w : i === 0 ? w[0].toUpperCase() + w.slice(1) : w.toLowerCase()))
-    .join(" ");
-}
-
 /** What Claude Code's files say a setting is now, as the CLI spells values. */
 export function currentConfigValue(settings: Record<string, unknown>, key: string): string | null {
   const v = settings[key];

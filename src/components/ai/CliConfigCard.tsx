@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { claudeCodeSettings } from "../../ipc/delegateCommands";
 import { Select, Toggle } from "../settings/controls";
-import { configCommand, configLabel, currentConfigValue, type ConfigOption } from "./cliConfig";
+import { configCommand, currentConfigValue, type ConfigOption } from "./cliConfig";
 
 type Props = {
   options: ConfigOption[];
@@ -31,7 +31,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
 
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return q ? options.filter((o) => o.key.toLowerCase().includes(q) || configLabel(o.key).toLowerCase().includes(q)) : options;
+    return q ? options.filter((o) => o.key.toLowerCase().includes(q)) : options;
   }, [filter, options]);
 
   const stage = (key: string, value: string) => setStaged((prev) => {
@@ -69,10 +69,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
           const changed = option.key in staged;
           return (
             <div key={option.key} style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 38, padding: "3px 14px" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, color: changed ? "var(--accent)" : "var(--fg)" }}>{configLabel(option.key)}</div>
-                <div style={{ fontSize: 11, color: "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>{option.key}</div>
-              </div>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: changed ? "var(--accent)" : "var(--fg)", overflowWrap: "anywhere" }}>{option.key}</div>
               {!option.settable ? (
                 <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>Terminal only</span>
               ) : option.choices === null ? (
@@ -81,17 +78,17 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
                   value={value}
                   disabled={disabled}
                   onChange={(e) => stage(option.key, e.target.value)}
-                  aria-label={configLabel(option.key)}
+                  aria-label={option.key}
                   style={{ width: 180, height: 28, padding: "0 10px", fontSize: 12 }}
                 />
               ) : isBoolean(option.choices) && (known !== null || changed) ? (
-                <Toggle checked={value === "true"} onChange={(on) => stage(option.key, String(on))} label={configLabel(option.key)} />
+                <Toggle checked={value === "true"} onChange={(on) => stage(option.key, String(on))} label={option.key} />
               ) : (
                 <Select
                   value={value || UNKNOWN}
                   onChange={(next) => { if (next !== UNKNOWN) stage(option.key, next); }}
                   options={value ? option.choices : [UNKNOWN, ...option.choices]}
-                  label={configLabel(option.key)}
+                  label={option.key}
                 />
               )}
             </div>
