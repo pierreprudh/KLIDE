@@ -296,7 +296,7 @@ Klide/
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — start a connector's stdio server, handshake, list tools, kill it (a probe, not a session)
-    │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + status.rs hook server
+    │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── run_core.rs        Tauri-free turn prep — provider quirks, message assembly, compaction
