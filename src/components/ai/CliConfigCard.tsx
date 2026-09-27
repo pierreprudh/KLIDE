@@ -46,7 +46,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
   return (
     <section
       aria-label="Claude Code settings"
-      style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-elevated)", margin: "2px 0 4px", overflow: "hidden" }}
+      style={{ border: "1px solid var(--border)", borderRadius: 12, background: "color-mix(in srgb, var(--bg-elevated) 45%, transparent)", margin: "2px 0 4px", overflow: "hidden" }}
     >
       <header style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -68,8 +68,8 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
           const value = staged[option.key] ?? known ?? "";
           const changed = option.key in staged;
           return (
-            <div key={option.key} style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 38, padding: "3px 14px" }}>
-              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: changed ? "var(--accent)" : "var(--fg)", overflowWrap: "anywhere" }}>{option.key}</div>
+            <div key={option.key} className="cli-config-row" style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 38, padding: "3px 14px" }}>
+              <div style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12.5, color: changed ? "var(--accent)" : "var(--fg)", overflowWrap: "anywhere" }}>{option.key}</div>
               {!option.settable ? (
                 <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>Terminal only</span>
               ) : option.choices === null ? (
