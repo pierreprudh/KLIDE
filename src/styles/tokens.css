@@ -9197,9 +9197,11 @@ button:focus-visible .menu-leadout {
 .github-observer-sidebar .github-observer-content { justify-self:stretch; gap:10px; }
 .github-observer-sidebar .github-observer-content:has(.github-observer-stop) { margin-bottom:18px; }
 .github-observer-state > :first-child { margin-left:0; }
-/* Claude Code settings card (CliConfigCard): a row lights up under the pointer. */
-.cli-config-row { transition: background var(--motion-fast) ease-out; }
-.cli-config-row:hover { background: var(--bg-hover); }
+/* Claude Code settings card (CliConfigCard): a setting's name brightens
+   under the pointer; a changed one stays accent. */
+.cli-config-name { color: var(--fg-subtle); transition: color var(--motion-fast) ease-out; }
+.cli-config-row:hover .cli-config-name { color: var(--fg-strong); }
+.cli-config-name[data-changed] { color: var(--accent); }
 /* Side panel: the check sits in the logo's 28px column so status text lines
    up under "PR #n", and the hover arrow takes no width, so both actions reach
    the divider's ends. */

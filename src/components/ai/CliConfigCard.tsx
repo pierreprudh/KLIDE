@@ -69,7 +69,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
           const changed = option.key in staged;
           return (
             <div key={option.key} className="cli-config-row" style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 38, padding: "3px 14px" }}>
-              <div style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12.5, color: changed ? "var(--accent)" : "var(--fg)", overflowWrap: "anywhere" }}>{option.key}</div>
+              <div className="cli-config-name" data-changed={changed || undefined} style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12.5, overflowWrap: "anywhere" }}>{option.key}</div>
               {!option.settable ? (
                 <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>Terminal only</span>
               ) : option.choices === null ? (
