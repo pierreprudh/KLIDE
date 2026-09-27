@@ -52,6 +52,8 @@ import {
 } from "../../ipc/connectors";
 import { githubAccounts } from "../../ipc/git";
 import { LinkMark } from "../linkMark";
+import { ProviderLogo } from "../ai/icons";
+import type { ProviderId } from "../../agent/types";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
 import { GhostButton, LinkButton, Panel, Toggle } from "./controls";
@@ -80,6 +82,28 @@ const ORIGIN_LABEL: Record<string, string> = {
 function commandLine(server: ServerSpec): string {
   return isRemote(server) ? server.url : [server.command, ...server.args].join(" ");
 }
+
+/** `SkyComputerUseClient mcp` for `./Codex Computer Use.app/…/SkyComputerUseClient mcp`:
+ *  a path's last segment is what tells two servers apart; the full line stays
+ *  one hover away. A bare program (`npx -y linear-mcp`) is already short. */
+function shortCommand(server: ServerSpec): string {
+  if (isRemote(server)) return server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const program = server.command.includes("/") ? server.command.split("/").pop() || server.command : server.command;
+  return [program, ...server.args].join(" ");
+}
+
+/** `/Users/pierre/.codex/config.toml` → `~/.codex/config.toml`. */
+function tildify(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
+}
+
+/** The tool a server was found in, as its own mark and name. */
+const SOURCE: Record<string, { name: string; logo?: ProviderId }> = {
+  "claude-code": { name: "Claude Code", logo: "claude-code" },
+  codex: { name: "Codex", logo: "codex" },
+  opencode: { name: "OpenCode", logo: "opencode" },
+  workspace: { name: "This project" },
+};
 
 /** The names — never the values — of what a connector is handed: a program's
  *  environment, a remote server's headers. */
@@ -383,26 +407,34 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         ) : (
           <div {...offers.listProps}>
             <GlideHighlight glide={offers.glide} />
-            {importable.map((candidate, i) => (
-              <div
-                key={`${candidate.origin}:${candidate.id}`}
-                className="klide-connector-offer"
-                style={{ animationDelay: `${Math.min(i, 8) * 22}ms` }}
-                {...offers.rowProps}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div className="klide-row-title">{candidate.label}</div>
-                  <div className="klide-connector-command">{commandLine(candidate.server)}</div>
-                  <div className="klide-connector-meta">
-                    <span>{ORIGIN_LABEL[candidate.origin] ?? candidate.origin}</span>
-                    <span style={{ opacity: 0.75 }}>{candidate.sourcePath}</span>
+            {importable.map((candidate, i) => {
+              const source = SOURCE[candidate.origin];
+              return (
+                <div
+                  key={`${candidate.origin}:${candidate.id}`}
+                  className="klide-connector-offer"
+                  style={{ animationDelay: `${Math.min(i, 8) * 22}ms` }}
+                  {...offers.rowProps}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div className="klide-connector-offer-head">
+                      <span className="klide-row-title" style={{ margin: 0 }}>{candidate.label}</span>
+                      <span className="klide-connector-source" title={candidate.sourcePath}>
+                        {source?.logo && <ProviderLogo id={source.logo} size={12} />}
+                        <span>{source?.name ?? candidate.origin}</span>
+                        <span className="klide-connector-source-path">{tildify(candidate.sourcePath)}</span>
+                      </span>
+                    </div>
+                    <div className="klide-connector-command" title={commandLine(candidate.server)}>
+                      {shortCommand(candidate.server)}
+                    </div>
+                  </div>
+                  <div className="klide-connector-verbs">
+                    <Verb onClick={() => void importOne(candidate)}>Import</Verb>
                   </div>
                 </div>
-                <div className="klide-connector-verbs">
-                  <Verb onClick={() => void importOne(candidate)}>Import</Verb>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
