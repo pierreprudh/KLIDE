@@ -44,6 +44,7 @@ import { MissionControlSkeleton } from "./components/MissionControlSkeleton";
 import ToastHost from "./components/ToastHost";
 import { ObserverNotifications } from "./components/ObserverNotifications";
 import { notify } from "./toast";
+import { MISSIONS_UNREADABLE_EVENT, type UnreadableMission } from "./agent/durableMissions";
 import { onDelegateExit } from "./ipc/delegatePty";
 import {
   gitWorktreeAdd,
@@ -1439,7 +1440,9 @@ function App() {
     const root = referencedDocumentRoots.current.get(path) ?? workspaceRoot;
     if (!root) return;
     try {
-      await openArtifactInApp(root, path);
+      if (await openArtifactInApp(root, path) === "reveal") {
+        notify("Shown in Finder — Klide does not launch executables");
+      }
     } catch (err) {
       notify(`Unable to open ${path}: ${errMessage(err)}`, { tone: "error" });
     }
@@ -2748,6 +2751,22 @@ function App() {
         const tail = lines[lines.length - 1] ?? "";
         notify(`Worktree setup failed · ${name}${tail ? ` — ${tail}` : ""}`, { tone: "error" });
       }
+    }));
+    return listeners.dispose;
+  }, []);
+
+  // Restart reconciliation sets aside a Mission it cannot read and resumes the
+  // rest; the only place that is visible is here — `set_active_workspace`
+  // errors are swallowed above.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const listeners = createListenerScope();
+    listeners.add(listen<UnreadableMission[]>(MISSIONS_UNREADABLE_EVENT, (e) => {
+      const [first] = e.payload;
+      if (!first) return;
+      const name = first.dir.split("/").pop() ?? first.dir;
+      const more = e.payload.length > 1 ? ` and ${e.payload.length - 1} more` : "";
+      notify(`Mission ${name}${more} could not be read — ${first.error}`, { tone: "warn" });
     }));
     return listeners.dispose;
   }, []);
@@ -4130,7 +4149,9 @@ function App() {
             setSpreadsheetContext({ panelId, id: Date.now(), text });
           }}
           onClose={() => setSpreadsheet(null)} onOpenExternal={(path) => {
-            void openArtifactInApp(spreadsheet.root, path).catch(error => notify(`Unable to open ${path}: ${errMessage(error)}`, { tone: "error" }));
+            void openArtifactInApp(spreadsheet.root, path).then(opened => {
+              if (opened === "reveal") notify("Shown in Finder — Klide does not launch executables");
+            }).catch(error => notify(`Unable to open ${path}: ${errMessage(error)}`, { tone: "error" }));
           }} />
       )}
       <ToastHost />

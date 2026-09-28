@@ -4,6 +4,7 @@ use super::runs::{
     TranscriptState,
 };
 use super::chat_stream::{message_blocks, result_text, StreamItem};
+use super::cli_commands::CliCommands;
 use super::{shell_quote, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunParser};
 use std::collections::{HashMap, HashSet};
 
@@ -165,6 +166,12 @@ impl Delegate for ClaudeCode {
         true
     }
 
+    /// `init` lists `slash_commands`, and `claude -p "/cost"` answers the
+    /// command itself rather than handing the words to the model.
+    fn reports_slash_commands(&self) -> bool {
+        true
+    }
+
     /// Claude Code's dialect is Anthropic's, wrapped one object per line:
     /// a `system`/`init` line naming the session, `assistant` messages holding
     /// text and `tool_use` blocks, the matching `tool_result`s addressed to
@@ -179,14 +186,26 @@ impl Delegate for ClaudeCode {
             return Vec::new();
         };
         match value.get("type").and_then(|v| v.as_str()) {
-            // Only `init` carries the session id; the other `system` lines
-            // (hook_started, hook_response, …) are noise for our purposes.
+            // Only `init` carries the session id and the command list; the
+            // other `system` lines (hook_started, hook_response, …) are noise
+            // for our purposes.
             Some("system") => match value.get("subtype").and_then(|v| v.as_str()) {
-                Some("init") => value
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                    .map(|id| vec![StreamItem::Session(id.to_string())])
-                    .unwrap_or_default(),
+                Some("init") => {
+                    let mut items: Vec<StreamItem> = value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| StreamItem::Session(id.to_string()))
+                        .into_iter()
+                        .collect();
+                    let names = |field: &str| -> Option<Vec<String>> {
+                        Some(value.get(field)?.as_array()?.iter().filter_map(|c| c.as_str().map(str::to_string)).collect())
+                    };
+                    if let Some(commands) = names("slash_commands") {
+                        let terminal = names("terminal_slash_commands").unwrap_or_default();
+                        items.push(StreamItem::Commands(CliCommands { commands, terminal }));
+                    }
+                    items
+                }
                 _ => Vec::new(),
             },
             Some("assistant") => message_blocks(&value)
@@ -830,6 +849,21 @@ mod tests {
     const RESULT_LINE: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"1\t<div align=\"center\">"}]}}"#;
     const RATE_LIMIT: &str = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#;
     const FINISHED: &str = r#"{"type":"result","subtype":"success","total_cost_usd":0.348942,"num_turns":2}"#;
+
+    #[test]
+    fn init_names_the_commands_the_cli_answers_itself() {
+        let init = r#"{"type":"system","subtype":"init","session_id":"abc","slash_commands":["compact","tdd","config"],"terminal_slash_commands":["config"]}"#;
+        assert_eq!(
+            ClaudeCode.parse_stream_line(init),
+            vec![
+                StreamItem::Session("abc".into()),
+                StreamItem::Commands(CliCommands {
+                    commands: vec!["compact".into(), "tdd".into(), "config".into()],
+                    terminal: vec!["config".into()],
+                }),
+            ]
+        );
+    }
 
     #[test]
     fn reads_session_text_calls_and_results_from_a_real_turn() {

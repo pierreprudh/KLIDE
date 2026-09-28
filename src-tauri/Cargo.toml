@@ -56,6 +56,11 @@ tiny_http = "0.12"
 ironcalc = "=0.8.3"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 
+# Process-group signals for commands a Run starts (`agent/process.rs`): a
+# direct kill(2) instead of forking `/bin/kill`, and a signal-0 liveness probe.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # One keyring backend per platform. The call sites in `providers.rs` and
 # `accounts.rs` only use `Entry::new` / get / set / delete, which every backend
 # provides, so nothing else in the crate changes with the target.

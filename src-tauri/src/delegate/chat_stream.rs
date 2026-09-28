@@ -22,6 +22,8 @@ use serde_json::Value;
 pub(crate) enum StreamItem {
     /// The session id this turn runs under — what `--resume` needs later.
     Session(String),
+    /// The `/` commands this CLI answers itself (see `cli_commands.rs`).
+    Commands(super::cli_commands::CliCommands),
     /// A whole assistant text block, delivered once the model finished it.
     ///
     /// With Claude Code's `--include-partial-messages` the same text has

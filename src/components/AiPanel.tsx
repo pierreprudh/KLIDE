@@ -126,6 +126,9 @@ import { conversationMark } from "../modelIdentity";
 import { buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
+import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
+import { CliConfigCard } from "./ai/CliConfigCard";
+import { parseConfigUsage } from "./ai/cliConfig";
 import { SlashMenu } from "./ai/SlashMenu";
 import { SkillTokenLede } from "./ai/SkillTokenLede";
 import { draftSpans, joinSkillToken, skillTokenCaret, skillTokenOf, splitSkillToken } from "./ai/skillToken";
@@ -1443,6 +1446,7 @@ export function AiPanel({
   useEffect(() => { localStorage.setItem("klide.contextMode", contextMode); }, [contextMode]);
 
   const [slash, setSlash] = useState<SlashQuery | null>(null);
+  const cliCommandNames = useCliSlashCommands(provider, workspaceRoot, slash !== null);
   const [slashIdx, setSlashIdx] = useState(0);
   const [nextSendMode, setNextSendMode] = useState<AgentMode | null>(null);
 
@@ -1528,10 +1532,17 @@ export function AiPanel({
     requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(body, body); } });
   });
   SLASH_COMMANDS.push(...SKILL_COMMANDS);
+  // A Claude Code conversation also offers the CLI's own commands, head only:
+  // the CLI reads one only when it opens the message.
+  const HEAD_COMMANDS = withCliCommands(SLASH_COMMANDS, cliCommandNames, providerName(provider), (prefix) => {
+    setInput(prefix);
+    setSlash(null);
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(prefix.length, prefix.length); } });
+  });
   // Mid-sentence, only the Skills are on offer. A built-in owns the whole
   // draft (`/clear` empties it, `/plan` flips a mode and clears), so listing
   // one under a half-written sentence would offer to delete the sentence.
-  const slashVocabulary = slash === null ? [] : slash.head ? SLASH_COMMANDS : SKILL_COMMANDS;
+  const slashVocabulary = slash === null ? [] : slash.head ? HEAD_COMMANDS : SKILL_COMMANDS;
   const slashMatches = slash !== null ? filterSlashCommands(slashVocabulary, slash.query) : [];
 
   function acceptSlash(idx: number) { const cmd = slashMatches[idx]; setSlash(null); if (cmd) cmd.run(); }
@@ -4797,7 +4808,11 @@ This user request requires workspace inspection. Before answering, you MUST call
                   ? (m.delegateHeadless
                     ? <WorkingSince since={previous?.role === "user" ? previous.ts : undefined} />
                     : <AssistantPlaceholderLoader />)
-                  : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
+                  : !isStreamingActive && m.role === "assistant" && parseConfigUsage(m.content)
+                    // Claude Code's `/config` usage is a menu in its terminal
+                    // app; headless it is a list, so draw the menu here.
+                    ? <CliConfigCard options={parseConfigUsage(m.content)!} workspaceRoot={workspaceRoot} disabled={streaming} onApply={(text) => void send({ text })} />
+                    : <>{renderMessageBody(m, isStreamingActive || isThinkingActive, { hideThinking: toolRunAt(i) !== null, results: attachedResults })}{isStreamingActive && <span className="ai-caret" />}</>}
                 {!isStreamingActive && !isAssistantPlaceholder && isResponseEnd && m.content?.trim() && (
                   <>
                     <MessageActions

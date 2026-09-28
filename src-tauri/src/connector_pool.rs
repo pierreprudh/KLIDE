@@ -128,7 +128,13 @@ fn ensure(slot: &mut Slot, connector: &Connector, workspace: Option<&Path>) -> R
     }
 }
 
+/// The connectors a Run may use. Empty under test: the store is the user's
+/// real `~/.klide/connectors.json`, and a test Run that connected to their
+/// GitHub would be slow, order-dependent, and — for a write — not a test.
 fn enabled() -> Vec<Connector> {
+    if cfg!(test) {
+        return Vec::new();
+    }
     connectors::list().into_iter().filter(|c| c.enabled).collect()
 }
 

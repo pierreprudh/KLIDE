@@ -12,6 +12,7 @@ mod coordination_bridge;
 mod custom_cli;
 mod custom_providers;
 mod delegate;
+mod documents;
 mod durable;
 mod file_memo;
 mod gateway;
@@ -487,29 +488,48 @@ async fn preview_file(workspace_root: String, path: String, size: Option<u32>) -
     blocking::run(move || {
         let ws = workspace::Workspace::new(&workspace_root)?;
         let abs = ws.resolve_abs_read(&path)?;
+        if !documents::is_previewable(&abs) {
+            return Err("Klide does not preview this kind of file.".to_string());
+        }
         preview::data_uri(&abs, preview::clamp_size(size), preview::quick_look)
     })
     .await
 }
 
-/// Hand a file to the application the machine already opens it with. The one
-/// way to read a deck, a PDF or a spreadsheet a run produced: Klide renders
-/// none of them, and a viewer for each would be a bigger thing than the card
-/// that lists them.
+/// Hand a file to the application the machine already opens it with — when
+/// `documents.rs` says it is a document. A folder or an unknown kind is shown
+/// in Finder instead, and anything macOS would execute is refused: the click
+/// on a completion card must never be the click that runs what a Run wrote.
+/// The answer tells the webview which of the two happened.
 #[tauri::command]
-fn open_entry(workspace_root: String, path: String) -> Result<(), String> {
-    let ws = workspace::Workspace::new(&workspace_root)?;
-    let target = ws.resolve_abs_read(&path)?;
-    tauri_plugin_opener::open_path(target, None::<&str>)
-        .map_err(|e| format!("Unable to open this file: {e}"))
+async fn open_entry(workspace_root: String, path: String) -> Result<documents::Disposition, String> {
+    blocking::run(move || {
+        let ws = workspace::Workspace::new(&workspace_root)?;
+        let target = ws.resolve_abs_read(&path)?;
+        match documents::classify(&target)? {
+            documents::Disposition::Open => tauri_plugin_opener::open_path(target, None::<&str>)
+                .map(|()| documents::Disposition::Open)
+                .map_err(|e| format!("Unable to open this file: {e}")),
+            documents::Disposition::Reveal => tauri_plugin_opener::reveal_item_in_dir(target)
+                .map(|()| documents::Disposition::Reveal)
+                .map_err(|e| format!("Unable to reveal in Finder: {e}")),
+            documents::Disposition::Refuse(reason) => {
+                Err(format!("Klide does not launch this file. {reason}"))
+            }
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-fn reveal_entry(workspace_root: String, path: String) -> Result<(), String> {
-    let ws = workspace::Workspace::new(&workspace_root)?;
-    let target = ws.resolve_abs_read(&path)?;
-    tauri_plugin_opener::reveal_item_in_dir(target)
-        .map_err(|e| format!("Unable to reveal in Finder: {e}"))
+async fn reveal_entry(workspace_root: String, path: String) -> Result<(), String> {
+    blocking::run(move || {
+        let ws = workspace::Workspace::new(&workspace_root)?;
+        let target = ws.resolve_abs_read(&path)?;
+        tauri_plugin_opener::reveal_item_in_dir(target)
+            .map_err(|e| format!("Unable to reveal in Finder: {e}"))
+    })
+    .await
 }
 
 // ── Agent runs aggregation ──────────────────────────────────────────────
@@ -626,6 +646,25 @@ async fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String
     blocking::run(move || {
         let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
         delegate::OpenCode.read_run(&home, &session_id)
+    })
+    .await
+}
+
+/// The `/` commands a delegate CLI answers itself in this workspace, for the
+/// composer's menu. Async and non-blocking: the one probe is a tokio child.
+#[tauri::command]
+async fn delegate_slash_commands(provider: String, workspace_root: String) -> Result<delegate::CliCommands, String> {
+    let adapter = delegate::lookup(&provider).ok_or_else(|| format!("No delegate adapter for {provider}"))?;
+    delegate::cli_commands(adapter, &workspace_root).await
+}
+
+/// Claude Code's current settings for the `/config` card (see
+/// `delegate::claude_code_settings`).
+#[tauri::command]
+async fn claude_code_settings(workspace_root: String) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
+    blocking::run(move || {
+        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+        Ok(delegate::claude_code_settings(&home, &workspace_root))
     })
     .await
 }
@@ -955,6 +994,8 @@ pub fn run() {
             list_agent_runs,
             read_agent_run,
             read_opencode_run,
+            delegate_slash_commands,
+            claude_code_settings,
             models::ai_provider_models,
             models::ai_provider_credits,
             models::ai_provider_model_meta,
@@ -1037,14 +1078,10 @@ pub fn run() {
             coordination::coordination_snapshot,
             coordination::coordination_events,
             missions::mission_create,
-            missions::mission_read,
             missions::mission_list,
             missions::mission_save_task,
             missions::mission_approve,
-            missions::mission_dispatch_task,
-            missions::mission_prepare_attempt,
-            missions::mission_fail_attempt_dispatch,
-            missions::mission_validate_attempt,
+            missions::mission_request_task,
             missions::mission_review_attempt,
             git::github::create_pr,
             git::git_log,
@@ -1189,17 +1226,12 @@ mod blocking_door_tests {
         "ai_tool_catalog",
         // lib.rs — a small JSON read; user-driven, not polled
         "accounts_list",
-        // lib.rs — hand off to the opener plugin / native menu
-        "open_entry",
-        "reveal_entry",
+        // lib.rs — hand off to the native menu
         "menu_sync_projects",
         // missions.rs — Mission writes serialized behind the store's write
         // gate (ADR-0002); a blocking closure cannot hold that State lock.
         "mission_create",
         "mission_save_task",
-        "mission_prepare_attempt",
-        "mission_fail_attempt_dispatch",
-        "mission_validate_attempt",
         // pty.rs — a mutex touch on an in-process session, or a spawn whose
         // cost is the fork itself
         "delegate_daemon_status",

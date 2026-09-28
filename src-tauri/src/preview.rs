@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Pictures remembered at once. An 1800 px deck is ~230 KB as a data URI, so
 /// this is a few tens of MB at the very worst, and a run makes a handful of
@@ -103,6 +104,37 @@ pub fn data_uri(
     Ok(data_uri)
 }
 
+/// How long one Quick Look render may take. A normal one is ~200 ms; a
+/// generator that hangs on a malformed file would otherwise hold a blocking
+/// worker, and the card waiting on it, forever.
+#[cfg(target_os = "macos")]
+const QUICK_LOOK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Wait for `child`, killing it at `deadline`. A child still running then is
+/// reported as a timeout, not a status, so the caller never reads a picture a
+/// killed render half wrote as a good one.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn wait_with_deadline(
+    mut child: std::process::Child,
+    deadline: Duration,
+) -> std::io::Result<std::process::ExitStatus> {
+    let until = Instant::now() + deadline;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("timed out after {} ms", deadline.as_millis()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// Quick Look's picture of `abs`, as PNG bytes.
 #[cfg(target_os = "macos")]
 pub fn quick_look(abs: &Path, size: u32) -> Result<Vec<u8>, String> {
@@ -135,7 +167,8 @@ pub fn quick_look(abs: &Path, size: u32) -> Result<Vec<u8>, String> {
         .arg(abs)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status();
+        .spawn()
+        .and_then(|child| wait_with_deadline(child, QUICK_LOOK_TIMEOUT));
     let png = out.join(format!("{name}.png"));
     let result = match (status, std::fs::read(&png)) {
         (Ok(_), Ok(bytes)) => Ok(bytes),
@@ -256,5 +289,15 @@ mod tests {
         assert_eq!(clamp_size(Some(16)), 120);
         assert_eq!(clamp_size(Some(9000)), 2000);
         assert_eq!(clamp_size(Some(1800)), 1800);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stuck_quick_look_is_killed_at_the_deadline() {
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let started = Instant::now();
+        let err = wait_with_deadline(child, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

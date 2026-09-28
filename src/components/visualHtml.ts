@@ -15,7 +15,14 @@
 //      define `#arrow` and each keeps its own.
 //
 // Pure string work on purpose: no DOMParser, so the rules are testable in a
-// plain Node test run and identical in the webview.
+// plain Node test run and identical in the webview. CSS is the exception to
+// "string work": it is read through a real tokenizer (`cssTokens.ts`), because
+// a stylesheet the sanitizer reads differently from the browser is one it has
+// not sanitized.
+
+import {
+  hasBrokenToken, matchingClose, serializeCss, serializeIdent, splitTopLevel, tokenizeCss, type CssToken,
+} from "./cssTokens";
 
 /**
  * What the model wrote. A `drawing` is a diagram — it sits on the conversation's
@@ -318,6 +325,42 @@ function readRawText(src: string, from: number, tag: string): { text: string; en
 
 const ATTR_RE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 
+// Attributes that reach past the block into the document around it: `name`
+// and `is` clobber `document.getElementById` and friends, `slot` and `form*`
+// attach to elements the app owns, `target`/`rel` are the block's to set on a
+// link (see below), and focus/editing/popover attributes let a picture take
+// the keyboard or float over the app.
+const DROP_ATTRS = new Set([
+  "name", "is", "slot", "target", "rel", "download", "referrerpolicy", "accesskey",
+  "autofocus", "contenteditable",
+]);
+const DROP_ATTR_PREFIX_RE = /^(?:form|popover)/;
+
+// Attributes whose value is a list of ids. Every one is namespaced like `id`,
+// so a label points at its own control and not at one the app rendered.
+const ID_LIST_ATTRS = new Set([
+  "for", "headers", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns",
+  "aria-activedescendant", "aria-details", "aria-errormessage", "aria-flowto",
+]);
+
+// A value that could fetch something when an SVG presentation attribute reads
+// it as CSS: `fill="url(https://…)"`, `filter="url(…)"`, `mask="image(…)"`.
+const CSS_FETCH_RE = /(?:url|src|image-set|image|element|paint|cross-fade)\s*\(/i;
+
+// The character references a model actually writes. The browser decodes an
+// attribute before anything reads it, so the sanitizer has to read the same
+// decoded text — and `quote` then re-escapes every `&`, so a reference this
+// does not know (`&lpar;`) reaches the page as the literal text it checked.
+const NAMED_REFS: Record<string, string> = { quot: '"', amp: "&", lt: "<", gt: ">", apos: "'", nbsp: " " };
+
+function decodeAttr(value: string): string {
+  return value.replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([A-Za-z]+));?/g, (all, dec: string, hex: string, named: string) => {
+    if (named) return NAMED_REFS[named.toLowerCase()] ?? all;
+    const cp = dec ? parseInt(dec, 10) : parseInt(hex, 16);
+    return cp > 0 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : "�";
+  });
+}
+
 function sanitizeAttrs(raw: string, tag: string, scope: string, invert: boolean): string {
   let out = "";
   let m: RegExpExecArray | null;
@@ -325,10 +368,16 @@ function sanitizeAttrs(raw: string, tag: string, scope: string, invert: boolean)
   while ((m = ATTR_RE.exec(raw))) {
     const written = m[1];
     const name = written.toLowerCase();
-    const value = m[2] ?? m[3] ?? m[4] ?? "";
+    const value = decodeAttr(m[2] ?? m[3] ?? m[4] ?? "");
     if (!ATTR_NAME_RE.test(name)) continue;
     // Every event handler, under every spelling.
     if (name.startsWith("on")) continue;
+    if (DROP_ATTRS.has(name) || DROP_ATTR_PREFIX_RE.test(name)) continue;
+    if (ID_LIST_ATTRS.has(name)) {
+      const ids = value.split(/\s+/).filter(Boolean).map((id) => namespaceId(id, scope)).join(" ");
+      if (ids) out += ` ${written}="${quote(ids)}"`;
+      continue;
+    }
     if (name === "style") {
       const decls = sanitizeDeclsPaired(value, scope, invert);
       if (decls) out += ` ${written}="${quote(decls)}"`;
@@ -343,11 +392,19 @@ function sanitizeAttrs(raw: string, tag: string, scope: string, invert: boolean)
       if (url) out += ` ${written}="${quote(url)}"`;
       continue;
     }
-    // Values elsewhere can still reference an id: `fill="url(#grad)"`,
-    // `filter="url(#blur)"`, `clip-path="url(#cut)"`.
+    // Values elsewhere can still reference an id — `fill="url(#grad)"`,
+    // `filter="url(#blur)"`, `clip-path="url(#cut)"` — or name something to
+    // fetch. Read as CSS: own references namespaced, anything else neutered,
+    // and a value that will not tokenize cleanly dropped rather than guessed at.
     // `fill="var(--surface)"` is the same guess in attribute clothing, and
     // `fill="#e9e5dc"` the same hardcoded surface.
-    let rewritten = value.includes("url(#") ? namespaceUrlRefs(value, scope) : value;
+    let rewritten = value;
+    if (CSS_FETCH_RE.test(value)) {
+      const tokens = sanitizeValue("", tokenizeCss(value), scope);
+      if (!tokens) continue;
+      rewritten = serializeCss(tokens);
+      if (!isSafeValueText(rewritten)) continue;
+    }
     if (rewritten.includes("var(--")) rewritten = withTokenFallbacks(rewritten);
     if (COLOR_ATTRS.has(name)) rewritten = normalizeColors(rewritten, attrColorRole(tag, name), invert);
     out += rewritten ? ` ${written}="${quote(rewritten)}"` : ` ${written}`;
@@ -386,15 +443,11 @@ function sanitizeAttrs(raw: string, tag: string, scope: string, invert: boolean)
 }
 
 function quote(value: string): string {
-  return value.replace(/"/g, "&quot;");
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 function namespaceId(id: string, scope: string): string {
   return `${id.trim()}-${scope}`;
-}
-
-function namespaceUrlRefs(value: string, scope: string): string {
-  return value.replace(/url\(\s*(['"]?)#([^)'"]+)\1\s*\)/g, (_all, q, id) => `url(${q}#${namespaceId(id, scope)}${q})`);
 }
 
 /**
@@ -406,7 +459,7 @@ export function safeVisualUrl(value: string, tag: string, scope: string): string
   const url = value.trim();
   if (url.startsWith("#")) return `#${namespaceId(url.slice(1), scope)}`;
   if (tag === "img" || tag === "image") {
-    return /^data:image\/(png|jpe?g|gif|webp|svg\+xml|avif);base64,[A-Za-z0-9+/=\s]*$/i.test(url) ? url : null;
+    return DATA_IMAGE_RE.test(url) ? url : null;
   }
   if (tag === "a") return /^https?:\/\//i.test(url) || /^mailto:/i.test(url) ? url : null;
   return null;
@@ -656,30 +709,17 @@ const ROLE_BY_PROPERTY: [RegExp, ColorRole][] = [
  * neighbours in the same rule settle it — a rule that also sets a stroke is
  * drawing a shape, one that sets type is drawing a label.
  */
-function fillRole(decls: string): ColorRole {
-  const shape = /(?:^|[;\s])stroke(?:-width)?\s*:/i.test(decls);
-  const type = /(?:^|[;\s])(?:font-|text-anchor|letter-spacing|dominant-baseline)/i.test(decls);
+function fillRole(properties: readonly string[]): ColorRole {
+  const shape = properties.some((p) => p === "stroke" || p === "stroke-width");
+  const type = properties.some((p) => /^(?:font-|text-anchor|letter-spacing|dominant-baseline)/.test(p));
   if (type && !shape) return "ink";
   if (shape) return "surface";
   return "auto";
 }
 
-/** Each declaration's colors, normalized for what that declaration paints. */
-function normalizeDeclColors(decls: string, invert: boolean): string {
-  return decls
-    .split(";")
-    .map((decl) => {
-      const split = decl.indexOf(":");
-      if (split < 0) return decl;
-      const property = decl.slice(0, split).trim().toLowerCase();
-      const value = decl.slice(split + 1);
-      if (!/#|\(|[a-z]{3}/i.test(value)) return decl;
-      const role =
-        property === "fill" ? fillRole(decls) : (ROLE_BY_PROPERTY.find(([re]) => re.test(property))?.[1] ?? "auto");
-      // Soften first: a tint normalization produced must not be tinted again.
-      return `${decl.slice(0, split)}:${normalizeColors(softenChroma(value, role), role, invert)}`;
-    })
-    .join(";");
+/** What one declaration's colors paint, read from its property. */
+function colorRole(property: string, properties: readonly string[]): ColorRole {
+  return property === "fill" ? fillRole(properties) : (ROLE_BY_PROPERTY.find(([re]) => re.test(property))?.[1] ?? "auto");
 }
 
 // A rule that paints a chroma fill and says nothing about text leaves the label
@@ -736,38 +776,257 @@ function mapViewportUnits(value: string): string {
 const SCREENFUL_PROPERTY_RE = /^(?:min-|max-)?(?:height|block-size)$/i;
 const BLOCK_AXIS_UNIT_RE = /\d\s*(?:vh|vb|vmin|vmax)(?![\w%-])/i;
 
-/** Every declaration re-measured against the block instead of the window. */
-function withBlockRelativeUnits(decls: string): string {
+// ── Declarations, read as tokens ────────────────────────────────────────────
+//
+// Every declaration a visual writes — in a `<style>` rule, a keyframe, or a
+// `style="…"` attribute — goes through one path: tokenized, checked against
+// what the browser would make of it, rewritten token by token, and written
+// back as canonical text. The palette and unit passes above still work on
+// text, one declaration value at a time, and their output is tokenized once
+// more before it is kept: nothing they do may change the structure.
+
+// What a visual may style: layout, type, paint, tables, SVG presentation, and
+// its own custom properties. Behaviour a stylesheet can attach to the page
+// (`behavior`, `-moz-binding`), and anything not named here, is dropped.
+const ALLOWED_PROPERTY_RE = new RegExp(
+  "^(?:" +
+    [
+      // box model and flow
+      "(?:min-|max-)?(?:width|height|inline-size|block-size)", "margin(?:-[a-z-]+)?", "padding(?:-[a-z-]+)?",
+      "box-sizing", "aspect-ratio", "overflow(?:-[a-z-]+)?", "inset(?:-[a-z-]+)?", "top", "right", "bottom", "left",
+      "position", "z-index", "float", "clear", "display", "visibility", "vertical-align", "object-(?:fit|position)",
+      "flex(?:-[a-z-]+)?", "grid(?:-[a-z-]+)?", "gap", "row-gap", "column-gap", "(?:align|justify|place)-(?:content|items|self)",
+      "order", "columns", "column-(?:count|width|fill|span|rule(?:-[a-z]+)?)", "line-clamp", "box-orient",
+      // type, lists, generated content
+      "font(?:-[a-z-]+)?", "line-height", "letter-spacing", "word-spacing", "text-[a-z-]+", "white-space(?:-collapse)?",
+      "word-break", "overflow-wrap", "word-wrap", "hyphens", "tab-size", "direction", "unicode-bidi", "writing-mode",
+      "list-style(?:-[a-z]+)?", "counter-(?:reset|increment|set)", "content", "quotes", "color", "caret-color", "accent-color",
+      // paint and motion
+      "background(?:-[a-z-]+)?", "border(?:-[a-z-]+)?", "outline(?:-[a-z-]+)?", "box-shadow", "opacity", "filter",
+      "backdrop-filter", "mix-blend-mode", "isolation", "clip-path", "clip-rule", "mask(?:-[a-z-]+)?",
+      "transform(?:-[a-z-]+)?", "translate", "rotate", "scale", "perspective(?:-origin)?", "backface-visibility",
+      "transition(?:-[a-z-]+)?", "animation(?:-[a-z-]+)?", "cursor", "pointer-events", "user-select",
+      // tables
+      "table-layout", "border-collapse", "border-spacing", "caption-side", "empty-cells",
+      // SVG presentation
+      "fill(?:-rule|-opacity)?", "stroke(?:-[a-z-]+)?", "stop-(?:color|opacity)", "flood-(?:color|opacity)",
+      "lighting-color", "marker(?:-start|-mid|-end)?", "paint-order", "vector-effect", "shape-rendering",
+      "text-rendering", "image-rendering", "color-interpolation(?:-filters)?", "dominant-baseline",
+      "alignment-baseline", "baseline-shift", "cx", "cy", "r", "rx", "ry", "x", "y", "d",
+      // containment
+      "contain(?:-[a-z-]+)?", "container(?:-[a-z]+)?", "content-visibility",
+    ].join("|") +
+    ")$",
+);
+
+function allowedProperty(property: string): boolean {
+  if (property.startsWith("--")) return true;
+  return ALLOWED_PROPERTY_RE.test(property.replace(/^-(?:webkit|moz)-/, ""));
+}
+
+// The only images a stylesheet may name: one of its own ids, or bytes inline.
+const DATA_IMAGE_RE = /^data:image\/(png|jpe?g|gif|webp|svg\+xml|avif);base64,[A-Za-z0-9+/=\s]*$/i;
+
+const isSafeCssUrl = (url: string) => url.startsWith("#") || DATA_IMAGE_RE.test(url);
+
+/**
+ * A `url()` that is not an inline image or an own-id reference would be a
+ * network fetch the model chose — a beacon. The value is neutralized and the
+ * property kept, so a broken background does not take the layout with it.
+ */
+function safeCssUrl(value: string, scope: string): CssToken {
+  const url = value.trim();
+  if (url.startsWith("#")) return { type: "url", value: `#${namespaceId(url.slice(1), scope)}` };
+  return DATA_IMAGE_RE.test(url) ? { type: "url", value: url } : { type: "ident", value: "none" };
+}
+
+// Image functions that take a URL as a bare string — `image-set("x.png" 1x)`
+// fetches without ever writing `url(`. Refused when a string is anywhere in
+// them. `element()`/`paint()` paint someone else's pixels; `src()` is `url()`
+// by another name; `expression()` is script.
+const STRING_FETCH_FUNCTIONS = new Set(["image-set", "-webkit-image-set", "image", "cross-fade", "-webkit-cross-fade"]);
+const REFUSED_FUNCTIONS = new Set(["src", "element", "-moz-element", "paint", "expression"]);
+
+// The words an `animation` shorthand can hold that are not a keyframes name.
+const ANIMATION_KEYWORDS = new Set([
+  "none", "initial", "inherit", "unset", "revert", "revert-layer", "auto", "linear", "ease", "ease-in", "ease-out",
+  "ease-in-out", "step-start", "step-end", "infinite", "normal", "reverse", "alternate", "alternate-reverse",
+  "forwards", "backwards", "both", "running", "paused",
+]);
+
+/** A keyframes name as this block writes it — its own, never the app's. */
+const keyframesName = (name: string, scope: string) => `${name}-${scope}`;
+
+/**
+ * One declaration value, rewritten token by token — URLs neutered, `fixed`
+ * pinned, animation names made local. `null` when the value should go whole.
+ */
+function sanitizeValue(property: string, tokens: readonly CssToken[], scope: string): CssToken[] | null {
+  const out: CssToken[] = [];
+  const animation = property === "animation" || property === "animation-name";
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type === "url") {
+      out.push(safeCssUrl(t.value, scope));
+      continue;
+    }
+    if (t.type === "function") {
+      const fn = t.value.toLowerCase();
+      const close = matchingClose(tokens, i);
+      if (close < 0 || REFUSED_FUNCTIONS.has(fn)) return null;
+      const inner = tokens.slice(i + 1, close);
+      if (fn === "url") {
+        // `url("…")` — the quoted spelling. Anything but one string is a
+        // modifier this renderer has no use for.
+        const args = inner.filter((a) => a.type !== "ws" && a.type !== "comment");
+        const arg = args[0];
+        out.push(args.length === 1 && arg.type === "string" ? safeCssUrl(arg.value, scope) : { type: "ident", value: "none" });
+        i = close;
+        continue;
+      }
+      if (STRING_FETCH_FUNCTIONS.has(fn) && inner.some((a) => a.type === "string")) return null;
+      depth++;
+      out.push(t);
+      continue;
+    }
+    if (t.type === "(" || t.type === "[") depth++;
+    if (t.type === ")" || t.type === "]") depth--;
+    if (t.type === "ident" && depth === 0) {
+      const word = t.value.toLowerCase();
+      // Containment already traps a fixed child in the block, but saying so
+      // costs nothing and keeps the intent readable.
+      if (property === "position" && word === "fixed") { out.push({ type: "ident", value: "absolute" }); continue; }
+      if (animation && !ANIMATION_KEYWORDS.has(word)) { out.push({ type: "ident", value: keyframesName(t.value, scope) }); continue; }
+    }
+    if (t.type === "string" && animation && depth === 0) return null;
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Whether text the palette passes produced still reads as one inert value: no
+ * token that would end the declaration or the rule, nothing the browser would
+ * recover from by dropping it, no URL that fetches.
+ */
+function isSafeValueText(text: string): boolean {
+  const tokens = tokenizeCss(text);
+  if (hasBrokenToken(tokens) || splitTopLevel(tokens, ";").unbalanced) return false;
+  return tokens.every((t, i) => {
+    if (t.type === "{" || t.type === "}" || t.type === ";") return false;
+    if (t.type === "url") return isSafeCssUrl(t.value);
+    if (t.type === "function" && t.value.toLowerCase() === "url") {
+      const arg = tokens.slice(i + 1).find((a) => a.type !== "ws" && a.type !== "comment");
+      return arg?.type === "string" && isSafeCssUrl(arg.value);
+    }
+    return true;
+  });
+}
+
+const isBlank = (t: CssToken) => t.type === "ws" || t.type === "comment";
+
+type Declaration = { property: string; head: string; value: CssToken[] };
+
+/** One `;`-separated segment as a declaration, or null when it is not a clean one. */
+function readDeclaration(segment: readonly CssToken[]): Declaration | null {
+  if (hasBrokenToken(segment) || segment.some((t) => t.type === "{" || t.type === "}")) return null;
+  let i = 0;
+  while (i < segment.length && isBlank(segment[i])) i++;
+  const name = segment[i];
+  if (!name || name.type !== "ident") return null;
+  let colon = i + 1;
+  while (colon < segment.length && isBlank(segment[colon])) colon++;
+  if (segment[colon]?.type !== ":") return null;
+  const property = name.value.toLowerCase();
+  if (!allowedProperty(property)) return null;
+  return { property, head: serializeCss(segment.slice(0, colon)) + ":", value: segment.slice(colon + 1) };
+}
+
+// A page's ground is the block's ground. `body { background: #0b0b0b }` is a
+// whole-window decision made for a window this block does not have, and kept
+// it half-themes the visual — a near-black slab across a light theme, or, once
+// the palette maps that literal to ink, a white slab across a dark one. The
+// gutters, the measure, the type all stay.
+const GROUND_PROPERTY_RE = /^(?:background(?:-color|-image)?|color)$/i;
+
+/** A declaration list from tokens, with the unsafe parts out. */
+function sanitizeDeclTokens(tokens: readonly CssToken[], scope: string, invert: boolean, dropGround = false): string {
+  const { parts, unbalanced } = splitTopLevel(tokens, ";");
+  // A block the input never closed ran to the end: its declaration goes.
+  if (unbalanced) parts.pop();
+  const decls = parts.map((segment) => (segment.every(isBlank) ? serializeCss(segment) : readDeclaration(segment)));
+  const properties = decls.flatMap((d) => (d && typeof d !== "string" ? [d.property] : []));
   return decls
-    .split(";")
     .map((decl) => {
-      const split = decl.indexOf(":");
-      if (split < 0) return decl;
-      const value = decl.slice(split + 1);
-      if (SCREENFUL_PROPERTY_RE.test(decl.slice(0, split).trim()) && BLOCK_AXIS_UNIT_RE.test(value)) return null;
-      return `${decl.slice(0, split)}:${mapViewportUnits(value)}`;
+      if (decl === null || typeof decl === "string") return decl;
+      if (dropGround && GROUND_PROPERTY_RE.test(decl.property)) return null;
+      const value = sanitizeValue(decl.property, decl.value, scope);
+      if (!value) return null;
+      let text = serializeCss(value);
+      if (SCREENFUL_PROPERTY_RE.test(decl.property) && BLOCK_AXIS_UNIT_RE.test(text)) return null;
+      // A model writes `var(--surface)` or a hex; either way it lands on the
+      // palette, painted for what this property draws.
+      text = withTokenFallbacks(text);
+      if (/#|\(|[a-z]{3}/i.test(text)) {
+        const role = colorRole(decl.property, properties);
+        // Soften first: a tint normalization produced must not be tinted again.
+        text = normalizeColors(softenChroma(text, role), role, invert);
+      }
+      text = mapViewportUnits(text);
+      return isSafeValueText(text) ? decl.head + text : null;
     })
     .filter((decl): decl is string => decl !== null)
-    .join(";");
+    .join(";")
+    .trim();
 }
 
 /** A declaration list from a `style="…"` attribute, with the unsafe parts out. */
 export function sanitizeDecls(value: string, scope: string, invert = false): string {
-  return withBlockRelativeUnits(normalizeDeclColors(withTokenFallbacks(namespaceUrlRefs(value, scope)), invert))
-    // A `url()` that is not an inline image or an own-id reference would be a
-    // network fetch the model chose — a beacon. Neutralize the value, keep the
-    // property, so a broken background does not take the layout with it.
-    .replace(/url\(\s*(?!['"]?(?:#|data:image\/))[^)]*\)/gi, "none")
-    // Containment already traps a fixed child in the block, but saying so
-    // costs nothing and keeps the intent readable.
-    .replace(/position\s*:\s*fixed/gi, "position:absolute")
-    .replace(/expression\s*\(/gi, "(")
-    .trim();
+  return sanitizeDeclTokens(tokenizeCss(value), scope, invert);
 }
 
 /** The same list, plus the text color a literal background implies. */
 function sanitizeDeclsPaired(value: string, scope: string, invert = false): string {
   return withPairedInk(sanitizeDecls(value, scope, invert), value, invert);
+}
+
+// ── Rules ───────────────────────────────────────────────────────────────────
+
+/**
+ * Walk the rules of a sheet (or of a block inside one) the way the browser
+ * consumes them. A prelude runs to its `{` — or, for an at-rule, to a `;` that
+ * makes it a statement, which is skipped. A prelude holding a stray `}` or `;`,
+ * or a token the browser would drop, is refused with its block; a block the
+ * input never closes ends the walk, because nothing after it can be placed.
+ */
+function forEachRule(tokens: readonly CssToken[], visit: (prelude: CssToken[], block: CssToken[]) => void): void {
+  let i = 0;
+  while (i < tokens.length) {
+    const first = tokens[i];
+    if (isBlank(first) || first.type === "cdo" || first.type === "cdc") { i++; continue; }
+    let j = i;
+    let statement = false;
+    while (j < tokens.length && tokens[j].type !== "{") {
+      const kind = tokens[j].type;
+      if (kind === ";" && first.type === "at-keyword") { statement = true; break; }
+      if (kind === "(" || kind === "[" || kind === "function") {
+        const close = matchingClose(tokens, j);
+        if (close < 0) return;
+        j = close + 1;
+        continue;
+      }
+      j++;
+    }
+    if (statement) { i = j + 1; continue; }
+    if (j >= tokens.length) return;
+    const close = matchingClose(tokens, j);
+    if (close < 0) return;
+    const prelude = tokens.slice(i, j);
+    i = close + 1;
+    if (hasBrokenToken(prelude) || prelude.some((t) => t.type === ";" || t.type === "}")) continue;
+    visit(prelude, tokens.slice(j + 1, close));
+  }
 }
 
 /**
@@ -776,63 +1035,61 @@ function sanitizeDeclsPaired(value: string, scope: string, invert = false): stri
  * that reach outside a block — `@import`, `@font-face`, `@page` — are dropped.
  */
 export function scopeCss(css: string, scope: string, invert = false): string {
-  let out = "";
-  let i = 0;
-  while (i < css.length) {
-    if (css.startsWith("/*", i)) {
-      const end = css.indexOf("*/", i + 2);
-      i = end < 0 ? css.length : end + 2;
-      continue;
-    }
-    const brace = css.indexOf("{", i);
-    if (brace < 0) break;
-    const prelude = css.slice(i, brace).trim();
-    const block = readBalanced(css, brace);
+  return scopeRules(tokenizeCss(css), scope, invert);
+}
 
-    if (prelude.startsWith("@")) {
-      const at = prelude.slice(1).split(/[\s({]/)[0].toLowerCase();
+function scopeRules(tokens: readonly CssToken[], scope: string, invert: boolean): string {
+  let out = "";
+  forEachRule(tokens, (prelude, block) => {
+    const head = prelude[0];
+    if (head.type === "at-keyword") {
+      const at = head.value.toLowerCase();
+      const written = serializeCss(prelude).trim();
       if (at === "media" || at === "supports" || at === "container" || at === "layer") {
-        const inner = scopeCss(block.inner, scope, invert);
+        const inner = scopeRules(block, scope, invert);
         // A drawing sits in a column, not in a window: a width query has to ask
         // about the block. Anything else a @media can ask — a color scheme, a
         // motion preference — is still about the window and stays put.
-        const prelude2 = at === "media" && SIZE_QUERY_RE.test(prelude) ? prelude.replace(/^@media/, "@container") : prelude;
-        if (inner) out += `${prelude2}{${inner}}`;
-      } else if (at.endsWith("keyframes")) {
-        // Frame selectors are percentages, not document selectors — the body
-        // is kept verbatim and the animation stays inside the block anyway.
-        out += `${prelude}{${block.inner}}`;
+        const query = at === "media" && SIZE_QUERY_RE.test(written) ? written.replace(/^@media/, "@container") : written;
+        if (inner) out += `${query}{${inner}}`;
+      } else if (at === "keyframes" || at === "-webkit-keyframes") {
+        out += scopeKeyframes(head.value, prelude.slice(1), block, scope, invert);
       }
       // @import, @font-face, @page, @charset: dropped.
-    } else {
-      const parts = prelude
-        .split(",")
-        .map((part) => scopeSelector(part.trim(), scope))
-        .filter(Boolean);
-      // A page's ground is the block's ground. `body { background: #0b0b0b }`
-      // is a whole-window decision made for a window this block does not have,
-      // and kept it half-themes the visual — a near-black slab across a light
-      // theme, or, once the palette maps that literal to ink, a white slab
-      // across a dark one. The gutters, the measure, the type all stay.
-      const authored = parts.includes(`.${scope}`) ? withoutGround(block.inner) : block.inner;
-      const decls = sanitizeDeclsPaired(authored, scope, invert);
-      if (parts.length && decls) out += `${parts.join(", ")}{${decls}}`;
+      return;
     }
-    i = block.end;
-  }
+    const parts = splitTopLevel(prelude, ",").parts
+      .map((part) => scopeSelector(serializeCss(part).trim(), scope))
+      .filter(Boolean);
+    if (!parts.length) return;
+    const ground = parts.includes(`.${scope}`);
+    const decls = withPairedInk(sanitizeDeclTokens(block, scope, invert, ground), ground ? "" : serializeCss(block), invert);
+    if (decls) out += `${parts.join(", ")}{${decls}}`;
+  });
   return out;
 }
 
-const GROUND_PROPERTY_RE = /^(?:background(?:-color|-image)?|color)$/i;
-
-function withoutGround(decls: string): string {
-  return decls
-    .split(";")
-    .filter((decl) => {
-      const split = decl.indexOf(":");
-      return split < 0 || !GROUND_PROPERTY_RE.test(decl.slice(0, split).trim());
-    })
-    .join(";");
+/**
+ * Keyframes are sanitized like any rule — a frame can hold a `url()` as well
+ * as a selector can — and renamed into the block, so a visual can neither
+ * redefine one of the app's own animations nor borrow one. `animation` and
+ * `animation-name` values get the same suffix (`sanitizeValue`).
+ */
+function scopeKeyframes(at: string, nameTokens: readonly CssToken[], block: readonly CssToken[], scope: string, invert: boolean): string {
+  const named = nameTokens.filter((t) => !isBlank(t));
+  const name = named[0];
+  if (named.length !== 1 || name.type !== "ident") return "";
+  let frames = "";
+  forEachRule(block, (prelude, body) => {
+    const selectors = splitTopLevel(prelude, ",").parts.map((part) => part.filter((t) => !isBlank(t)));
+    const valid = selectors.every(
+      (sel) => sel.length === 1 && (sel[0].type === "percentage" || (sel[0].type === "ident" && /^(?:from|to)$/i.test(sel[0].value))),
+    );
+    if (!valid) return;
+    const decls = sanitizeDeclTokens(body, scope, invert);
+    if (decls) frames += `${selectors.map((sel) => serializeCss(sel)).join(",")}{${decls}}`;
+  });
+  return `@${serializeIdent(at)} ${serializeIdent(keyframesName(name.value, scope))}{${frames}}`;
 }
 
 // Only width/height/aspect-ratio conditions — no `prefers-*`, no `print`.
@@ -847,25 +1104,4 @@ function scopeSelector(selector: string, scope: string): string {
   // scoped as a descendant it would paint any `.dark` inside the block instead.
   if (rest !== selector && rest === self && /^[.#:[]/.test(self)) return `.${scope}${self}`;
   return `.${scope} ${self}`;
-}
-
-function readBalanced(css: string, openBrace: number): { inner: string; end: number } {
-  let depth = 0;
-  let i = openBrace;
-  let quote = "";
-  while (i < css.length) {
-    const ch = css[i];
-    if (quote) {
-      if (ch === quote) quote = "";
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === "{") {
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0) return { inner: css.slice(openBrace + 1, i), end: i + 1 };
-    }
-    i++;
-  }
-  return { inner: css.slice(openBrace + 1), end: css.length };
 }
