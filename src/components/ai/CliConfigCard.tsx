@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { claudeCodeSettings } from "../../ipc/delegateCommands";
 import { Select, Toggle } from "../settings/controls";
-import { configCommand, currentConfigValue, unconfirmedConfigChanges, type ConfigOption } from "./cliConfig";
+import { configCommand, currentConfigValue, sendableConfigChanges, settleAppliedConfig, type ConfigOption } from "./cliConfig";
 
 type Props = {
   options: ConfigOption[];
@@ -20,17 +20,28 @@ const UNKNOWN = "—";
 export function CliConfigCard({ options, workspaceRoot, onApply, disabled = false }: Props) {
   const [current, setCurrent] = useState<Record<string, unknown>>({});
   const [staged, setStaged] = useState<Record<string, string>>({});
+  const stagedRef = useRef(staged);
+  stagedRef.current = staged;
   const [filter, setFilter] = useState("");
+  // The edits the last Apply sent, until the turn after it settles them; and
+  // the ones the files keep under a name Klide cannot read back.
+  const sent = useRef<Record<string, string> | null>(null);
+  const [assumed, setAssumed] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!workspaceRoot || disabled) return;
     let alive = true;
-    // A completed (or cancelled) turn triggers a fresh read. Never promote
-    // staged edits just because sending the command was accepted.
+    // A settled turn triggers a fresh read. Sending the command is not taking
+    // effect: an Apply's edits clear only against what the files say after.
     void claudeCodeSettings(workspaceRoot).then((settings) => {
       if (!alive) return;
       setCurrent(settings);
-      setStaged((pending) => unconfirmedConfigChanges(pending, settings));
+      const applied = sent.current;
+      if (!applied) return;
+      sent.current = null;
+      const settled = settleAppliedConfig(stagedRef.current, applied, settings);
+      setStaged(settled.staged);
+      setAssumed((prev) => ({ ...prev, ...settled.assumed }));
     }).catch(() => {});
     return () => { alive = false; };
   }, [workspaceRoot, disabled]);
@@ -40,9 +51,11 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
     return q ? options.filter((o) => o.key.toLowerCase().includes(q)) : options;
   }, [filter, options]);
 
+  // What a setting is now: the files first, then an Apply they cannot show.
+  const valueOf = (key: string) => currentConfigValue(current, key) ?? assumed[key] ?? null;
   const stage = (key: string, value: string) => setStaged((prev) => {
     const next = { ...prev };
-    if (value === (currentConfigValue(current, key) ?? "")) delete next[key];
+    if (value === (valueOf(key) ?? "")) delete next[key];
     else next[key] = value;
     return next;
   });
@@ -70,7 +83,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
       </header>
       <div style={{ maxHeight: 360, overflowY: "auto", padding: "4px 0" }}>
         {shown.map((option) => {
-          const known = currentConfigValue(current, option.key);
+          const known = valueOf(option.key);
           const value = staged[option.key] ?? known ?? "";
           const changed = option.key in staged;
           return (
@@ -109,7 +122,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
         <button
           type="button"
           disabled={disabled || !message}
-          onClick={() => { if (message) { onApply(message); } }}
+          onClick={() => { if (message) { sent.current = sendableConfigChanges(staged); onApply(message); } }}
           style={textButton(message && !disabled ? "var(--accent)" : "var(--fg-dim)", !!message && !disabled)}
         >
           {count > 0 ? `Apply ${count} change${count === 1 ? "" : "s"}` : "Apply"}

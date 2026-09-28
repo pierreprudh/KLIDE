@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configCommand, currentConfigValue, parseConfigUsage, unconfirmedConfigChanges } from "./cliConfig";
+import { configCommand, currentConfigValue, parseConfigUsage, sendableConfigChanges, settleAppliedConfig } from "./cliConfig";
 
 const USAGE = `Usage: /config key=value [key=value ...]
   autoCompact=true|false
@@ -36,18 +36,32 @@ describe("current values", () => {
     expect(currentConfigValue({ verbose: false, theme: "dark", projects: {} }, "verbose")).toBe("false");
     expect(currentConfigValue({ theme: "dark" }, "theme")).toBe("dark");
     expect(currentConfigValue({ projects: {} }, "projects")).toBeNull();
+    expect(currentConfigValue({ autoCompactEnabled: false, editorMode: "vim" }, "autoCompact")).toBe("false");
+    expect(currentConfigValue({ autoCompactEnabled: false, editorMode: "vim" }, "editor")).toBe("vim");
   });
 });
 
-describe("confirming applied settings", () => {
-  it("keeps failed and unsent edits pending after a partial apply", () => {
-    const edits = { autoCompact: "false", editor: "vim", language: "two words" };
-    expect(configCommand(edits)).toBe("/config autoCompact=false editor=vim");
-    expect(unconfirmedConfigChanges(edits, { autoCompact: false, editor: "normal", language: "en" }))
-      .toEqual({ editor: "vim", language: "two words" });
-    expect(unconfirmedConfigChanges(edits, {})).toEqual(edits);
+describe("settling an Apply", () => {
+  it("clears confirmed edits, keeps refused ones, and leaves unsent ones alone", () => {
+    const staged = { verbose: "true", tips: "false", editor: "vim", language: "two words" };
+    const sent = { verbose: "true", tips: "false", editor: "vim" };
+    // verbose confirmed; tips refused (still true); editor stored as editorMode.
+    const settings = { verbose: true, tips: true, editorMode: "vim" };
+    expect(settleAppliedConfig(staged, sent, settings)).toEqual({
+      staged: { tips: "false", language: "two words" },
+      assumed: {},
+    });
   });
-  it("clears only confirmed values, including CLI whitespace normalization", () => {
-    expect(unconfirmedConfigChanges({ language: " en ", verbose: "false" }, { language: "en", verbose: false })).toEqual({});
+  it("takes an edit the files cannot show as applied", () => {
+    expect(settleAppliedConfig({ chrome: "true" }, { chrome: "true" }, {})).toEqual({ staged: {}, assumed: { chrome: "true" } });
+  });
+  it("keeps an edit changed again after it was sent", () => {
+    expect(settleAppliedConfig({ tips: "true" }, { tips: "false" }, { tips: false })).toEqual({ staged: { tips: "true" }, assumed: {} });
+  });
+});
+
+describe("sendableConfigChanges", () => {
+  it("is what configCommand sends", () => {
+    expect(sendableConfigChanges({ a: "1", b: " ", c: "x y" })).toEqual({ a: "1" });
   });
 });
