@@ -15,6 +15,19 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### From other apps
+
+- **`klide://` links.** `klide://new?prompt=…&project=…` opens a new Focus
+  conversation with the composer pre-filled — never sent, since any web page
+  can fire a link; `klide://open?path=/file:42` opens a file at a line,
+  bringing its repository along; `klide://project?path=…` opens a folder.
+  Paths are checked in Rust; a bad link is a toast, not a silent no-op.
+  macOS delivers links to the installed app in `/Applications`, not to
+  `tauri dev`.
+- **Ask Kit in the Services menu.** Settings → General → From other apps
+  installs a Quick Action: select text anywhere, right-click → Services →
+  Ask Kit.
+
 ### Connectors
 
 - **The assistant can use your connectors.** In Plan and Goal, a conversation
