@@ -663,8 +663,18 @@ function computeMeta(
       : timing !== undefined
         ? timing.modelMs - (timing.ttftMs ?? 0)
         : undefined;
+  // A measured window only counts when the answer actually streamed over it.
+  // A turn whose text lands in one burst at the end (a headless CLI turn, a
+  // provider that flushes the whole message) has TTFT ≈ model time, so the
+  // "decode" is the few ms between first and last chunk — 1,168 tokens over
+  // 0.27s read as 4,278 tok/s. Provider-reported eval time is always trusted.
+  const burst =
+    usage?.evalDurationMs === undefined &&
+    timing !== undefined &&
+    decodeMs !== undefined &&
+    (decodeMs < 1000 || decodeMs < timing.modelMs * 0.05);
   const tps =
-    tokens > 0 && decodeMs !== undefined && decodeMs > 100
+    tokens > 0 && decodeMs !== undefined && decodeMs > 100 && !burst
       ? Math.round(tokens / (decodeMs / 1000))
       : undefined;
   if (ms === undefined && !tokens && tps === undefined && timing === undefined) return null;

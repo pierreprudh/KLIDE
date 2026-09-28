@@ -610,6 +610,20 @@ describe("foldAgentEvents", () => {
       expect(row.meta?.tps).toBe(20);
     });
 
+    it("omits tok/s when the answer arrived in one burst at the end", () => {
+      const rows = foldAgentEvents([
+        assistantMessage("answer", {
+          usage: { completionTokens: 1_168 },
+          timing: { modelMs: 124_000, ttftMs: 123_727 },
+        }),
+      ]);
+      const row = rows[0];
+      if (row.kind !== "assistant") throw new Error("expected assistant");
+      // 273ms between first and last chunk is delivery, not decode.
+      expect(row.meta?.tps).toBeUndefined();
+      expect(row.meta?.modelMs).toBe(124_000);
+    });
+
     it("carries each row's event timestamp through to the messages", () => {
       const events: AgentEvent[] = [
         { type: "user_message", runId: RUN, messageId: "u1", text: "hi", attachments: [], ts: 7_000 },

@@ -930,7 +930,11 @@ function MessageMeta({ meta }: { meta: { ms?: number; modelMs?: number; tokens?:
   if (meta.modelMs !== undefined && meta.ms !== undefined && meta.ms - meta.modelMs >= 1000) {
     parts.push(`${formatDuration(meta.ms)} total`);
   }
-  if (meta.ttftMs !== undefined) parts.push(`TTFT ${formatDuration(meta.ttftMs)}`);
+  // A TTFT that reads the same as the duration says the whole answer arrived
+  // at once — it repeats the slot above rather than adding anything.
+  if (meta.ttftMs !== undefined && (durationMs === undefined || formatDuration(meta.ttftMs) !== formatDuration(durationMs))) {
+    parts.push(`TTFT ${formatDuration(meta.ttftMs)}`);
+  }
   // Cost last, so the eye lands on it. Sub-cent turns show "<$0.01".
   if (meta.costUsd !== undefined && meta.costUsd > 0) {
     parts.push(meta.costUsd < 0.01 ? "<$0.01" : `$${meta.costUsd.toFixed(meta.costUsd < 1 ? 3 : 2)}`);
