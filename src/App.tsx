@@ -136,6 +136,7 @@ import {
 import { createListenerScope } from "./tauriEvents";
 import { registerSettingsOpener } from "./settingsNavigation";
 import { registerWorkspaceOpener } from "./revealPath";
+import { DEEP_LINK_ERROR_EVENT, DEEP_LINK_EVENT, takeDeepLinks, type LinkAction } from "./ipc/deepLink";
 import { setIndexedProject } from "./workspaceIndex";
 import {
   canonicalWorkspaceRoot,
@@ -702,6 +703,76 @@ function App() {
     return () => registerWorkspaceOpener(null, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceRoot]);
+
+  // `klide://` links (deep_link.rs, src/ipc/deepLink.ts). Rust queues each
+  // checked link; this drains the queue on mount and on every nudge. The
+  // handler is re-bound each render so it always sees the current project and
+  // surface, while the listeners stay registered once.
+  const [focusComposerSeed, setFocusComposerSeed] = useState<{ id: number; text: string } | null>(null);
+  const clearFocusComposerSeed = useCallback(() => setFocusComposerSeed(null), []);
+  /** A file link for a project that wasn't open: held until that project is. */
+  const pendingLinkOpenRef = useRef<{ root: string; path: string; line: number | null } | null>(null);
+  const deepLinkRef = useRef<(action: LinkAction) => void>(() => {});
+  deepLinkRef.current = (action) => {
+    if (action.kind === "project") {
+      back();
+      changeRoot(action.path);
+      return;
+    }
+    if (action.kind === "new") {
+      if (action.project && action.project !== workspaceRoot) changeRoot(action.project);
+      enterFocus();
+      startFocusTask();
+      setFocusComposerSeed({ id: Date.now(), text: action.prompt });
+      return;
+    }
+    const inOpen = !!workspaceRoot && action.path.startsWith(`${workspaceRoot}/`);
+    const root = inOpen ? workspaceRoot : action.project;
+    if (!root) {
+      notify(`${action.path} isn't inside a project Klide can open`, { tone: "warn" });
+      return;
+    }
+    if (root === workspaceRoot) {
+      void openLinkedFile(root, action.path, action.line);
+    } else {
+      pendingLinkOpenRef.current = { root, path: action.path, line: action.line };
+      changeRoot(root);
+    }
+  };
+  async function openLinkedFile(root: string, absolute: string, line: number | null) {
+    back();
+    if (focusBase) exitFocus();
+    const relative = absolute.slice(root.length + 1);
+    try {
+      if (isSpreadsheetPath(relative)) {
+        openSpreadsheet(relative);
+        return;
+      }
+      const content = await readWorkspaceTextFile(root, relative);
+      openFile(relative, content, line ? { line, column: 1 } : undefined);
+    } catch (e) {
+      notify(`Couldn't open ${relative}: ${errMessage(e)}`, { tone: "error" });
+    }
+  }
+  useEffect(() => {
+    const pending = pendingLinkOpenRef.current;
+    if (!pending || pending.root !== workspaceRoot) return;
+    pendingLinkOpenRef.current = null;
+    void openLinkedFile(pending.root, pending.path, pending.line);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceRoot]);
+  useEffect(() => {
+    const listeners = createListenerScope();
+    const drain = () => {
+      takeDeepLinks()
+        .then((actions) => actions.forEach((action) => deepLinkRef.current(action)))
+        .catch(() => {});
+    };
+    listeners.add(listen(DEEP_LINK_EVENT, drain));
+    listeners.add(listen<string>(DEEP_LINK_ERROR_EVENT, (event) => notify(event.payload, { tone: "warn" })));
+    drain();
+    return () => listeners.dispose();
+  }, []);
   const [theme, setTheme] = useSetting(SETTINGS.theme);
   const [autoTheme] = useSetting(SETTINGS.autoTheme);
   const [lightTheme] = useSetting(SETTINGS.lightTheme);
@@ -3403,6 +3474,8 @@ function App() {
               <Suspense fallback={null}>
                 <FocusMode
                   workspaceRoot={workspaceRoot}
+                  composerSeed={focusComposerSeed}
+                  onComposerSeedConsumed={clearFocusComposerSeed}
                   branch={gitStatus?.branch ?? null}
                   gitChangeCount={gitStatus?.files.length ?? 0}
                   gitRefreshToken={gitStatus

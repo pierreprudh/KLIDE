@@ -3,6 +3,7 @@ mod accounts;
 mod adapters;
 mod blocking;
 mod cli;
+mod deep_link;
 mod cli_update;
 mod agent;
 mod coordination;
@@ -36,6 +37,7 @@ pub mod pty_daemon;
 mod pty_host;
 mod pty_spawn;
 mod search;
+mod services_menu;
 mod skills;
 mod storage;
 mod workspace;
@@ -871,6 +873,7 @@ pub fn run() {
         // handler only exists once the plugin is initialized here. Without
         // this line a link in an answer answers "plugin opener not found".
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
         // the frontend finishing its first page load proves the packaged
         // binary, its dylibs, the webview entitlements, and the embedded
@@ -889,6 +892,19 @@ pub fn run() {
             use tauri::Manager;
 
             let handle = app.handle();
+
+            // `klide://` links: a link that launched the app, then every one
+            // that arrives while it runs. deep_link.rs parses and queues them.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let links = handle.clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::receive(&links, event.urls().into_iter().map(|u| u.to_string()));
+                });
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::receive(handle, urls.into_iter().map(|u| u.to_string()));
+                }
+            }
 
             // Persistent delegate sessions: reconnect to (or start) the ptyd
             // daemon when the toggle was left on last session. Skipped during
@@ -1044,6 +1060,9 @@ pub fn run() {
             connectors::connectors_remove,
             connectors::connectors_discover,
             connectors::connectors_probe,
+            deep_link::deep_link_take,
+            services_menu::services_ask_kit_status,
+            services_menu::services_ask_kit_set,
             connectors::connectors_add_github,
             connectors::connectors_status,
             agent::agent_start_run,
@@ -1264,6 +1283,8 @@ mod blocking_door_tests {
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
         ("connectors.rs", include_str!("connectors.rs")),
+        ("deep_link.rs", include_str!("deep_link.rs")),
+        ("services_menu.rs", include_str!("services_menu.rs")),
         ("models.rs", include_str!("models.rs")),
         ("coordination.rs", include_str!("coordination.rs")),
         ("storage.rs", include_str!("storage.rs")),
