@@ -169,6 +169,14 @@ pub enum ToolKind {
     // polling it must not re-prompt. Goal-mode only, like the Command that
     // could have produced one.
     BackgroundShell,
+    // A connector (an MCP server the user enabled) tool the server marks
+    // read-only, or the local lookup of what a connector offers. Runs without
+    // a prompt in Plan and Goal, like a workspace read. Never a registry entry:
+    // `connector_tools.rs` resolves these per Run from the live catalog.
+    ConnectorRead,
+    // A connector tool that may change something outside Klide — a GitHub
+    // issue, a Linear ticket. Goal-only, and gated like a network target.
+    Connector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +191,8 @@ pub enum ToolCapability {
     CoordinateAgents,
     Network,
     ManageBackgroundShell,
+    ReadConnector,
+    UseConnector,
 }
 
 impl ToolKind {
@@ -198,6 +208,8 @@ impl ToolKind {
             ToolKind::Pause => ToolCapability::PauseForUser,
             ToolKind::Coordination => ToolCapability::CoordinateAgents,
             ToolKind::BackgroundShell => ToolCapability::ManageBackgroundShell,
+            ToolKind::ConnectorRead => ToolCapability::ReadConnector,
+            ToolKind::Connector => ToolCapability::UseConnector,
         }
     }
 }
@@ -216,6 +228,7 @@ pub fn tool_allowed_in_mode(mode: &AgentMode, kind: ToolKind) -> bool {
                 | ToolKind::ProjectMemory
                 | ToolKind::PlanState
                 | ToolKind::Coordination
+                | ToolKind::ConnectorRead
         ),
         AgentMode::Goal => true,
     }
@@ -237,6 +250,8 @@ pub fn tool_capability_label(capability: ToolCapability) -> &'static str {
         ToolCapability::CoordinateAgents => "coordinate agents",
         ToolCapability::Network => "network",
         ToolCapability::ManageBackgroundShell => "manage background shell",
+        ToolCapability::ReadConnector => "read connector",
+        ToolCapability::UseConnector => "use connector",
     }
 }
 
@@ -257,6 +272,8 @@ impl ToolCapability {
             ToolCapability::CoordinateAgents => "coordinate_agents",
             ToolCapability::Network => "network",
             ToolCapability::ManageBackgroundShell => "manage_background_shell",
+            ToolCapability::ReadConnector => "read_connector",
+            ToolCapability::UseConnector => "use_connector",
         }
     }
 }

@@ -108,7 +108,7 @@ Klide/
 │   ├── diffComments.ts          Line-anchored diff comments sent back to running agents
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
-│   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe)
+│   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe, GitHub preset, pool status)
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
 │   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
 │   ├── gitGraph.ts              Lane layout for the commit graph (gitTypes.ts: wire types)
@@ -271,7 +271,8 @@ Klide/
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
     │   ├── local_servers.rs      Ollama / MLX local server start/stop/status
     │   ├── gateway.rs            opencodex proxy process — install check, start/stop, Codex un-inject
-    │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config
+    │   ├── connectors.rs         Connectors store (~/.klide/connectors.json) + read-only discovery from Claude Code / Codex / OpenCode config + `${VAR}` resolution + the GitHub preset
+    │   ├── connector_pool.rs     Live connector sessions shared by every Run — lazy connect, reconnect on break, killed at exit
     │   ├── search.rs             Find-in-files over a Workspace with ignore policy
     │   ├── workspace.rs          Workspace module — owns the Workspace-rooted invariant
     │   ├── worktree_setup.rs     Per-workspace worktree bootstrap recipe (copy/link/port/script)
@@ -295,7 +296,7 @@ Klide/
     │   ├── coordination.rs       Run coordination journal — registry, states, envelopes, results; one cross-process writer lock, a fold memoised forward
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
-    │   ├── mcp_client.rs         Klide as an MCP client — start a connector's stdio server, handshake, list tools, kill it (a probe, not a session)
+    │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
@@ -307,6 +308,7 @@ Klide/
     │       ├── process.rs         One lifecycle for every command a Run starts — process group, bounded capture, exit from wait() with a 1 s drain, cancel-aware wait (background.rs is its registry)
     │       ├── retained.rs        Retained tool outputs — a huge result becomes addressable, not inlined
     │       ├── tool_handlers.rs   Per-capability call ceremony — permission gates, pauses, checkpoints
+    │       ├── connector_tools.rs `connector_tools` / `connector_call` — the enabled connectors as two Tools, gated by the target tool's read-only hint
     │       ├── delivery.rs        Everything the operator didn't type (peer mail, observer completions) — one nonce-fenced renderer
     │       ├── conversation_search.rs Workspace-scoped search over prior Harness transcripts
     │       ├── glob_match.rs      Shared */? matcher (glob tool + command allowlist)
@@ -680,7 +682,7 @@ enforce wrapper coverage for the git family.
 - [x] Reasoning effort — levels read from the provider/CLI rather than assumed
 - [x] Composer `/` command menu and ↑ / ↓ prompt history
 - [x] Workers — `spawn_subagent` can hand a task to a Delegate CLI as a gated, isolated Run of its own
-- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use
+- [x] Connectors — the MCP servers Klide connects to, imported from the tools you already use; the Harness calls them (reads free, writes gated) and GitHub connects in one click as the pinned account
 - [x] Visuals — an `html` or `svg` fence renders as a sanitized, themed picture in the conversation
 - [x] Delegate CLI versions — each CLI's version on its Settings row, with its own updater beside it
 - [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit

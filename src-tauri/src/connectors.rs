@@ -22,8 +22,16 @@
 //! tool's config file is already on disk in plain text — Klide copying it does
 //! not make that worse, but it is why a connector's env is shown in the UI as
 //! the sensitive thing it is rather than folded away.
+//!
+//! A value may instead be a `${VAR}` reference — in a stdio server's `env` or
+//! a remote server's `headers` — resolved at connect time by [`resolve`] from
+//! the process env or a `.env` (project, then `~/.klide`), exactly like a
+//! self-hosted provider's token. One name is Klide's own: `${KLIDE_GITHUB_TOKEN}`
+//! is the token of the GitHub account Klide already acts as (the pinned one,
+//! else gh's active login), which is how the GitHub preset connects without a
+//! token ever being typed or stored.
 
-use crate::mcp_client::{Probe, StdioServer, PROBE_TIMEOUT};
+use crate::mcp_client::{HttpServer, Probe, ServerSpec, StdioServer, PROBE_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -33,6 +41,16 @@ use std::path::{Path, PathBuf};
 /// config (`delegate::Delegate::mcp_wiring`). Never a connector.
 const OWN_SERVER_ID: &str = "klide";
 
+/// The reference that resolves to the GitHub account Klide acts as.
+const GITHUB_TOKEN_REF: &str = "KLIDE_GITHUB_TOKEN";
+
+/// GitHub's own remote MCP server.
+pub const GITHUB_MCP_URL: &str = "https://api.githubcopilot.com/mcp/";
+
+/// The toolsets the preset asks GitHub for. The full server is ~100 tools;
+/// these four are what a coding Run reaches for — code, issues, PRs, CI.
+pub const GITHUB_TOOLSETS: &str = "repos,issues,pull_requests,actions";
+
 /// One MCP server Klide may use. `id` is a slug, unique in the store, and the
 /// name the Harness will eventually namespace this server's tools under.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -41,7 +59,7 @@ pub struct Connector {
     pub id: String,
     /// What the user sees. Defaults to the id when imported.
     pub label: String,
-    pub server: StdioServer,
+    pub server: ServerSpec,
     /// A disabled connector stays in the store with its config intact — the
     /// off switch for one flaky server, not a reason to retype it later.
     #[serde(default = "yes")]
@@ -66,7 +84,7 @@ pub struct Discovered {
     pub origin: String,
     /// The file it was read from, shown so an import is never a mystery.
     pub source_path: String,
-    pub server: StdioServer,
+    pub server: ServerSpec,
     /// True when a connector with this id is already in Klide's store.
     pub already_added: bool,
 }
@@ -110,8 +128,12 @@ pub fn upsert(mut connector: Connector) -> Result<Vec<Connector>, String> {
             "`{OWN_SERVER_ID}` is Klide's own server, which it serves to delegate CLIs. Pick another name."
         ));
     }
-    if connector.server.command.trim().is_empty() {
-        return Err("A connector needs a command to run".to_string());
+    if connector.server.is_blank() {
+        return Err(match connector.server {
+            ServerSpec::Stdio(_) => "A connector needs a command to run",
+            ServerSpec::Http(_) => "A connector needs a URL",
+        }
+        .to_string());
     }
     if connector.label.trim().is_empty() {
         connector.label = connector.id.clone();
@@ -157,7 +179,7 @@ pub fn discover(workspace: Option<&Path>) -> Vec<Discovered> {
     let existing = list();
     let mut found: Vec<Discovered> = Vec::new();
     let mut push = |mut candidate: Discovered| {
-        if candidate.id == OWN_SERVER_ID || candidate.server.command.trim().is_empty() {
+        if candidate.id == OWN_SERVER_ID || candidate.server.is_blank() {
             return;
         }
         // First source wins. A server configured in three CLIs is one offer,
@@ -240,21 +262,30 @@ fn mcp_servers_block(block: Option<&Value>, origin: &str, path: &Path) -> Vec<Di
     };
     map.iter()
         .filter_map(|(name, entry)| {
-            // A remote connector (`"type": "http"`, `"url": …`) is real config
-            // but not something this slice can launch. Skipped rather than
-            // imported as a broken stdio row; the transport lands with the
-            // HTTP variant in mcp_client.rs.
+            // A remote connector: `"type": "http"` (or the older `"sse"`) with
+            // a `url` and optional `headers`.
+            if let Some(url) = entry.get("url").and_then(Value::as_str) {
+                return Some(discovered(
+                    name,
+                    origin,
+                    path,
+                    ServerSpec::Http(HttpServer {
+                        url: url.to_string(),
+                        headers: string_map(entry.get("headers")),
+                    }),
+                ));
+            }
             let command = entry.get("command")?;
             Some(discovered(
                 name,
                 origin,
                 path,
-                StdioServer {
+                ServerSpec::Stdio(StdioServer {
                     command: command.as_str()?.to_string(),
                     args: string_list(entry.get("args")),
                     env: string_map(entry.get("env")),
                     cwd: None,
-                },
+                }),
             ))
         })
         .collect()
@@ -276,6 +307,18 @@ fn from_opencode_json(path: &Path) -> Vec<Discovered> {
     };
     map.iter()
         .filter_map(|(name, entry)| {
+            // `"type": "remote"` carries a `url` and `headers`.
+            if let Some(url) = entry.get("url").and_then(Value::as_str) {
+                return Some(discovered(
+                    name,
+                    "opencode",
+                    path,
+                    ServerSpec::Http(HttpServer {
+                        url: url.to_string(),
+                        headers: string_map(entry.get("headers")),
+                    }),
+                ));
+            }
             let mut command = string_list(entry.get("command"));
             if command.is_empty() {
                 return None;
@@ -284,18 +327,18 @@ fn from_opencode_json(path: &Path) -> Vec<Discovered> {
                 name,
                 "opencode",
                 path,
-                StdioServer {
+                ServerSpec::Stdio(StdioServer {
                     command: command.remove(0),
                     args: command,
                     env: string_map(entry.get("environment").or_else(|| entry.get("env"))),
                     cwd: None,
-                },
+                }),
             ))
         })
         .collect()
 }
 
-fn discovered(name: &str, origin: &str, path: &Path, server: StdioServer) -> Discovered {
+fn discovered(name: &str, origin: &str, path: &Path, server: ServerSpec) -> Discovered {
     Discovered {
         id: slug(name),
         label: name.to_string(),
@@ -341,6 +384,10 @@ fn string_map(value: Option<&Value>) -> BTreeMap<String, String> {
 /// Two shapes both appear in the wild and both matter, because a connector
 /// imported without its environment starts and then fails at the first call:
 /// `env = { KEY = "v" }` inline, and a `[mcp_servers.<name>.env]` sub-table.
+///
+/// A remote server is `url = "…"`, with `bearer_token_env_var = "NAME"` (kept
+/// as an `Authorization: Bearer ${NAME}` reference, never read here) and
+/// `http_headers = { … }`.
 fn from_codex_toml(path: &Path) -> Vec<Discovered> {
     /// Which table the reader is inside. Any other sub-table of a server
     /// (`.tool_timeouts`, a future one) is ignored without ending the server.
@@ -353,12 +400,14 @@ fn from_codex_toml(path: &Path) -> Vec<Discovered> {
         return Vec::new();
     };
     let mut found = Vec::new();
-    let mut current: Option<(String, StdioServer)> = None;
+    let mut current: Option<(String, StdioServer, HttpServer)> = None;
     let mut section = In::Other;
-    let flush = |current: &mut Option<(String, StdioServer)>, found: &mut Vec<Discovered>| {
-        if let Some((name, server)) = current.take() {
-            if !server.command.is_empty() {
-                found.push(discovered(&name, "codex", path, server));
+    let flush = |current: &mut Option<(String, StdioServer, HttpServer)>, found: &mut Vec<Discovered>| {
+        if let Some((name, stdio, http)) = current.take() {
+            if !http.url.is_empty() {
+                found.push(discovered(&name, "codex", path, ServerSpec::Http(http)));
+            } else if !stdio.command.is_empty() {
+                found.push(discovered(&name, "codex", path, ServerSpec::Stdio(stdio)));
             }
         }
     };
@@ -372,13 +421,13 @@ fn from_codex_toml(path: &Path) -> Vec<Discovered> {
             };
             match rest.split_once('.') {
                 // A sub-table of the server being read.
-                Some((name, "env")) if current.as_ref().is_some_and(|(c, _)| c == &unquote(name)) => {
+                Some((name, "env")) if current.as_ref().is_some_and(|(c, _, _)| c == &unquote(name)) => {
                     section = In::Env;
                 }
                 Some(_) => section = In::Other,
                 None => {
                     flush(&mut current, &mut found);
-                    current = Some((unquote(rest).to_string(), StdioServer::default()));
+                    current = Some((unquote(rest).to_string(), StdioServer::default(), HttpServer::default()));
                     section = In::Server;
                 }
             }
@@ -387,7 +436,7 @@ fn from_codex_toml(path: &Path) -> Vec<Discovered> {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        let Some((_, server)) = current.as_mut() else {
+        let Some((_, server, http)) = current.as_mut() else {
             continue;
         };
         let (key, value) = (key.trim(), value.trim());
@@ -399,6 +448,12 @@ fn from_codex_toml(path: &Path) -> Vec<Discovered> {
                 "command" => server.command = unquote(value).to_string(),
                 "args" => server.args = toml_string_array(value),
                 "env" => server.env = toml_inline_table(value),
+                "url" => http.url = unquote(value).to_string(),
+                "http_headers" => http.headers.extend(toml_inline_table(value)),
+                "bearer_token_env_var" => {
+                    http.headers
+                        .insert("Authorization".to_string(), format!("Bearer ${{{}}}", unquote(value)));
+                }
                 // A relative cwd is relative to the CLI that wrote it, which is
                 // not Klide — only an absolute one can be carried over.
                 "cwd" => {
@@ -442,6 +497,73 @@ fn toml_inline_table(raw: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/* -------------------------------------------------------------- resolution --*/
+
+/// The spec with every `${VAR}` reference replaced by its value, ready to
+/// connect. `workspace` scopes the project `.env`. An unresolved reference is
+/// an error naming the variable — a request sent with a literal `${TOKEN}` in
+/// its `Authorization` header fails later and says less.
+pub fn resolve(spec: &ServerSpec, workspace: Option<&Path>) -> Result<ServerSpec, String> {
+    let expand_map = |map: &BTreeMap<String, String>| -> Result<BTreeMap<String, String>, String> {
+        map.iter()
+            .map(|(key, value)| Ok((key.clone(), expand(value, workspace)?)))
+            .collect()
+    };
+    Ok(match spec {
+        ServerSpec::Stdio(stdio) => ServerSpec::Stdio(StdioServer {
+            env: expand_map(&stdio.env)?,
+            ..stdio.clone()
+        }),
+        ServerSpec::Http(http) => ServerSpec::Http(HttpServer {
+            url: http.url.clone(),
+            headers: expand_map(&http.headers)?,
+        }),
+    })
+}
+
+/// Replace each `${NAME}` in `raw`. Text around a reference is kept, so
+/// `Bearer ${TOKEN}` works; a value with no reference passes through untouched.
+fn expand(raw: &str, workspace: Option<&Path>) -> Result<String, String> {
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find("${") {
+        let Some(len) = rest[start..].find('}') else { break };
+        let name = rest[start + 2..start + len].trim();
+        out.push_str(&rest[..start]);
+        let value = if name == GITHUB_TOKEN_REF {
+            crate::git::github::klide_token().ok_or_else(|| {
+                "No GitHub account is signed in. Run `gh auth login`, or pick an account in Settings → Accounts."
+                    .to_string()
+            })?
+        } else {
+            crate::providers::resolve_reference(&format!("${{{name}}}"), workspace)
+                .ok_or_else(|| format!("${{{name}}} is not set in the environment or a .env file"))?
+        };
+        out.push_str(&value);
+        rest = &rest[start + len + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// The GitHub connector: GitHub's own remote server, authenticated as the
+/// account Klide already uses, limited to the toolsets a coding Run needs.
+pub fn github_preset() -> Connector {
+    Connector {
+        id: "github".to_string(),
+        label: "GitHub".to_string(),
+        server: ServerSpec::Http(HttpServer {
+            url: GITHUB_MCP_URL.to_string(),
+            headers: BTreeMap::from([
+                ("Authorization".to_string(), format!("Bearer ${{{GITHUB_TOKEN_REF}}}")),
+                ("X-MCP-Toolsets".to_string(), GITHUB_TOOLSETS.to_string()),
+            ]),
+        }),
+        enabled: true,
+        origin: "preset".to_string(),
+    }
+}
+
 /* ---------------------------------------------------------------- commands --*/
 
 #[tauri::command]
@@ -451,12 +573,35 @@ pub(crate) async fn connectors_list() -> Result<Vec<Connector>, String> {
 
 #[tauri::command]
 pub(crate) async fn connectors_upsert(connector: Connector) -> Result<Vec<Connector>, String> {
-    crate::blocking::run(move || upsert(connector)).await
+    let all = crate::blocking::run(move || upsert(connector)).await?;
+    crate::connector_pool::warm();
+    Ok(all)
 }
 
 #[tauri::command]
 pub(crate) async fn connectors_remove(id: String) -> Result<Vec<Connector>, String> {
     crate::blocking::run(move || remove(&id)).await
+}
+
+/// Add (or restore) the GitHub connector in one step. Probes it first, so a
+/// missing sign-in is an error on the button, not a silent row that fails at
+/// the first Run.
+#[tauri::command]
+pub(crate) async fn connectors_add_github() -> Result<Vec<Connector>, String> {
+    let all = crate::blocking::run(|| {
+        let preset = github_preset();
+        crate::mcp_client::probe(&resolve(&preset.server, None)?, PROBE_TIMEOUT)?;
+        upsert(preset)
+    })
+    .await?;
+    crate::connector_pool::warm();
+    Ok(all)
+}
+
+/// Whether each enabled connector is connected right now, for the page.
+#[tauri::command]
+pub(crate) async fn connectors_status() -> Result<Vec<crate::connector_pool::Status>, String> {
+    crate::blocking::run(|| Ok(crate::connector_pool::status())).await
 }
 
 #[tauri::command]
@@ -468,13 +613,31 @@ pub(crate) async fn connectors_discover(workspace: Option<String>) -> Result<Vec
 /// row the user asks about — never on a loop, because each call is a process
 /// spawn and, the first time, an `npx` download.
 #[tauri::command]
-pub(crate) async fn connectors_probe(server: StdioServer) -> Result<Probe, String> {
-    crate::blocking::run(move || crate::mcp_client::probe(&server, PROBE_TIMEOUT)).await
+pub(crate) async fn connectors_probe(server: ServerSpec, workspace: Option<String>) -> Result<Probe, String> {
+    crate::blocking::run(move || {
+        let resolved = resolve(&server, workspace.as_deref().map(Path::new))?;
+        crate::mcp_client::probe(&resolved, PROBE_TIMEOUT)
+    })
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stdio(spec: &ServerSpec) -> &StdioServer {
+        match spec {
+            ServerSpec::Stdio(s) => s,
+            other => panic!("expected stdio, got {other:?}"),
+        }
+    }
+
+    fn http(spec: &ServerSpec) -> &HttpServer {
+        match spec {
+            ServerSpec::Http(h) => h,
+            other => panic!("expected http, got {other:?}"),
+        }
+    }
 
     fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
@@ -507,20 +670,82 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "linear");
         assert_eq!(found[0].label, "Linear");
-        assert_eq!(found[0].server.command, "npx");
-        assert_eq!(found[0].server.args, ["-y", "linear-mcp"]);
-        assert_eq!(found[0].server.env["LINEAR_KEY"], "abc");
+        assert_eq!(stdio(&found[0].server).command, "npx");
+        assert_eq!(stdio(&found[0].server).args, ["-y", "linear-mcp"]);
+        assert_eq!(stdio(&found[0].server).env["LINEAR_KEY"], "abc");
     }
 
     #[test]
-    fn a_remote_connector_is_skipped_not_imported_broken() {
+    fn a_remote_connector_is_imported_with_its_headers() {
         let dir = temp_dir("remote");
         let path = write(
             &dir,
             ".mcp.json",
-            r#"{"mcpServers":{"notion":{"type":"http","url":"https://mcp.notion.com/mcp"}}}"#,
+            r#"{"mcpServers":{"notion":{"type":"http","url":"https://mcp.notion.com/mcp","headers":{"Authorization":"Bearer ${NOTION}"}}}}"#,
         );
-        assert!(from_mcp_servers_file(&path, "workspace").is_empty());
+        let found = from_mcp_servers_file(&path, "workspace");
+        assert_eq!(found.len(), 1);
+        assert_eq!(http(&found[0].server).url, "https://mcp.notion.com/mcp");
+        assert_eq!(http(&found[0].server).headers["Authorization"], "Bearer ${NOTION}");
+    }
+
+    #[test]
+    fn a_codex_remote_server_keeps_its_bearer_as_a_reference() {
+        let dir = temp_dir("codex-remote");
+        let path = write(
+            &dir,
+            "config.toml",
+            r#"
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_PAT"
+http_headers = { X-MCP-Toolsets = "repos" }
+"#,
+        );
+        let found = from_codex_toml(&path);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let server = http(&found[0].server);
+        assert_eq!(server.url, "https://api.githubcopilot.com/mcp/");
+        assert_eq!(server.headers["Authorization"], "Bearer ${GITHUB_PAT}");
+        assert_eq!(server.headers["X-MCP-Toolsets"], "repos");
+    }
+
+    #[test]
+    fn references_expand_in_place_and_a_missing_one_names_itself() {
+        std::env::set_var("KLIDE_TEST_CONNECTOR_TOKEN", "s3cret");
+        assert_eq!(expand("Bearer ${KLIDE_TEST_CONNECTOR_TOKEN}", None).unwrap(), "Bearer s3cret");
+        assert_eq!(expand("plain value", None).unwrap(), "plain value");
+        assert_eq!(expand("a ${ KLIDE_TEST_CONNECTOR_TOKEN } b", None).unwrap(), "a s3cret b");
+        let error = expand("Bearer ${KLIDE_TEST_CONNECTOR_UNSET}", None).unwrap_err();
+        assert!(error.contains("KLIDE_TEST_CONNECTOR_UNSET"), "{error}");
+    }
+
+    /// Live: the preset against GitHub itself, as the account Klide uses.
+    /// `cargo test --lib -- --ignored github_preset_connects_live`
+    #[test]
+    #[ignore]
+    fn github_preset_connects_live() {
+        let spec = resolve(&github_preset().server, None).expect("a gh login");
+        let mut session = crate::mcp_client::Session::connect(&spec, PROBE_TIMEOUT).expect("connect");
+        assert!(session.info.tools.iter().any(|t| t.name == "list_pull_requests"));
+        let result = session
+            .call_tool(
+                "search_repositories",
+                serde_json::json!({ "query": "repo:pierreprudh/KLIDE" }),
+                PROBE_TIMEOUT,
+            )
+            .expect("call");
+        assert!(!result.is_error, "{}", result.text);
+        eprintln!("{} tools; reply {} bytes", session.info.tools.len(), result.text.len());
+    }
+
+    #[test]
+    fn the_github_preset_stores_a_reference_never_a_token() {
+        let preset = github_preset();
+        let server = http(&preset.server);
+        assert_eq!(server.url, GITHUB_MCP_URL);
+        assert_eq!(server.headers["Authorization"], "Bearer ${KLIDE_GITHUB_TOKEN}");
+        assert_eq!(server.headers["X-MCP-Toolsets"], GITHUB_TOOLSETS);
     }
 
     #[test]
@@ -544,8 +769,8 @@ command = "not-a-connector"
         let found = from_codex_toml(&path);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].id, "playwright");
-        assert_eq!(found[0].server.args, ["-y", "@playwright/mcp@latest"]);
-        assert_eq!(found[0].server.env["PW_HEADLESS"], "1");
+        assert_eq!(stdio(&found[0].server).args, ["-y", "@playwright/mcp@latest"]);
+        assert_eq!(stdio(&found[0].server).env["PW_HEADLESS"], "1");
     }
 
     /// The shape Codex actually writes for a server with an environment — the
@@ -579,10 +804,10 @@ web_search = true
         let found = from_codex_toml(&path);
         let ids: Vec<&str> = found.iter().map(|f| f.id.as_str()).collect();
         assert_eq!(ids, ["node-repl", "computer-use"], "{ids:?}");
-        assert_eq!(found[0].server.env["NODE_REPL_NODE_PATH"], "/opt/node");
-        assert_eq!(found[0].server.env["CODEX_HOME"], "/Users/x/.codex");
+        assert_eq!(stdio(&found[0].server).env["NODE_REPL_NODE_PATH"], "/opt/node");
+        assert_eq!(stdio(&found[0].server).env["CODEX_HOME"], "/Users/x/.codex");
         // A relative cwd means "wherever Codex ran", which Klide cannot honour.
-        assert_eq!(found[1].server.cwd, None);
+        assert_eq!(stdio(&found[1].server).cwd, None);
     }
 
     #[test]
@@ -595,9 +820,9 @@ web_search = true
         );
         let found = from_opencode_json(&path);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].server.command, "uvx");
-        assert_eq!(found[0].server.args, ["mcp-server-fs", "/tmp"]);
-        assert_eq!(found[0].server.env["A"], "b");
+        assert_eq!(stdio(&found[0].server).command, "uvx");
+        assert_eq!(stdio(&found[0].server).args, ["mcp-server-fs", "/tmp"]);
+        assert_eq!(stdio(&found[0].server).env["A"], "b");
     }
 
     #[test]
@@ -633,7 +858,7 @@ web_search = true
         assert!(upsert(Connector {
             id: "klide".to_string(),
             label: "Klide".to_string(),
-            server: StdioServer::default(),
+            server: ServerSpec::default(),
             enabled: true,
             origin: "manual".to_string(),
         })

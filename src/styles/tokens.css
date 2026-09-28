@@ -8825,9 +8825,38 @@ button:focus-visible .menu-leadout {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 20px;
-  padding: 11px 8px;
+  /* Inset past the glide's own 6px inset, so the highlight frames the text
+     instead of touching it. */
+  padding: 12px 18px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   animation: klide-connector-row-in 0.3s var(--ease-out) both;
+}
+
+/* `computer-use   ◐ Codex  ~/.codex/config.toml` — name, then where it came
+   from, on one baseline. */
+.klide-connector-offer-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.klide-connector-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  align-self: center;
+}
+
+.klide-connector-source-path {
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .klide-connector-offer:last-child {

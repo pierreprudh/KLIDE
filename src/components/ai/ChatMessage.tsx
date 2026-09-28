@@ -10,6 +10,7 @@ import {
 } from "./coordinationPeers";
 import { readCoordinationSnapshot, type CoordinationEnvelope, type CoordinationEnvelopeSnapshot } from "../../agent/coordination";
 import { DotGridLoader, ProviderLogo, ToolIcon } from "./icons";
+import { ConnectorMark } from "../linkMark";
 import { renderMarkdown, splitThinking, stripPlanJson } from "../markdown";
 import { providerName } from "../../agent/providers";
 import type { ProviderId } from "../../agent/types";
@@ -464,10 +465,38 @@ function ToolCallRow({ name, args, count = 1, result, childRunId }: { name: stri
   );
 }
 
+/** A connector call reads as the tool it ran, not the door it went through:
+ *  `add_issue_comment  pierreprudh/KLIDE`, behind GitHub's mark — never
+ *  `connector_call github`. A lookup is `tools`. Other connectors say their
+ *  name first (`linear create_issue`), since the plug alone doesn't. */
+function connectorRow(name: string, args: unknown): { connector: string; label: string; summary: string } | null {
+  if (name !== "connector_call" && name !== "connector_tools") return null;
+  const o = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+  const connector = typeof o.connector === "string" ? o.connector : "";
+  const prefix = connector && connector !== "github" ? `${connector} ` : "";
+  if (name === "connector_tools") {
+    const wanted = Array.isArray(o.tools) ? o.tools.filter((t): t is string => typeof t === "string") : [];
+    return { connector, label: `${prefix}tools`, summary: wanted.join(", ") };
+  }
+  const tool = typeof o.tool === "string" && o.tool ? o.tool : "tool";
+  return { connector, label: `${prefix}${tool}`, summary: repoSummary(o.arguments) ?? summarizeArgs(o.arguments ?? {}) };
+}
+
+/** `owner/repo #131` when a call names a repository — the fact a GitHub row
+ *  most needs — else nothing, and the generic summary takes over. */
+function repoSummary(args: unknown): string | null {
+  if (!args || typeof args !== "object") return null;
+  const o = args as Record<string, unknown>;
+  if (typeof o.owner !== "string" || typeof o.repo !== "string") return null;
+  const n = o.pullNumber ?? o.pull_number ?? o.issue_number ?? o.issueNumber;
+  return `${o.owner}/${o.repo}${typeof n === "number" || typeof n === "string" ? ` #${n}` : ""}`;
+}
+
 function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
   const command = commandArg(name, args);
   const argsText = command ?? formatJson(args);
-  const summary = summarizeArgs(args);
+  const connector = connectorRow(name, args);
+  const summary = connector ? connector.summary : summarizeArgs(args);
   return (
     <details style={{ margin: "5px 0 -3px" }}>
       <summary
@@ -489,7 +518,7 @@ function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
             work is machinery, and it should recede next to the thought
             process and the answer rather than compete with them. */}
         <span aria-hidden style={{ display: "grid", placeItems: "center", color: "var(--fg-dim)", flexShrink: 0 }}>
-          <ToolIcon name={name} />
+          {connector ? <ConnectorMark connector={connector.connector} /> : <ToolIcon name={name} />}
         </span>
         <span
           style={{
@@ -500,7 +529,7 @@ function ToolCallDisclosure({ name, args }: { name: string; args: unknown }) {
             flexShrink: 0,
           }}
         >
-          {name}
+          {connector ? connector.label : name}
         </span>
         {summary && (
           <span

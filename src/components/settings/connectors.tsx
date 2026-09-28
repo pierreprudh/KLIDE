@@ -5,7 +5,12 @@
 //   1. Your connectors     — what Klide has, and whether each one starts.
 //   2. Available to import — the servers already configured in Claude Code,
 //                            Codex and OpenCode, read from their own config.
-//   3. Add a connector     — the escape hatch for a server no other tool knows.
+//   3. Add a connector     — the escape hatch for a server no other tool knows:
+//                            a command, or a URL for a remote server.
+//
+// GitHub gets one more door: "Connect GitHub" adds GitHub's own remote server,
+// signed in as the account Klide already uses (`connectors::github_preset`), so
+// the most common connector needs no token and no config file at all.
 //
 // The import block is the point. Anyone who would use this page has already
 // typed these commands into another tool's JSON; asking them to type them a
@@ -27,13 +32,15 @@
 // badges, no status dots; the styles live under `.klide-connector-*` in
 // tokens.css.
 //
-// One honesty rule runs through it: a connector's tools are *listed*, not yet
-// callable — the Harness tool registry is the next slice — and the page says so
-// once, plainly, rather than implying a capability that isn't wired.
+// What the assistant may do with them is said once, plainly, in the footnote:
+// read-only tools run as asked, anything that can change something asks first
+// (`agent/connector_tools.rs`).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  addGithubConnector,
   discoverConnectors,
+  isRemote,
   listConnectors,
   probeConnector,
   removeConnector,
@@ -41,11 +48,15 @@ import {
   type Connector,
   type Discovered,
   type Probe,
-  type StdioServer,
+  type ServerSpec,
 } from "../../ipc/connectors";
+import { githubAccounts } from "../../ipc/git";
+import { LinkMark } from "../linkMark";
+import { ProviderLogo } from "../ai/icons";
+import type { ProviderId } from "../../agent/types";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
-import { CodeText, GhostButton, LinkButton, Panel, Toggle } from "./controls";
+import { GhostButton, LinkButton, Panel, Toggle } from "./controls";
 
 /** What the page knows about one connector's last check. Per-connector, and
  *  never persisted: a probe is a fact about right now, not about the store. */
@@ -58,17 +69,55 @@ type Check =
 /** Where a connector came from, in words rather than a badge. */
 const ORIGIN_LABEL: Record<string, string> = {
   manual: "Added here",
+  preset: "As your GitHub account",
   "claude-code": "From Claude Code",
   codex: "From Codex",
   opencode: "From OpenCode",
   workspace: "From this project",
 };
 
-/** `npx -y linear-mcp` — the same thing a config file would hold. Display
- *  only; the split that produced it happened when the connector was saved. */
-function commandLine(server: StdioServer): string {
-  return [server.command, ...server.args].join(" ");
+/** `npx -y linear-mcp`, or a remote server's URL — the same thing a config
+ *  file would hold. Display only; the split that produced it happened when the
+ *  connector was saved. */
+function commandLine(server: ServerSpec): string {
+  return isRemote(server) ? server.url : [server.command, ...server.args].join(" ");
 }
+
+/** `SkyComputerUseClient mcp` for `./Codex Computer Use.app/…/SkyComputerUseClient mcp`:
+ *  a path's last segment is what tells two servers apart; the full line stays
+ *  one hover away. A bare program (`npx -y linear-mcp`) is already short. */
+function shortCommand(server: ServerSpec): string {
+  if (isRemote(server)) return server.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const program = server.command.includes("/") ? server.command.split("/").pop() || server.command : server.command;
+  return [program, ...server.args].join(" ");
+}
+
+/** `/Users/pierre/.codex/config.toml` → `~/.codex/config.toml`. */
+function tildify(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
+}
+
+/** The tool a server was found in, as its own mark and name. */
+const SOURCE: Record<string, { name: string; logo?: ProviderId }> = {
+  "claude-code": { name: "Claude Code", logo: "claude-code" },
+  codex: { name: "Codex", logo: "codex" },
+  opencode: { name: "OpenCode", logo: "opencode" },
+  workspace: { name: "This project" },
+};
+
+/** The names — never the values — of what a connector is handed: a program's
+ *  environment, a remote server's headers. */
+function configKeys(server: ServerSpec): string[] {
+  return Object.keys(isRemote(server) ? server.headers : server.env);
+}
+
+/** The GitHub connector, however it arrived — the preset, or an import of
+ *  GitHub's own server from another tool. It is the one row that earns a mark. */
+function isGithub(connector: Connector): boolean {
+  return connector.id === "github" || (isRemote(connector.server) && connector.server.url.includes("githubcopilot.com"));
+}
+
+const isUrl = (line: string) => /^https?:\/\//i.test(line.trim());
 
 /** One command line → program + argv. Whitespace-separated, with quoted spans
  *  kept whole, so a path with a space survives. Not a shell: nothing expands,
@@ -156,6 +205,10 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
   const [checks, setChecks] = useState<Record<string, Check>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [connectingGithub, setConnectingGithub] = useState(false);
+  /** Who "Connect GitHub" will sign in as — the pinned account, else gh's
+   *  active one. `undefined` while loading, `null` when gh has no login. */
+  const [githubLogin, setGithubLogin] = useState<string | null | undefined>(undefined);
   /** A check in flight owns its row; a second click is ignored rather than
    *  spawning the same server twice. */
   const inFlight = useRef(new Set<string>());
@@ -170,6 +223,12 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
       setScanning(false);
     }
   }, [workspaceRoot]);
+
+  useEffect(() => {
+    githubAccounts()
+      .then((accounts) => setGithubLogin(accounts.pinned ?? accounts.active ?? null))
+      .catch(() => setGithubLogin(null));
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -188,7 +247,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     inFlight.current.add(connector.id);
     setChecks((prev) => ({ ...prev, [connector.id]: { state: "checking" } }));
     try {
-      const probe = await probeConnector(connector.server);
+      const probe = await probeConnector(connector.server, workspaceRoot);
       setChecks((prev) => ({ ...prev, [connector.id]: { state: "ok", probe } }));
     } catch (e) {
       setChecks((prev) => ({
@@ -198,7 +257,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     } finally {
       inFlight.current.delete(connector.id);
     }
-  }, []);
+  }, [workspaceRoot]);
 
   /** One at a time: each check may be an `npx` that downloads a package, and
    *  five of those at once is a stalled machine, not a faster page. */
@@ -227,6 +286,20 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
     }
   }
 
+  /** Rust connects before it saves, so the one failure worth explaining — no
+   *  GitHub login — lands here, on the button, with the fix in its words. */
+  async function connectGithub() {
+    setConnectingGithub(true);
+    try {
+      setConnectors(await addGithubConnector());
+      notify("GitHub connected", { tone: "success" });
+    } catch (e) {
+      notify(errMessage(e), { tone: "error" });
+    } finally {
+      setConnectingGithub(false);
+    }
+  }
+
   async function importOne(candidate: Discovered) {
     await save({
       id: candidate.id,
@@ -240,6 +313,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
 
   const importable = useMemo(() => found.filter((f) => !f.alreadyAdded), [found]);
   const busy = connectors.some((c) => checks[c.id]?.state === "checking");
+  const hasGithub = connectors.some(isGithub);
 
   // "2 of 3 on · 14 tools seen" — the facts worth knowing before reading rows.
   const summary = useMemo(() => {
@@ -260,7 +334,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         <Head
           index="01"
           title="Your connectors"
-          note={summary ?? "MCP servers Klide can start."}
+          note={summary ?? "The services the assistant can reach."}
           action={
             connectors.length > 0 ? (
               <Verb onClick={() => void checkAll()} disabled={busy}>
@@ -272,13 +346,16 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         <Panel>
           <div {...ledger.listProps}>
             <GlideHighlight glide={ledger.glide} />
-            {connectors.length === 0 ? (
-              <Empty>
-                None yet. Klide reads the MCP servers you already configured in
-                Claude Code, Codex and OpenCode — import one below.
-              </Empty>
-            ) : (
-              connectors.map((connector, i) => (
+            {!hasGithub && (
+              <GithubSuggestion
+                login={githubLogin}
+                connecting={connectingGithub}
+                onConnect={() => void connectGithub()}
+                rowProps={ledger.rowProps}
+                last={connectors.length === 0}
+              />
+            )}
+            {connectors.map((connector, i) => (
                 <ConnectorRow
                   key={connector.id}
                   connector={connector}
@@ -296,14 +373,14 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
                   onRemove={() => void drop(connector)}
                   rowProps={ledger.rowProps}
                 />
-              ))
-            )}
+            ))}
           </div>
         </Panel>
         <FootNote>
-          A connector's tools are listed here, but the assistant can't call them
-          yet — wiring them into the Rust harness is the next step. Klide's own{" "}
-          <CodeText>klide mcp coordination</CodeText> server is the opposite
+          In Plan and Goal, the assistant can use every enabled connector. Tools
+          a server marks read-only run as asked; anything that can change
+          something — open a PR, comment on an issue — asks you first. Klide's
+          own <InlineCode>klide mcp coordination</InlineCode> server is the opposite
           direction: what delegate CLIs use to reach back into Klide.
         </FootNote>
       </section>
@@ -330,26 +407,34 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         ) : (
           <div {...offers.listProps}>
             <GlideHighlight glide={offers.glide} />
-            {importable.map((candidate, i) => (
-              <div
-                key={`${candidate.origin}:${candidate.id}`}
-                className="klide-connector-offer"
-                style={{ animationDelay: `${Math.min(i, 8) * 22}ms` }}
-                {...offers.rowProps}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div className="klide-row-title">{candidate.label}</div>
-                  <div className="klide-connector-command">{commandLine(candidate.server)}</div>
-                  <div className="klide-connector-meta">
-                    <span>{ORIGIN_LABEL[candidate.origin] ?? candidate.origin}</span>
-                    <span style={{ opacity: 0.75 }}>{candidate.sourcePath}</span>
+            {importable.map((candidate, i) => {
+              const source = SOURCE[candidate.origin];
+              return (
+                <div
+                  key={`${candidate.origin}:${candidate.id}`}
+                  className="klide-connector-offer"
+                  style={{ animationDelay: `${Math.min(i, 8) * 22}ms` }}
+                  {...offers.rowProps}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div className="klide-connector-offer-head">
+                      <span className="klide-row-title" style={{ margin: 0 }}>{candidate.label}</span>
+                      <span className="klide-connector-source" title={candidate.sourcePath}>
+                        {source?.logo && <ProviderLogo id={source.logo} size={12} />}
+                        <span>{source?.name ?? candidate.origin}</span>
+                        <span className="klide-connector-source-path">{tildify(candidate.sourcePath)}</span>
+                      </span>
+                    </div>
+                    <div className="klide-connector-command" title={commandLine(candidate.server)}>
+                      {shortCommand(candidate.server)}
+                    </div>
+                  </div>
+                  <div className="klide-connector-verbs">
+                    <Verb onClick={() => void importOne(candidate)}>Import</Verb>
                   </div>
                 </div>
-                <div className="klide-connector-verbs">
-                  <Verb onClick={() => void importOne(candidate)}>Import</Verb>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -358,7 +443,7 @@ export function ConnectorsSection({ workspaceRoot }: { workspaceRoot: string | n
         <Head
           index="03"
           title="Add a connector"
-          note="Any stdio MCP server — the command runs directly, never through a shell."
+          note="A command Klide starts, or a remote server's URL."
           action={
             !adding ? <Verb onClick={() => setAdding(true)}>Add manually</Verb> : null
           }
@@ -399,7 +484,8 @@ function ConnectorRow({
   /** Hover/focus handlers from the list's glide. */
   rowProps: { onMouseEnter: (e: { currentTarget: HTMLElement }) => void; onFocus: (e: { currentTarget: HTMLElement }) => void };
 }) {
-  const env = Object.keys(connector.server.env);
+  const env = configKeys(connector.server);
+  const scope = isGithub(connector) ? githubScope(connector.server) : null;
   return (
     <div>
       <div
@@ -424,11 +510,15 @@ function ConnectorRow({
             font: "inherit",
           }}
         >
-          <div className="klide-row-title">{connector.label}</div>
+          <RowTitle mark={isGithub(connector)}>{connector.label}</RowTitle>
           <div className="klide-connector-command">{commandLine(connector.server)}</div>
           <div className="klide-connector-meta">
             <span>{ORIGIN_LABEL[connector.origin] ?? connector.origin}</span>
-            {env.length > 0 && <span style={{ opacity: 0.75 }}>{env.join(" · ")}</span>}
+            {scope ? (
+              <span style={{ opacity: 0.75 }}>{scope}</span>
+            ) : (
+              env.length > 0 && <span style={{ opacity: 0.75 }}>{env.join(" · ")}</span>
+            )}
           </div>
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -453,6 +543,62 @@ function ConnectorRow({
           <CheckDetail check={check} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** A row's title, with the GitHub mark in front of it when it earns one. The
+ *  mark sits inside the title's line, so every row's text below still starts at
+ *  the same x — a marked row is never indented past its neighbours. */
+function RowTitle({ mark, children }: { mark: boolean; children: ReactNode }) {
+  return (
+    <div className="klide-row-title" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+      {mark && <LinkMark site="github" size={14} />}
+      {children}
+    </div>
+  );
+}
+
+/** `repos · issues · pull requests · actions` — what a GitHub connector was
+ *  scoped to, which says more on its row than the names of its headers. */
+function githubScope(server: ServerSpec): string | null {
+  if (!isRemote(server)) return null;
+  const toolsets = Object.entries(server.headers).find(([k]) => k.toLowerCase() === "x-mcp-toolsets")?.[1];
+  return toolsets ? toolsets.split(",").map((s) => s.trim().replace(/_/g, " ")).join(" · ") : null;
+}
+
+/** GitHub, before it is connected: the one connector most people want, offered
+ *  where connectors live rather than as a link in a heading. Its verb is always
+ *  shown — this row exists to be clicked, unlike a row's Check / Remove. */
+function GithubSuggestion({
+  login,
+  connecting,
+  onConnect,
+  rowProps,
+  last,
+}: {
+  login: string | null | undefined;
+  connecting: boolean;
+  onConnect: () => void;
+  rowProps: { onMouseEnter: (e: { currentTarget: HTMLElement }) => void; onFocus: (e: { currentTarget: HTMLElement }) => void };
+  last: boolean;
+}) {
+  const who =
+    login === undefined ? "Signs in as your GitHub account"
+      : login === null ? "Needs a GitHub login first — run gh auth login"
+        : `Signs in as ${login} — nothing to paste`;
+  return (
+    <div className="klide-connector-row" style={last ? { borderBottom: "none" } : undefined} {...rowProps}>
+      <div style={{ minWidth: 0 }}>
+        <RowTitle mark>GitHub</RowTitle>
+        <div className="klide-connector-meta" style={{ fontSize: 12.5, color: "var(--fg-subtle)" }}>
+          Repositories, issues, pull requests and Actions
+        </div>
+        <div className="klide-connector-meta">{who}</div>
+      </div>
+      <Verb onClick={onConnect} disabled={connecting || login === null}>
+        {connecting ? "Connecting…" : "Connect"}
+      </Verb>
     </div>
   );
 }
@@ -500,7 +646,7 @@ function CheckDetail({ check }: { check: Check }) {
           {probe.serverVersion && ` ${probe.serverVersion}`}
         </span>
         <span>MCP {probe.protocolVersion || "unknown"}</span>
-        <span>started in {(probe.elapsedMs / 1000).toFixed(1)}s</span>
+        <span>ready in {(probe.elapsedMs / 1000).toFixed(1)}s</span>
       </div>
       {probe.tools.length === 0 ? (
         <Quiet>It started, but advertises no tools.</Quiet>
@@ -568,16 +714,20 @@ function AddForm({
   const [line, setLine] = useState("");
   const [env, setEnv] = useState("");
 
+  const remote = isUrl(line);
+
   function submit() {
     const { command, args } = splitCommand(line);
     if (!label.trim() || !command) {
-      notify("A connector needs a name and a command", { tone: "warn" });
+      notify("A connector needs a name and a command or URL", { tone: "warn" });
       return;
     }
     onAdd({
       id: label,
       label: label.trim(),
-      server: { command, args, env: parseEnv(env), cwd: null },
+      server: remote
+        ? { url: line.trim(), headers: parseEnv(env) }
+        : { command, args, env: parseEnv(env), cwd: null },
       enabled: true,
       origin: "manual",
     });
@@ -589,16 +739,19 @@ function AddForm({
         <Field label="Name">
           <Input value={label} onChange={setLabel} placeholder="Linear" autoFocus />
         </Field>
-        <Field label="Command">
+        <Field label="Command or URL">
           <Input value={line} onChange={setLine} placeholder="npx -y linear-mcp" mono />
         </Field>
-        <Field label="Environment" hint="one KEY=value per line, optional">
+        <Field
+          label={remote ? "Headers" : "Environment"}
+          hint={remote ? "one Name=value per line; a value may be ${VAR}" : "one KEY=value per line, optional"}
+        >
           <textarea
             value={env}
             onChange={(e) => setEnv(e.target.value)}
             rows={3}
             spellCheck={false}
-            placeholder="LINEAR_API_KEY=lin_api_…"
+            placeholder={remote ? "Authorization=Bearer ${LINEAR_TOKEN}" : "LINEAR_API_KEY=lin_api_…"}
             className="klide-field"
             style={{
               width: "100%",
@@ -732,6 +885,12 @@ function Empty({ children, flush }: { children: ReactNode; flush?: boolean }) {
       {children}
     </div>
   );
+}
+
+/** A command name inside prose, at the prose's own size — a mono face reads
+ *  larger than Atkinson at the same pixel size, so it steps down a half. */
+function InlineCode({ children }: { children: ReactNode }) {
+  return <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.92em", color: "var(--fg-subtle)" }}>{children}</span>;
 }
 
 function FootNote({ children }: { children: ReactNode }) {

@@ -15,6 +15,24 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Connectors
+
+- **The assistant can use your connectors.** In Plan and Goal, a conversation
+  reaches every enabled MCP server through `connector_tools` (what it offers)
+  and `connector_call` (run one tool). Tools the server marks read-only run as
+  asked; anything that can change something asks first, per tool, with the
+  usual run/project scopes. Full auto never answers it.
+- **Connect GitHub in one click.** Settings → Connectors adds GitHub's own MCP
+  server (`api.githubcopilot.com/mcp/`, repos · issues · pull requests ·
+  actions), signed in as the account Klide already uses. No token is typed or
+  stored: the header holds `${KLIDE_GITHUB_TOKEN}`, resolved at connect time.
+- **Remote connectors.** A connector can be a URL (Streamable HTTP, JSON or
+  event-stream replies), and discovery now imports the remote servers Claude
+  Code, Codex and OpenCode have configured instead of skipping them. Header and
+  env values may be `${VAR}` references.
+- Connectors stay connected across messages instead of starting per Run, and
+  start in the background at launch.
+
 ### Permission
 
 - **Settings → Harness → Tools per mode now takes effect.** The toggles were

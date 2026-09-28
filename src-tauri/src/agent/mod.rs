@@ -4,6 +4,7 @@ mod background;
 mod process;
 mod observers;
 mod command_allowlist;
+mod connector_tools;
 mod conversation_search;
 pub(crate) mod delivery;
 mod glob_match;
@@ -1967,7 +1968,21 @@ async fn run_agent_loop(
     // turn would arrive as a fresh chat — the "agent has no memory"
     // bug the user kept hitting.
     let subject = permission::GateSubject::from_request(&request);
-    let tools = schemas_for_mode(&subject, request.workspace_root.as_deref());
+    let mut tools = schemas_for_mode(&subject, request.workspace_root.as_deref());
+    // The user's connectors, fixed for this Run: two Tools whatever is
+    // connected (connector_tools.rs), filtered by the same toggles as the rest.
+    let connectors = connector_tools::Catalog::load(&subject, request.workspace_root.as_deref()).await;
+    let connector_schemas: Vec<serde_json::Value> = connectors
+        .schemas()
+        .into_iter()
+        .filter(|schema| {
+            let name = schema["function"]["name"].as_str().unwrap_or("");
+            !subject.disabled.contains(name)
+        })
+        .collect();
+    if !connector_schemas.is_empty() {
+        tools.get_or_insert_with(Vec::new).extend(connector_schemas);
+    }
     // Retention only makes sense while the model can actually peek the
     // stored value back: without `peek_value` in this run's tool list, a
     // stub would be a dead end, so results ride in context verbatim and
@@ -2531,13 +2546,16 @@ async fn run_agent_loop(
                 finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                 return Ok(());
             }
-            let kind = find_tool_kind_for_workspace(&call.name, request.workspace_root.as_deref());
+            let kind = find_tool_kind_for_workspace(&call.name, request.workspace_root.as_deref())
+                .or_else(|| connectors.kind(&call));
             emit(AgentEvent::ToolCallStarted {
                 run_id: id.clone(),
                 tool_call_id: call.id.clone(),
                 name: call.name.clone(),
                 input: call.input.clone(),
-                summary: tool_summary_for_workspace(&call, request.workspace_root.as_deref()),
+                summary: connectors
+                    .summary(&call)
+                    .unwrap_or_else(|| tool_summary_for_workspace(&call, request.workspace_root.as_deref())),
                 capability: kind.map(|k| k.capability().wire().to_string()),
                 ts: now_ms(),
             })?;
@@ -2582,6 +2600,9 @@ async fn run_agent_loop(
                 },
                 Some(ToolKind::Command) => process_command_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::BackgroundShell) => process_background_shell_tool(&ctx, &call)?,
+                Some(ToolKind::ConnectorRead | ToolKind::Connector) => {
+                    connector_tools::process(&ctx, &call, &connectors, &mut emit).await?
+                }
                 Some(ToolKind::Network) => process_network_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Write) => process_write_tool(&ctx, &call, &mut emit).await?,
                 Some(ToolKind::Coordination) => {

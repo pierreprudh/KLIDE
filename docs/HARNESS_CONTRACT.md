@@ -85,6 +85,8 @@ Every Tool has one capability:
 | `PauseForUser` | `Pause` | Goal-only. Pauses the Run and resumes on an outside answer — typed user input (`userAnswerQuestion`), a nested subagent Run (`spawn_subagent`), or an advisor model (`consult_advisor`). A `spawn_subagent` call that names a `worker` (a Delegate id) is a **dispatch**: it first produces a permission request of its own, and on approval the child runs as that Delegate in an isolated worktree. |
 | `Network` | `Network` | Goal-only. Produces a permission request and reads from the network only after approval. |
 | `UpdatePlanState` | `PlanState` | May run in `plan` and `goal`. Mutates Klide's own planning metadata (the TODO store), never Workspace files, so it needs no Diff review. |
+| `ReadConnector` | `ConnectorRead` | May run in `plan` and `goal`, conversation Runs only. `connector_tools` (Klide's cached catalog) and a `connector_call` whose target the server annotates `readOnlyHint: true`. |
+| `UseConnector` | `Connector` | Goal-only, conversation Runs only. A `connector_call` whose target may write — an unannotated tool counts as writing. Gated as a network target `mcp:<connector>/<tool>`. |
 
 Dynamic tools loaded from `.agents/tools.json` are shell-backed command tools.
 They are always `RunCommand` capability, Goal-only, approval-gated, timeout
@@ -217,6 +219,21 @@ Network-capability Tools use the same pause/resume permission channel, but store
 separate network targets. `web_search` uses the `web_search` target; `web_fetch`
 uses `host:<domain>`, such as `host:docs.rs`. Project-scoped network approvals
 persist under `.klide/network-allowlist.json` and never imply command approval.
+
+Connector Tools (`agent/connector_tools.rs`) reach the MCP servers the user
+enabled in Settings → Connectors through two fixed Tools, so a connector with
+forty tools costs the prompt one short listing, not forty schemas:
+`connector_tools` returns a connector's tool list or the argument schemas of
+the tools named, and `connector_call` runs one. The kind is resolved per call
+from the *target* tool's annotation, before the Mode check and before
+`ToolCallStarted` records the capability. A write goes through the Network
+permission path under the target `mcp:<connector>/<tool>`, so run and project
+approvals are per tool and never imply a host or command approval; full auto
+does not answer it. Mission attempts and child Runs are offered no connector
+Tools, because nothing can answer their cards. Sessions live in
+`connector_pool.rs`, shared across Runs and killed at app exit; a call whose
+session the server ended is retried once on a fresh one, and no other failure
+is retried, so a write is never sent twice.
 
 Agent-to-agent messages are gated on the **receiving** side, through the same
 channel. Another agent's words are queued in the coordination journal and

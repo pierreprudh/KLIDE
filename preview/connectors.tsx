@@ -9,6 +9,7 @@
 //   npx vite --port 1421   →  http://localhost:1421/preview/connectors.html
 //   ?theme=dark | klide-light | sage-garden | sage-garden-dark | cursor-dark | …
 //   ?state=empty            →  the first-visit page, nothing imported yet
+//   ?state=github           →  GitHub already connected
 import ReactDOM from "react-dom/client";
 import "@fontsource/atkinson-hyperlegible/400.css";
 import "@fontsource/atkinson-hyperlegible/700.css";
@@ -34,13 +35,26 @@ const nodeRepl = {
 };
 const linear = { command: "npx", args: ["-y", "linear-mcp"], env: { LINEAR_API_KEY: "lin_api_…" }, cwd: null };
 
-let store = EMPTY
+const GITHUB = params.get("state") === "github";
+let store: Array<{ id: string; label: string; server: unknown; enabled: boolean; origin: string }> = EMPTY
   ? []
   : [
       { id: "pencil", label: "Pencil", server: pencil, enabled: true, origin: "claude-code" },
       { id: "linear", label: "Linear", server: linear, enabled: true, origin: "manual" },
       { id: "node-repl", label: "node_repl", server: nodeRepl, enabled: false, origin: "codex" },
     ];
+if (GITHUB) {
+  store = [
+    {
+      id: "github",
+      label: "GitHub",
+      server: { url: "https://api.githubcopilot.com/mcp/", headers: { Authorization: "Bearer ${KLIDE_GITHUB_TOKEN}", "X-MCP-Toolsets": "repos,issues,pull_requests,actions" } },
+      enabled: true,
+      origin: "preset",
+    },
+    ...store,
+  ];
+}
 
 const OFFERS = [
   {
@@ -111,6 +125,25 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
           tools: many ? TOOLS : TOOLS.slice(0, 3),
           elapsedMs: many ? 4200 : 760,
         };
+      }
+      case "github_accounts":
+        return { logins: ["pierreprudh"], active: "pierreprudh", pinned: null };
+      case "connectors_add_github": {
+        await wait(900);
+        const github = {
+          id: "github",
+          label: "GitHub",
+          server: {
+            url: "https://api.githubcopilot.com/mcp/",
+            headers: { Authorization: "Bearer ${KLIDE_GITHUB_TOKEN}", "X-MCP-Toolsets": "repos,issues,pull_requests,actions" },
+          },
+          enabled: true,
+          origin: "preset",
+        };
+        store = [...store.filter((c) => c.id !== "github"), github].sort((a, b) =>
+          a.label.toLowerCase().localeCompare(b.label.toLowerCase())
+        );
+        return store;
       }
       default:
         throw `preview: no stub for ${cmd}`;
