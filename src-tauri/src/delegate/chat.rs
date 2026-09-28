@@ -129,7 +129,7 @@ pub async fn run_subscription_chat(
             let emitted = AtomicBool::new(false);
             match run_cli_streaming(
                 adapter,
-                with_command_instructions(command?, adapter.id(), cli_command.is_some(), &messages),
+                with_command_instructions(command?, adapter, cli_command.is_some(), &messages),
                 prompt,
                 label,
                 &cwd,
@@ -155,7 +155,7 @@ pub async fn run_subscription_chat(
                         .ok_or_else(|| format!("{label} has no structured mode"))??;
                     run_cli_streaming(
                         adapter,
-                        with_command_instructions(command, adapter.id(), cli_command.is_some(), &messages),
+                        with_command_instructions(command, adapter, cli_command.is_some(), &messages),
                         if cli_command.is_some() { latest_user_message(&messages) } else { prompt_from_messages(&messages) },
                         label,
                         &cwd,
@@ -168,7 +168,12 @@ pub async fn run_subscription_chat(
                 Err(err) => return Err(err),
             }
         }
-        None => run_cli_with_stdin(adapter.chat_invocation(&cwd, model)?, prompt, label, on_chunk)
+        None => run_cli_with_stdin(
+            with_command_instructions(adapter.chat_invocation(&cwd, model)?, adapter, cli_command.is_some(), &messages),
+            prompt,
+            label,
+            on_chunk,
+        )
             .await?
     };
     Ok(AiChatResponse {
@@ -362,20 +367,20 @@ async fn run_cli_streaming(
 
 fn with_command_instructions(
     mut command: TokioCommand,
-    provider: &str,
+    adapter: &dyn Delegate,
     is_cli_command: bool,
     messages: &[serde_json::Value],
 ) -> TokioCommand {
     // Keep native slash syntax on stdin while carrying the current mode in
     // the CLI's separate system channel, including cold-session retries.
-    if provider == "claude-code" && is_cli_command {
+    if let Some(flag) = adapter.append_system_prompt_flag().filter(|_| is_cli_command) {
         let system = messages.iter()
             .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
             .map(text_from_message)
             .collect::<Vec<_>>()
             .join("\n\n");
         if !system.trim().is_empty() {
-            command.arg("--append-system-prompt").arg(system);
+            command.arg(flag).arg(system);
         }
     }
     command
@@ -547,12 +552,12 @@ mod tests {
         for resume in [None, Some("session")] {
             let mut command = TokioCommand::new("claude");
             if let Some(id) = resume { command.arg("--resume").arg(id); }
-            let command = with_command_instructions(command, "claude-code", true, &messages);
+            let command = with_command_instructions(command, &super::super::ClaudeCode, true, &messages);
             let args: Vec<_> = command.as_std().get_args().map(|s| s.to_string_lossy().into_owned()).collect();
             assert_eq!(&args[args.len()-2..], &["--append-system-prompt", "PLAN MODE: do not edit files.\n\nUse the project rules."]);
             assert_eq!(latest_user_message(&messages), "/init");
         }
-        let other = with_command_instructions(TokioCommand::new("codex"), "codex", true, &messages);
+        let other = with_command_instructions(TokioCommand::new("codex"), &super::super::Codex, true, &messages);
         assert_eq!(other.as_std().get_args().count(), 0);
     }
 

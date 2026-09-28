@@ -4,7 +4,7 @@ use super::runs::{
     TranscriptState,
 };
 use super::chat_stream::{message_blocks, result_text, StreamItem};
-use super::cli_commands::CliCommands;
+use super::cli_commands::{CliCommands, SlashProbe};
 use super::{shell_quote, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunParser};
 use std::collections::{HashMap, HashSet};
 
@@ -167,9 +167,20 @@ impl Delegate for ClaudeCode {
     }
 
     /// `init` lists `slash_commands`, and `claude -p "/cost"` answers the
-    /// command itself rather than handing the words to the model.
-    fn reports_slash_commands(&self) -> bool {
-        true
+    /// command itself rather than handing the words to the model — so the
+    /// probe is an ordinary headless turn, read up to its first line, with a
+    /// command the CLI answers locally in case it gets further. Nothing of it
+    /// is kept: no session on disk, no run on the board.
+    fn slash_command_probe(&self, cwd: &str) -> Option<Result<SlashProbe, String>> {
+        let spec = ChatSpec { model: "", effort: None, resume: None, mcp: None, allowed_commands: &[] };
+        Some(self.chat_stream_invocation(cwd, &spec)?.map(|mut command| {
+            command.arg("--no-session-persistence");
+            SlashProbe { command, stdin: b"/cost".to_vec() }
+        }))
+    }
+
+    fn append_system_prompt_flag(&self) -> Option<&'static str> {
+        Some("--append-system-prompt")
     }
 
     /// Claude Code's dialect is Anthropic's, wrapped one object per line:
@@ -202,7 +213,7 @@ impl Delegate for ClaudeCode {
                     };
                     if let Some(commands) = names("slash_commands") {
                         let terminal = names("terminal_slash_commands").unwrap_or_default();
-                        items.push(StreamItem::Commands(CliCommands { commands, terminal }));
+                        items.push(StreamItem::Commands(CliCommands { commands, terminal, ..Default::default() }));
                     }
                     items
                 }
@@ -860,6 +871,7 @@ mod tests {
                 StreamItem::Commands(CliCommands {
                     commands: vec!["compact".into(), "tdd".into(), "config".into()],
                     terminal: vec!["config".into()],
+                    ..Default::default()
                 }),
             ]
         );

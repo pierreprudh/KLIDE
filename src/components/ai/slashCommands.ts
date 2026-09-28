@@ -24,7 +24,8 @@ export type SlashCommand = {
  *  gives the remaining paths away is what *follows* the word: a second slash
  *  or a dot means `/src/App.tsx`, not a command, and the menu stays shut even
  *  while the path is half typed. Hyphens belong to the word, so `/auto-mode`
- *  keeps the menu open past the dash.
+ *  keeps the menu open past the dash, and so does a colon, which namespaces a
+ *  plugin's commands (`/ui-ux-pro-max:design`).
  *
  *  `head` says the slash opens the draft and nothing follows it — the shape in
  *  which a command may take the whole composer over (`/clear`, `/plan`).
@@ -42,12 +43,12 @@ export type SlashQuery = {
 export function slashQueryAt(value: string, caret: number = value.length): SlashQuery | null {
   const at = Math.max(0, Math.min(caret, value.length));
   const before = value.slice(0, at);
-  const m = before.match(/(?:^|\s)\/([\w-]*)$/);
+  const m = before.match(/(?:^|\s)\/([\w:-]*)$/);
   if (m === null) return null;
   const query = m[1];
   // The word can run on past the caret — `/vis|ualise`, or the `src` of a path
   // whose slash happens to follow a space. Read it whole before judging it.
-  const tail = value.slice(at).match(/^[\w-]*/)![0];
+  const tail = value.slice(at).match(/^[\w:-]*/)![0];
   const rest = value.slice(at + tail.length);
   if (/^[/.]/.test(rest)) return null;
   const start = at - query.length - 1;
@@ -73,7 +74,7 @@ export function replaceSlashWord(opts: {
   prefix: string;
 }): { value: string; caret: number } {
   const { value, start, caret, prefix } = opts;
-  const end = caret + (value.slice(caret).match(/^[\w-]*/)?.[0].length ?? 0);
+  const end = caret + (value.slice(caret).match(/^[\w:-]*/)?.[0].length ?? 0);
   const after = value.slice(end);
   const inserted = /^\s/.test(after) ? prefix.replace(/\s+$/, "") : prefix;
   return { value: value.slice(0, start) + inserted + after, caret: start + inserted.length };

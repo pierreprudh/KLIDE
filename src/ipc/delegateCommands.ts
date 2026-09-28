@@ -1,5 +1,6 @@
 // Typed frontend adapter for `delegate_slash_commands` — the `/` commands a
-// delegate CLI answers itself (Claude Code: built-ins, skills, plugins).
+// delegate CLI answers itself (Claude Code: built-ins, skills, plugins; omp:
+// its file commands).
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -9,6 +10,8 @@ export type CliCommands = {
   commands: string[];
   /** Need the CLI's own terminal UI; never offered in a composer. */
   terminal: string[];
+  /** What the CLI says a command does, when it says (omp). */
+  descriptions?: Record<string, string>;
 };
 
 export function delegateSlashCommands(provider: string, workspaceRoot: string): Promise<CliCommands> {

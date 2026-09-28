@@ -274,11 +274,27 @@ pub trait Delegate: Sync {
         None
     }
 
-    /// Whether this CLI's structured stream names the `/` commands it answers
-    /// itself ([`StreamItem::Commands`](chat_stream::StreamItem::Commands)) and
-    /// runs one sent as a headless message. Only such a CLI is probed for them.
-    fn reports_slash_commands(&self) -> bool {
-        false
+    /// How to ask this CLI for the `/` commands it runs itself when one is
+    /// sent as a headless message. `None` — the default — means it has no such
+    /// commands Klide can offer, and it is never started to find out.
+    fn slash_command_probe(&self, _cwd: &str) -> Option<Result<cli_commands::SlashProbe, String>> {
+        None
+    }
+
+    /// One line of the probe's output, read as the command list when it is
+    /// one. By default the list is the stream's own
+    /// [`StreamItem::Commands`](chat_stream::StreamItem::Commands).
+    fn parse_probe_line(&self, line: &str) -> Option<CliCommands> {
+        self.parse_stream_line(line).into_iter().find_map(|item| match item {
+            chat_stream::StreamItem::Commands(commands) => Some(commands),
+            _ => None,
+        })
+    }
+
+    /// The flag that adds text to this CLI's system prompt for one run, so a
+    /// `/` command sent verbatim still carries Klide's mode instructions.
+    fn append_system_prompt_flag(&self) -> Option<&'static str> {
+        None
     }
 
     /// Whether [`Delegate::chat_stream_args`] honours a `resume` id. The runner

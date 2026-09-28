@@ -23,8 +23,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::timeout;
 
-use super::chat_stream::StreamItem;
-use super::{ChatSpec, Delegate};
+use super::Delegate;
 
 /// What the CLI said it answers, as it said it.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -34,6 +33,18 @@ pub struct CliCommands {
     pub commands: Vec<String>,
     /// Commands that need the CLI's own terminal UI.
     pub terminal: Vec<String>,
+    /// What the CLI says a command does, when it says (omp does, Claude Code
+    /// does not).
+    #[serde(default)]
+    pub descriptions: std::collections::BTreeMap<String, String>,
+}
+
+/// How to ask one CLI for its commands without starting a model turn: a
+/// process, what to write on its stdin, and the adapter's
+/// [`Delegate::parse_probe_line`] to read its answer.
+pub struct SlashProbe {
+    pub command: tokio::process::Command,
+    pub stdin: Vec<u8>,
 }
 
 impl CliCommands {
@@ -77,38 +88,29 @@ pub(crate) fn leading_command(provider: &str, cwd: &str, message: &str) -> Optio
 /// it (SessionStart), so this is generous.
 const PROBE_CEILING: Duration = Duration::from_secs(20);
 
-/// The CLI's commands for `cwd`, probing it once when no turn has reported
-/// them yet. A delegate that cannot report its commands answers empty without
-/// being started — a probe prompt sent to a CLI that does not recognise it
-/// would be a real model turn.
+/// The CLI's commands for `cwd`, probing it once when nothing has reported
+/// them yet. A delegate with no probe answers empty without being started —
+/// a probe prompt sent to a CLI that does not recognise it would be a real
+/// model turn.
 pub async fn cli_commands(adapter: &dyn Delegate, cwd: &str) -> Result<CliCommands, String> {
-    if !adapter.reports_slash_commands() {
+    let Some(probe) = adapter.slash_command_probe(cwd) else {
         return Ok(CliCommands::default());
-    }
+    };
     if let Some(known) = remembered(adapter.id(), cwd) {
         return Ok(known);
     }
-    let spec = ChatSpec { model: "", effort: None, resume: None, mcp: None, allowed_commands: &[] };
-    let mut command = adapter
-        .chat_stream_invocation(cwd, &spec)
-        .ok_or("This CLI has no structured mode")??;
-    // Nothing of the probe is kept: no session on disk, no run on the board.
-    command.arg("--no-session-persistence");
+    let SlashProbe { mut command, stdin } = probe?;
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| format!("Unable to start {}: {e}", adapter.id()))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // A command the CLI answers locally, without a model call, in case the
-        // process gets that far before it is killed.
-        stdin.write_all(b"/cost").await.map_err(|e| e.to_string())?;
+    if let Some(mut pipe) = child.stdin.take() {
+        pipe.write_all(&stdin).await.map_err(|e| e.to_string())?;
     }
     let stdout = child.stdout.take().ok_or("Unable to read the CLI's output")?;
     let found = timeout(PROBE_CEILING, async {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            for item in adapter.parse_stream_line(&line) {
-                if let StreamItem::Commands(commands) = item {
-                    return Some(commands);
-                }
+            if let Some(commands) = adapter.parse_probe_line(&line) {
+                return Some(commands);
             }
         }
         None
@@ -155,12 +157,25 @@ pub fn claude_code_settings(home: &str, cwd: &str) -> HashMap<String, serde_json
 mod tests {
     use super::*;
 
+    /// Live: starts the real CLIs. `cargo test --lib live_probe -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_probe_lists_each_clis_commands() {
+        for adapter in [&super::super::ClaudeCode as &dyn Delegate, &super::super::Omp] {
+            let got = cli_commands(adapter, env!("CARGO_MANIFEST_DIR")).await.unwrap();
+            let runnable: Vec<_> = got.commands.iter().filter(|c| got.runs(c)).collect();
+            println!("{}: {} listed, {} runnable, {} described: {:?}", adapter.id(), got.commands.len(), runnable.len(), got.descriptions.len(), &runnable[..runnable.len().min(12)]);
+            assert!(!runnable.is_empty());
+        }
+    }
+
     #[test]
     fn only_a_known_headless_command_counts_as_one() {
         let cwd = "/tmp/klide-cli-commands-test";
         remember("claude-code", cwd, CliCommands {
             commands: vec!["compact".into(), "review".into(), "config".into()],
             terminal: vec!["config".into()],
+            ..Default::default()
         });
         assert_eq!(leading_command("claude-code", cwd, "/compact"), Some("compact".into()));
         assert_eq!(leading_command("claude-code", cwd, "  /review the auth flow"), Some("review".into()));

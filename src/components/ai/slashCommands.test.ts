@@ -19,6 +19,9 @@ describe("slashQueryAt", () => {
 
   it("keeps the menu open across a hyphen so /auto-mode can be typed out", () => {
     expect(slashQueryAt("/auto-")?.query).toBe("auto-");
+    // A plugin namespaces its commands with a colon; the word runs past it.
+    expect(slashQueryAt("/ui-ux-pro-max:des")).toEqual({ query: "ui-ux-pro-max:des", start: 0, head: true });
+    expect(slashQueryAt("see https://x.dev")).toBeNull();
     expect(slashQueryAt("/auto-mode")?.query).toBe("auto-mode");
   });
 

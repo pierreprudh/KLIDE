@@ -2,6 +2,7 @@ use super::runs::{
     cap_messages, clean_title, extract_user_text, mtime_ms, project_name, tool_file_path,
     transcript_status, AgentRun, RunMessage, RunToolCall, TranscriptState,
 };
+use super::cli_commands::{CliCommands, SlashProbe};
 use super::{shell_quote, Delegate, RunCandidate, RunParser};
 use std::collections::HashSet;
 
@@ -53,6 +54,25 @@ impl Delegate for Omp {
         }
         args.extend(["--auto-approve".into(), "--mode".into(), "text".into()]);
         Ok(args)
+    }
+
+    /// omp's RPC mode answers `get_available_commands` with every command
+    /// it knows, each with a description and a source, and exits once stdin
+    /// closes — no model turn, no session saved (`--no-session`).
+    fn slash_command_probe(&self, cwd: &str) -> Option<Result<SlashProbe, String>> {
+        Some(crate::cli::resolve_command(self.binary()).map(|cli| {
+            let mut command = tokio::process::Command::new(cli);
+            command.current_dir(cwd).args(["--mode", "rpc", "--no-session"]);
+            SlashProbe { command, stdin: format!("{{\"type\":\"get_available_commands\",\"id\":\"{PROBE_ID}\"}}\n").into_bytes() }
+        }))
+    }
+
+    fn parse_probe_line(&self, line: &str) -> Option<CliCommands> {
+        parse_available_commands(line)
+    }
+
+    fn append_system_prompt_flag(&self) -> Option<&'static str> {
+        Some("--append-system-prompt")
     }
 
     /// omp has no login command — it reads provider keys straight from the
@@ -310,6 +330,34 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
 
 /// Parse an ISO 8601 / RFC 3339 timestamp (e.g. "2026-06-15T13:28:06.376Z")
 /// into epoch milliseconds. Returns None if it doesn't parse.
+const PROBE_ID: &str = "klide-commands";
+
+/// The RPC answer to the probe, as commands a headless turn can send.
+///
+/// `omp -p` expands only file-based commands (markdown templates) before the
+/// model sees the message. Built-ins are drawn by its terminal app, `/skill:`
+/// commands are expanded by the RPC, ACP and terminal front ends but not by
+/// `-p`, and custom and extension commands may want a UI print mode does not
+/// give them — so every source but `file` is listed as terminal-only.
+fn parse_available_commands(line: &str) -> Option<CliCommands> {
+    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    if value.get("id").and_then(|v| v.as_str()) != Some(PROBE_ID) {
+        return None;
+    }
+    let mut out = CliCommands::default();
+    for command in value.get("data")?.get("commands")?.as_array()? {
+        let Some(name) = command.get("name").and_then(|v| v.as_str()) else { continue };
+        out.commands.push(name.to_string());
+        if command.get("source").and_then(|v| v.as_str()) != Some("file") {
+            out.terminal.push(name.to_string());
+        }
+        if let Some(desc) = command.get("description").and_then(|v| v.as_str()).map(str::trim).filter(|d| !d.is_empty()) {
+            out.descriptions.insert(name.to_string(), desc.to_string());
+        }
+    }
+    Some(out)
+}
+
 fn iso_to_ms(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
@@ -397,6 +445,20 @@ mod tests {
         assert_eq!(dispatch, "omp --model 'opus' 'fix the bug'");
         let resume = Omp.spawn_command(None, None, Some("019ecb77"), None);
         assert_eq!(resume, "omp --resume '019ecb77'");
+    }
+
+    #[test]
+    fn only_file_commands_run_headless() {
+        let line = r#"{"id":"klide-commands","type":"response","command":"get_available_commands","success":true,"data":{"commands":[
+            {"name":"model","source":"builtin","description":"Show current model selection"},
+            {"name":"skill:tdd","source":"skill","description":"Test first"},
+            {"name":"init","source":"file","description":"Generate AGENTS.md for current codebase"},
+            {"name":"review","source":"custom","description":"Launch interactive code review"}]}}"#;
+        let got = parse_available_commands(line).unwrap();
+        assert!(got.runs("init"));
+        assert!(!got.runs("model") && !got.runs("skill:tdd") && !got.runs("review"));
+        assert_eq!(got.descriptions.get("init").map(String::as_str), Some("Generate AGENTS.md for current codebase"));
+        assert!(parse_available_commands(r#"{"type":"ready"}"#).is_none());
     }
 
     #[test]
