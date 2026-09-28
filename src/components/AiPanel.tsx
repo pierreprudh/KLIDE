@@ -3237,8 +3237,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     runId: string;
     requestId: string;
     toolName: string;
-    kind: "command" | "network" | "message" | "worker";
+    kind: "command" | "network" | "message" | "worker" | "connector";
     command: string;
+    /** For a connector tool: the connector id, for its mark. */
+    connector?: string;
     /** For a message: who wrote it, by thread title when known, and which
      *  envelope — so the pre-turn card for the same message is not drawn twice.
      *  For a worker dispatch: who is being sent and as what. */
@@ -3271,7 +3273,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // sends {command, cwd, externalPaths, matchedAllowRule}, a network
     // capability sends whatever it declared. Everything else is typed, and the
     // Rust `frontend_mirror_matches_agent_wire` test keeps it that way.
-    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string };
+    const input = (req.input ?? {}) as { command?: string; externalPaths?: string[]; fromRunId?: string; envelopeId?: string; body?: string; worker?: string; workerLabel?: string; subagent?: string; task?: string; branch?: string; connector?: string; connectorLabel?: string; tool?: string };
     const isCommand = !!input.command;
     // An incoming-message gate carries the sender and the text; the card shows
     // the text where the command would be and names the peer as the chat does.
@@ -3280,19 +3282,25 @@ This user request requires workspace inspection. Before answering, you MUST call
     // task where the command would be, with "Claude Code · implementer →" in
     // front of it, and the branch the worker will edit on as its detail.
     const isWorker = !isCommand && !isMessage && !!input.worker;
+    // A connector tool shows its mark and the tool it would run — the card's
+    // command line is `add_issue_comment`, not a network target.
+    const isConnector = !isCommand && !isMessage && !isWorker && !!input.connector && !!input.tool;
     const command = input.command
       ?? (isMessage ? input.body ?? "" : undefined)
       ?? (isWorker ? input.task ?? "" : undefined)
+      ?? (isConnector ? input.tool : undefined)
       ?? req.summary ?? req.toolName ?? "permission request";
     return {
       runId,
       requestId: req.id,
       toolName: req.toolName ?? "permission",
-      kind: isCommand ? ("command" as const) : isMessage ? ("message" as const) : isWorker ? ("worker" as const) : ("network" as const),
+      kind: isCommand ? ("command" as const) : isMessage ? ("message" as const) : isWorker ? ("worker" as const) : isConnector ? ("connector" as const) : ("network" as const),
+      connector: isConnector ? input.connector : undefined,
       command,
       peer: isMessage ? peerName(input.fromRunId!, peerIndex)
         : isWorker ? `${input.workerLabel ?? input.worker} ${input.subagent ?? "worker"}`
-          : undefined,
+          : isConnector ? input.connectorLabel ?? input.connector
+            : undefined,
       worker: isWorker ? (input.worker as ProviderId) : undefined,
       envelopeId: isMessage ? input.envelopeId : undefined,
       summary: req.summary ?? command,
@@ -5178,6 +5186,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onApproveOnce={() => approveCommand("once")}
             peer={pendingPermission.peer}
             worker={pendingPermission.worker}
+            connector={pendingPermission.connector}
             onApproveForRun={pendingPermission.kind === "worker" ? undefined : () => approveCommand("run")}
             onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}

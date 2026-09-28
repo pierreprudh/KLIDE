@@ -1,10 +1,14 @@
 import { type ReactNode } from "react";
 import type { ProviderId } from "../agent/types";
 import { ProviderLogo } from "./ai/icons";
+import { ConnectorMark } from "./linkMark";
 
 type Props = {
   command: string;
-  kind?: "command" | "network" | "message" | "worker";
+  kind?: "command" | "network" | "message" | "worker" | "connector";
+  /** For a connector tool: the connector id, for its mark. `peer` holds its
+   *  label, said in words only when the mark alone wouldn't name it. */
+  connector?: string;
   /** For a message: the peer it goes to, by thread title. For a worker
    *  dispatch: who is being sent and as what — "Claude Code implementer", two
    *  facts set apart by a space, not a dot. */
@@ -77,6 +81,7 @@ export function InlineCommandReview({
   kind = "command",
   peer,
   worker,
+  connector,
   detail,
   externalPaths = [],
   onReject,
@@ -88,11 +93,15 @@ export function InlineCommandReview({
 }: Props) {
   const canApprovePattern = !!pattern && !!onApprovePattern && pattern !== command;
   const approveRunLabel =
-    kind === "network" ? "Approve target for this run"
+    kind === "connector" ? "Approve this tool for this run"
+      : kind === "network" ? "Approve target for this run"
       : kind === "message" ? "Approve messages from this agent for this run"
         : "Approve for this run";
   const approveOnceLabel = kind === "worker" ? "Dispatch" : "Approve";
-  const approveProjectLabel = kind === "network" ? "Approve target for this project" : "Approve for this project";
+  const approveProjectLabel =
+    kind === "connector" ? "Approve this tool for this project"
+      : kind === "network" ? "Approve target for this project"
+        : "Approve for this project";
   return (
     <div
       className="ai-qa-card"
@@ -132,6 +141,14 @@ export function InlineCommandReview({
           title={command}
         >
           {kind === "command" && <span style={{ color: "var(--fg-dim)", userSelect: "none" }}>$ </span>}
+          {kind === "connector" && connector && (
+            // The mark, then — for anything but GitHub, whose mark says it — the
+            // connector's name, set apart from the tool by space, not a dot.
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "bottom", marginRight: 7 }}>
+              <ConnectorMark connector={connector} size={13} />
+              {connector !== "github" && peer && <span style={{ color: "var(--accent)", fontWeight: 500 }}>{peer}</span>}
+            </span>
+          )}
           {kind === "message" && peer && <span style={{ color: "var(--accent)", fontWeight: 500 }}>@{peer} </span>}
           {kind === "worker" && peer && (
             <span style={{ color: "var(--accent)", fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "bottom" }}>

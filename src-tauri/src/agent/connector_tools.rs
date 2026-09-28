@@ -176,8 +176,8 @@ impl Catalog {
         let (connector, tool) = target(call);
         let label = self.connector(&connector).map(|c| c.label.as_str()).unwrap_or(connector.as_str());
         match call.name.as_str() {
-            CONNECTOR_TOOLS => Some(format!("{label} · tools")),
-            CONNECTOR_CALL => Some(format!("{label} · {tool}")),
+            CONNECTOR_TOOLS => Some(format!("{label} tools")),
+            CONNECTOR_CALL => Some(format!("{tool} on {label}")),
             _ => None,
         }
     }
@@ -341,8 +341,14 @@ where
         run_id: ctx.id.to_string(),
         tool_call_id: call.id.clone(),
         tool_name: call.name.clone(),
-        input: json!({ "target": key, "connector": connector, "tool": tool, "arguments": arguments }),
-        summary: format!("{} · {tool}", c.label),
+        input: json!({
+            "target": key,
+            "connector": connector,
+            "connectorLabel": c.label,
+            "tool": tool,
+            "arguments": arguments,
+        }),
+        summary: format!("{tool} on {}", c.label),
         reason: format!("The agent wants to use {} on {}, which can change things there.", tool, c.label),
         options: standard_gate_options("Approve this tool for this run", "Approve this tool for this project"),
     };
@@ -489,7 +495,8 @@ mod tests {
             _ => None,
         });
         let request = request.expect("a write asks first");
-        assert_eq!(request.summary, "GitHub · create_pull_request");
+        assert_eq!(request.summary, "create_pull_request on GitHub");
+        assert_eq!(request.input["connectorLabel"], "GitHub");
         assert_eq!(request.input["target"], "mcp:klide/create_pull_request");
         assert!(!result.ok);
         assert!(result.content.contains("declined"), "{}", result.content);

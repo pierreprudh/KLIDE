@@ -2,7 +2,7 @@ import { Globe } from "@phosphor-icons/react/dist/csr/Globe";
 import { Icon } from "../icons";
 import type { LinkSite } from "../linkIdentity";
 import type { ProviderId } from "../agent/types";
-import { ProviderLogo } from "./ai/icons";
+import { ProviderLogo, ToolIcon } from "./ai/icons";
 
 // The mark beside a link's name. Brand marks are the standing exception to the
 // icon vocabulary (see icons.tsx) — a logo is a specific drawing, not a glyph
@@ -26,6 +26,23 @@ const GITHUB_PATH =
 
 const NPM_PATH =
   "M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.332h-2.669zm12.001 0h-1.33v-4h-1.336v4h-1.335v-4h-1.33v4h-2.671V8.667h8.002v5.331zM10.665 10H12v2.667h-1.335V10z";
+
+/**
+ * The mark for a connector: GitHub's own for the GitHub connector, the plug
+ * every other connector shares. Drawn in `currentColor`, so it takes the tone
+ * of the row it sits in — a tool row's dim ink, a card's strong one — rather
+ * than LinkMark's fixed ink.
+ */
+export function ConnectorMark({ connector, size = 12 }: { connector: string; size?: number }) {
+  if (connector === "github") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ flexShrink: 0 }}>
+        <path d={GITHUB_PATH} />
+      </svg>
+    );
+  }
+  return <ToolIcon name="connector_call" size={size} />;
+}
 
 /**
  * A site's mark at text size. `null` draws the neutral globe — used where a

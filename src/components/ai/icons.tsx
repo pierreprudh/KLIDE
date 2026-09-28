@@ -588,6 +588,20 @@ const TOOL_ICON_PATHS: Record<string, ReactElement> = {
   ),
 };
 
+// The connector tools draw the Settings plug, so a call reads as "through a
+// connector" at a glance. A call to GitHub itself wears GitHub's mark instead
+// (`ConnectorMark` in linkMark.tsx) — this is the one for everything else.
+const CONNECTOR_PLUG = (
+  <>
+    <path d="M9 3v5" />
+    <path d="M15 3v5" />
+    <path d="M6 8h12v2.5a6 6 0 0 1-12 0V8Z" />
+    <path d="M12 16.5V21" />
+  </>
+);
+TOOL_ICON_PATHS.connector_call = CONNECTOR_PLUG;
+TOOL_ICON_PATHS.connector_tools = CONNECTOR_PLUG;
+
 const TOOL_ICON_FALLBACK = (
   <path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6l-2.8 2.8-2.5-.5-.5-2.5z" />
 );
