@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { claudeCodeSettings } from "../../ipc/delegateCommands";
 import { Select, Toggle } from "../settings/controls";
-import { configCommand, currentConfigValue, type ConfigOption } from "./cliConfig";
+import { configCommand, currentConfigValue, unconfirmedConfigChanges, type ConfigOption } from "./cliConfig";
 
 type Props = {
   options: ConfigOption[];
@@ -23,11 +23,17 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
-    if (!workspaceRoot) return;
+    if (!workspaceRoot || disabled) return;
     let alive = true;
-    void claudeCodeSettings(workspaceRoot).then((s) => { if (alive) setCurrent(s); }).catch(() => {});
+    // A completed (or cancelled) turn triggers a fresh read. Never promote
+    // staged edits just because sending the command was accepted.
+    void claudeCodeSettings(workspaceRoot).then((settings) => {
+      if (!alive) return;
+      setCurrent(settings);
+      setStaged((pending) => unconfirmedConfigChanges(pending, settings));
+    }).catch(() => {});
     return () => { alive = false; };
-  }, [workspaceRoot]);
+  }, [workspaceRoot, disabled]);
 
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -51,7 +57,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
       <header style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: "var(--fg-strong)", fontSize: 13, fontWeight: 600 }}>Claude Code settings</div>
-          <div style={{ color: "var(--fg-subtle)", fontSize: 12 }}>Saved to Claude Code's own config</div>
+          <div style={{ color: "var(--fg-subtle)", fontSize: 12 }}>Changes are confirmed from Claude Code's config</div>
         </div>
         <input
           className="klide-field"
@@ -103,7 +109,7 @@ export function CliConfigCard({ options, workspaceRoot, onApply, disabled = fals
         <button
           type="button"
           disabled={disabled || !message}
-          onClick={() => { if (message) { onApply(message); setCurrent((prev) => ({ ...prev, ...staged })); setStaged({}); } }}
+          onClick={() => { if (message) { onApply(message); } }}
           style={textButton(message && !disabled ? "var(--accent)" : "var(--fg-dim)", !!message && !disabled)}
         >
           {count > 0 ? `Apply ${count} change${count === 1 ? "" : "s"}` : "Apply"}

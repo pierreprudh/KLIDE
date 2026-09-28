@@ -129,7 +129,7 @@ pub async fn run_subscription_chat(
             let emitted = AtomicBool::new(false);
             match run_cli_streaming(
                 adapter,
-                command?,
+                with_command_instructions(command?, adapter.id(), cli_command.is_some(), &messages),
                 prompt,
                 label,
                 &cwd,
@@ -155,7 +155,7 @@ pub async fn run_subscription_chat(
                         .ok_or_else(|| format!("{label} has no structured mode"))??;
                     run_cli_streaming(
                         adapter,
-                        command,
+                        with_command_instructions(command, adapter.id(), cli_command.is_some(), &messages),
                         if cli_command.is_some() { latest_user_message(&messages) } else { prompt_from_messages(&messages) },
                         label,
                         &cwd,
@@ -360,6 +360,27 @@ async fn run_cli_streaming(
     Ok(answer)
 }
 
+fn with_command_instructions(
+    mut command: TokioCommand,
+    provider: &str,
+    is_cli_command: bool,
+    messages: &[serde_json::Value],
+) -> TokioCommand {
+    // Keep native slash syntax on stdin while carrying the current mode in
+    // the CLI's separate system channel, including cold-session retries.
+    if provider == "claude-code" && is_cli_command {
+        let system = messages.iter()
+            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+            .map(text_from_message)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if !system.trim().is_empty() {
+            command.arg("--append-system-prompt").arg(system);
+        }
+    }
+    command
+}
+
 /// The newest user message, which is all a resumed session still needs — it
 /// already holds everything before it.
 ///
@@ -514,6 +535,25 @@ mod tests {
 
     fn msg(role: &str, text: &str) -> serde_json::Value {
         serde_json::json!({ "role": role, "content": text })
+    }
+
+    #[test]
+    fn native_commands_keep_mode_instructions_outside_the_command_text() {
+        let messages = vec![
+            msg("system", "PLAN MODE: do not edit files."),
+            msg("system", "Use the project rules."),
+            msg("user", "/init"),
+        ];
+        for resume in [None, Some("session")] {
+            let mut command = TokioCommand::new("claude");
+            if let Some(id) = resume { command.arg("--resume").arg(id); }
+            let command = with_command_instructions(command, "claude-code", true, &messages);
+            let args: Vec<_> = command.as_std().get_args().map(|s| s.to_string_lossy().into_owned()).collect();
+            assert_eq!(&args[args.len()-2..], &["--append-system-prompt", "PLAN MODE: do not edit files.\n\nUse the project rules."]);
+            assert_eq!(latest_user_message(&messages), "/init");
+        }
+        let other = with_command_instructions(TokioCommand::new("codex"), "codex", true, &messages);
+        assert_eq!(other.as_std().get_args().count(), 0);
     }
 
     #[test]

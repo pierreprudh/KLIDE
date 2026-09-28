@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configCommand, currentConfigValue, parseConfigUsage } from "./cliConfig";
+import { configCommand, currentConfigValue, parseConfigUsage, unconfirmedConfigChanges } from "./cliConfig";
 
 const USAGE = `Usage: /config key=value [key=value ...]
   autoCompact=true|false
@@ -36,5 +36,18 @@ describe("current values", () => {
     expect(currentConfigValue({ verbose: false, theme: "dark", projects: {} }, "verbose")).toBe("false");
     expect(currentConfigValue({ theme: "dark" }, "theme")).toBe("dark");
     expect(currentConfigValue({ projects: {} }, "projects")).toBeNull();
+  });
+});
+
+describe("confirming applied settings", () => {
+  it("keeps failed and unsent edits pending after a partial apply", () => {
+    const edits = { autoCompact: "false", editor: "vim", language: "two words" };
+    expect(configCommand(edits)).toBe("/config autoCompact=false editor=vim");
+    expect(unconfirmedConfigChanges(edits, { autoCompact: false, editor: "normal", language: "en" }))
+      .toEqual({ editor: "vim", language: "two words" });
+    expect(unconfirmedConfigChanges(edits, {})).toEqual(edits);
+  });
+  it("clears only confirmed values, including CLI whitespace normalization", () => {
+    expect(unconfirmedConfigChanges({ language: " en ", verbose: "false" }, { language: "en", verbose: false })).toEqual({});
   });
 });

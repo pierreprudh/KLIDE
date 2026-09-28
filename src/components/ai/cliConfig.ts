@@ -46,3 +46,10 @@ export function configCommand(changes: Record<string, string>): string | null {
     .filter(([, v]) => v !== "" && !/\s/.test(v));
   return pairs.length ? `/config ${pairs.map(([k, v]) => `${k}=${v}`).join(" ")}` : null;
 }
+
+/** Keep edits pending until the settings read back from disk confirm them. */
+export function unconfirmedConfigChanges(changes: Record<string, string>, settings: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.entries(changes).filter(([key, value]) =>
+    currentConfigValue(settings, key) !== value.trim(),
+  ));
+}
