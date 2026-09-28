@@ -175,7 +175,7 @@ impl Delegate for ClaudeCode {
         let spec = ChatSpec { model: "", effort: None, resume: None, mcp: None, allowed_commands: &[] };
         Some(self.chat_stream_invocation(cwd, &spec)?.map(|mut command| {
             command.arg("--no-session-persistence");
-            SlashProbe { command, stdin: b"/cost".to_vec() }
+            SlashProbe { command, stdin: b"/cost".to_vec(), basic_auth: None }
         }))
     }
 

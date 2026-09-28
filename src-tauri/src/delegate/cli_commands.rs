@@ -45,6 +45,16 @@ pub struct CliCommands {
 pub struct SlashProbe {
     pub command: tokio::process::Command,
     pub stdin: Vec<u8>,
+    /// Credentials for a probe that answers over HTTP
+    /// ([`Delegate::probe_fetch_url`]) — minted per probe, so the moment the
+    /// CLI's server is up it serves only this caller.
+    pub basic_auth: Option<(String, String)>,
+}
+
+/// Where a probe line pointed: the list itself, or a URL that serves it.
+enum ProbeStep {
+    Commands(CliCommands),
+    Fetch(String),
 }
 
 impl CliCommands {
@@ -99,7 +109,7 @@ pub async fn cli_commands(adapter: &dyn Delegate, cwd: &str) -> Result<CliComman
     if let Some(known) = remembered(adapter.id(), cwd) {
         return Ok(known);
     }
-    let SlashProbe { mut command, stdin } = probe?;
+    let SlashProbe { mut command, stdin, basic_auth } = probe?;
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     let mut child = command.spawn().map_err(|e| format!("Unable to start {}: {e}", adapter.id()))?;
     if let Some(mut pipe) = child.stdin.take() {
@@ -108,12 +118,26 @@ pub async fn cli_commands(adapter: &dyn Delegate, cwd: &str) -> Result<CliComman
     let stdout = child.stdout.take().ok_or("Unable to read the CLI's output")?;
     let found = timeout(PROBE_CEILING, async {
         let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        let step = loop {
+            let Ok(Some(line)) = lines.next_line().await else { return None };
             if let Some(commands) = adapter.parse_probe_line(&line) {
-                return Some(commands);
+                break ProbeStep::Commands(commands);
+            }
+            if let Some(url) = adapter.probe_fetch_url(&line) {
+                break ProbeStep::Fetch(url);
+            }
+        };
+        match step {
+            ProbeStep::Commands(commands) => Some(commands),
+            ProbeStep::Fetch(url) => {
+                let mut request = reqwest::Client::new().get(&url);
+                if let Some((user, password)) = &basic_auth {
+                    request = request.basic_auth(user, Some(password));
+                }
+                let body = request.send().await.ok()?.error_for_status().ok()?.text().await.ok()?;
+                adapter.parse_probe_body(&body)
             }
         }
-        None
     })
     .await
     .ok()
@@ -161,7 +185,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_probe_lists_each_clis_commands() {
-        for adapter in [&super::super::ClaudeCode as &dyn Delegate, &super::super::Omp] {
+        for adapter in [&super::super::ClaudeCode as &dyn Delegate, &super::super::Omp, &super::super::OpenCode] {
             let got = cli_commands(adapter, env!("CARGO_MANIFEST_DIR")).await.unwrap();
             let runnable: Vec<_> = got.commands.iter().filter(|c| got.runs(c)).collect();
             println!("{}: {} listed, {} runnable, {} described: {:?}", adapter.id(), got.commands.len(), runnable.len(), got.descriptions.len(), &runnable[..runnable.len().min(12)]);

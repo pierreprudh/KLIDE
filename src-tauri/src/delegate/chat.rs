@@ -109,8 +109,18 @@ pub async fn run_subscription_chat(
     // A `/` command the CLI said it runs goes out as typed even on a cold
     // start: folded under Klide's preamble it would reach the model as prose.
     let cli_command = super::cli_commands::leading_command(adapter.id(), &cwd, &latest_user_message(&messages));
-    let prompt = match (&resume, &cli_command) {
-        (Some(_), _) | (None, Some(_)) => latest_user_message(&messages),
+    // What a command turn sends: the command as typed, or — for a CLI that
+    // takes the name as a flag (`run_command_args`) — only its arguments.
+    let command_message = cli_command.as_deref().map(|name| {
+        let typed = latest_user_message(&messages);
+        match adapter.run_command_args(name) {
+            Some(_) => command_arguments(&typed).to_string(),
+            None => typed,
+        }
+    });
+    let prompt = match (&resume, &command_message) {
+        (_, Some(message)) => message.clone(),
+        (Some(_), None) => latest_user_message(&messages),
         (None, None) => prompt_from_messages(&messages),
     };
 
@@ -129,7 +139,7 @@ pub async fn run_subscription_chat(
             let emitted = AtomicBool::new(false);
             match run_cli_streaming(
                 adapter,
-                with_command_instructions(command?, adapter, cli_command.is_some(), &messages),
+                with_command_instructions(command?, adapter, cli_command.as_deref(), &messages),
                 prompt,
                 label,
                 &cwd,
@@ -155,8 +165,8 @@ pub async fn run_subscription_chat(
                         .ok_or_else(|| format!("{label} has no structured mode"))??;
                     run_cli_streaming(
                         adapter,
-                        with_command_instructions(command, adapter, cli_command.is_some(), &messages),
-                        if cli_command.is_some() { latest_user_message(&messages) } else { prompt_from_messages(&messages) },
+                        with_command_instructions(command, adapter, cli_command.as_deref(), &messages),
+                        command_message.clone().unwrap_or_else(|| prompt_from_messages(&messages)),
                         label,
                         &cwd,
                         key.as_deref(),
@@ -169,7 +179,7 @@ pub async fn run_subscription_chat(
             }
         }
         None => run_cli_with_stdin(
-            with_command_instructions(adapter.chat_invocation(&cwd, model)?, adapter, cli_command.is_some(), &messages),
+            with_command_instructions(adapter.chat_invocation(&cwd, model)?, adapter, cli_command.as_deref(), &messages),
             prompt,
             label,
             on_chunk,
@@ -368,12 +378,16 @@ async fn run_cli_streaming(
 fn with_command_instructions(
     mut command: TokioCommand,
     adapter: &dyn Delegate,
-    is_cli_command: bool,
+    cli_command: Option<&str>,
     messages: &[serde_json::Value],
 ) -> TokioCommand {
     // Keep native slash syntax on stdin while carrying the current mode in
     // the CLI's separate system channel, including cold-session retries.
-    if let Some(flag) = adapter.append_system_prompt_flag().filter(|_| is_cli_command) {
+    let Some(name) = cli_command else { return command };
+    if let Some(args) = adapter.run_command_args(name) {
+        command.args(args);
+    }
+    if let Some(flag) = adapter.append_system_prompt_flag() {
         let system = messages.iter()
             .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
             .map(text_from_message)
@@ -384,6 +398,12 @@ fn with_command_instructions(
         }
     }
     command
+}
+
+/// `/review main --staged` → `main --staged`: what follows the command word.
+fn command_arguments(message: &str) -> &str {
+    let message = message.trim_start();
+    message.split_once(char::is_whitespace).map(|(_, rest)| rest.trim()).unwrap_or("")
 }
 
 /// The newest user message, which is all a resumed session still needs — it
@@ -543,6 +563,16 @@ mod tests {
     }
 
     #[test]
+    fn a_cli_that_takes_the_command_as_a_flag_gets_the_name_there() {
+        let messages = vec![msg("user", "/review main --staged")];
+        let command = with_command_instructions(TokioCommand::new("opencode"), &super::super::OpenCode, Some("review"), &messages);
+        let args: Vec<_> = command.as_std().get_args().map(|s| s.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, ["--command", "review"]);
+        assert_eq!(command_arguments("/review main --staged"), "main --staged");
+        assert_eq!(command_arguments("/init"), "");
+    }
+
+    #[test]
     fn native_commands_keep_mode_instructions_outside_the_command_text() {
         let messages = vec![
             msg("system", "PLAN MODE: do not edit files."),
@@ -552,12 +582,12 @@ mod tests {
         for resume in [None, Some("session")] {
             let mut command = TokioCommand::new("claude");
             if let Some(id) = resume { command.arg("--resume").arg(id); }
-            let command = with_command_instructions(command, &super::super::ClaudeCode, true, &messages);
+            let command = with_command_instructions(command, &super::super::ClaudeCode, Some("init"), &messages);
             let args: Vec<_> = command.as_std().get_args().map(|s| s.to_string_lossy().into_owned()).collect();
             assert_eq!(&args[args.len()-2..], &["--append-system-prompt", "PLAN MODE: do not edit files.\n\nUse the project rules."]);
             assert_eq!(latest_user_message(&messages), "/init");
         }
-        let other = with_command_instructions(TokioCommand::new("codex"), &super::super::Codex, true, &messages);
+        let other = with_command_instructions(TokioCommand::new("codex"), &super::super::Codex, Some("init"), &messages);
         assert_eq!(other.as_std().get_args().count(), 0);
     }
 

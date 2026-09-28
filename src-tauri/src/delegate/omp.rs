@@ -63,7 +63,7 @@ impl Delegate for Omp {
         Some(crate::cli::resolve_command(self.binary()).map(|cli| {
             let mut command = tokio::process::Command::new(cli);
             command.current_dir(cwd).args(["--mode", "rpc", "--no-session"]);
-            SlashProbe { command, stdin: format!("{{\"type\":\"get_available_commands\",\"id\":\"{PROBE_ID}\"}}\n").into_bytes() }
+            SlashProbe { command, stdin: format!("{{\"type\":\"get_available_commands\",\"id\":\"{PROBE_ID}\"}}\n").into_bytes(), basic_auth: None }
         }))
     }
 

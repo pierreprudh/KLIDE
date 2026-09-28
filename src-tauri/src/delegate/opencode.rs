@@ -2,6 +2,7 @@ use super::runs::{
     cap_messages, clean_title, project_name, tool_file_path, transcript_status, RunToolCall,
     TranscriptState,
 };
+use super::cli_commands::{CliCommands, SlashProbe};
 use super::chat_stream::{result_text, StreamItem};
 use super::{shell_quote, AgentRun, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
 use std::collections::HashSet;
@@ -132,6 +133,42 @@ impl Delegate for OpenCode {
     /// `opencode run -s <id>` continues the named session.
     fn resumes_sessions(&self) -> bool {
         true
+    }
+
+    /// OpenCode lists its commands — built-ins (`init`, `review`), the user's
+    /// and the project's, and skills — only over its local server
+    /// (`GET /command`). The probe starts `opencode serve` in the workspace
+    /// long enough to ask, behind a password minted for this probe alone (its
+    /// API can run the agent), then it is killed. No session is created.
+    fn slash_command_probe(&self, cwd: &str) -> Option<Result<SlashProbe, String>> {
+        let password = match probe_password() {
+            Ok(password) => password,
+            Err(e) => return Some(Err(e)),
+        };
+        Some(crate::cli::resolve_command(self.binary()).map(|cli| {
+            let mut command = tokio::process::Command::new(cli);
+            command
+                .current_dir(cwd)
+                .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
+                .env("OPENCODE_SERVER_USERNAME", "opencode")
+                .env("OPENCODE_SERVER_PASSWORD", &password);
+            SlashProbe { command, stdin: Vec::new(), basic_auth: Some(("opencode".to_string(), password)) }
+        }))
+    }
+
+    fn probe_fetch_url(&self, line: &str) -> Option<String> {
+        let url = line.split_once("listening on ")?.1.split_whitespace().next()?;
+        url.starts_with("http://127.0.0.1:").then(|| format!("{}/command", url.trim_end_matches('/')))
+    }
+
+    fn parse_probe_body(&self, body: &str) -> Option<CliCommands> {
+        parse_command_list(body)
+    }
+
+    /// `opencode run` reads `/init` as prose; a command goes by name in
+    /// `--command`, and only its arguments are the message.
+    fn run_command_args(&self, name: &str) -> Option<Vec<String>> {
+        Some(vec!["--command".to_string(), name.to_string()])
     }
 
     /// OpenCode's dialect is its own: one event object per line, each wrapping a
@@ -680,6 +717,27 @@ fn message_text(parts: &[serde_json::Value]) -> Option<(String, Vec<RunToolCall>
     }
 }
 
+fn probe_password() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| format!("OS RNG unavailable: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// `GET /command`: every command with its description. Each runs headless
+/// through `--command`, so none is terminal-only.
+fn parse_command_list(body: &str) -> Option<CliCommands> {
+    let list: Vec<serde_json::Value> = serde_json::from_str(body).ok()?;
+    let mut out = CliCommands::default();
+    for command in list {
+        let Some(name) = command.get("name").and_then(|v| v.as_str()) else { continue };
+        out.commands.push(name.to_string());
+        if let Some(desc) = command.get("description").and_then(|v| v.as_str()).map(str::trim).filter(|d| !d.is_empty()) {
+            out.descriptions.insert(name.to_string(), desc.to_string());
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +748,23 @@ mod tests {
     const TEXT: &str = r#"{"type":"text","sessionID":"ses_fef0","part":{"id":"prt_02","type":"text","text":"DONE"}}"#;
     const TOOL_DONE: &str = r#"{"type":"tool_use","sessionID":"ses_fef0","part":{"type":"tool","tool":"read","callID":"call_1b21","state":{"status":"completed","input":{"filePath":"/ws/TODO.md","limit":1},"output":"<content>\n1: # TODO\n</content>"}}}"#;
     const TOOL_RUNNING: &str = r#"{"type":"tool_use","sessionID":"ses_fef0","part":{"type":"tool","tool":"bash","callID":"call_9","state":{"status":"running","input":{"command":"npm test"}}}}"#;
+
+    #[test]
+    fn probe_reads_the_server_url_and_its_command_list() {
+        assert_eq!(
+            OpenCode.probe_fetch_url("opencode server listening on http://127.0.0.1:52011"),
+            Some("http://127.0.0.1:52011/command".to_string())
+        );
+        // Only loopback is ever asked; warnings are not URLs.
+        assert_eq!(OpenCode.probe_fetch_url("listening on http://0.0.0.0:4096"), None);
+        assert_eq!(OpenCode.probe_fetch_url("Warning: OPENCODE_SERVER_PASSWORD is not set"), None);
+        let got = OpenCode
+            .parse_probe_body(r#"[{"name":"init","description":"guided AGENTS.md setup","source":"command"},{"name":"tdd","source":"skill","description":" "}]"#)
+            .unwrap();
+        assert!(got.runs("init") && got.runs("tdd"));
+        assert_eq!(got.descriptions.get("init").map(String::as_str), Some("guided AGENTS.md setup"));
+        assert!(!got.descriptions.contains_key("tdd"));
+    }
 
     #[test]
     fn one_tool_event_yields_both_the_call_and_its_result() {

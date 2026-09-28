@@ -291,6 +291,24 @@ pub trait Delegate: Sync {
         })
     }
 
+    /// A probe line that names a URL serving the command list (a CLI that
+    /// answers over its local server rather than on stdout).
+    fn probe_fetch_url(&self, _line: &str) -> Option<String> {
+        None
+    }
+
+    /// The body that URL served, read as the command list.
+    fn parse_probe_body(&self, _body: &str) -> Option<CliCommands> {
+        None
+    }
+
+    /// How this CLI runs one of its commands headless, when it is not by
+    /// reading `/name args` as the message: the extra arguments, with only
+    /// `args` then sent as the message (`opencode run --command name`).
+    fn run_command_args(&self, _name: &str) -> Option<Vec<String>> {
+        None
+    }
+
     /// The flag that adds text to this CLI's system prompt for one run, so a
     /// `/` command sent verbatim still carries Klide's mode instructions.
     fn append_system_prompt_flag(&self) -> Option<&'static str> {
