@@ -3924,7 +3924,6 @@ function App() {
                           width: 30,
                           flexShrink: 0,
                           border: "none",
-                          borderBottom: "1px solid var(--border)",
                           display: "grid",
                           placeItems: "center",
                           background: "transparent",

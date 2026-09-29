@@ -8034,7 +8034,10 @@ button:focus-visible .menu-leadout {
    it's the primary editing surface, not a sidecar. */
 .editor-dock-overlay {
   position: absolute;
-  top: 0;
+  /* Runs up through the titlebar band to the window's top edge, the mirror
+     of the rail on the left: one full-height column with an unbroken
+     hairline, instead of a pane that starts halfway down the band. */
+  top: calc(-1 * var(--titlebar-h));
   right: 0;
   bottom: 0;
   width: clamp(480px, 52vw, 960px);
