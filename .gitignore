@@ -32,6 +32,7 @@ GOAL_LOOP_DESIGN.md
 # contracts below are the exception: the README links them, so they ship.
 docs/*
 !docs/AGENT_COORDINATION.md
+!docs/BACKGROUND_CONVERSATIONS.md
 !docs/HARNESS_CONTRACT.md
 !docs/KLIDE_COORDINATION_SCHEMA.md
 !docs/KLIDE_HARNESS_SCHEMA.md

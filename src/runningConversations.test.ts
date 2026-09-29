@@ -62,7 +62,7 @@ async function load() {
 
 describe("running conversations", () => {
   it("confirms a published row against Rust before calling it live", async () => {
-    invokeMock.mockResolvedValue("running");
+    invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -78,7 +78,7 @@ describe("running conversations", () => {
     // `agent_start_run` has round-tripped — so the first status ask races the
     // registration and answers null while the run is real. The confirmation
     // retries instead of writing the run off for the whole turn.
-    invokeMock.mockResolvedValueOnce(null).mockResolvedValue("running");
+    invokeMock.mockResolvedValueOnce({ status: null, fromSeq: null }).mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -98,7 +98,7 @@ describe("running conversations", () => {
     // The exact shape a panel unmounted mid-run leaves behind: the last
     // snapshot it wrote says running, the run settled afterwards, and nothing
     // was mounted to correct the record.
-    invokeMock.mockResolvedValue(null); // supervisor no longer tracks it
+    invokeMock.mockResolvedValue({ status: null, fromSeq: null }); // supervisor no longer tracks it
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -109,7 +109,7 @@ describe("running conversations", () => {
   });
 
   it("drops the row when the run it is following emits a terminal event", async () => {
-    invokeMock.mockResolvedValue("running");
+    invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     const notified = vi.fn();
@@ -128,7 +128,7 @@ describe("running conversations", () => {
   });
 
   it("ignores a conversation with no Harness Run — a Delegate PTY is not one", async () => {
-    invokeMock.mockResolvedValue(null);
+    invokeMock.mockResolvedValue({ status: null, fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -139,7 +139,7 @@ describe("running conversations", () => {
   });
 
   it("follows each live run once, however often the store republishes", async () => {
-    invokeMock.mockResolvedValue("running");
+    invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -158,7 +158,7 @@ describe("running conversations", () => {
     // Two panels, two live runs — both rail rows have to animate. Nothing here
     // is single-flight across ids: the guards, the watchers and the event
     // streams are all per conversation.
-    invokeMock.mockResolvedValue("running");
+    invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -172,7 +172,7 @@ describe("running conversations", () => {
   });
 
   it("retires one of two concurrent runs without disturbing the other", async () => {
-    invokeMock.mockResolvedValue("running");
+    invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     subscribeRunningConversations(() => {});
@@ -190,7 +190,7 @@ describe("running conversations", () => {
   });
 
   it("stops following a run whose panel came back and settled it", async () => {
-    invokeMock.mockResolvedValue("running");
+    invokeMock.mockResolvedValue({ status: "running", fromSeq: null });
 
     const { subscribeRunningConversations, getRunningConversationIds } = await load();
     const { settleKlideConvo } = await import("./klideConvos");

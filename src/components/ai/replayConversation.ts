@@ -9,8 +9,8 @@
 // That decoration has to agree with the live run path in AiPanel, and the rule
 // they share is `IS_SILENT_RUN_ERROR`.
 
-import type { AgentEvent } from "../../agent/types";
-import { foldAgentEvents, foldedToMsgs } from "../../agent/foldEvents";
+import type { AgentEvent, ProviderId } from "../../agent/types";
+import { foldAgentEvents, foldedToMsgs, foldedRowToMsgs } from "../../agent/foldEvents";
 import type { RunMessage } from "../../runs";
 import type { Conversation, Msg } from "./types";
 
@@ -128,6 +128,7 @@ function conversationWeight(msgs: Msg[]): number {
 export function replayForAdoption(
   events: AgentEvent[],
   current: Msg[],
+  live?: { provider: ProviderId; delegateHeadless?: true },
 ): Msg[] | null {
   const queuedLocal = current.filter(
     (m) => m.role === "user" && m.queueState === "queued",
@@ -137,8 +138,25 @@ export function replayForAdoption(
   // which is exactly what a reattached panel showed when the provider timed
   // out while nobody was on the live channel.
   const errorLine = runErrorLine(events);
+  const tail = events[events.length - 1]?.type;
+  const active = live && tail !== "run_result" && tail !== "run_error";
+  const rows = foldAgentEvents(events);
+  let lastUser = -1;
+  rows.forEach((row, index) => { if (row.kind === "user") lastUser = index; });
+  const messages = rows.flatMap((row, index) => foldedRowToMsgs(row,
+    active && index > lastUser
+      ? { runningPlaceholders: true, delegate: { delegateHeadless: live.delegateHeadless } }
+      : {},
+  ));
+  // A silent provider phase still needs an assistant row to carry its mark
+  // and working indicator. Replace it naturally when the first delta arrives.
+  if (active && messages[messages.length - 1]?.role === "user") {
+    const started = [...events].reverse().find((event) => event.type === "run_started");
+    messages.push({ role: "assistant", content: "", provider: started?.provider ?? live.provider,
+      model: started?.model, delegateHeadless: live.delegateHeadless });
+  }
   const replayed = [
-    ...eventsToMsgs(events),
+    ...messages,
     ...(errorLine ? [errorLine] : []),
     ...queuedLocal,
   ];

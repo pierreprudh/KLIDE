@@ -982,6 +982,8 @@ pub fn run() {
             preview_file,
             reveal_entry,
             storage::app_storage_dirs,
+            storage::app_storage_conversations,
+            storage::app_storage_delete_conversation,
             storage::app_storage_reveal,
             storage::app_storage_set_runs_dir,
             storage::app_storage_reset_runs_dir,
@@ -1247,7 +1249,6 @@ mod blocking_door_tests {
         "delegate_pty_stop",
         // local_servers.rs / agent/mod.rs — kill a child / read a status map
         "ai_local_server_stop",
-        "agent_run_status",
         // Observer controls touch only the in-memory registry and a oneshot.
         "agent_list_observers",
         "agent_stop_observer",

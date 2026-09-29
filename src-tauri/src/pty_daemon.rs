@@ -111,9 +111,10 @@ pub fn ensure_token(data_dir: &Path) -> Result<String, String> {
 /// runs what it is given.
 pub struct DaemonState {
     host: SessionHost,
+    chats: Arc<crate::agent::daemon::RunHost>,
     /// Event-stream connections, keyed by a client id so a dead writer can be
     /// dropped from inside the broadcast loop.
-    subscribers: Mutex<HashMap<u64, UnixStream>>,
+    subscribers: Mutex<HashMap<u64, std::sync::mpsc::SyncSender<Arc<String>>>>,
     next_client: AtomicU64,
     /// Last request or event, for the idle-exit check.
     active_ms: AtomicI64,
@@ -143,8 +144,11 @@ impl DaemonState {
         let Ok(line) = serde_json::to_string(event) else {
             return;
         };
+        let line = Arc::new(line);
         let mut subs = self.subscribers.lock().unwrap();
-        subs.retain(|_, stream| writeln!(stream, "{line}").is_ok());
+        // A suspended GUI must never block the process producing its answer.
+        // Slow consumers reconnect and replay the durable sequence.
+        subs.retain(|_, sender| sender.try_send(line.clone()).is_ok());
     }
 }
 
@@ -249,14 +253,7 @@ pub fn daemon_main(data_dir: PathBuf) -> ! {
             std::process::exit(1);
         }
     };
-    let state = Arc::new(DaemonState {
-        host: SessionHost::default(),
-        subscribers: Mutex::new(HashMap::new()),
-        next_client: AtomicU64::new(1),
-        active_ms: AtomicI64::new(crate::pty_host::now_ms()),
-        data_dir: data_dir.clone(),
-        token,
-    });
+    let state = new_state(data_dir.clone(), token);
     state.log(&format!(
         "ptyd v{} listening (pid {})",
         env!("CARGO_PKG_VERSION"),
@@ -270,7 +267,7 @@ pub fn daemon_main(data_dir: PathBuf) -> ! {
         std::thread::spawn(move || loop {
             std::thread::sleep(IDLE_CHECK_EVERY);
             let busy =
-                !state.host.live_ids().is_empty() || !state.subscribers.lock().unwrap().is_empty();
+                !state.host.live_ids().is_empty() || !state.chats.statuses().is_empty() || !state.subscribers.lock().unwrap().is_empty();
             if busy {
                 state.touch();
                 continue;
@@ -353,7 +350,9 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
         match request {
             Request::Subscribe => {
                 let id = state.next_client.fetch_add(1, Ordering::Relaxed);
-                if let Ok(event_half) = writer.try_clone() {
+                if let Ok(mut event_half) = writer.try_clone() {
+                    let (tx, rx) = std::sync::mpsc::sync_channel::<Arc<String>>(128);
+                    let _ = event_half.set_write_timeout(Some(std::time::Duration::from_secs(1)));
                     // Ack THEN register, both under the broadcast lock: a
                     // session streaming at full tilt broadcasts every ~15ms,
                     // and a chunk slipping out between registration and the
@@ -367,8 +366,16 @@ fn handle_client(stream: UnixStream, state: Arc<DaemonState>) {
                         if respond(&mut writer, &Response::Subscribed).is_err() {
                             return;
                         }
-                        subs.insert(id, event_half);
+                        subs.insert(id, tx);
                     }
+                    std::thread::spawn(move || {
+                        while let Ok(line) = rx.recv() {
+                            if writeln!(event_half, "{line}").is_err() { break; }
+                        }
+                        // Wake the other half and the client when backpressure
+                        // drops this subscriber, rather than leaving it idle.
+                        let _ = event_half.shutdown(std::net::Shutdown::Both);
+                    });
                     // Keep reading only to notice the disconnect: an event
                     // stream client sends nothing more.
                     let mut drain = BufReader::new(writer);
@@ -411,9 +418,25 @@ fn respond(writer: &mut UnixStream, response: &Response) -> std::io::Result<()> 
 
 fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
     match request {
+        Request::ChatStart { request, runs_dir } => match state.chats.start(*request, runs_dir) {
+            Ok(from_seq) => Response::ChatStarted { from_seq },
+            Err(message) => Response::Err { message },
+        },
+        Request::ChatStatus { run_id } => {
+            let (status, from_seq) = state.chats.status(&run_id);
+            Response::ChatStatus { status, from_seq }
+        },
+        Request::ChatOperations { run_id } => Response::ChatOperations { operations: state.chats.operations(&run_id) },
+        Request::ChatOperationReply { operation_id, result } => { state.chats.reply(&operation_id, result); Response::Ok },
+        Request::ChatList => Response::ChatList { runs: state.chats.statuses() },
+        Request::ChatControl { run_id, control } => match state.chats.control(&run_id, control) {
+            Ok(answered) => Response::ChatControlled { answered },
+            Err(message) => Response::Err { message },
+        },
         Request::Ping => Response::Pong {
             version: env!("CARGO_PKG_VERSION").to_string(),
             pid: std::process::id(),
+            protocol: crate::pty_wire::PROTOCOL_VERSION,
         },
         Request::ReuseOrCd { session_id, cwd } => {
             match state.host.reuse_or_cd(&session_id, cwd.as_deref()) {
@@ -489,19 +512,37 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
     }
 }
 
+fn new_state(data_dir: PathBuf, token: String) -> Arc<DaemonState> {
+    Arc::new_cyclic(|weak: &std::sync::Weak<DaemonState>| {
+        let target = weak.clone();
+        let chats = crate::agent::daemon::RunHost::new(data_dir.clone(), Arc::new(move |run_id, seq, event| {
+                if let Some(state) = target.upgrade() {
+                    state.touch();
+                    state.broadcast(&Event::Chat { run_id: run_id.into(), seq, event: event.clone() });
+                }
+            }));
+        let operations = weak.clone();
+        chats.set_operation_sink(Arc::new(move |operation| {
+            if let Some(state) = operations.upgrade() { state.broadcast(&Event::ChatOperation { operation }); }
+        }));
+        DaemonState {
+            host: SessionHost::default(),
+            chats,
+            subscribers: Mutex::new(HashMap::new()),
+            next_client: AtomicU64::new(1),
+            active_ms: AtomicI64::new(crate::pty_host::now_ms()),
+            data_dir,
+            token,
+        }
+    })
+}
+
 /// Test-only constructor so integration tests can serve without the process
 /// lifecycle (idle exit, socket cleanup) of [`daemon_main`].
 #[cfg(test)]
 pub fn test_state(data_dir: PathBuf) -> Arc<DaemonState> {
     let token = ensure_token(&data_dir).expect("test token");
-    Arc::new(DaemonState {
-        host: SessionHost::default(),
-        subscribers: Mutex::new(HashMap::new()),
-        next_client: AtomicU64::new(1),
-        active_ms: AtomicI64::new(crate::pty_host::now_ms()),
-        data_dir,
-        token,
-    })
+    new_state(data_dir, token)
 }
 
 #[cfg(test)]
@@ -564,7 +605,7 @@ mod tests {
     fn ping_reports_version_and_pid() {
         let server = TestServer::start("ping");
         match server.roundtrip(&Request::Ping) {
-            Response::Pong { version, pid } => {
+            Response::Pong { version, pid, .. } => {
                 assert_eq!(version, env!("CARGO_PKG_VERSION"));
                 assert_eq!(pid, std::process::id());
             }
@@ -814,7 +855,7 @@ mod tests {
                     assert!(!outcome.stop_requested);
                     break;
                 }
-                Event::ExternalId { .. } => {}
+                Event::ExternalId { .. } | Event::Chat { .. } | Event::ChatOperation { .. } => {}
             }
         }
         assert!(

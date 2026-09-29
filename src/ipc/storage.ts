@@ -64,3 +64,20 @@ export function setRunsDir(path: string, moveExisting: boolean): Promise<RunsDir
 export function resetRunsDir(moveExisting: boolean): Promise<RunsDirChange> {
   return invoke<RunsDirChange>("app_storage_reset_runs_dir", { moveExisting });
 }
+
+export type StoredRun = {
+  id: string;
+  title: string;
+  updatedMs: number;
+  bytes: number;
+  transcriptBytes: number;
+  supportingBytes: number;
+};
+
+export function readStoredRuns(): Promise<StoredRun[]> {
+  return invoke<StoredRun[]>("app_storage_conversations");
+}
+
+export function deleteStoredRun(id: string): Promise<void> {
+  return invoke<void>("app_storage_delete_conversation", { id });
+}

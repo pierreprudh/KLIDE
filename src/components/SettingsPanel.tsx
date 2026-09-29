@@ -212,7 +212,7 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
   editor: "Monaco editor preferences — font, gutter, and wrapping.",
   terminal: "The built-in shell's appearance and behaviour.",
   stats: "Token usage and cost across your agent runs.",
-  storage: "What the local conversation cache is holding, and where Klide keeps your run transcripts.",
+  storage: "Manage saved conversations, disk usage, the local cache and your transcript folder.",
 };
 
 // Searchable index for the "Look for a setting" box. Each entry points at the
@@ -236,7 +236,7 @@ const panelOnlyIndex: SettingIndexEntry[] = [
   { label: "GitHub account", section: "subscription", keywords: "github account gh avatar profile picture identity work personal switch pin push pr" },
   { label: "Terminal", section: "terminal", keywords: "terminal shell font xterm" },
   { label: "Usage & stats", section: "stats", keywords: "stats usage tokens cost transcripts runs" },
-  { label: "Conversation cache & disk usage", section: "storage", keywords: "storage cache quota full history conversations size photos images delete clear folder path transcripts runs disk localstorage reveal finder" },
+  { label: "Saved conversations & disk usage", section: "storage", keywords: "storage cache quota full history conversations size photos images delete clear folder path transcripts runs disk localstorage reveal finder" },
 ];
 // Merged and shown in section order, so derived and hand rows interleave the
 // way the section rail reads.

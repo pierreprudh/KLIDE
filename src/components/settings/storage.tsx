@@ -9,11 +9,9 @@
 //    evicted to make room. That is the number this section makes visible,
 //    because it used to be invisible until a toast said 33 threads were gone.
 //  · the **Run transcripts** on disk — the durable record Mission Control
-//    reads. Nothing here deletes those; the folder rows say where they are.
+//    reads. Saved conversations can be explicitly deleted after confirmation.
 //
-// So the whole section answers one question: what is the cache holding, and
-// what happens if I clear it? (Answer: your history list shortens, your runs
-// don't move.)
+// Cache cleanup and permanent disk deletion are separate, explicitly labelled actions.
 //
 // The transcripts, being the copy that matters, also get to live where you
 // want: the runs folder is choosable, and changing it carries the existing
@@ -31,6 +29,9 @@ import {
 import { deleteKlideConvo } from "../../klideConvos";
 import {
   readStorageDirs,
+  readStoredRuns,
+  deleteStoredRun,
+  type StoredRun,
   resetRunsDir,
   revealStorageDir,
   setRunsDir,
@@ -50,6 +51,7 @@ const CACHE_QUOTA_BYTES = 5_000_000;
 
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 KB";
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
   if (bytes < 1000) return `${bytes} B`;
   if (bytes < 1_000_000) return `${Math.round(bytes / 1000)} KB`;
   return `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} MB`;
@@ -92,6 +94,18 @@ export function StorageSection() {
   const [dirs, setDirs] = useState<StorageDir[] | null>(null);
   const [dirsError, setDirsError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [diskRuns, setDiskRuns] = useState<StoredRun[]>([]);
+  const [diskError, setDiskError] = useState<string | null>(null);
+  const [diskLoading, setDiskLoading] = useState(true);
+  const [diskLimit, setDiskLimit] = useState(20);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const refreshRuns = useCallback(async () => {
+    setDiskLoading(true);
+    try { setDiskRuns(await readStoredRuns()); setDiskError(null); }
+    catch (error) { setDiskError(errMessage(error)); }
+    finally { setDiskLoading(false); }
+  }, []);
+
   // A move walks the filesystem; the row says so instead of looking idle.
   const [movingRuns, setMovingRuns] = useState(false);
 
@@ -115,7 +129,8 @@ export function StorageSection() {
   useEffect(() => {
     refreshCache();
     void refreshDirs();
-  }, [refreshCache, refreshDirs]);
+    void refreshRuns();
+  }, [refreshCache, refreshDirs, refreshRuns]);
 
   function reportChange(change: RunsDirChange) {
     const moved =
@@ -161,7 +176,7 @@ export function StorageSection() {
     setMovingRuns(true);
     try {
       reportChange(await setRunsDir(picked, moveExisting));
-      await refreshDirs();
+      await Promise.all([refreshDirs(), refreshRuns()]);
     } catch (e) {
       notify(errMessage(e), { tone: "error" });
     } finally {
@@ -176,11 +191,31 @@ export function StorageSection() {
     setMovingRuns(true);
     try {
       reportChange(await resetRunsDir(moveExisting));
-      await refreshDirs();
+      await Promise.all([refreshDirs(), refreshRuns()]);
     } catch (e) {
       notify(errMessage(e), { tone: "error" });
     } finally {
       setMovingRuns(false);
+    }
+  }
+
+  async function removeDiskRun(run: StoredRun) {
+    const approved = await confirm(
+      `Permanently delete “${run.title}” (${formatBytes(run.bytes)})? This removes its saved messages, checkpoints and retained tool output, including any evidence used by Mission Control. Project files and the provider’s own history stay in place. This cannot be undone.`,
+      { title: "Delete saved conversation?", kind: "warning" },
+    );
+    if (!approved) return;
+    setDeleting(run.id);
+    try {
+      await deleteStoredRun(run.id);
+      forgetStoredConversation(run.id);
+      deleteKlideConvo(run.id);
+      refreshCache();
+      notify("Saved conversation deleted.", { tone: "success" });
+    } catch (error) { notify(errMessage(error), { tone: "error" }); }
+    finally {
+      await Promise.all([refreshDirs(), refreshRuns()]);
+      setDeleting(null);
     }
   }
 
@@ -198,6 +233,26 @@ export function StorageSection() {
 
   return (
     <>
+      <SettingBlock title="Saved conversations">
+        <Panel>
+          <Row title="Conversation storage"
+            description="Saved messages, streaming activity, checkpoints and retained tool output. Background conversations are saved here so you can reopen them. History stays until you delete it."
+            control={<LinkButton disabled={diskLoading || deleting !== null || movingRuns} onClick={() => { refreshCache(); void refreshDirs(); void refreshRuns(); }}>Refresh</LinkButton>} />
+          {diskError ? <Row title="Could not load saved conversations" description={diskError} control={null} />
+            : diskLoading && diskRuns.length === 0 ? <Row title="Measuring saved conversations…" description="Reading saved history sizes." control={null} />
+            : <Row title={`${diskRuns.length} saved conversation${diskRuns.length === 1 ? "" : "s"}`}
+                description="Largest first. Deletion is available when all conversations have finished or stopped."
+                control={<CodeText>{formatBytes(diskRuns.reduce((sum, run) => sum + run.bytes, 0))}</CodeText>} />}
+          {!diskError && diskRuns.slice(0, diskLimit).map(run => <Row key={run.id} title={run.title || "Untitled conversation"}
+            description={`${relativeTime(run.updatedMs)} · ${formatBytes(run.transcriptBytes)} messages and activity · ${formatBytes(run.supportingBytes)} supporting data`}
+            control={<div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <CodeText>{formatBytes(run.bytes)}</CodeText>
+              <LinkButton disabled={deleting !== null || movingRuns || diskLoading} onClick={() => void removeDiskRun(run)}>{deleting === run.id ? "Deleting…" : "Delete…"}</LinkButton>
+            </div>} />)}
+          {!diskError && diskRuns.length > diskLimit && <Row title={`${diskRuns.length - diskLimit} more conversations`} description="Continue through the list by size." control={<GhostButton onClick={() => setDiskLimit(limit => limit + 20)}>Show more</GhostButton>} />}
+        </Panel>
+      </SettingBlock>
+
       <SettingBlock title="Local conversation cache">
         <Panel>
           <Row
@@ -334,12 +389,12 @@ export function StorageSection() {
                         {dir.path}
                       </span>
                       {movable && (
-                        <LinkButton disabled={movingRuns} onClick={() => void chooseRunsDir(dir)}>
+                        <LinkButton disabled={movingRuns || deleting !== null} onClick={() => void chooseRunsDir(dir)}>
                           {movingRuns ? "Moving…" : "Change…"}
                         </LinkButton>
                       )}
                       {movable && dir.custom && (
-                        <LinkButton disabled={movingRuns} onClick={() => void restoreDefaultRunsDir(dir)}>
+                        <LinkButton disabled={movingRuns || deleting !== null} onClick={() => void restoreDefaultRunsDir(dir)}>
                           Use default
                         </LinkButton>
                       )}

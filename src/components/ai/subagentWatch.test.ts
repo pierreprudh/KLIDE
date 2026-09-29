@@ -148,7 +148,7 @@ const readRun = vi.fn<(runId: string) => Promise<AgentEvent[]>>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args: any) => {
-    if (cmd === "agent_run_status") return runStatus();
+    if (cmd === "agent_run_status") return { status: await runStatus(), fromSeq: null };
     if (cmd === "agent_read_run") return readRun(args.runId);
     return null;
   }),

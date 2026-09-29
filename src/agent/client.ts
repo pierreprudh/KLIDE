@@ -165,8 +165,14 @@ const ACTIVE_RUN_STATUSES = new Set([
  * and evicted, or never started this session). Used on panel mount to decide
  * whether to reattach to a still-running harness run.
  */
+export type AgentRunState = { status: string | null; fromSeq: number | null };
+
+export async function getAgentRunState(runId: string): Promise<AgentRunState> {
+  return invoke<AgentRunState>("agent_run_status", { runId });
+}
+
 export async function getAgentRunStatus(runId: string): Promise<string | null> {
-  return invoke<string | null>("agent_run_status", { runId });
+  return (await getAgentRunState(runId)).status;
 }
 
 export function isActiveRunStatus(status: string | null): boolean {
@@ -188,9 +194,9 @@ export type RunReattachment = {
  * request-scoped channel from `startAgentRun` died with the old mount). Follows
  * the global `agent-run:{id}` stream the harness broadcasts for every persisted
  * event, dropping any event already covered by the caller's snapshot
- * (`seq < fromSeq`). Only structural events replay here — token deltas stream
- * on the original channel and are not rebroadcast, so a reattached view shows
- * tool calls and completed messages landing rather than a token animation.
+ * (`seq < fromSeq`). App-owned runs replay structural events. Background
+ * subscription runs also persist their deltas and observed tool activity,
+ * so those continue streaming after a desktop restart.
  *
  * Listen is registered before the caller snapshots, and dedup is by absolute
  * `seq`, so no event is lost or double-applied across the snapshot/live seam.
