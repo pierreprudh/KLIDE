@@ -1,12 +1,10 @@
-// ProfileModal — a centered, SkillsModal-style overlay that surfaces
-// "you, the person using this IDE" with the smallest possible surface:
-// avatar + username + hostname + whether a workspace is active. The identity
-// stays local, but reuses the authenticated GitHub profile picture when one is
-// available — no account controls, sign out, or parallel identity model.
-
-import { useEffect } from "react";
+// Compact account popover above the bottom edge of the workspace.
+import { useEffect, useRef } from "react";
+import { AccountControl } from "./settings/accounts";
+import { GitHubAccountRow } from "./GitHubAccountRow";
 import { Z } from "../zLayers";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
+import "./profileMenu.css";
 
 type Props = {
   open: boolean;
@@ -14,122 +12,56 @@ type Props = {
   onClose: () => void;
 };
 
-/* ------------------------------------------------------------------ icons */
-
-function CloseIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
-  );
-}
-
-/* ============================================================ the modal ===*/
-
-export function ProfileModal({ open, workspaceRoot, onClose }: Props) {
-  const { username: localUsername, hostname, avatarUrl } = useUserInfo();
+export function ProfileModal({ open, onClose }: Props) {
+  const { username, avatarUrl } = useUserInfo();
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    menuRef.current?.focus();
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+      if (event.key === "Tab") {
+        const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+        if (!buttons.length) { event.preventDefault(); return; }
+        const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        if (event.shiftKey && index <= 0) {
+          event.preventDefault(); buttons[buttons.length - 1].focus();
+        } else if (!event.shiftKey && (index === -1 || index === buttons.length - 1)) {
+          event.preventDefault(); buttons[0].focus();
+        }
+      }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      previous?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
-
-  const username = localUsername || "you";
-  const hasWorkspace = Boolean(workspaceRoot);
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Profile"
-      onClick={onClose}
-      className="skills-tab-in"
-      style={{
-        position: "fixed", inset: 0, zIndex: Z.modal,
-        display: "grid", placeItems: "center",
-        background: "var(--modal-scrim)",
-        backdropFilter: "blur(3px)",
-      }}
-    >
-      <div
-        className="floating-panel"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(420px, calc(100vw - 80px))",
-          borderRadius: "var(--radius-lg)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
-        {/* Centered hero — avatar + identity + workspace line. No
-            sections, no lists, no actions. The point is to confirm
-            "you, on this machine" with the smallest possible surface. */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 16,
-            padding: "22px 24px 18px",
-            position: "relative",
-          }}
-        >
-          <Avatar name={username} avatarUrl={avatarUrl} size={48} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 17, fontWeight: 600, color: "var(--fg-strong)", letterSpacing: "-0.014em" }}>
-              {username}
-              {hostname && (
-                <span style={{ color: "var(--fg-dim)", fontSize: 12, fontWeight: 400, marginLeft: 8, fontFamily: "var(--font-mono)" }}>
-                  · {hostname}
-                </span>
-              )}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--fg-subtle)", marginTop: 4, letterSpacing: "-0.005em" }}>
-              {hasWorkspace
-                ? <>Workspace open</>
-                : <>No workspace open</>}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="klide-button klide-button-ghost"
-            style={{ minHeight: 28, padding: "0 8px", color: "var(--fg-subtle)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--fg-strong)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--fg-subtle)"; e.currentTarget.style.background = "transparent"; }}
-          >
-            <CloseIcon />
-          </button>
+    <div style={{ position: "fixed", inset: 0, zIndex: Z.modal }} onClick={onClose}>
+      <div ref={menuRef} role="dialog" aria-modal="true" aria-label="Accounts" tabIndex={-1}
+        className="profile-account-menu" onClick={(event) => event.stopPropagation()}>
+        <div className="profile-account-menu-header">
+          <Avatar name={username || "you"} avatarUrl={avatarUrl} size={28} />
+          <span>{username || "Local profile"}</span>
         </div>
-
-        <div
-          style={{
-            padding: "0 24px 16px",
-            fontSize: 10.5,
-            fontFamily: "var(--font-mono)",
-            color: "var(--fg-dim)",
-            letterSpacing: "0.04em",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <span>Klide · local</span>
-          <span style={{ flex: 1 }} />
-          <span>esc to close</span>
+        <div className="profile-account-menu-rows">
+          <GitHubAccountRow compact />
+          <AccountControl provider="codex" title="Codex" connected={false} compact />
+          <AccountControl provider="claude-code" title="Claude Code" connected={false} compact />
+          <AccountControl provider="opencode" title="OpenCode" connected={false} compact />
         </div>
       </div>
     </div>
   );
 }
-
-/* ============================================================ pieces ===*/
 
 function Avatar({ name, avatarUrl, size }: { name: string; avatarUrl: string; size: number }) {
   const initials = initialsOf(name);

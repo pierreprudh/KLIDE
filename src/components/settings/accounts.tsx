@@ -1,3 +1,5 @@
+import { AccountSwapButton } from "../AccountSwapButton";
+import { notify } from "../../toast";
 // Delegate CLI accounts — identity display + the account snapshot switcher
 // (save the current login / activate a saved one) for subscription CLIs.
 // Extracted from SettingsPanel.tsx.
@@ -7,10 +9,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Z } from "../../zLayers";
 import { ChevronDown } from "../ai/icons";
-import { LinkButton, Row } from "./controls";
-import { githubAccounts, githubSetAccount, type GitHubAccounts } from "../../ipc/git";
-import { setGitHubUserInfo } from "../../hooks/useUserInfo";
-import { notify } from "../../toast";
+import { LinkButton } from "./controls";
 
 // Account snapshots (mirrors `accounts::Account*` serde camelCase output).
 export type AccountIdentity = {
@@ -33,250 +32,7 @@ export type AccountsView = {
   present: boolean;
 };
 
-// ── GitHub ───────────────────────────────────────────────────────────────────
-
-// `gh` keeps ONE globally active account, so with a work and a personal login
-// signed in, Klide's identity, avatars, and PR commands followed whichever one
-// you last `gh auth switch`ed to — the work face turning up in a personal
-// project. Pinning writes the choice to ~/.klide/github_account.json and Rust
-// passes that account's token per command, so Klide stays put without touching
-// gh's global state. Same pill + menu shape as the CLI rows beside it, and it
-// owns its whole row so the description can name the account actually in force.
-export function GitHubAccountRow() {
-  const [view, setView] = useState<GitHubAccounts | null>(null);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [rect, setRect] = useState<DOMRect | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    githubAccounts()
-      .then((next) => !cancelled && setView(next))
-      .catch(() => !cancelled && setView(null));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // `null` clears the pin and follows gh again.
-  async function choose(login: string | null) {
-    setBusy(login ?? FOLLOW_GH);
-    setErr(null);
-    try {
-      const user = await githubSetAccount(login);
-      // Repaint every avatar in the app now rather than at next launch.
-      setGitHubUserInfo(user);
-      setView(await githubAccounts());
-      setOpen(false);
-      notify(
-        login
-          ? `Klide now acts as ${user.login} on GitHub.`
-          : `Following gh's active account (${user.login}).`,
-        { tone: "success" },
-      );
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  const logins = view?.logins ?? [];
-  const pinned = view?.pinned ?? null;
-  const active = view?.active ?? null;
-  const inForce = pinned ?? active;
-
-  function openMenu() {
-    if (btnRef.current) setRect(btnRef.current.getBoundingClientRect());
-    setOpen(true);
-  }
-
-  const menuItemBase: React.CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    textAlign: "left",
-    padding: "7px 10px",
-    borderRadius: "var(--radius-sm)",
-    border: "none",
-    background: "transparent",
-    color: "var(--fg)",
-  };
-  const menuWidth = 280;
-
-  const pill = (
-    <div style={{ position: "relative" }}>
-      <button
-        ref={btnRef}
-        type="button"
-        onClick={() => (open ? setOpen(false) : openMenu())}
-        disabled={logins.length === 0}
-        title={
-          pinned
-            ? `Pinned to ${pinned}`
-            : active
-            ? `Following gh's active account (${active})`
-            : "gh isn't signed in"
-        }
-        className="klide-button klide-button-secondary"
-        style={{
-          height: 32,
-          maxWidth: 220,
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          padding: "0 10px",
-          opacity: logins.length === 0 ? 0.55 : 1,
-        }}
-      >
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            maxWidth: 170,
-            fontWeight: pinned ? 600 : 500,
-          }}
-        >
-          {inForce ?? "Not signed in"}
-        </span>
-        <ChevronDown />
-      </button>
-
-      {open && rect &&
-        createPortal(
-          <>
-            <div onMouseDown={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: Z.contextMenu }} />
-            <div
-              className="klide-surface"
-              style={{
-                position: "fixed",
-                top: rect.bottom + 6,
-                left: Math.max(8, rect.right - menuWidth),
-                zIndex: Z.contextMenu + 1,
-                width: menuWidth,
-                padding: 6,
-                borderRadius: "var(--radius-md)",
-                boxShadow: "var(--panel-shadow)",
-                display: "flex",
-                flexDirection: "column",
-                gap: 2,
-              }}
-            >
-              {logins.map((login) => {
-                const isPinned = login === pinned;
-                return (
-                  <button
-                    key={login}
-                    type="button"
-                    onClick={() => !isPinned && void choose(login)}
-                    disabled={busy !== null}
-                    style={{
-                      ...menuItemBase,
-                      background: isPinned ? "var(--bg-hover)" : "transparent",
-                      cursor: isPinned || busy ? "default" : "pointer",
-                    }}
-                    onMouseEnter={(e) => { if (!isPinned && !busy) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                    onMouseLeave={(e) => { if (!isPinned) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <img
-                      src={`https://github.com/${login}.png?size=32`}
-                      alt=""
-                      width={16}
-                      height={16}
-                      style={{ borderRadius: "50%", flexShrink: 0 }}
-                    />
-                    <span style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: isPinned ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {login}
-                      </div>
-                      {login === active && (
-                        <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>gh's active account</div>
-                      )}
-                    </span>
-                    {busy === login ? (
-                      <span style={{ fontSize: 11, color: "var(--fg-dim)", flexShrink: 0 }}>pinning…</span>
-                    ) : isPinned ? (
-                      <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", flexShrink: 0 }}>pinned</span>
-                    ) : null}
-                  </button>
-                );
-              })}
-
-              {logins.length === 0 && (
-                <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--fg-dim)" }}>
-                  gh isn't signed in. Run <code>gh auth login</code> first.
-                </div>
-              )}
-
-              {logins.length > 0 && (
-                <div style={{ height: 1, background: "var(--border)", margin: "4px 6px" }} />
-              )}
-
-              <button
-                type="button"
-                onClick={() => pinned !== null && void choose(null)}
-                disabled={busy !== null || pinned === null}
-                style={{
-                  ...menuItemBase,
-                  fontSize: 12.5,
-                  color: pinned === null ? "var(--fg-subtle)" : "var(--fg)",
-                  cursor: pinned === null || busy ? "default" : "pointer",
-                }}
-                onMouseEnter={(e) => { if (pinned !== null && !busy) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <span style={{ minWidth: 0, flex: 1 }}>
-                  Follow gh's active account
-                  {pinned === null && (
-                    <div style={{ fontSize: 11, color: "var(--fg-subtle)" }}>current behaviour</div>
-                  )}
-                </span>
-                {busy === FOLLOW_GH && (
-                  <span style={{ fontSize: 11, color: "var(--fg-dim)", flexShrink: 0 }}>clearing…</span>
-                )}
-              </button>
-
-              {err && (
-                <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>
-                  {err}
-                </div>
-              )}
-            </div>
-          </>,
-          document.body
-        )}
-    </div>
-  );
-
-  return (
-    <Row
-      title="GitHub"
-      description={accountDescription(view)}
-      control={pill}
-      leading={<img src="./github-invertocat.svg" alt="" width={18} height={18} />}
-    />
-  );
-}
-
-/** Busy sentinel for the clear-the-pin item, which has no login of its own. */
-const FOLLOW_GH = "__follow-gh";
-
-/** The line under the GitHub row's title — says which account is in force and
- *  why, so the row explains itself without a help click. */
-function accountDescription(view: GitHubAccounts | null): string {
-  if (!view) return "Choose which signed-in GitHub account Klide uses.";
-  if (view.pinned) {
-    return `Klide always acts as ${view.pinned} — identity, avatars, PRs, and pushes — whatever account gh has active.`;
-  }
-  if (view.active) {
-    return `Following gh's active account (${view.active}). Pin one so switching gh elsewhere can't change Klide's identity.`;
-  }
-  return "gh isn't signed in — run `gh auth login` to connect an account.";
-}
+export { GitHubAccountRow } from "../GitHubAccountRow";
 
 // A short human label for a login: "email · detail" when an email is known,
 // "API key ••fingerprint" for key-based logins, else the detail/auth mode.
@@ -332,11 +88,14 @@ export function AccountControl({
   provider,
   title,
   connected,
+  compact = false,
 }: {
   provider: string;
   title: string;
   connected: boolean;
+  compact?: boolean;
 }) {
+  const swapping = useRef(false);
   const [view, setView] = useState<AccountsView | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // name being activated
@@ -363,6 +122,7 @@ export function AccountControl({
     try {
       await invoke("account_activate", { provider, name });
       await refresh();
+      window.dispatchEvent(new Event("klide-accounts-changed"));
       setOpen(false);
     } catch (e) {
       setErr(String(e));
@@ -380,6 +140,7 @@ export function AccountControl({
       await invoke("account_save_current", { provider, name });
       setDraft(null);
       await refresh();
+      window.dispatchEvent(new Event("klide-accounts-changed"));
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -389,6 +150,13 @@ export function AccountControl({
 
   useEffect(() => {
     void refresh();
+    const reload = () => void refresh();
+    window.addEventListener("klide-accounts-changed", reload);
+    window.addEventListener("focus", reload);
+    return () => {
+      window.removeEventListener("klide-accounts-changed", reload);
+      window.removeEventListener("focus", reload);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
 
@@ -429,15 +197,54 @@ export function AccountControl({
     color: "var(--fg)",
   };
 
+  // Only offer a reversible quick swap once the current login is saved.
+  const canSwap = !!active && accounts.some((account) => !account.active);
+  async function swap() {
+    if (swapping.current) return;
+    swapping.current = true;
+    setBusy("swapping");
+    try {
+      const latest = await invoke<AccountsView>("accounts_list", { provider });
+      setView(latest);
+      const index = latest.accounts.findIndex((account) => account.active);
+      const next = index < 0 ? undefined : [...latest.accounts.slice(index + 1), ...latest.accounts.slice(0, index)].find((account) => !account.active);
+      if (!next) {
+        notify(`Save both ${title} accounts in Settings before switching.`, { tone: "info" });
+        return;
+      }
+      await invoke("account_activate", { provider, name: next.name });
+      await refresh();
+      window.dispatchEvent(new Event("klide-accounts-changed"));
+      notify(`${title}: switched to ${next.name}.`, { tone: "success" });
+    } catch (error) {
+      notify(String(error), { tone: "error" });
+    } finally {
+      swapping.current = false;
+      setBusy(null);
+    }
+  }
+  const swapControl = canSwap ? <AccountSwapButton label={`Switch ${title} account`} busy={busy !== null || saving} onClick={() => void swap()} /> : null;
+
+  if (compact) return canSwap ? (
+    <section aria-label={`${title} account`} className="profile-account-menu-row">
+      <AccountIcon name={title} size={18} />
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={active ? identityLabel(active.identity) : undefined}>
+        {title} · {active?.name}
+      </span>
+      {swapControl}
+    </section>
+  ) : null;
+
   const menuWidth = 280;
 
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 6 }}>
+      {swapControl}
       <button
         ref={btnRef}
         type="button"
         onClick={() => (open ? closeMenu() : openMenu())}
-        disabled={!connected && accounts.length === 0}
+        disabled={busy !== null || saving || (!connected && accounts.length === 0)}
         title={active ? identityLabel(active.identity) : triggerLabel}
         className="klide-button klide-button-secondary"
         style={{
@@ -496,7 +303,7 @@ export function AccountControl({
                 key={acc.name}
                 type="button"
                 onClick={() => !acc.active && void activate(acc.name)}
-                disabled={busy !== null}
+                disabled={busy !== null || saving}
                 style={{
                   ...menuItemBase,
                   background: acc.active ? "var(--bg-hover)" : "transparent",
@@ -553,7 +360,7 @@ export function AccountControl({
               <button
                 type="button"
                 onClick={() => { setDraft(""); setErr(null); }}
-                disabled={!connected}
+                disabled={!connected || busy !== null || saving}
                 style={{
                   ...menuItemBase,
                   cursor: connected ? "pointer" : "not-allowed",
