@@ -163,7 +163,7 @@ pub(super) async fn start(
             return Err(format!("A run is already active for this conversation ({id}). Wait for it to finish or stop it first."));
         }
         let dir = crate::pty_client::chat_host_dir(&base)?;
-        crate::pty_client::ensure_daemon(&dir)?;
+        crate::pty_client::ensure_chat_daemon(&dir)?;
         // Subscribe before dispatch: even an immediate CLI failure must reach
         // the request channel. The socket buffers events until the reader starts.
         let reader = crate::pty_client::subscribe(&dir)?;

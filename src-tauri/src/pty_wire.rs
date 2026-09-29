@@ -17,6 +17,27 @@
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
+/// Which binary a process is running, captured once at start: the executable's
+/// length and modification time. The package version alone does not change on
+/// a rebuild, so without this a daemon started before `cargo build` would keep
+/// running the old Harness for every background chat that follows.
+pub fn build_id() -> &'static str {
+    static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| {
+        std::env::current_exe()
+            .and_then(std::fs::metadata)
+            .map(|meta| {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
+                format!("{}-{modified}", meta.len())
+            })
+            .unwrap_or_default()
+    })
+}
+
 use crate::pty_host::{
     DelegateMissionLink, LiveSessionRow, PtyExitOutcome, SessionSnapshot,
 };
@@ -125,6 +146,9 @@ pub enum Response {
         pid: u32,
         #[serde(default)]
         protocol: u32,
+        /// [`build_id`] of the serving binary; empty from older daemons.
+        #[serde(default)]
+        build: String,
     },
     ChatStatus { status: Option<String>, from_seq: u64 },
     ChatList { runs: std::collections::HashMap<String, String> },

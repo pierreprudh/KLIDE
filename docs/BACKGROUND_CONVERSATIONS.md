@@ -59,12 +59,17 @@ wire protocol, and transcript recovery, not the native window lifecycle.
 ## Storage and latency follow-up
 
 The conversation index remains in localStorage, while full Run events live in
-JSONL transcripts. No database migration is part of this change. The daemon uses
-the existing flushed append contract; streamed events increase write frequency.
+JSONL transcripts. No database migration is part of this change. Streamed text
+is merged into one transcript line per 150 ms (`agent/stream_log.rs`, a timer
+writes a silent tail) and appended without waiting on the disk; the turn's
+final message still goes through the synced append and supersedes it, so a
+power loss costs at most the live tail. A ptyd serving chats must be the same
+binary as the app (`pty_wire::build_id`), so a rebuild never leaves an older
+Harness running new conversations; terminals only need the same wire.
 
 Measure before choosing a migration: bytes per conversation, time spent flushing
 stream events, localStorage serialization time, and reopen latency at increasing
-history sizes. Likely next work is bounded batching of stream writes, incremental
+history sizes. Likely next work is incremental
 transcript reads, and reducing per-token snapshot rewrites. Keep the transcript
 as the recovery authority and retain bounded memory for inactive conversations.
 

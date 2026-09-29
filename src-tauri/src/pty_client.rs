@@ -70,8 +70,13 @@ pub(crate) fn chat_host_dirs(data_dir: &Path) -> [std::path::PathBuf; 2] {
     [data_dir.to_path_buf(), data_dir.join("chat-host")]
 }
 
-fn compatible(version: &str, protocol: u32) -> bool {
-    version == env!("CARGO_PKG_VERSION") && protocol == crate::pty_wire::PROTOCOL_VERSION
+/// `strict` also requires the very same binary. Chats need it: the daemon
+/// runs their Harness loop, and a rebuild keeps the package version. Terminals
+/// only need the wire, and must not be refused after every dev rebuild.
+fn compatible(version: &str, protocol: u32, build: &str, strict: bool) -> bool {
+    version == env!("CARGO_PKG_VERSION")
+        && protocol == crate::pty_wire::PROTOCOL_VERSION
+        && (!strict || build == crate::pty_wire::build_id())
 }
 
 pub(crate) fn chat_host_dir(data_dir: &Path) -> Result<std::path::PathBuf, String> {
@@ -93,7 +98,7 @@ fn select_chat_host(
         _ => return Err("Unexpected response from the background chat host".into()),
     }
     match ping(&primary) {
-        Ok(Response::Pong { version, protocol, .. }) if compatible(&version, protocol) => Ok(primary),
+        Ok(Response::Pong { version, protocol, build, .. }) if compatible(&version, protocol, &build, true) => Ok(primary),
         // Never stop or upgrade the old host to start a chat. It may still own
         // terminals, even when its LiveRows shape is too old for us to decode.
         Ok(Response::Pong { .. }) => Ok(companion),
@@ -109,9 +114,20 @@ fn select_chat_host(
 /// an older host with active work is left running and the new start is refused.
 /// Both the package version and protocol revision participate in compatibility.
 pub fn ensure_daemon(data_dir: &Path) -> Result<(), String> {
+    ensure(data_dir, false)
+}
+
+#[cfg(unix)]
+/// [`ensure_daemon`] for a background chat host: the same binary as this app.
+pub fn ensure_chat_daemon(data_dir: &Path) -> Result<(), String> {
+    ensure(data_dir, true)
+}
+
+#[cfg(unix)]
+fn ensure(data_dir: &Path, strict: bool) -> Result<(), String> {
     match request(data_dir, &Request::Ping) {
-        Ok(Response::Pong { version, protocol, .. })
-            if compatible(&version, protocol) => return Ok(()),
+        Ok(Response::Pong { version, protocol, build, .. })
+            if compatible(&version, protocol, &build, strict) => return Ok(()),
         Ok(Response::Pong { version, protocol, .. }) => {
             // An upgrade must never kill work merely to obtain a newer wire.
             match request(data_dir, &Request::LiveRows) {
@@ -136,7 +152,7 @@ pub fn ensure_daemon(data_dir: &Path) -> Result<(), String> {
     let mut delay = Duration::from_millis(50);
     for _ in 0..6 {
         std::thread::sleep(delay);
-        if matches!(request(data_dir, &Request::Ping), Ok(Response::Pong { version, protocol, .. }) if compatible(&version, protocol)) {
+        if matches!(request(data_dir, &Request::Ping), Ok(Response::Pong { version, protocol, build, .. }) if compatible(&version, protocol, &build, strict)) {
             return Ok(());
         }
         delay *= 2;
@@ -223,7 +239,7 @@ mod tests {
         let selected = select_chat_host(base, |dir| {
             if dir == base {
                 // The pre-chat daemon's Ping has no protocol field on the wire.
-                Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: 0, pid: 1 })
+                Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: 0, pid: 1, build: String::new() })
             } else { Err("connect: no socket".into()) }
         }).unwrap();
         assert_eq!(selected, base.join("chat-host"));
@@ -235,7 +251,7 @@ mod tests {
         for present in [false, true] {
             let selected = select_chat_host(base, |dir| {
                 if present && dir == base {
-                    Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: crate::pty_wire::PROTOCOL_VERSION, pid: 1 })
+                    Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: crate::pty_wire::PROTOCOL_VERSION, pid: 1, build: crate::pty_wire::build_id().into() })
                 } else { Err("connect: no socket".into()) }
             }).unwrap();
             assert_eq!(selected, base);
@@ -247,7 +263,7 @@ mod tests {
         let base = Path::new("/test/klide");
         let selected = select_chat_host(base, |dir| {
             assert_eq!(dir, base.join("chat-host"));
-            Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: crate::pty_wire::PROTOCOL_VERSION, pid: 2 })
+            Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: crate::pty_wire::PROTOCOL_VERSION, pid: 2, build: crate::pty_wire::build_id().into() })
         }).unwrap();
         assert_eq!(selected, base.join("chat-host"));
     }

@@ -75,6 +75,28 @@ pub fn append_event(
     seq: u64,
     event: &AgentEvent,
 ) -> Result<(), String> {
+    append_event_with(runs_dir, run_id, seq, event, crate::durable::append_line)
+}
+
+/// Streamed output only: the turn's final, synced event supersedes it, so a
+/// power loss costs at most the live tail, and a stream of chunks does not
+/// wait on the disk once per chunk.
+pub fn append_stream_event(
+    runs_dir: &Path,
+    run_id: &str,
+    seq: u64,
+    event: &AgentEvent,
+) -> Result<(), String> {
+    append_event_with(runs_dir, run_id, seq, event, crate::durable::append_line_unsynced)
+}
+
+fn append_event_with(
+    runs_dir: &Path,
+    run_id: &str,
+    seq: u64,
+    event: &AgentEvent,
+    append: fn(&Path, &str) -> Result<(), String>,
+) -> Result<(), String> {
     let ts = event.ts();
     let line = TranscriptLine {
         schema_version: TRANSCRIPT_SCHEMA_VERSION,
@@ -89,7 +111,7 @@ pub fn append_event(
     // the page cache, so a crash could publish a torn line — and the Transcript
     // is what replay, the Validation contract, the cost totals and the evidence
     // packet are all derived from.
-    crate::durable::append_line(&transcript_path(runs_dir, run_id), &encoded)
+    append(&transcript_path(runs_dir, run_id), &encoded)
 }
 
 pub fn write_summary(runs_dir: &Path, summary: &AgentRunSummary) -> Result<(), String> {

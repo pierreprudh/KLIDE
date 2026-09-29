@@ -102,6 +102,19 @@ fn write_atomic_inner(dest: &Path, bytes: &[u8], private: bool, create_new: bool
 /// with `O_APPEND`, so a concurrent appender cannot interleave inside it. That
 /// plus a strict reader is what keeps the Mission event log's `seq` honest.
 pub fn append_line(path: &Path, line: &str) -> Result<(), String> {
+    append(path, line, true)
+}
+
+/// [`append_line`] without waiting for the disk. For high-rate records whose
+/// loss on power failure is harmless because a later synced record supersedes
+/// them (streamed answer text before its final message). `sync_data` flushes
+/// the whole file, so the next synced append also persists these: a crash can
+/// only drop a tail, never tear the interior.
+pub fn append_line_unsynced(path: &Path, line: &str) -> Result<(), String> {
+    append(path, line, false)
+}
+
+fn append(path: &Path, line: &str, sync: bool) -> Result<(), String> {
     let mut buf = String::with_capacity(line.len() + 1);
     buf.push_str(line);
     buf.push('\n');
@@ -120,6 +133,9 @@ pub fn append_line(path: &Path, line: &str) -> Result<(), String> {
     }
     file.write_all(buf.as_bytes())
         .map_err(|e| format!("Could not append to {path:?}: {e}"))?;
+    if !sync {
+        return Ok(());
+    }
     file.sync_data()
         .map_err(|e| format!("Could not flush {path:?}: {e}"))
 }

@@ -437,6 +437,7 @@ fn handle_request(request: Request, state: &Arc<DaemonState>) -> Response {
             version: env!("CARGO_PKG_VERSION").to_string(),
             pid: std::process::id(),
             protocol: crate::pty_wire::PROTOCOL_VERSION,
+            build: crate::pty_wire::build_id().to_string(),
         },
         Request::ReuseOrCd { session_id, cwd } => {
             match state.host.reuse_or_cd(&session_id, cwd.as_deref()) {

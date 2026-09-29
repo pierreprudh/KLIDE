@@ -481,9 +481,17 @@ mod tests {
         .unwrap();
         drop(rx); // the GUI and its output channel disappear mid-generation
         assert_eq!(host.statuses()["conversation"], "running");
-        assert!(read_events(&runs, "conversation").unwrap().iter().any(
-            |e| matches!(e, AgentEvent::AssistantDelta { text, .. } if text == "Saved while away")
-        ));
+        // Streamed text lands within the merge window, with the provider
+        // still mid-turn and nobody watching.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !read_events(&runs, "conversation").unwrap().iter().any(
+                |e| matches!(e, AgentEvent::AssistantDelta { text, .. } if text == "Saved while away")
+            ) {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("streamed text should reach the transcript mid-turn");
         assert!(host
             .start_with(request, runs.clone(), caller.clone())
             .unwrap_err()

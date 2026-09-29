@@ -1,6 +1,7 @@
 mod approval_store;
 pub(crate) mod daemon;
 mod remote;
+mod stream_log;
 mod artifacts;
 mod background;
 mod process;
@@ -2125,24 +2126,39 @@ async fn run_agent_loop(
         let stream_run_id = id.clone();
         let stream_assistant_id = assistant_id.clone();
         let stream_failure = Arc::new(Mutex::new(None::<String>));
-        let stream_channel = if sup.persist_stream() {
-            let failure = stream_failure.clone();
-            let sequence = sequence.clone();
-            let dir = runs_dir.clone();
-            let run_id = id.clone();
+        let stream_log = sup.persist_stream().then(|| {
             let supervisor = supervisor.clone();
-            Channel::<AgentEvent>::new(move |body| {
-                let event = body.deserialize::<AgentEvent>()?;
-                let mut seq = sequence.lock().map_err(|_| tauri::Error::Io(std::io::Error::other("Transcript sequence unavailable")))?;
-                if let Err(error) = append_event(&dir, &run_id, *seq, &event) {
-                    *failure.lock().unwrap() = Some(error.clone());
-                    return Err(tauri::Error::Io(std::io::Error::other(error)));
+            stream_log::StreamLog::new(
+                runs_dir.clone(),
+                id.clone(),
+                sequence.clone(),
+                Box::new(move |run_id, seq, event| supervisor.broadcast(run_id, seq, event)),
+            )
+        });
+        let stream_channel = match &stream_log {
+            Some(log) => {
+                let failure = stream_failure.clone();
+                let log = log.clone();
+                Channel::<AgentEvent>::new(move |body| {
+                    let event = body.deserialize::<AgentEvent>()?;
+                    if let Err(error) = log.push(event) {
+                        *failure.lock().unwrap() = Some(error.clone());
+                        return Err(tauri::Error::Io(std::io::Error::other(error)));
+                    }
+                    Ok(())
+                })
+            }
+            None => event_channel.clone(),
+        };
+        // Text still merging when the provider returns (or the turn is
+        // cancelled) belongs before whatever the loop writes next.
+        let flush_stream = |failure: &Mutex<Option<String>>| {
+            if let Some(log) = &stream_log {
+                if let Some(error) = log.flush().err().or_else(|| log.take_failure()) {
+                    failure.lock().unwrap().get_or_insert(error);
                 }
-                supervisor.broadcast(&run_id, *seq, &event);
-                *seq += 1;
-                Ok(())
-            })
-        } else { event_channel.clone() };
+            }
+        };
         // Time to first token, captured where it actually happens: the first
         // streamed chunk of this turn. 0 means "no delta yet" (a non-streaming
         // turn keeps it at 0 and reports no TTFT).
@@ -2383,6 +2399,7 @@ async fn run_agent_loop(
         let request_started_ms = now_ms();
         let provider_result = tokio::select! {
             _ = cancel.cancelled() => {
+                flush_stream(&stream_failure);
                 finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                 return Ok(());
             }
@@ -2401,6 +2418,7 @@ async fn run_agent_loop(
                 stream,
             }) => result,
         };
+        flush_stream(&stream_failure);
         let provider_result = match stream_failure.lock().unwrap().take() {
             Some(error) => Err(format!("Could not save streamed output: {error}")),
             None => provider_result,
