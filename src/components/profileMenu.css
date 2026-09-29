@@ -1,0 +1,54 @@
+.profile-account-menu {
+  position: absolute;
+  left: 12px;
+  bottom: 64px;
+  width: min(292px, calc(100vw - 24px));
+  max-height: calc(100dvh - 88px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 16%), 0 2px 6px rgb(0 0 0 / 6%);
+  color: var(--fg);
+  outline: none;
+  transform-origin: bottom left;
+  animation: profile-menu-appear 140ms ease-out;
+}
+.profile-account-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 6px 4px;
+  padding: 8px 2px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.profile-account-menu-header > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-account-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 2px 6px 2px 10px;
+  border-radius: 8px;
+}
+.profile-account-menu-row:hover,
+.profile-account-menu-row:focus-within {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+@keyframes profile-menu-appear {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .profile-account-menu { animation: none; }
+}
