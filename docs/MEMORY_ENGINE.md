@@ -5,8 +5,6 @@ or learning policy to an external provider. MCP is an interoperability adapter
 that lets Delegate CLIs reach the same engine; Kit and Missions use the Rust
 domain directly.
 
-![Klide Memory Engine architecture](public/memory-engine-architecture.svg)
-
 ## Product promise
 
 Every agent running through Klide can recover reviewed project knowledge, show
@@ -42,8 +40,6 @@ SQLite FTS or local-embedding index may accelerate the same contract, but must
 be rebuildable from Markdown.
 
 ## Recall lifecycle
-
-![Klide Memory recall lifecycle](public/memory-recall-lifecycle.svg)
 
 1. A Run emits an append-only Transcript and evidence.
 2. A model may generate a memory draft from that evidence.
