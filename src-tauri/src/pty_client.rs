@@ -63,16 +63,80 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response, String> {
     serde_json::from_str(&reply).map_err(|e| format!("bad response: {e}"))
 }
 
+/// Both locations are stable across desktop restarts. The second is used
+/// when a legacy terminal host cannot speak the chat protocol. Existing runs
+/// must always be located across both before starting or controlling a turn.
+pub(crate) fn chat_host_dirs(data_dir: &Path) -> [std::path::PathBuf; 2] {
+    [data_dir.to_path_buf(), data_dir.join("chat-host")]
+}
+
+/// `strict` also requires the very same binary. Chats need it: the daemon
+/// runs their Harness loop, and a rebuild keeps the package version. Terminals
+/// only need the wire, and must not be refused after every dev rebuild.
+fn compatible(version: &str, protocol: u32, build: &str, strict: bool) -> bool {
+    version == env!("CARGO_PKG_VERSION")
+        && protocol == crate::pty_wire::PROTOCOL_VERSION
+        && (!strict || build == crate::pty_wire::build_id())
+}
+
+pub(crate) fn chat_host_dir(data_dir: &Path) -> Result<std::path::PathBuf, String> {
+    select_chat_host(data_dir, |dir| request(dir, &Request::Ping))
+}
+
+fn select_chat_host(
+    data_dir: &Path,
+    ping: impl Fn(&Path) -> Result<Response, String>,
+) -> Result<std::path::PathBuf, String> {
+    let [primary, companion] = chat_host_dirs(data_dir);
+    // Keep using an already-launched companion, including after its terminal
+    // predecessor goes away. ensure_daemon still validates compatibility.
+    match ping(&companion) {
+        Ok(Response::Pong { .. }) => return Ok(companion),
+        Err(error) if error.starts_with("connect:") => {},
+        Err(error) => return Err(error),
+        Ok(Response::Err { message }) => return Err(message),
+        _ => return Err("Unexpected response from the background chat host".into()),
+    }
+    match ping(&primary) {
+        Ok(Response::Pong { version, protocol, build, .. }) if compatible(&version, protocol, &build, true) => Ok(primary),
+        // Never stop or upgrade the old host to start a chat. It may still own
+        // terminals, even when its LiveRows shape is too old for us to decode.
+        Ok(Response::Pong { .. }) => Ok(companion),
+        Err(error) if error.starts_with("connect:") => Ok(primary),
+        Err(error) => Err(error),
+        Ok(Response::Err { message }) => Err(message),
+        _ => Err("Unexpected response from the background host".into()),
+    }
+}
+
 #[cfg(unix)]
-/// Make sure a daemon of OUR version is serving, starting or replacing one as
-/// needed. A version mismatch (app was upgraded while a daemon from the old
-/// binary kept running) gets a polite `shutdown` and a fresh spawn — its
-/// sessions die, which is the honest option: the old binary may host
-/// sessions the new protocol misreads.
+/// Ensure a compatible daemon is serving. An idle older host is replaced;
+/// an older host with active work is left running and the new start is refused.
+/// Both the package version and protocol revision participate in compatibility.
 pub fn ensure_daemon(data_dir: &Path) -> Result<(), String> {
+    ensure(data_dir, false)
+}
+
+#[cfg(unix)]
+/// [`ensure_daemon`] for a background chat host: the same binary as this app.
+pub fn ensure_chat_daemon(data_dir: &Path) -> Result<(), String> {
+    ensure(data_dir, true)
+}
+
+#[cfg(unix)]
+fn ensure(data_dir: &Path, strict: bool) -> Result<(), String> {
     match request(data_dir, &Request::Ping) {
-        Ok(Response::Pong { version, .. }) if version == env!("CARGO_PKG_VERSION") => return Ok(()),
-        Ok(Response::Pong { version, .. }) => {
+        Ok(Response::Pong { version, protocol, build, .. })
+            if compatible(&version, protocol, &build, strict) => return Ok(()),
+        Ok(Response::Pong { version, protocol, .. }) => {
+            // An upgrade must never kill work merely to obtain a newer wire.
+            match request(data_dir, &Request::LiveRows) {
+                Ok(Response::LiveRows { rows }) if rows.is_empty() => {},
+                _ => return Err("The background host needs an update. Finish its active terminal sessions before starting a new background chat.".into()),
+            }
+            if protocol >= 2 && !matches!(request(data_dir, &Request::ChatList), Ok(Response::ChatList { runs }) if runs.is_empty()) {
+                return Err("The background host needs an update. Finish its active conversations first.".into());
+            }
             let _ = request(data_dir, &Request::Shutdown);
             eprintln!(
                 "ptyd: replacing v{version} with v{}",
@@ -88,7 +152,7 @@ pub fn ensure_daemon(data_dir: &Path) -> Result<(), String> {
     let mut delay = Duration::from_millis(50);
     for _ in 0..6 {
         std::thread::sleep(delay);
-        if matches!(request(data_dir, &Request::Ping), Ok(Response::Pong { .. })) {
+        if matches!(request(data_dir, &Request::Ping), Ok(Response::Pong { version, protocol, build, .. }) if compatible(&version, protocol, &build, strict)) {
             return Ok(());
         }
         delay *= 2;
@@ -167,6 +231,41 @@ mod tests {
         let state = pty_daemon::test_state(dir.clone());
         std::thread::spawn(move || pty_daemon::serve(listener, state));
         dir
+    }
+
+    #[test]
+    fn chat_host_selection_bypasses_a_legacy_terminal_host() {
+        let base = Path::new("/test/klide");
+        let selected = select_chat_host(base, |dir| {
+            if dir == base {
+                // The pre-chat daemon's Ping has no protocol field on the wire.
+                Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: 0, pid: 1, build: String::new() })
+            } else { Err("connect: no socket".into()) }
+        }).unwrap();
+        assert_eq!(selected, base.join("chat-host"));
+    }
+
+    #[test]
+    fn chat_host_selection_reuses_fresh_and_compatible_hosts() {
+        let base = Path::new("/test/klide");
+        for present in [false, true] {
+            let selected = select_chat_host(base, |dir| {
+                if present && dir == base {
+                    Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: crate::pty_wire::PROTOCOL_VERSION, pid: 1, build: crate::pty_wire::build_id().into() })
+                } else { Err("connect: no socket".into()) }
+            }).unwrap();
+            assert_eq!(selected, base);
+        }
+    }
+
+    #[test]
+    fn chat_host_selection_keeps_the_companion_after_the_old_host_exits() {
+        let base = Path::new("/test/klide");
+        let selected = select_chat_host(base, |dir| {
+            assert_eq!(dir, base.join("chat-host"));
+            Ok(Response::Pong { version: env!("CARGO_PKG_VERSION").into(), protocol: crate::pty_wire::PROTOCOL_VERSION, pid: 2, build: crate::pty_wire::build_id().into() })
+        }).unwrap();
+        assert_eq!(selected, base.join("chat-host"));
     }
 
     #[test]

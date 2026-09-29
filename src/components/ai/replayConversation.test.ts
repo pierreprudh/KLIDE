@@ -18,7 +18,7 @@ import type { Msg } from "./types";
 // (and casting past the error) produced a crash that looked like a bug in
 // `foldAgentEvents` and was a bug in the fixture.
 
-function runStarted(ts: number): AgentEvent {
+function runStarted(ts: number): Extract<AgentEvent, { type: "run_started" }> {
   return {
     type: "run_started",
     runId: "r1",
@@ -447,5 +447,41 @@ describe("hasOpenTurn", () => {
   it("is false for a transcript with no turn at all", () => {
     expect(hasOpenTurn([])).toBe(false);
     expect(hasOpenTurn([runStarted(1)])).toBe(false);
+  });
+});
+
+describe("reopening a live background conversation", () => {
+  const live = { provider: "opencode" as const, delegateHeadless: true as const };
+  const started: AgentEvent = { ...runStarted(1), provider: "opencode", model: "test-model" };
+  const events: AgentEvent[] = [started, userMessage("work", 2)];
+
+  it("restores the provider-bearing working row before any output arrives", () => {
+    const queued: Msg = { role: "user", content: "next", queueState: "queued" };
+    const restored = replayForAdoption(events, [queued], live)!;
+    expect(restored[1]).toMatchObject({ role: "assistant", content: "", provider: "opencode", model: "test-model", delegateHeadless: true });
+    expect(restored[restored.length - 1]).toBe(queued);
+    expect(replayForAdoption(events, [])).toHaveLength(1);
+  });
+
+  it("restores running tool activity and replaces it with its result", () => {
+    const call: AgentEvent = { type: "observed_tool_call", runId: "r1", toolCallId: "t1", provider: "opencode", name: "bash", input: { command: "sleep 60" }, summary: "sleep 60", ts: 3 };
+    const running = replayForAdoption([...events, call], [], live)!;
+    expect(running[running.length - 1]).toMatchObject({ role: "tool", content: "Running sleep 60...", observedBy: "opencode" });
+    const result: AgentEvent = { type: "observed_tool_result", runId: "r1", toolCallId: "t1", ok: true, content: "done", ts: 4 };
+    const finished = replayForAdoption([...events, call, result], running, live)!;
+    expect(finished[finished.length - 1]).toMatchObject({ role: "tool", content: "done" });
+  });
+
+  it("adopts successive text chunks without duplicating the placeholder or final reply", () => {
+    const delta = (text: string, ts: number): AgentEvent => ({ type: "assistant_delta", runId: "r1", messageId: "a1", text, ts });
+    const partial = [...events, delta("Hello", 3)];
+    const first = replayForAdoption(partial, [], live)!;
+    expect(first.filter(m => m.role === "assistant")).toHaveLength(1);
+    const next = [...partial, delta(" world", 4)];
+    const streamed = replayForAdoption(next, first, live)!;
+    expect(streamed[streamed.length - 1]?.content).toBe("Hello world");
+    const finished = replayForAdoption([...next, assistantMessage("Hello world", 5)], streamed, live)!;
+    expect(finished.filter(m => m.role === "assistant").map(m => m.content)).toEqual(["Hello world"]);
+    expect(replayForAdoption([...events, runError("aborted", "Aborted", 6)], [], live)).toHaveLength(1);
   });
 });

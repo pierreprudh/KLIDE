@@ -49,7 +49,7 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunStatus, isActiveRunStatus, isRunBusyError, reattachAgentRun, type RunReattachment } from "../agent/client";
+import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunState, isActiveRunStatus, isRunBusyError, reattachAgentRun, type RunReattachment } from "../agent/client";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
 import { serviceAdvisorConsult } from "../agent/advisorConsult";
@@ -2274,6 +2274,7 @@ This user request requires workspace inspection. Before answering, you MUST call
       const reattachId = conversationId;
       const baseLen = msgsRef.current.length;
       void (async () => {
+        let latestAdoptedLength = 0;
         // Re-read the transcript and adopt the replay, guarding against a
         // conversation switch mid-await and against clobbering typing. Reports
         // the event count and whether the transcript *tail* is terminal — the
@@ -2289,12 +2290,17 @@ This user request requires workspace inspection. Before answering, you MUST call
           // That rule, and the refusal to adopt a replay shorter than what is
           // on screen, live in `replayForAdoption`: the post-turn heal in
           // `runHarnessTurn` adopts on exactly the same terms.
-          const replayed = replayForAdoption(events, msgsRef.current);
+          const replayed = replayForAdoption(events, msgsRef.current,
+            isActiveRunStatus(status) ? {
+              provider: runProvider,
+              delegateHeadless: isDelegateProvider(runProvider) ? true : undefined,
+            } : undefined);
           const safe =
             replayed !== null &&
+            events.length >= latestAdoptedLength &&
             conversationSessionRef.current.conversationId === reattachId &&
             (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen);
-          if (safe) { msgsRef.current = replayed; setMsgs(replayed); }
+          if (safe) { latestAdoptedLength = events.length; msgsRef.current = replayed; setMsgs(replayed); }
           const tail = events[events.length - 1]?.type;
           return {
             len: events.length,
@@ -2347,20 +2353,25 @@ This user request requires workspace inspection. Before answering, you MUST call
           );
         };
 
+        // Ask the owner before reading disk: completion between these calls
+        // is included in the snapshot. A prior turn's terminal event is not
+        // evidence that a newly accepted background turn has already finished.
+        let status: string | null;
+        let fromSeq: number | null;
+        try { ({ status, fromSeq } = await getAgentRunState(reattachId)); }
+        catch { return; } // an unreachable owner is not proof of interruption
+        if (conversationSessionRef.current.conversationId !== reattachId) return;
         let snapshot: { len: number; terminal: boolean; events: AgentEvent[] };
         try {
           snapshot = await adopt(baseLen);
         } catch {
-          return; // no transcript for this id (brand-new chat) — nothing to reconnect
+          if (!isActiveRunStatus(status)) return;
+          snapshot = { len: 0, terminal: false, events: [] };
         }
-        if (snapshot.terminal) return; // already finished — snapshot is the final word
+        const thisTurnFinished = (value: { len: number; terminal: boolean }) =>
+          value.terminal && (fromSeq === null || value.len > fromSeq);
+        if (thisTurnFinished(snapshot)) return;
 
-        // Is the run still live in Rust? If not, the snapshot is the final word
-        // — including any request it ends on, which belongs to a run that died
-        // with the process and can no longer be answered.
-        let status: string | null = null;
-        try { status = await getAgentRunStatus(reattachId); } catch { /* ignore */ }
-        if (conversationSessionRef.current.conversationId !== reattachId) return;
         if (!isActiveRunStatus(status)) {
           // No live run, and a turn that never settled: it died with the app.
           // Say so where the answer would have been, or the user message just
@@ -2406,7 +2417,7 @@ This user request requires workspace inspection. Before answering, you MUST call
         try {
           const post = await adopt();
           restoreGates(post.events);
-          if (post.terminal) settle();
+          if (thisTurnFinished(post)) settle();
         } catch { /* ignore transient read error */ }
       })();
     }

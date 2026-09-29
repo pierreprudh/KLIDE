@@ -15,6 +15,29 @@
 //! `pty_host::SessionHost` exposes as methods. Keeping them in step is manual;
 //! `Recent` is the evidence — it is served but never sent.
 
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Which binary a process is running, captured once at start: the executable's
+/// length and modification time. The package version alone does not change on
+/// a rebuild, so without this a daemon started before `cargo build` would keep
+/// running the old Harness for every background chat that follows.
+pub fn build_id() -> &'static str {
+    static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| {
+        std::env::current_exe()
+            .and_then(std::fs::metadata)
+            .map(|meta| {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
+                format!("{}-{modified}", meta.len())
+            })
+            .unwrap_or_default()
+    })
+}
+
 use crate::pty_host::{
     DelegateMissionLink, LiveSessionRow, PtyExitOutcome, SessionSnapshot,
 };
@@ -76,6 +99,15 @@ pub enum Request {
         session_id: String,
     },
     LiveRows,
+    ChatStart {
+        request: Box<crate::agent::types::StartRunRequest>,
+        runs_dir: std::path::PathBuf,
+    },
+    ChatStatus { run_id: String },
+    ChatList,
+    ChatOperations { run_id: String },
+    ChatOperationReply { operation_id: String, result: Result<serde_json::Value, String> },
+    ChatControl { run_id: String, control: ChatControl },
     // NOTE: there is deliberately no `Recent` here. It existed, and was served,
     // but `pty.rs` never sent it — `delegate_pty_recent_sessions` scans the
     // shared scrollback dir directly, which is identical from either host. It
@@ -83,13 +115,44 @@ pub enum Request {
     // `SessionHost`'s methods rather than deriving one from the other.
 }
 
+/// An approved Mission operation still belongs to the app's Mission supervisor.
+/// The daemon keeps this request pending across GUI disconnects; reopening
+/// replays it through the existing idempotent Mission dispatch path.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChatOperation {
+    pub id: String,
+    pub run_id: String,
+    pub workspace_root: String,
+    pub request: crate::missions::orchestration::Request,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatControl {
+    Stop,
+    Permission { decision: serde_json::Value },
+    Diff { decision: serde_json::Value },
+    Question { answer: String },
+    CommandPolicy { auto_approve: bool },
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    ChatStarted { from_seq: u64 },
+    ChatOperations { operations: Vec<ChatOperation> },
     Pong {
         version: String,
         pid: u32,
+        #[serde(default)]
+        protocol: u32,
+        /// [`build_id`] of the serving binary; empty from older daemons.
+        #[serde(default)]
+        build: String,
     },
+    ChatStatus { status: Option<String>, from_seq: u64 },
+    ChatList { runs: std::collections::HashMap<String, String> },
+    ChatControlled { answered: bool },
     Subscribed,
     Ok,
     Err {
@@ -112,6 +175,8 @@ pub enum Response {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    ChatOperation { operation: ChatOperation },
+    Chat { run_id: String, seq: u64, event: crate::agent::types::AgentEvent },
     Chunk {
         session_id: String,
         data: String,

@@ -24,6 +24,114 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+// Serializes new run admission with storage mutations in this app process.
+pub(crate) static RUN_STORAGE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredRun {
+    id: String,
+    title: String,
+    updated_ms: i64,
+    bytes: u64,
+    transcript_bytes: u64,
+    supporting_bytes: u64,
+}
+
+fn run_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>, String> {
+    crate::agent::transcripts::validate_run_id(id)?;
+    let paths = vec![
+        root.join(format!("{id}.jsonl")),
+        root.join(format!("{id}.summary.json")),
+        root.join(id).join("checkpoints"),
+        root.join(format!("{id}.values")),
+    ];
+    // Never traverse links supplied in a custom storage directory.
+    for path in &paths {
+        for ancestor in path.ancestors().take_while(|p| *p != root) {
+            if let Ok(meta) = std::fs::symlink_metadata(ancestor) {
+                if meta.file_type().is_symlink() {
+                    return Err("Conversation storage contains a symbolic link.".into());
+                }
+            }
+        }
+    }
+    Ok(paths)
+}
+
+fn stored_runs(root: &Path) -> Result<Vec<StoredRun>, String> {
+    let mut rows = Vec::new();
+    for summary in crate::agent::transcripts::list_summaries(root, None, None)? {
+        let paths = run_storage_paths(root, &summary.id)?;
+        let sizes: Vec<u64> = paths
+            .iter()
+            .map(|path| {
+                std::fs::symlink_metadata(path)
+                    .map(|meta| {
+                        if meta.is_dir() {
+                            measure(path, 0).1
+                        } else {
+                            meta.len()
+                        }
+                    })
+                    .unwrap_or(0)
+            })
+            .collect();
+        rows.push(StoredRun {
+            id: summary.id,
+            title: summary.title,
+            updated_ms: summary.updated_ms,
+            bytes: sizes.iter().sum(),
+            transcript_bytes: sizes[0],
+            supporting_bytes: sizes[1..].iter().sum(),
+        });
+    }
+    rows.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.id.cmp(&b.id)));
+    Ok(rows)
+}
+
+#[tauri::command]
+pub async fn app_storage_conversations(app: tauri::AppHandle) -> Result<Vec<StoredRun>, String> {
+    crate::blocking::run(move || stored_runs(&runs_dir(&app)?)).await
+}
+
+fn delete_stored_run(root: &Path, id: &str) -> Result<(), String> {
+    let paths = run_storage_paths(root, id)?;
+    // A valid summary proves this is a known run, rather than an arbitrary id.
+    crate::agent::transcripts::read_summary(root, id)?;
+    // Delete the index last, leaving a discoverable row if cleanup fails.
+    for index in [2, 3, 0, 1] {
+        let path = &paths[index];
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        if meta.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        }
+        .map_err(|e| format!("Unable to delete {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn app_storage_delete_conversation(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let _guard = RUN_STORAGE_GATE.lock().await;
+    crate::blocking::run(move || {
+        crate::agent::ensure_storage_idle(&app).map_err(|_| {
+            "Finish or stop active conversations before deleting saved history.".to_string()
+        })?;
+        delete_stored_run(&runs_dir(&app)?, &id)
+    })
+    .await
+}
+
 /// One directory Klide owns, measured.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +169,12 @@ fn measure(dir: &Path, depth: usize) -> (usize, u64) {
     let mut files = 0;
     let mut bytes = 0;
     for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
         if meta.is_dir() {
             let (f, b) = measure(&entry.path(), depth + 1);
             files += f;
@@ -100,7 +213,11 @@ fn dir_for(app: &tauri::AppHandle, kind: &str) -> Result<PathBuf, String> {
         return runs_dir(app);
     }
     let root = app_data(app)?;
-    Ok(if relative.is_empty() { root } else { root.join(relative) })
+    Ok(if relative.is_empty() {
+        root
+    } else {
+        root.join(relative)
+    })
 }
 
 /// `~/.klide/storage.json` — the same `~/.klide` home the skills loader and the
@@ -174,7 +291,10 @@ fn override_problem(path: &Path) -> Option<String> {
     // first use); one whose parent is gone is an unplugged drive.
     match path.parent() {
         Some(parent) if parent.is_dir() => None,
-        _ => Some(format!("{} is unreachable — the folder above it is missing.", path.display())),
+        _ => Some(format!(
+            "{} is unreachable — the folder above it is missing.",
+            path.display()
+        )),
     }
 }
 
@@ -238,8 +358,7 @@ fn validate_target(target: &Path, current: &Path) -> Result<(), String> {
     // Whether the folder was ours to make, so a failed probe can undo it: a
     // rejected choice must not leave an empty folder where the user browsed.
     let created = !target.exists();
-    std::fs::create_dir_all(target)
-        .map_err(|e| format!("Cannot use {}: {e}", target.display()))?;
+    std::fs::create_dir_all(target).map_err(|e| format!("Cannot use {}: {e}", target.display()))?;
     // Writability is worth proving now rather than at the first run's first
     // event — a read-only volume looks fine until something needs saving.
     if let Some(problem) = write_problem(target) {
@@ -256,7 +375,9 @@ fn validate_target(target: &Path, current: &Path) -> Result<(), String> {
 /// guide — the suffix is. Anything else in the folder belongs to whoever put it
 /// there: a chosen folder is a place on the user's disk, not Klide's to empty.
 fn is_transcript_file(name: &std::ffi::OsStr) -> bool {
-    let Some(name) = name.to_str() else { return false };
+    let Some(name) = name.to_str() else {
+        return false;
+    };
     name.ends_with(".jsonl") || name.ends_with(".summary.json")
 }
 
@@ -293,8 +414,13 @@ fn move_entry(source: &Path, dest: &Path) -> Result<(), String> {
         std::fs::remove_dir(source).ok();
         return Ok(());
     }
-    std::fs::copy(source, dest)
-        .map_err(|e| format!("Could not copy {} to {}: {e}", source.display(), dest.display()))?;
+    std::fs::copy(source, dest).map_err(|e| {
+        format!(
+            "Could not copy {} to {}: {e}",
+            source.display(),
+            dest.display()
+        )
+    })?;
     std::fs::remove_file(source).ok();
     Ok(())
 }
@@ -312,14 +438,19 @@ fn move_runs(from: &Path, to: &Path) -> Result<(usize, u64, usize), String> {
     if !from.exists() {
         return Ok((0, 0, 0));
     }
-    let entries = std::fs::read_dir(from)
-        .map_err(|e| format!("Could not read {}: {e}", from.display()))?;
+    let entries =
+        std::fs::read_dir(from).map_err(|e| format!("Could not read {}: {e}", from.display()))?;
     let mut moved = 0;
     let mut bytes = 0;
     let mut left = 0;
     for entry in entries.flatten() {
         let source = entry.path();
-        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
         let ours = if meta.is_dir() {
             is_run_folder(&source)
         } else if meta.is_file() {
@@ -339,7 +470,11 @@ fn move_runs(from: &Path, to: &Path) -> Result<(usize, u64, usize), String> {
         }
         move_entry(&source, &dest)?;
         moved += 1;
-        bytes += if meta.is_dir() { measure(&dest, 0).1 } else { meta.len() };
+        bytes += if meta.is_dir() {
+            measure(&dest, 0).1
+        } else {
+            meta.len()
+        };
     }
     Ok((moved, bytes, left))
 }
@@ -364,11 +499,13 @@ pub async fn app_storage_set_runs_dir(
     path: String,
     move_existing: bool,
 ) -> Result<RunsDirChange, String> {
+    let _guard = RUN_STORAGE_GATE.lock().await;
     let target = PathBuf::from(path.trim());
     // Resolving the current folder touches the filesystem, so it belongs inside
     // the blocking task with the rest — a Tauri command body runs on the UI
     // thread until it awaits, and this module's whole point is not to freeze it.
     tokio::task::spawn_blocking(move || {
+        crate::agent::ensure_storage_idle(&app)?;
         let current = runs_dir(&app)?;
         validate_target(&target, &current)?;
         let (moved_files, moved_bytes, left_behind) = if move_existing {
@@ -406,7 +543,9 @@ pub async fn app_storage_reset_runs_dir(
     app: tauri::AppHandle,
     move_existing: bool,
 ) -> Result<RunsDirChange, String> {
+    let _guard = RUN_STORAGE_GATE.lock().await;
     tokio::task::spawn_blocking(move || {
+        crate::agent::ensure_storage_idle(&app)?;
         let current = runs_dir(&app)?;
         let default = default_runs_dir(&app)?;
         if current == default {
@@ -652,7 +791,10 @@ mod tests {
         assert_eq!((moved, bytes, left), (1, 5, 3));
         assert!(from.join("taxes.pdf").exists(), "the user's file stays put");
         assert!(from.join("notes.md").exists());
-        assert!(from.join("Photos").is_dir(), "a folder with no checkpoints is not ours");
+        assert!(
+            from.join("Photos").is_dir(),
+            "a folder with no checkpoints is not ours"
+        );
         assert!(!to.join("taxes.pdf").exists());
         std::fs::remove_dir_all(&root).ok();
     }
@@ -675,7 +817,9 @@ mod tests {
         let file = root.join("not-a-folder");
         std::fs::write(&file, b"x").unwrap();
         assert!(override_problem(&file).unwrap().contains("is a file"));
-        assert!(override_problem(Path::new("runs")).unwrap().contains("absolute"));
+        assert!(override_problem(Path::new("runs"))
+            .unwrap()
+            .contains("absolute"));
 
         let existing = root.join("already");
         std::fs::create_dir_all(&existing).unwrap();
@@ -687,7 +831,10 @@ mod tests {
         let locked = root.join("read-only");
         std::fs::create_dir_all(&locked).unwrap();
         set_readonly(&locked, true);
-        assert!(std::fs::create_dir_all(&locked).is_ok(), "the trap this guards");
+        assert!(
+            std::fs::create_dir_all(&locked).is_ok(),
+            "the trap this guards"
+        );
         assert!(override_problem(&locked).unwrap().contains("read-only"));
         assert!(write_problem(&locked).is_some());
 
@@ -730,5 +877,77 @@ mod tests {
         for hostile in ["../../etc", "/etc", "runs/../..", "", "RUNS"] {
             assert!(relative_for(hostile).is_err(), "{hostile} must be refused");
         }
+    }
+}
+
+#[cfg(test)]
+mod conversation_storage_tests {
+    use super::*;
+    fn fixture() -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "klide-history-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+    fn saved(root: &Path, id: &str, text: &str) {
+        let summary = serde_json::json!({"id": id, "path": "", "source": "klide", "title": id,
+            "status": "done", "provider": "opencode", "model": "test", "createdMs": 1,
+            "updatedMs": 2, "messageCount": 1});
+        std::fs::write(root.join(format!("{id}.summary.json")), summary.to_string()).unwrap();
+        std::fs::write(root.join(format!("{id}.jsonl")), text).unwrap();
+    }
+    #[test]
+    fn measures_largest_first_and_deletes_only_selected_history() {
+        let root = fixture();
+        saved(&root, "small", "a");
+        saved(&root, "large", &"a".repeat(1000));
+        std::fs::create_dir_all(root.join("large/checkpoints")).unwrap();
+        std::fs::write(root.join("large/checkpoints/saved"), "backup").unwrap();
+        std::fs::write(root.join("large/unrelated"), "keep").unwrap();
+        std::fs::create_dir_all(root.join("large.values")).unwrap();
+        std::fs::write(root.join("large.values/result"), "output").unwrap();
+        let rows = stored_runs(&root).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "large");
+        assert_eq!(rows[0].transcript_bytes, 1000);
+        assert!(rows[0].supporting_bytes >= 12);
+        delete_stored_run(&root, "large").unwrap();
+        assert!(!root.join("large.jsonl").exists());
+        assert!(!root.join("large.summary.json").exists());
+        assert!(!root.join("large/checkpoints").exists());
+        assert!(!root.join("large.values").exists());
+        assert!(root.join("large/unrelated").exists());
+        assert!(root.join("small.jsonl").exists());
+        assert_eq!(stored_runs(&root).unwrap().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn refuses_unknown_ids_and_path_escape() {
+        let root = fixture();
+        std::fs::write(root.join("unknown.jsonl"), "keep").unwrap();
+        assert!(delete_stored_run(&root, "unknown").is_err());
+        assert!(delete_stored_run(&root, "../outside").is_err());
+        assert!(root.join("unknown.jsonl").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn refuses_linked_storage_without_touching_target() {
+        let root = fixture();
+        let outside = fixture();
+        saved(&root, "linked", "history");
+        std::fs::write(outside.join("keep"), "safe").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("linked.values")).unwrap();
+        assert!(delete_stored_run(&root, "linked").is_err());
+        assert!(outside.join("keep").exists());
+        assert!(root.join("linked.jsonl").exists());
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(outside).unwrap();
     }
 }

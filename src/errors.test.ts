@@ -8,6 +8,13 @@ import { describe, expect, it } from "vitest";
 import { errMessage, providerFailureMessage, RunBusyError } from "./errors";
 
 describe("providerFailureMessage", () => {
+  it.each([
+    "The background host needs an update. Finish its active terminal sessions before starting a new background chat.",
+    "Could not confirm background run start: recv: timed out. Reopen the conversation to check its state before retrying.",
+  ])("does not blame credentials for a local run-host error", (message) => {
+    expect(providerFailureMessage(message, "OpenCode")).toBe(message);
+  });
+
   it("says a busy Run is busy, without blaming the provider", () => {
     expect(providerFailureMessage(new RunBusyError(), "Anthropic")).toBe(
       "This conversation's Run is still busy — stop it or wait, then send again.",

@@ -300,6 +300,9 @@ Klide/
     │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
+    │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit
+    │       ├── remote.rs          App-side proxy to those runs — start, reconnect, replay the durable gap, route Stop/approvals
+    │       ├── stream_log.rs      Streamed output of a background turn — deltas merged per 150 ms, written without a disk wait
     │       ├── run_core.rs        Tauri-free turn prep — provider quirks, message assembly, compaction
     │       ├── routing.rs         The `auto` Provider → one concrete provider+model at run start (gate, rank, lock)
     │       ├── tools.rs           Tool registry (schema + capability + execution, including native memory recall)
@@ -567,7 +570,12 @@ adapter's `chat_stream_invocation` applies it, so both surfaces act as one Run. 
 (`agent_wait`), because Klide owns no turn boundary inside a foreign CLI;
 waking an idle CLI when mail arrives (a Stop hook that blocks with the inbox as
 its reason) is the next slice. Do not add a direct journal writer outside the
-app process, and do not let an adapter trust a caller-supplied actor.
+app process and its background host, and do not let an adapter trust a
+caller-supplied actor. The one sanctioned second writer is `klide ptyd` running
+a background subscription chat (`agent/daemon.rs`, docs/BACKGROUND_CONVERSATIONS.md):
+it is the same binary, writes through the same cross-process lock, and hosts
+the same Delegate door (its own bridge + `chat-coordination-endpoint.json`),
+not a third one.
 
 ### Provider streaming (1 loop, 3 adapters)
 

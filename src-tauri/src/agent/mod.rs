@@ -1,4 +1,7 @@
 mod approval_store;
+pub(crate) mod daemon;
+mod remote;
+mod stream_log;
 mod artifacts;
 mod background;
 mod process;
@@ -137,7 +140,7 @@ impl Default for AgentSupervisorState {
 /// workspace in the same app process must never interrupt a real active Run.
 pub(crate) fn run_is_active(app: &tauri::AppHandle, run_id: &str) -> bool {
     let state = app.state::<AgentSupervisorState>();
-    state
+    let local = state
         .runs
         .lock()
         .ok()
@@ -152,7 +155,17 @@ pub(crate) fn run_is_active(app: &tauri::AppHandle, run_id: &str) -> bool {
                     | AgentRunStatus::Paused
             )
         })
-        .unwrap_or(false)
+        .unwrap_or(false);
+    local || off_the_worker(|| remote::statuses(app).ok().is_some_and(|runs| runs.contains_key(run_id)))
+}
+
+/// Storage relocation must not strand a writer in the previous directory.
+pub(crate) fn ensure_storage_idle(app: &tauri::AppHandle) -> Result<(), String> {
+    if !app.state::<AgentSupervisorState>().runs.lock().map_err(|_| "Agent state unavailable")?.is_empty()
+        || !remote::statuses(app)?.is_empty() {
+        return Err("Finish or stop active conversations before changing the runs folder.".into());
+    }
+    Ok(())
 }
 
 /// The project's approved commands, but only for a provider that needs them.
@@ -300,8 +313,10 @@ trait RunSupervisor: Send + Sync {
     /// so a remounted panel snapshots the transcript then follows this event to
     /// stay live. Best-effort; a no-op off-Tauri (tests). Only events that go
     /// through the `emit` closure (structural events, persisted with a `seq`)
-    /// are broadcast — token deltas stream separately and are not replayed.
+    /// are broadcast. App-owned runs stream deltas separately; daemon-owned
+    /// subscription runs persist and broadcast them as part of the same sequence.
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent);
+    fn persist_stream(&self) -> bool { false }
     fn watch_background(&self, _run_id: &str, _shell_id: &str, _request: &StartRunRequest) {}
     /// Feed the failure budget: a run settled in error (`failed`) or done.
     /// Default no-op keeps FakeSupervisor tests headless; the budget itself
@@ -1645,6 +1660,7 @@ async fn start_run(
     done: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
     observer_shell_id: Option<&str>,
 ) -> Result<StartRunResponse, String> {
+    let _storage_guard = crate::storage::RUN_STORAGE_GATE.lock().await;
     let state = app.state::<AgentSupervisorState>();
     let runs_dir = app_runs_dir(&app)?;
     // Never accept renderer-supplied trust. Only the private, fingerprint-bound
@@ -1713,6 +1729,15 @@ async fn start_run(
                 });
             }
         }
+    }
+    #[cfg(unix)]
+    if remote::eligible(&request) && done.is_none() && observer_shell_id.is_none() {
+        request.run_id = Some(id.clone());
+        return remote::start(app, request, runs_dir, on_event).await;
+    }
+    // A provider switch must not start a local writer beside a daemon-owned turn.
+    if remote::status(&app, &id).await?.is_some() {
+        return Err(format!("A run is already active for this conversation ({id}). Wait for it to finish or stop it first."));
     }
     let mission_link = match (
         request.workspace_root.clone(),
@@ -1867,7 +1892,7 @@ async fn run_agent_loop(
         .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))
         .count();
     let created_ms = now_ms();
-    let mut seq = prior_events.len() as u64;
+    let sequence = Arc::new(Mutex::new(prior_events.len() as u64));
     let event_channel = on_event.clone();
     // A wake turn: no words from the user, started by the panel so the Run
     // reads what another agent left for it once its user let that in. There
@@ -1876,12 +1901,13 @@ async fn run_agent_loop(
     let wake = resuming && request.initial_text.trim().is_empty() && request.attachments.is_empty();
 
     let mut emit = |event: AgentEvent| -> Result<(), String> {
-        append_event(&runs_dir, &id, seq, &event)?;
+        let mut seq = sequence.lock().map_err(|_| "Transcript sequence unavailable")?;
+        append_event(&runs_dir, &id, *seq, &event)?;
         // Broadcast before advancing seq so the global reattach stream carries
         // the same index the transcript just wrote. append-then-broadcast means
         // any seq a listener sees is already durable on disk.
-        sup.broadcast(&id, seq, &event);
-        seq += 1;
+        sup.broadcast(&id, *seq, &event);
+        *seq += 1;
         let _ = on_event.send(event);
         Ok(())
     };
@@ -2099,7 +2125,40 @@ async fn run_agent_loop(
         let assistant_id = message_id("assistant");
         let stream_run_id = id.clone();
         let stream_assistant_id = assistant_id.clone();
-        let stream_channel = event_channel.clone();
+        let stream_failure = Arc::new(Mutex::new(None::<String>));
+        let stream_log = sup.persist_stream().then(|| {
+            let supervisor = supervisor.clone();
+            stream_log::StreamLog::new(
+                runs_dir.clone(),
+                id.clone(),
+                sequence.clone(),
+                Box::new(move |run_id, seq, event| supervisor.broadcast(run_id, seq, event)),
+            )
+        });
+        let stream_channel = match &stream_log {
+            Some(log) => {
+                let failure = stream_failure.clone();
+                let log = log.clone();
+                Channel::<AgentEvent>::new(move |body| {
+                    let event = body.deserialize::<AgentEvent>()?;
+                    if let Err(error) = log.push(event) {
+                        *failure.lock().unwrap() = Some(error.clone());
+                        return Err(tauri::Error::Io(std::io::Error::other(error)));
+                    }
+                    Ok(())
+                })
+            }
+            None => event_channel.clone(),
+        };
+        // Text still merging when the provider returns (or the turn is
+        // cancelled) belongs before whatever the loop writes next.
+        let flush_stream = |failure: &Mutex<Option<String>>| {
+            if let Some(log) = &stream_log {
+                if let Some(error) = log.flush().err().or_else(|| log.take_failure()) {
+                    failure.lock().unwrap().get_or_insert(error);
+                }
+            }
+        };
         // Time to first token, captured where it actually happens: the first
         // streamed chunk of this turn. 0 means "no delta yet" (a non-streaming
         // turn keeps it at 0 and reports no TTFT).
@@ -2340,6 +2399,7 @@ async fn run_agent_loop(
         let request_started_ms = now_ms();
         let provider_result = tokio::select! {
             _ = cancel.cancelled() => {
+                flush_stream(&stream_failure);
                 finish_cancelled(&mut emit, &mut lease, &runs_dir, &summary, message_count)?;
                 return Ok(());
             }
@@ -2357,6 +2417,11 @@ async fn run_agent_loop(
                 reflection_level: request.reflection_level.clone(),
                 stream,
             }) => result,
+        };
+        flush_stream(&stream_failure);
+        let provider_result = match stream_failure.lock().unwrap().take() {
+            Some(error) => Err(format!("Could not save streamed output: {error}")),
+            None => provider_result,
         };
         if provider_result.is_ok() && !coordination_inbox.is_empty() {
             if let Some(root) = coordination_workspace_for(&request) {
@@ -2857,9 +2922,13 @@ pub async fn agent_submit_user_turn(
 // corrupt transcript ordering and let a UI believe approval was enforced.
 #[tauri::command]
 pub async fn agent_resolve_permission(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
     decision: PermissionDecisionRequest,
 ) -> Result<(), String> {
+    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&decision.run_id) {
+        return remote::control(&app, decision.run_id.clone(), crate::pty_wire::ChatControl::Permission { decision: decision.decision }).await.map(|_| ());
+    }
     let runs = state
         .runs
         .lock()
@@ -2891,10 +2960,14 @@ pub async fn agent_resolve_permission(
 /// Mission attempt or a child Run, which no conversation's rung reaches.
 #[tauri::command]
 pub async fn agent_set_command_policy(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
     run_id: String,
     auto_approve_commands: bool,
 ) -> Result<bool, String> {
+    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&run_id) {
+        return remote::control(&app, run_id.clone(), crate::pty_wire::ChatControl::CommandPolicy { auto_approve: auto_approve_commands }).await;
+    }
     let runs = state
         .runs
         .lock()
@@ -2907,9 +2980,13 @@ pub async fn agent_set_command_policy(
 
 #[tauri::command]
 pub async fn agent_resolve_diff(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
     decision: DiffDecisionRequest,
 ) -> Result<(), String> {
+    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&decision.run_id) {
+        return remote::control(&app, decision.run_id.clone(), crate::pty_wire::ChatControl::Diff { decision: decision.decision }).await.map(|_| ());
+    }
     let runs = state
         .runs
         .lock()
@@ -2950,9 +3027,13 @@ pub struct UserQuestionDecisionRequest {
 
 #[tauri::command]
 pub async fn agent_resolve_question(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
     decision: UserQuestionDecisionRequest,
 ) -> Result<(), String> {
+    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&decision.run_id) {
+        return remote::control(&app, decision.run_id.clone(), crate::pty_wire::ChatControl::Question { answer: decision.answer }).await.map(|_| ());
+    }
     let runs = state
         .runs
         .lock()
@@ -2973,9 +3054,13 @@ pub async fn agent_resolve_question(
 
 #[tauri::command]
 pub async fn agent_abort_run(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
     run_id: String,
 ) -> Result<(), String> {
+    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&run_id) {
+        return remote::control(&app, run_id.clone(), crate::pty_wire::ChatControl::Stop).await.map(|_| ());
+    }
     let runs = state
         .runs
         .lock()
@@ -2997,14 +3082,24 @@ pub async fn agent_abort_run(
 /// (running / waiting / queued / paused) means the run is still going in Rust,
 /// so the panel reattaches to the `agent-run:{id}` stream instead of showing a
 /// frozen transcript snapshot.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunState {
+    status: Option<String>,
+    /// First transcript event belonging to the accepted background turn.
+    /// A prior turn's final event must not settle a just-started follow-up.
+    from_seq: Option<u64>,
+}
+
 #[tauri::command]
-pub fn agent_run_status(
+pub async fn agent_run_status(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AgentSupervisorState>,
     run_id: String,
-) -> Option<String> {
-    let runs = state.runs.lock().ok()?;
-    runs.get(&run_id)
-        .map(|h| run_status_wire(&h.status).to_string())
+) -> Result<RunState, String> {
+    let local = state.runs.lock().ok().and_then(|runs| runs.get(&run_id).map(|h| run_status_wire(&h.status).to_string()));
+    if local.is_some() { return Ok(RunState { status: local, from_seq: None }); }
+    remote::state(&app, &run_id).await
 }
 
 pub(crate) fn shutdown_observers() { background::shutdown(); }
@@ -3043,6 +3138,9 @@ pub async fn agent_compact_context(
         return Err("Refusing to compact with an empty summary".to_string());
     }
     validate_run_id(&run_id)?;
+    if run_is_active(&app, &run_id) {
+        return Err("Wait for this conversation to finish before compacting it.".into());
+    }
     let runs_dir = app_runs_dir(&app)?;
     let prior = read_events(&runs_dir, &run_id).unwrap_or_default();
     if prior.is_empty() {
@@ -3130,7 +3228,10 @@ pub async fn agent_list_runs(
     let scan_dir = runs_dir.clone();
     let mut summaries =
         crate::blocking::run(move || list_summaries(&scan_dir, limit, offset)).await?;
+    let remote_app = app.clone();
+    let remote_statuses = crate::blocking::run(move || remote::statuses(&remote_app)).await?;
     for summary in &mut summaries {
+        if let Some(status) = remote_statuses.get(&summary.id) { summary.status = status.clone(); }
         if let Some(status) = live_statuses.get(&summary.id) {
             summary.status = run_status_wire(status).to_string();
         }
@@ -3142,7 +3243,7 @@ pub async fn agent_list_runs(
                 | "waiting_for_permission"
                 | "waiting_for_diff"
                 | "paused"
-        ) && !live_statuses.contains_key(&summary.id)
+        ) && !live_statuses.contains_key(&summary.id) && !remote_statuses.contains_key(&summary.id)
         {
             summary.status = "cancelled".to_string();
         }
@@ -3162,7 +3263,7 @@ pub async fn agent_read_run(
 ) -> Result<Vec<AgentEvent>, String> {
     validate_run_id(&run_id)?;
     let runs_dir = app_runs_dir(&app)?;
-    read_events(&runs_dir, &run_id)
+    crate::blocking::run(move || read_events(&runs_dir, &run_id)).await
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

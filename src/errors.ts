@@ -29,6 +29,11 @@ export class RunBusyError extends Error {
 export function providerFailureMessage(err: unknown, providerLabel: string): string {
   if (err instanceof RunBusyError) return err.message;
   const message = errMessage(err).trim().replace(/[.\s]+$/, "");
+  // Host failures happen before the provider is contacted; their recovery
+  // instruction already names the local problem.
+  if (/^(?:the )?background host\b|^could not confirm background run start\b|^lost connection to the background run\b/i.test(message)) {
+    return `${message}.`;
+  }
   return `${message}. ${providerFailureHint(message, providerLabel)}`;
 }
 
