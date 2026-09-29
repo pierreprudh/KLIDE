@@ -148,7 +148,7 @@ export function EditorArea({
             enabled: minimap,
             side: "right",
             renderCharacters: false,
-            showSlider: "always",
+            showSlider: "mouseover",
             maxColumn: 90,
           },
           fontSize,
