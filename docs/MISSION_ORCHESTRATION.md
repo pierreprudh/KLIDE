@@ -4,8 +4,6 @@ A Goal Harness Run or a Delegate MCP client can use `mission_orchestrate` to
 find approved tasks, dispatch a worker, and inspect its exact attempt. Both
 adapters call the existing Rust Mission supervisor. No renderer must stay mounted.
 
-![Approved Mission orchestration](../public/mission-orchestration.svg)
-
 ## Workflow
 
 The operator creates and approves the Mission in Mission Control, freezing each
