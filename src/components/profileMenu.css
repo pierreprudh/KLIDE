@@ -45,9 +45,25 @@
 .profile-account-menu-row:focus-within {
   background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
-/* One CLI: its row, then its usage under the name. */
+/* One CLI: its row, then its usage under the name. Each bar is drawn in the
+   CLI's own brand colour (brand marks are exempt from the palette, like the
+   logos beside them) and turns red once a window is nearly spent. */
 .profile-account-cli {
   padding-bottom: 6px;
+  --usage-color: var(--accent);
+}
+.profile-account-cli:has(.profile-account-head[aria-expanded="false"]) {
+  padding-bottom: 0;
+}
+.profile-account-cli[data-provider="claude-code"] { --usage-color: #d97757; }
+.profile-account-cli[data-provider="codex"] { --usage-color: #7885eb; }
+.profile-account-cli[data-provider="opencode"] { --usage-color: #738cf2; }
+.profile-account-head {
+  cursor: pointer;
+  outline: none;
+}
+.profile-account-head:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .profile-account-title {
   flex: 1;
@@ -56,6 +72,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.profile-account-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .profile-account-plan,
 .profile-account-saved {
@@ -68,25 +89,39 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Log out waits for the row: shown on hover or focus, never a standing
-   destructive button. The first click only arms it. */
+/* The ragged-right slot: the plan at rest, Log out in its place while the
+   pointer is on the account. Stacked in one grid cell so neither shifts the
+   row when they trade places. */
+.profile-account-end {
+  display: grid;
+  justify-items: end;
+  min-width: 52px;
+  padding-right: 4px;
+  font-size: 12px;
+}
+.profile-account-end > * {
+  grid-area: 1 / 1;
+  transition: opacity 120ms ease-out, color 120ms ease-out;
+}
 .profile-account-logout {
   appearance: none;
   border: 0;
   background: transparent;
-  padding: 4px 6px;
-  border-radius: 6px;
+  padding: 0;
   font: inherit;
-  font-size: 12px;
   color: var(--fg-subtle);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 120ms ease-out, color 120ms ease-out;
 }
 .profile-account-cli:hover .profile-account-logout,
 .profile-account-logout:focus-visible,
 .profile-account-logout[data-confirming] {
   opacity: 1;
+}
+.profile-account-cli:hover .profile-account-end:has(.profile-account-logout) .profile-account-plan,
+.profile-account-end:has(.profile-account-logout:focus-visible) .profile-account-plan,
+.profile-account-end:has([data-confirming]) .profile-account-plan {
+  opacity: 0;
 }
 .profile-account-logout:hover {
   color: var(--fg);
@@ -108,6 +143,25 @@
   color: var(--fg-subtle);
   font-variant-numeric: tabular-nums;
 }
+.profile-usage-compact {
+  flex: 1.4;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.profile-usage-compact-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.profile-usage-compact-item .profile-usage-track {
+  flex: 1;
+}
 .profile-usage-track {
   height: 3px;
   border-radius: 2px;
@@ -118,16 +172,16 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: var(--usage-color);
   transition: width 240ms ease-out;
 }
-.profile-usage-fill[data-tone="warning"] { background: var(--warning); }
 .profile-usage-fill[data-tone="danger"] { background: var(--danger); }
 .profile-usage-value {
   text-align: right;
   color: var(--fg);
 }
 .profile-usage-reset {
+  text-align: right;
   white-space: nowrap;
 }
 .profile-usage-spend {
