@@ -114,16 +114,28 @@ pub enum ModelsHandler {
 /// (`src/delegate/`), one adapter per CLI.
 #[derive(Clone, Copy)]
 pub struct SubscriptionSpec {
-    /// Binary name as resolved by `resolve_command` (PATH + common
-    /// install locations).
-    pub cmd: &'static str,
-    /// Human-readable label for run output ("Claude Code", "Codex").
-    pub label: &'static str,
+    /// The Delegate adapter this row is the model-side of. Its binary and
+    /// label are read from here rather than restated, so a CLI's name has
+    /// one spelling.
+    pub delegate: &'static dyn crate::delegate::Delegate,
     /// Static fallback list when the CLI's cache file is absent.
     pub default_models: &'static [&'static str],
     /// Read the CLI's on-disk model cache. Returns None if the file
     /// isn't there yet.
     pub cached_models: fn() -> Option<Vec<String>>,
+}
+
+impl SubscriptionSpec {
+    /// Binary name as resolved by `resolve_command` (PATH + common
+    /// install locations).
+    pub fn cmd(&self) -> &'static str {
+        self.delegate.binary()
+    }
+
+    /// Human-readable label for run output ("Claude Code", "Codex").
+    pub fn label(&self) -> &'static str {
+        self.delegate.label()
+    }
 }
 
 /// One row of the registry. The whole provider lives here.
@@ -338,8 +350,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "claude",
-            label: "Claude Code",
+            delegate: &crate::delegate::ClaudeCode,
             default_models: &["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
             cached_models: crate::models::claude_cached_models,
         }),
@@ -351,8 +362,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "codex",
-            label: "Codex",
+            delegate: &crate::delegate::Codex,
             default_models: &["gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini"],
             cached_models: crate::models::codex_cached_models,
         }),
@@ -364,8 +374,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "opencode",
-            label: "OpenCode",
+            delegate: &crate::delegate::OpenCode,
             default_models: &["opencode"],
             cached_models: crate::models::opencode_cached_models,
         }),
@@ -382,8 +391,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "omp",
-            label: "Oh My Pi",
+            delegate: &crate::delegate::Omp,
             default_models: &[
                 "claude-sonnet-4-6",
                 "claude-opus-4-6",
@@ -1147,7 +1155,7 @@ pub(crate) fn plan_dispatch(provider: &str) -> Result<DispatchPlan, String> {
     if let Some(spec) = entry.subscription {
         return Ok(DispatchPlan::SubscriptionCli {
             provider_id: entry.id,
-            label: spec.label,
+            label: spec.label(),
         });
     }
     Ok(match entry.wire {
@@ -1469,12 +1477,18 @@ mod tests {
 
     #[test]
     fn subscription_predicate_matches_known_set() {
-        for id in ["claude-code", "codex", "opencode", "omp"] {
+        // Every Delegate has a subscription row, and that row points back
+        // at the same adapter — the registry never restates a CLI's facts.
+        for d in crate::delegate::ALL {
+            let id = d.id();
             assert!(is_subscription(id), "{id} should be subscription");
-            assert!(
-                lookup(id).unwrap().subscription.is_some(),
-                "{id} missing subscription spec"
-            );
+            let spec = lookup(id)
+                .unwrap()
+                .subscription
+                .unwrap_or_else(|| panic!("{id} missing subscription spec"));
+            assert_eq!(spec.delegate.id(), id, "{id}'s row names another adapter");
+            assert_eq!(spec.cmd(), d.binary());
+            assert_eq!(spec.label(), d.label());
         }
         for id in [
             "ollama",

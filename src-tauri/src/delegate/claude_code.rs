@@ -5,13 +5,31 @@ use super::runs::{
 };
 use super::chat_stream::{message_blocks, result_text, StreamItem};
 use super::cli_commands::{CliCommands, SlashProbe};
-use super::{shell_quote, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunParser};
+use super::{shell_quote, ChatSpec, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunParser};
 use std::collections::{HashMap, HashSet};
 
 /// Claude Code — Anthropic's CLI. Its TUI accepts the task as the first
 /// positional arg directly, so no subcommand is needed. Sessions land in
 /// `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`.
 pub struct ClaudeCode;
+
+impl ClaudeCode {
+    /// `.claude.json` — user state: the `oauthAccount` identity block, the
+    /// user-level MCP servers, per-project settings. Beside the config dir
+    /// by default (`~/.claude.json`); inside it once `CLAUDE_CONFIG_DIR`
+    /// moves the dir, which is where the CLI writes it then.
+    pub fn user_state_file(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        if env.var("CLAUDE_CONFIG_DIR").is_some() {
+            return self.config_home(env).map(|d| d.join(".claude.json"));
+        }
+        super::home_dir(env).map(|h| h.join(".claude.json"))
+    }
+
+    /// `<config_home>/skills` — one of the four places skills load from.
+    pub fn skills_dir(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("skills"))
+    }
+}
 
 /// Klide's approved commands as Claude Code tool permissions.
 ///
@@ -59,6 +77,34 @@ impl Delegate for ClaudeCode {
 
     fn binary(&self) -> &'static str {
         "claude"
+    }
+
+    fn label(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    /// `~/.claude`, or `$CLAUDE_CONFIG_DIR` when the user moved it.
+    fn config_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        super::home::overridable(env, "CLAUDE_CONFIG_DIR", ".claude")
+    }
+
+    fn sessions_dir(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("projects"))
+    }
+
+    /// `settings.json` — where Klide's status hooks ride.
+    fn config_file(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("settings.json"))
+    }
+
+    /// The login is in the keychain (see accounts.rs); `.claude.json` holds
+    /// only the identity beside it, so there is nothing here to copy.
+    fn auth_files(&self, _env: &dyn Env) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    fn supports_accounts(&self) -> bool {
+        true
     }
 
     fn model_arg(&self, model: &str) -> String {
@@ -260,8 +306,11 @@ impl Delegate for ClaudeCode {
 
     /// Claude Code is the one delegate with a first-class hooks system —
     /// Klide's status hooks ride `~/.claude/settings.json`.
-    fn ensure_status_hooks(&self, home: &str) -> Result<bool, String> {
-        super::status::install_claude_hooks(home)
+    fn ensure_status_hooks(&self, env: &dyn Env) -> Result<bool, String> {
+        let settings = self
+            .config_file(env)
+            .ok_or_else(|| "Could not resolve home directory".to_string())?;
+        super::status::install_claude_hooks(&settings)
     }
 
     fn login_commands(&self) -> Vec<String> {
@@ -321,9 +370,11 @@ impl Delegate for ClaudeCode {
         Some("@anthropic-ai/claude-code")
     }
 
-    fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
+    fn discover_runs(&self, env: &dyn Env) -> Vec<RunCandidate> {
         let mut out = Vec::new();
-        let root = std::path::Path::new(home).join(".claude/projects");
+        let Some(root) = self.sessions_dir(env) else {
+            return out;
+        };
         if let Ok(projects) = std::fs::read_dir(&root) {
             for proj in projects.flatten() {
                 if !proj.path().is_dir() {
@@ -361,11 +412,11 @@ impl Delegate for ClaudeCode {
         out
     }
 
-    fn run_parser(&self, _home: &str) -> Box<dyn RunParser> {
+    fn run_parser(&self, _env: &dyn Env) -> Box<dyn RunParser> {
         Box::new(ClaudeRunParser)
     }
 
-    fn read_run(&self, _home: &str, key: &str) -> Result<Vec<RunMessage>, String> {
+    fn read_run(&self, _env: &dyn Env, key: &str) -> Result<Vec<RunMessage>, String> {
         use std::io::BufRead;
         // Streamed, with the same oversized-line guard `parse_run` carries and
         // for the same reason: Claude inlines whole tool outputs, so a long
@@ -974,7 +1025,7 @@ mod tests {
         )
         .unwrap();
 
-        let msgs = ClaudeCode.read_run("", path.to_str().unwrap()).unwrap();
+        let msgs = ClaudeCode.read_run(&crate::delegate::ProcessEnv, path.to_str().unwrap()).unwrap();
 
         // The result is not a turn of its own — it belongs to the call above.
         assert_eq!(msgs.len(), 2);
@@ -1010,7 +1061,7 @@ mod tests {
         )
         .unwrap();
 
-        let msgs = ClaudeCode.read_run("", path.to_str().unwrap()).unwrap();
+        let msgs = ClaudeCode.read_run(&crate::delegate::ProcessEnv, path.to_str().unwrap()).unwrap();
         let tools = &msgs[0].tools;
 
         assert_eq!(tools[0].ok, Some(false));
@@ -1047,7 +1098,7 @@ mod tests {
         )
         .unwrap();
 
-        let msgs = ClaudeCode.read_run("", path.to_str().unwrap()).unwrap();
+        let msgs = ClaudeCode.read_run(&crate::delegate::ProcessEnv, path.to_str().unwrap()).unwrap();
 
         assert_eq!(msgs.len(), 1);
         assert_eq!(
@@ -1381,7 +1432,7 @@ mod tests {
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(proj.join("a.jsonl"), FIXTURE).unwrap();
         std::fs::write(proj.join("ignored.txt"), "x").unwrap();
-        let found = ClaudeCode.discover_runs(home.to_str().unwrap());
+        let found = ClaudeCode.discover_runs(&crate::delegate::home::test_env(&home));
         assert_eq!(found.len(), 1);
         assert!(found[0].key.ends_with("a.jsonl"));
     }
@@ -1397,7 +1448,7 @@ mod tests {
         std::fs::write(subagents.join("ignored.txt"), "x").unwrap();
 
         let mut keys: Vec<String> = ClaudeCode
-            .discover_runs(home.to_str().unwrap())
+            .discover_runs(&crate::delegate::home::test_env(&home))
             .into_iter()
             .map(|c| c.key)
             .collect();
@@ -1441,7 +1492,7 @@ mod tests {
         let home = temp_home("read");
         let p = home.join("session.jsonl");
         std::fs::write(&p, FIXTURE).unwrap();
-        let msgs = ClaudeCode.read_run("", p.to_str().unwrap()).unwrap();
+        let msgs = ClaudeCode.read_run(&crate::delegate::ProcessEnv, p.to_str().unwrap()).unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].text, "On it.");
@@ -1458,7 +1509,7 @@ mod tests {
             "\n",
         );
         std::fs::write(&p, fixture).unwrap();
-        let msgs = ClaudeCode.read_run("", p.to_str().unwrap()).unwrap();
+        let msgs = ClaudeCode.read_run(&crate::delegate::ProcessEnv, p.to_str().unwrap()).unwrap();
         assert_eq!(msgs.len(), 1);
         // The instruction survives; the "[Image: source: …]" breadcrumb is dropped.
         assert_eq!(msgs[0].text, "[Image #1] make it blue");

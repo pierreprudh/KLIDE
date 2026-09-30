@@ -279,8 +279,12 @@ A queued todo on Mission Control. Starts as a plain item; "send an agent" dispat
 _Avoid_: ticket, issue, todo
 
 **Delegate**:
-An external CLI agent (Claude Code, Codex, OpenCode) dispatched into the workspace through a PTY session. Klide observes its output; it does not drive its loop. All per-CLI knowledge — spawn syntax, resume flags, session-id detection, transcript parsing — lives in the Delegate module (`src-tauri/src/delegate/`), one adapter per CLI; pty.rs and Mission Control consume the interface and know nothing CLI-specific.
+An external CLI agent (Claude Code, Codex, OpenCode, Oh My Pi) dispatched into the workspace through a PTY session. Klide observes its output; it does not drive its loop. All per-CLI knowledge lives in the Delegate module (`src-tauri/src/delegate/`), one adapter per CLI: spawn syntax, resume flags, session-id detection, transcript parsing — and the CLI's *facts*: its label and binary, its login commands and auth check, whether its login can be switched (`supports_accounts`), and its **home** — the config and data directories honouring the CLI's own override (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, XDG for OpenCode) and the paths under them (sessions, the config file Klide writes hooks into, auth files, model cache). Every other module asks the adapter for a path; none spells `~/.codex` itself (a source scan in `delegate/home.rs` enforces it). Resolution reads through an `Env` so a test can move a home without touching the process.
 _Avoid_: external agent, subprocess, CLI tool
+
+**Delegate catalog**:
+The Delegate facts a surface shows without spawning one — id, label, binary, `supportsAccounts` — as `delegate::catalog()` in Rust, mirrored verbatim in `src/delegates.ts` (the frontend's one source: the `DelegateId` union, `delegateLabel`, every label map and the account-switcher flag derive from it) and served live by `delegate_catalog`. The Rust test `frontend_catalog_matches_all` pins the mirror to the adapters; a vitest source scan pins the rest of `src/` to the mirror.
+_Avoid_: delegate list, provider table
 
 **Klide convo**:
 A snapshot of an AI-panel conversation published to Mission Control, so it stays on the board after its panel closes.
@@ -291,7 +295,7 @@ A saved copy of the credentials a Delegate CLI already wrote, captured so Klide 
 _Avoid_: login, credential, token
 
 **Account provider**:
-The per-CLI seam for Account snapshots (`src-tauri/src/accounts.rs`) — one `AccountProvider` adapter per CLI (Codex / Claude Code / OpenCode) behind a trait, resolved by a single `provider(id)` registry. Mirrors the Delegate seam: where a login lives, how to read its identity, and how to capture and restore it all sit behind the trait; the generic save / list / activate flow knows nothing CLI-specific.
+The per-CLI seam for Account snapshots (`src-tauri/src/accounts.rs`) — one `AccountProvider` backend per CLI whose Delegate says `supports_accounts` (Codex / Claude Code / OpenCode) behind a trait. A backend names its Delegate and reads the CLI's id, label, login command and login files from that adapter — it keeps no id list, label or path of its own; what stays here is how to read the identity, and how to capture and restore it. The generic save / list / activate flow knows nothing CLI-specific.
 _Avoid_: account manager, credential handler
 
 ### Prompt assembly

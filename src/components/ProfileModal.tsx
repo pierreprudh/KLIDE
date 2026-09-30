@@ -1,6 +1,7 @@
 // Compact account popover above the bottom edge of the workspace.
 import { useEffect, useRef } from "react";
 import { AccountControl } from "./settings/accounts";
+import { DELEGATES } from "../delegates";
 import { GitHubAccountRow } from "./GitHubAccountRow";
 import { Z } from "../zLayers";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
@@ -54,9 +55,9 @@ export function ProfileModal({ open, onClose }: Props) {
         </div>
         <div className="profile-account-menu-rows">
           <GitHubAccountRow compact />
-          <AccountControl provider="codex" title="Codex" connected={false} compact />
-          <AccountControl provider="claude-code" title="Claude Code" connected={false} compact />
-          <AccountControl provider="opencode" title="OpenCode" connected={false} compact />
+          {DELEGATES.filter((d) => d.supportsAccounts).map((d) => (
+            <AccountControl key={d.id} provider={d.id} title={d.label} connected={false} compact />
+          ))}
         </div>
       </div>
     </div>

@@ -121,10 +121,7 @@ function providerCaption(id: ProviderId): string {
     case "xai": return "xAI Grok";
     case "deepseek": return "DeepSeek";
     case "openrouter": return "OpenRouter";
-    case "claude-code": return "Claude Code";
-    case "codex": return "Codex";
-    case "opencode": return "OpenCode";
-    // Self-hosted (custom:*) ids — caption with the endpoint's label.
+    // Delegates and self-hosted (custom:*) ids — the catalog's own name.
     default: return providerName(id);
   }
 }

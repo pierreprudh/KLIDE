@@ -53,6 +53,7 @@ import {
 import { githubAccounts } from "../../ipc/git";
 import { LinkMark } from "../linkMark";
 import { ProviderLogo } from "../ai/icons";
+import { DELEGATES } from "../../delegates";
 import type { ProviderId } from "../../agent/types";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
@@ -66,13 +67,12 @@ type Check =
   | { state: "ok"; probe: Probe }
   | { state: "failed"; error: string };
 
-/** Where a connector came from, in words rather than a badge. */
+/** Where a connector came from, in words rather than a badge. A Delegate's
+ *  name comes from the one catalog; discovery only ever names a Delegate id. */
 const ORIGIN_LABEL: Record<string, string> = {
   manual: "Added here",
   preset: "As your GitHub account",
-  "claude-code": "From Claude Code",
-  codex: "From Codex",
-  opencode: "From OpenCode",
+  ...Object.fromEntries(DELEGATES.map((d) => [d.id, `From ${d.label}`])),
   workspace: "From this project",
 };
 
@@ -99,9 +99,7 @@ function tildify(path: string): string {
 
 /** The tool a server was found in, as its own mark and name. */
 const SOURCE: Record<string, { name: string; logo?: ProviderId }> = {
-  "claude-code": { name: "Claude Code", logo: "claude-code" },
-  codex: { name: "Codex", logo: "codex" },
-  opencode: { name: "OpenCode", logo: "opencode" },
+  ...Object.fromEntries(DELEGATES.map((d) => [d.id, { name: d.label, logo: d.id as ProviderId }])),
   workspace: { name: "This project" },
 };
 

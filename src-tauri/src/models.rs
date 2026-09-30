@@ -6,6 +6,7 @@
 
 use crate::providers;
 use crate::cli::{ensure_command_available, resolve_command};
+use crate::delegate::Delegate;
 use crate::providers::{
     is_subscription_provider, provider_key, response_error, ANTHROPIC_VERSION, OLLAMA_URL,
 };
@@ -492,7 +493,7 @@ pub(crate) fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<
     // Without this guard, a "Check the Claude Code install" UI
     // (or the AiPanel's provider chip) would happily display a stale
     // cache from a Claude install that's been moved or uninstalled.
-    ensure_command_available(spec.cmd)?;
+    ensure_command_available(spec.cmd())?;
     let cached = (spec.cached_models)();
     Ok(cached.unwrap_or_else(|| {
         spec.default_models
@@ -503,7 +504,7 @@ pub(crate) fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<
 }
 
 pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
-    let cli = resolve_command("opencode").ok()?;
+    let cli = resolve_command(crate::delegate::OpenCode.binary()).ok()?;
     let output = std::process::Command::new(cli)
         .arg("models")
         .output()
@@ -524,8 +525,7 @@ pub(crate) fn opencode_cached_models() -> Option<Vec<String>> {
 }
 
 pub(crate) fn omp_cached_models() -> Option<Vec<String>> {
-    let home = std::env::var("HOME").ok()?;
-    let db = std::path::Path::new(&home).join(".omp/agent/models.db");
+    let db = crate::delegate::Omp.models_cache(&crate::delegate::ProcessEnv)?;
     if !db.exists() {
         return None;
     }
@@ -589,13 +589,13 @@ const CLAUDE_RECENT_TRANSCRIPTS: usize = 12;
 const CLAUDE_TRANSCRIPT_SCAN_BYTES: u64 = 256 * 1024;
 
 pub(crate) fn claude_cached_models() -> Option<Vec<String>> {
-    let home = std::env::var("HOME").ok()?;
-    let claude_dir = std::path::Path::new(&home).join(".claude");
+    let env = crate::delegate::ProcessEnv;
+    let claude_dir = crate::delegate::ClaudeCode.config_home(&env)?;
     let mut models = Vec::new();
 
     // Recent transcripts first — the models the user actually runs today.
     let mut transcripts: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-    collect_jsonl_paths(&claude_dir.join("projects"), &mut transcripts, 0);
+    collect_jsonl_paths(&crate::delegate::ClaudeCode.sessions_dir(&env)?, &mut transcripts, 0);
     transcripts.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
     for (_, path) in transcripts.into_iter().take(CLAUDE_RECENT_TRANSCRIPTS) {
         scan_for_claude_models(&path, &mut models);
@@ -701,17 +701,18 @@ fn is_claude_model_id(model: &str) -> bool {
 /// refreshes from OpenAI and then obeys. Klide reads that file rather than
 /// keeping a second table of OpenAI model facts — a private copy would be
 /// wrong the day a model ships or an effort is renamed.
-/// The read against an explicit home, the way every Delegate adapter
-/// takes its `home` — so the manifest parsing is exercised by a test with a
-/// fixture rather than by whatever sits in the developer's `~/.codex`.
-fn codex_manifest_models_in(home: &std::path::Path) -> Option<Vec<serde_json::Value>> {
-    let text = std::fs::read_to_string(home.join(".codex/models_cache.json")).ok()?;
+/// The read takes the manifest's path explicitly — so the parsing is
+/// exercised by a test with a fixture rather than by whatever sits in the
+/// developer's Codex home. Where that file is, is the adapter's to say.
+fn codex_manifest_models_in(manifest: &std::path::Path) -> Option<Vec<serde_json::Value>> {
+    let text = std::fs::read_to_string(manifest).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     Some(value.get("models")?.as_array()?.clone())
 }
 
+/// `models_cache.json` under the Codex home the CLI itself uses.
 fn codex_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+    crate::delegate::Codex.models_cache(&crate::delegate::ProcessEnv)
 }
 
 /// One manifest row, by the slug the CLI takes on `-m`.
@@ -1577,9 +1578,12 @@ mod tests {
     fn codex_home_fixture(name: &str, manifest: &str) -> std::path::PathBuf {
         let home = std::env::temp_dir().join(format!("klide-models-test-{name}"));
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".codex")).unwrap();
-        std::fs::write(home.join(".codex/models_cache.json"), manifest).unwrap();
-        home
+        let path = crate::delegate::Codex
+            .models_cache(&crate::delegate::home::test_env(&home))
+            .unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, manifest).unwrap();
+        path
     }
 
     /// Trimmed to the fields Klide reads, in the shape the CLI writes: a

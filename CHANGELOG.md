@@ -15,6 +15,24 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Delegates
+
+- **A CLI's home is honoured everywhere.** `CODEX_HOME`, `CLAUDE_CONFIG_DIR`
+  and OpenCode's XDG directories now reach every place Klide touches a
+  Delegate's files — the status-hook installer, the gateway's Codex
+  un-inject, connector discovery, the account switcher, model caches, skills,
+  Mission Control's run listing and reads. Before, one of nine Codex sites
+  read `CODEX_HOME`, so a moved home got its hook in one `config.toml` and its
+  un-inject in another. Each adapter resolves its own paths
+  (`delegate/home.rs`); a source scan keeps `~/.codex` out of every other module.
+- **One truth per CLI.** Label, binary, login commands and the accounts flag
+  live on the adapter; the Provider registry, the account switcher, the commit
+  co-author line and the frontend (`src/delegates.ts`, pinned by a drift test)
+  read them from there. OpenCode's login hint no longer disagrees with itself
+  (`opencode auth login`), its auth check reads the same `auth.json` the
+  switcher snapshots instead of always saying yes, and omp's runs are priced
+  as free like every other Delegate's.
+
 ### Connectors
 
 - **The assistant can use your connectors.** In Plan and Goal, a conversation
