@@ -1,14 +1,17 @@
-// Model discovery — what models each provider offers, how big their
-// context window is, and whether they support tools. Ollama and OpenAI-style
+// Model discovery — what models each provider offers. Ollama and OpenAI-style
 // endpoints get queried live (with a short cache for Ollama tags);
 // subscription CLIs read their on-disk model caches with static fallbacks;
 // MLX serves its presets. All read-only metadata, no chat traffic.
+//
+// What a model *can do* — window, tools, vision, reasoning levels, price
+// class, maker — is `model_capabilities`'s one answer; the `ai_model_*`
+// commands here are thin wrappers over it, kept so the frontend's existing
+// wire keeps working. The Provider-published facts this module reads (the
+// Codex manifest, an OpenAI-wire `/models` listing) feed that answer.
 
 use crate::providers;
 use crate::cli::{ensure_command_available, resolve_command};
-use crate::providers::{
-    is_subscription_provider, provider_key, response_error, ANTHROPIC_VERSION, OLLAMA_URL,
-};
+use crate::providers::{provider_key, response_error, ANTHROPIC_VERSION, OLLAMA_URL};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -22,15 +25,15 @@ static OLLAMA_MODELS_CACHE: LazyLock<Mutex<Option<(Instant, Vec<String>)>>> =
 /// per-model parameter list; plain OpenAI does not. All fields optional —
 /// `None` means "the endpoint didn't say", so callers keep their heuristic.
 #[derive(Clone, Debug, Default)]
-struct ModelMeta {
-    context_length: Option<usize>,
+pub(crate) struct ModelMeta {
+    pub(crate) context_length: Option<usize>,
     /// `Some(true/false)` when the endpoint advertises `supported_parameters`;
     /// `None` when it doesn't (caller falls back to its optimistic default).
-    supports_tools: Option<bool>,
+    pub(crate) supports_tools: Option<bool>,
     /// Prompt / completion price in USD per *million* tokens, when the
     /// listing reports it (OpenRouter). `None` for endpoints that don't.
-    input_per_million: Option<f64>,
-    output_per_million: Option<f64>,
+    pub(crate) input_per_million: Option<f64>,
+    pub(crate) output_per_million: Option<f64>,
 }
 
 /// Cached `/models` metadata, keyed by provider id. OpenRouter's listing is
@@ -41,21 +44,6 @@ static OPENAI_MODEL_META_CACHE: LazyLock<
 > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const MODEL_META_TTL: Duration = Duration::from_secs(300);
-
-/// Cached results of the active Ollama reflection probe. Keyed by
-/// `"ollama:<model>"`. Lives for the Tauri process so we don't burn a
-/// chat inference on every model switch.
-pub struct ReflectionProbeCache {
-    pub cache: Mutex<HashMap<String, bool>>,
-}
-
-impl Default for ReflectionProbeCache {
-    fn default() -> Self {
-        Self {
-            cache: Mutex::new(HashMap::new()),
-        }
-    }
-}
 
 fn normalize_model_ids(value: &serde_json::Value) -> Vec<String> {
     value
@@ -243,12 +231,14 @@ pub(crate) async fn installed_ollama_models() -> Result<Vec<String>, String> {
     fetch_ollama_tags().await
 }
 
-/// USD per million input tokens for one hosted model, from the curated price
-/// table first (Anthropic, OpenAI, …) and the Provider's `/models` metadata
-/// second (OpenRouter reports prices per model). `None` when neither knows —
-/// the router ranks an unpriced model after every priced one.
+/// USD per million input tokens for one hosted model, from the Provider's
+/// price class first (a list price for Anthropic, OpenAI, …) and its `/models`
+/// metadata second (OpenRouter reports prices per model). `None` when neither
+/// knows — the router ranks an unpriced model after every priced one.
 pub(crate) async fn model_input_price(provider: &str, model: &str) -> Option<f64> {
-    if let Some(price) = crate::pricing::pricing_for_model(model) {
+    if let crate::model_capabilities::PriceClass::Priced(price) =
+        crate::model_capabilities::price_class(provider, model)
+    {
         return Some(price.input_per_million);
     }
     if let Some(entry) = providers::lookup(provider) {
@@ -395,7 +385,7 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
 /// Best-effort: returns an empty map for non-OpenAI-wire providers, when no
 /// key is configured, or on any network/parse failure — callers then fall
 /// back to their heuristics. Never errors.
-async fn openai_model_meta(provider: &str) -> HashMap<String, ModelMeta> {
+pub(crate) async fn openai_model_meta(provider: &str) -> HashMap<String, ModelMeta> {
     {
         let cache = OPENAI_MODEL_META_CACHE.lock().unwrap();
         if let Some((ts, meta)) = cache.get(provider) {
@@ -466,25 +456,6 @@ pub(crate) async fn ai_provider_model_meta(provider: String) -> Result<Vec<Model
             output_per_million: m.output_per_million,
         })
         .collect())
-}
-
-/// Resolve a model's context window, in priority order: an explicit override
-/// (local `num_ctx`), the provider's advertised per-model window (OpenRouter
-/// `/models`), then the name-based heuristic. Shared by the frontend gauge
-/// command and the harness's compaction threshold so the two never disagree.
-pub(crate) async fn resolve_context_window(provider: &str, model: &str) -> usize {
-    if let Some(entry) = providers::lookup(provider) {
-        if matches!(entry.models, providers::ModelsHandler::OpenAiModels) {
-            if let Some(window) = openai_model_meta(provider)
-                .await
-                .get(model)
-                .and_then(|m| m.context_length)
-            {
-                return window;
-            }
-        }
-    }
-    fallback_context_window(provider, model)
 }
 
 pub(crate) fn subscription_models(spec: &providers::SubscriptionSpec) -> Result<Vec<String>, String> {
@@ -778,7 +749,7 @@ fn codex_cached_models_in(home: &std::path::Path) -> Option<Vec<String>> {
     }
 }
 
-fn codex_context_window(model: &str) -> Option<usize> {
+pub(crate) fn codex_context_window(model: &str) -> Option<usize> {
     codex_context_window_in(&codex_home()?, model)
 }
 
@@ -789,40 +760,7 @@ fn codex_context_window_in(home: &std::path::Path, model: &str) -> Option<usize>
         .map(|window| window as usize)
 }
 
-pub(crate) fn fallback_context_window(provider: &str, model: &str) -> usize {
-    // A provider with a fixed window owns that fact on its registry row.
-    if let Some(window) = providers::lookup(provider).and_then(|e| e.context_window) {
-        return window;
-    }
-    // Otherwise guess from the model name — this is genuinely cross-provider
-    // (an aggregator like OpenRouter serves claude-*/gemini/grok slugs under one
-    // provider id), so it stays a name heuristic, not a provider fact.
-    context_window_for_model_name(model)
-}
-
-/// Best-effort context window from a model name alone, for providers whose
-/// window is model-dependent. Defaults to 128k for unknown models.
-fn context_window_for_model_name(model: &str) -> usize {
-    let lower = model.to_lowercase();
-    if lower.starts_with("claude-") {
-        200_000
-    } else if lower.starts_with("gpt-5") {
-        272_000
-    } else if lower.starts_with("gpt-4.1") {
-        1_000_000
-    } else if lower.contains("gemini-2.5") {
-        1_000_000
-    } else if lower.contains("mistral-large") {
-        128_000
-    } else if lower.contains("grok") {
-        256_000
-    } else {
-        // gemma and everything unknown
-        128_000
-    }
-}
-
-fn find_context_window(value: &serde_json::Value) -> Option<usize> {
+pub(crate) fn find_context_window(value: &serde_json::Value) -> Option<usize> {
     match value {
         serde_json::Value::Number(n) => n.as_u64().map(|n| n as usize),
         serde_json::Value::Object(map) => {
@@ -866,44 +804,30 @@ fn find_context_window(value: &serde_json::Value) -> Option<usize> {
     }
 }
 
+/// The one answer, on the wire: what this provider + model can do. The
+/// `ai_model_*` commands below each read one field of it and exist so older
+/// callers keep working; a surface that needs several facts asks this once.
+/// `allow_activation_probe` false keeps the call passive (no chat probe that
+/// would load a cold local model).
 #[tauri::command]
-pub(crate) async fn ai_context_window(provider: String, model: String) -> Result<usize, String> {
-    // Not known until routed. The name heuristic's floor is the honest gauge
-    // for the composer; the run itself accounts against the resolved model.
-    if crate::agent::routing::is_auto(&provider) {
-        return Ok(fallback_context_window(&provider, &model));
-    }
-    if provider == "codex" {
-        return Ok(codex_context_window(&model)
-            .unwrap_or_else(|| fallback_context_window(&provider, &model)));
-    }
+pub(crate) async fn ai_model_capabilities(
+    provider: String,
+    model: String,
+    allow_activation_probe: Option<bool>,
+) -> Result<crate::model_capabilities::ModelCapabilities, String> {
+    crate::model_capabilities::capabilities(&provider, &model, allow_activation_probe.unwrap_or(true))
+        .await
+}
 
-    if provider == "ollama" {
-        let res = reqwest::Client::new()
-            .post(format!("{OLLAMA_URL}/api/show"))
-            .json(&serde_json::json!({ "model": model }))
-            .send()
-            .await
-            .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-        let status = res.status();
-        let body = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(response_error("Ollama", status, &body));
-        }
-        let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        return Ok(
-            find_context_window(&value).unwrap_or_else(|| fallback_context_window("ollama", ""))
-        );
-    }
-
-    if provider == "mlx" {
-        return Ok(fallback_context_window("mlx", &model));
-    }
-
-    // OpenAI-wire aggregators (OpenRouter) advertise the real per-model
-    // window in their `/models` listing; everything else falls back to the
-    // name-based heuristic inside `resolve_context_window`.
-    Ok(resolve_context_window(&provider, &model).await)
+/// The model's trained context window, or `None` when nobody published one.
+#[tauri::command]
+pub(crate) async fn ai_context_window(
+    provider: String,
+    model: String,
+) -> Result<Option<usize>, String> {
+    Ok(crate::model_capabilities::capabilities(&provider, &model, false)
+        .await?
+        .context_window)
 }
 
 #[tauri::command]
@@ -911,343 +835,46 @@ pub(crate) async fn ai_model_supports_tools(
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    if is_subscription_provider(&provider) {
-        return Ok(true);
-    }
-    // `auto` guarantees tools by construction: a Plan or Goal run routed
-    // through it is only ever placed on a model that reports tool support, so
-    // the picker may offer every Mode.
-    if crate::agent::routing::is_auto(&provider) {
-        return Ok(true);
-    }
-
-    if provider == "ollama" {
-        let res = reqwest::Client::new()
-            .post(format!("{OLLAMA_URL}/api/show"))
-            .json(&serde_json::json!({ "model": model }))
-            .send()
-            .await
-            .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-        let status = res.status();
-        let body = res.text().await.map_err(|e| e.to_string())?;
-        if !status.is_success() {
-            return Err(response_error("Ollama", status, &body));
-        }
-        let value: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
-        // Ollama reports capabilities as a top-level array of strings, e.g.
-        // ["tools", "thinking", "completion"]. The model supports tool calling
-        // iff that array contains "tools". (Older code looked for a nested
-        // `details.capabilities.tools` bool, which never existed — so every
-        // tool-capable model except the hard-coded qwen2/deepseek families was
-        // wrongly treated as tool-less and run in degraded chat mode.)
-        if let Some(caps) = value.get("capabilities").and_then(|v| v.as_array()) {
-            let has_tools = caps.iter().any(|c| c.as_str() == Some("tools"));
-            return Ok(has_tools);
-        }
-        // Fallback for Ollama versions old enough not to report capabilities:
-        // trust the known tool-capable families.
-        let family = value
-            .get("details")
-            .and_then(|d| d.get("family"))
-            .and_then(|v| v.as_str());
-        return Ok(matches!(family, Some("deepseek") | Some("qwen2")));
-    }
-
-    // mlx_lm.server parses tool calls for models with a tool template (Qwen3,
-    // Llama-3.1, …) and returns OpenAI-format `tool_calls`. The curated MLX
-    // presets are all tool-capable instruct models, so advertise support.
-    if provider == "mlx" {
-        return Ok(true);
-    }
-
-    // OpenAI-wire aggregators (OpenRouter) advertise per-model tool support
-    // via `supported_parameters`. Trust it when present so agent/goal mode
-    // doesn't silently send `tools` to a chat-only model; if the endpoint
-    // doesn't say (plain OpenAI), keep the optimistic default.
-    if let Some(entry) = providers::lookup(&provider) {
-        if matches!(entry.models, providers::ModelsHandler::OpenAiModels) {
-            if let Some(supports) = openai_model_meta(&provider)
-                .await
-                .get(&model)
-                .and_then(|m| m.supports_tools)
-            {
-                return Ok(supports);
-            }
-        }
-    }
-
-    Ok(true)
+    Ok(crate::model_capabilities::capabilities(&provider, &model, false)
+        .await?
+        .supports_tools)
 }
 
-/// Whether the model can accept image input, so the composer only offers image
-/// attach where the model can actually see it. Best-effort per provider:
-/// Anthropic is all-multimodal; Ollama advertises "vision" in its capability
-/// list; MLX text servers are not multimodal; every other (OpenAI-wire)
-/// provider falls back to a name heuristic over the model id. Conservative on
-/// the unknown side — a wrong `false` just hides the attach button, whereas a
+/// Whether the model can accept image input, so the composer only offers
+/// image attach where the model can actually see it. Conservative on the
+/// unknown side — a wrong `false` just hides the attach button, whereas a
 /// wrong `true` sends an image to a blind model and errors.
 #[tauri::command]
 pub(crate) async fn ai_model_supports_vision(
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    // Unknown until routed, and the router doesn't gate on vision — so no
-    // image attach on an `auto` composer rather than a photo sent to a blind
-    // model.
-    if crate::agent::routing::is_auto(&provider) {
-        return Ok(false);
-    }
-    if provider == "anthropic" {
-        return Ok(claude_model_supports_vision(
-            &model.trim().to_ascii_lowercase(),
-        ));
-    }
-    if provider == "ollama" {
-        return Ok(ollama_advertises_vision(&model).await.unwrap_or(false));
-    }
-    if provider == "mlx" {
-        // Vision on Apple silicon needs mlx-vlm; mlx_lm.server is text-only.
-        return Ok(false);
-    }
-    Ok(openai_wire_model_supports_vision(&model))
+    Ok(crate::model_capabilities::capabilities(&provider, &model, false)
+        .await?
+        .supports_vision)
 }
-
-/// Anthropic's chat models are vision-capable with one exception: the 3.5
-/// Haiku line is text-only. Sending it an image 400s the whole turn, which is
-/// exactly what this gate exists to prevent — so the blanket "anthropic ⇒
-/// vision" answer was a bug, not a simplification. Normalizes `3.5` → `3-5`
-/// because OpenRouter spells the id with a dot.
-fn claude_model_supports_vision(name: &str) -> bool {
-    !name.replace('.', "-").contains("3-5-haiku")
-}
-
-fn openai_wire_model_supports_vision(model: &str) -> bool {
-    let lower = model.trim().to_ascii_lowercase();
-    let name = lower.rsplit('/').next().unwrap_or(lower.as_str());
-    // Explicit vision builds + the "-VL" multimodal families (Qwen2-VL, …).
-    if name.contains("vision") || name.contains("-vl") || name.contains("vl-") {
-        return true;
-    }
-    // The o-series is vision-capable except its text-only small builds:
-    // o1-mini, o1-preview, o3-mini. (o4-mini *is* multimodal.)
-    let o_series = (name.starts_with("o1") || name.starts_with("o3") || name.starts_with("o4"))
-        && !name.starts_with("o1-mini")
-        && !name.starts_with("o1-preview")
-        && !name.starts_with("o3-mini");
-    let claude = (name.starts_with("claude-3")
-        || name.starts_with("claude-opus")
-        || name.starts_with("claude-sonnet")
-        || name.starts_with("claude-haiku")
-        || name.starts_with("claude-fable")
-        || name.starts_with("claude-mythos"))
-        && claude_model_supports_vision(name);
-    o_series
-        || claude
-        || name.starts_with("gpt-4o")
-        || name.starts_with("chatgpt-4o")
-        || name.starts_with("gpt-4.1")
-        || name.starts_with("gpt-4-turbo")
-        || name.starts_with("gpt-5")
-        || name.starts_with("gemini")
-        || name.starts_with("pixtral")
-        || name.starts_with("llava")
-        || name.contains("llama-3.2")
-        || name.starts_with("grok-4")
-}
-
-async fn ollama_advertises_vision(model: &str) -> Result<bool, String> {
-    let res = reqwest::Client::new()
-        .post(format!("{OLLAMA_URL}/api/show"))
-        .json(&serde_json::json!({ "model": model }))
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-    let status = res.status();
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(response_error("Ollama", status, &body));
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
-    Ok(value
-        .get("capabilities")
-        .and_then(|v| v.as_array())
-        .map(|caps| caps.iter().any(|c| c.as_str() == Some("vision")))
-        .unwrap_or(false))
-}
-
-/// The levels a Klide-wire run offers when the model reasons at all. Klide owns
-/// this vocabulary for its own adapters — it maps each one to OpenAI's
-/// `reasoning_effort` and to an Anthropic thinking budget (see `adapters.rs`).
-/// A Delegate CLI does not use it: the CLI publishes its own set.
-const WIRE_REFLECTION_LEVELS: [&str; 5] = ["minimal", "low", "medium", "high", "xhigh"];
 
 /// Which reasoning efforts this provider+model actually accepts, weakest
 /// first. Empty means "no dial here", and every surface reads it that way — a
 /// picker that offers a level the model ignores is worse than no picker.
 #[tauri::command]
 pub(crate) async fn ai_model_reflection_levels(
-    state: tauri::State<'_, ReflectionProbeCache>,
     provider: String,
     model: String,
 ) -> Result<Vec<String>, String> {
-    resolve_reflection_levels(&state, &provider, &model).await
+    Ok(crate::model_capabilities::capabilities(&provider, &model, true)
+        .await?
+        .reasoning_levels)
 }
 
 #[tauri::command]
 pub(crate) async fn ai_model_supports_reflection(
-    state: tauri::State<'_, ReflectionProbeCache>,
     provider: String,
     model: String,
 ) -> Result<bool, String> {
-    Ok(!resolve_reflection_levels(&state, &provider, &model)
+    Ok(crate::model_capabilities::capabilities(&provider, &model, true)
         .await?
-        .is_empty())
-}
-
-async fn resolve_reflection_levels(
-    state: &ReflectionProbeCache,
-    provider: &str,
-    model: &str,
-) -> Result<Vec<String>, String> {
-    // A Delegate CLI reasons on its own terms, so the levels are the CLI's,
-    // not Klide's. Codex publishes a per-model set in its manifest; Claude
-    // Code accepts a CLI-wide vocabulary.
-    if crate::delegate::lookup(provider).is_some() {
-        if provider == "codex" {
-            return Ok(codex_reasoning_levels(model).unwrap_or_default());
-        }
-        if provider == "claude-code" {
-            return Ok(crate::delegate::CLAUDE_EFFORT_LEVELS.iter().map(|s| s.to_string()).collect());
-        }
-        return Ok(Vec::new());
-    }
-    if resolve_reflection_support(state, provider, model).await? {
-        return Ok(WIRE_REFLECTION_LEVELS
-            .iter()
-            .map(|level| level.to_string())
-            .collect());
-    }
-    Ok(Vec::new())
-}
-
-async fn resolve_reflection_support(
-    state: &ReflectionProbeCache,
-    provider: &str,
-    model: &str,
-) -> Result<bool, String> {
-    // Unknown until routed; offering a reflection dial the resolved model may
-    // ignore is worse than none.
-    if crate::agent::routing::is_auto(provider) {
-        return Ok(false);
-    }
-    if provider == "anthropic" {
-        return Ok(true);
-    }
-
-    if let Some(entry) = providers::lookup(provider) {
-        if let providers::WireFormat::OpenAi(cfg) = entry.wire {
-            return Ok(cfg.supports_reasoning_effort && openai_wire_model_supports_reasoning(model));
-        }
-    }
-
-    if provider != "ollama" {
-        return Ok(false);
-    }
-
-    // Fast path: trust Ollama's modelfile capability list.
-    if ollama_advertises_thinking(model).await.unwrap_or(false) {
-        return Ok(true);
-    }
-
-    // Slow path: some local models (e.g. LFM 2.5 8B) accept the `think` param
-    // even when the modelfile forgets to advertise the capability. Probe once
-    // with a tiny non-streaming chat and cache the verdict for the session.
-    let cache_key = format!("ollama:{model}");
-    if let Some(cached) = state
-        .cache
-        .lock()
-        .expect("reflection probe cache poisoned")
-        .get(&cache_key)
-        .copied()
-    {
-        return Ok(cached);
-    }
-    let probed = probe_ollama_thinking_support(model).await;
-    state
-        .cache
-        .lock()
-        .expect("reflection probe cache poisoned")
-        .insert(cache_key, probed);
-    Ok(probed)
-}
-
-fn openai_wire_model_supports_reasoning(model: &str) -> bool {
-    let lower = model.trim().to_ascii_lowercase();
-    let model = lower.rsplit('/').next().unwrap_or(lower.as_str());
-
-    model.starts_with("gpt-5")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("o5")
-}
-
-async fn ollama_advertises_thinking(model: &str) -> Result<bool, String> {
-    let res = reqwest::Client::new()
-        .post(format!("{OLLAMA_URL}/api/show"))
-        .json(&serde_json::json!({ "model": model }))
-        .send()
-        .await
-        .map_err(|e| format!("Unable to reach Ollama: {e}"))?;
-    let status = res.status();
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(response_error("Ollama", status, &body));
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("Invalid Ollama model info: {e}"))?;
-    Ok(value
-        .get("capabilities")
-        .and_then(|v| v.as_array())
-        .map(|caps| caps.iter().any(|c| c.as_str() == Some("thinking")))
-        .unwrap_or(false))
-}
-
-/// Sends a one-shot non-streaming chat with `think: true` and decides
-/// whether the model actually exposed a thinking channel in the response.
-/// Conservative on ambiguity: a missing or empty field means "not supported".
-async fn probe_ollama_thinking_support(model: &str) -> bool {
-    let req = reqwest::Client::new()
-        .post(format!("{OLLAMA_URL}/api/chat"))
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [{"role": "user", "content": "hi"}],
-            "think": true,
-            "stream": false,
-        }))
-        .timeout(Duration::from_secs(15));
-    let Ok(res) = req.send().await else {
-        return false;
-    };
-    if !res.status().is_success() {
-        return false;
-    }
-    let Ok(body) = res.text().await else {
-        return false;
-    };
-    ollama_probe_response_has_thinking(&body)
-}
-
-fn ollama_probe_response_has_thinking(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("message").cloned())
-        .and_then(|m| m.get("thinking").cloned())
-        .and_then(|t| t.as_str().map(str::to_string))
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false)
+        .supports_reasoning())
 }
 
 /// Exact token count for a single message's text under a specific model's own
@@ -1370,55 +997,6 @@ mod tests {
         assert!(!is_claude_model_id("claude-fable")); // no version at all
         assert!(!is_claude_model_id("claude-sonnet-latest")); // non-numeric tail
         assert!(!is_claude_model_id("claude-sonnet-4-x"));
-    }
-
-    #[test]
-    fn vision_gate_excludes_the_text_only_models_it_used_to_wave_through() {
-        // The 3.5 Haiku line is Anthropic's one text-only chat model —
-        // including the dotted OpenRouter spelling.
-        assert!(!claude_model_supports_vision("claude-3-5-haiku-20241022"));
-        assert!(!claude_model_supports_vision("claude-3.5-haiku"));
-        assert!(claude_model_supports_vision("claude-3-5-sonnet-20241022"));
-        assert!(claude_model_supports_vision("claude-haiku-4-5"));
-        assert!(claude_model_supports_vision("claude-fable-5"));
-
-        // The same exception applies on the OpenAI wire (OpenRouter ids).
-        assert!(!openai_wire_model_supports_vision(
-            "anthropic/claude-3.5-haiku"
-        ));
-        assert!(openai_wire_model_supports_vision(
-            "anthropic/claude-sonnet-4-6"
-        ));
-
-        // o-series: the text-only small builds must not ride the prefix.
-        assert!(!openai_wire_model_supports_vision("o1-mini"));
-        assert!(!openai_wire_model_supports_vision("o1-preview"));
-        assert!(!openai_wire_model_supports_vision("openai/o3-mini"));
-        assert!(openai_wire_model_supports_vision("o1"));
-        assert!(openai_wire_model_supports_vision("o3"));
-        assert!(openai_wire_model_supports_vision("o4-mini"));
-        assert!(openai_wire_model_supports_vision("gpt-4o-mini"));
-    }
-
-    #[test]
-    fn fallback_context_window_covers_each_family() {
-        assert_eq!(fallback_context_window("claude-code", "anything"), 200_000);
-        assert_eq!(fallback_context_window("x", "claude-3-opus"), 200_000);
-        assert_eq!(fallback_context_window("codex", "anything"), 272_000);
-        assert_eq!(fallback_context_window("x", "gpt-5-mini"), 272_000);
-        assert_eq!(fallback_context_window("x", "gpt-4.1"), 1_000_000);
-        assert_eq!(fallback_context_window("x", "gemini-2.5-pro"), 1_000_000);
-        assert_eq!(
-            fallback_context_window("x", "mistral-large-latest"),
-            128_000
-        );
-        assert_eq!(fallback_context_window("x", "grok-3"), 256_000);
-        // DeepSeek's hosted models are 128k — the unknown-model default, so no
-        // heuristic arm of its own is needed.
-        assert_eq!(fallback_context_window("deepseek", "deepseek-chat"), 128_000);
-        assert_eq!(fallback_context_window("mlx", "anything"), 128_000);
-        assert_eq!(fallback_context_window("x", "gemma-2-9b"), 128_000);
-        assert_eq!(fallback_context_window("x", "totally-unknown"), 128_000);
     }
 
     #[test]
@@ -1546,31 +1124,6 @@ mod tests {
         assert!(normalize_model_ids(&serde_json::json!({ "data": "nope" })).is_empty());
     }
 
-    #[tokio::test]
-    async fn mlx_advertises_tool_support() {
-        // mlx_lm.server returns OpenAI-format tool_calls for the curated
-        // presets, so MLX models run the full tool harness (not chat-only).
-        let supports = ai_model_supports_tools(
-            "mlx".to_string(),
-            "mlx-community/Llama-3.1-8B-Instruct-4bit".to_string(),
-        )
-        .await
-        .unwrap();
-        assert!(supports);
-    }
-
-    #[tokio::test]
-    async fn mlx_does_not_advertise_reflection_support() {
-        let supports = resolve_reflection_support(
-            &ReflectionProbeCache::default(),
-            "mlx",
-            "mlx-community/Llama-3.1-8B-Instruct-4bit",
-        )
-        .await
-        .unwrap();
-        assert!(!supports);
-    }
-
     /// A throwaway HOME holding a `~/.codex/models_cache.json`, so the
     /// manifest reads are exercised against a fixture rather than against
     /// whatever the developer's Codex last cached.
@@ -1678,98 +1231,6 @@ mod tests {
         assert!(
             reasoning_levels_of(&serde_json::json!({ "supported_reasoning_levels": [] })).is_none()
         );
-    }
-
-    #[tokio::test]
-    async fn claude_effort_levels_are_cli_wide() {
-        for model in ["default", "sonnet", "opus"] {
-            assert_eq!(resolve_reflection_levels(&ReflectionProbeCache::default(), "claude-code", model).await.unwrap(),
-                vec!["low", "medium", "high", "xhigh", "max"]);
-        }
-    }
-
-    #[tokio::test]
-    async fn delegate_clis_without_an_effort_switch_get_no_dial() {
-        // These adapters have no effort switch; keep their dial hidden.
-        let cache = ReflectionProbeCache::default();
-        for provider in ["opencode", "omp"] {
-            assert!(
-                resolve_reflection_levels(&cache, provider, "any-model")
-                    .await
-                    .unwrap()
-                    .is_empty(),
-                "{provider}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_wire_reasoning_model_offers_klides_own_levels() {
-        let levels = resolve_reflection_levels(&ReflectionProbeCache::default(), "openai", "gpt-5")
-            .await
-            .unwrap();
-        assert_eq!(levels, WIRE_REFLECTION_LEVELS.to_vec());
-        // ...and a model that doesn't reason offers none at all.
-        assert!(
-            resolve_reflection_levels(&ReflectionProbeCache::default(), "openai", "gpt-4.1-mini")
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn hosted_reasoning_providers_advertise_reflection_support() {
-        let cache = ReflectionProbeCache::default();
-        assert!(resolve_reflection_support(&cache, "openai", "gpt-5")
-            .await
-            .unwrap());
-        assert!(resolve_reflection_support(&cache, "openai", "o4-mini")
-            .await
-            .unwrap());
-        assert!(
-            resolve_reflection_support(&cache, "anthropic", "claude-sonnet-4-6")
-                .await
-                .unwrap()
-        );
-        assert!(
-            resolve_reflection_support(&cache, "openrouter", "openai/gpt-5")
-                .await
-                .unwrap()
-        );
-        assert!(
-            !resolve_reflection_support(&cache, "openai", "gpt-4.1-mini")
-                .await
-                .unwrap()
-        );
-        assert!(
-            !resolve_reflection_support(&cache, "openrouter", "openai/gpt-4.1-mini")
-                .await
-                .unwrap()
-        );
-        assert!(
-            !resolve_reflection_support(&cache, "mistral", "mistral-large")
-                .await
-                .unwrap()
-        );
-    }
-
-    #[test]
-    fn ollama_probe_response_recognises_thinking_field() {
-        // Thinking field present and non-empty → supported.
-        assert!(ollama_probe_response_has_thinking(
-            r#"{"message":{"thinking":"Let me think...","content":"hi"}}"#
-        ));
-        // Thinking field present but empty → not supported (be conservative).
-        assert!(!ollama_probe_response_has_thinking(
-            r#"{"message":{"thinking":"","content":"hi"}}"#
-        ));
-        // No thinking field → not supported.
-        assert!(!ollama_probe_response_has_thinking(
-            r#"{"message":{"content":"hi"}}"#
-        ));
-        // Garbage body → not supported.
-        assert!(!ollama_probe_response_has_thinking("not json"));
     }
 
     #[tokio::test]

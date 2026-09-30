@@ -20,11 +20,9 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
-  modelReflectionLevels as queryModelReflectionLevels,
-  modelSupportsTools as queryModelSupportsTools,
-  modelSupportsVision as queryModelSupportsVision,
+  readModelCapabilities,
+  readModelPricing,
   readLocalProviderStatus,
-  readProviderContextWindow,
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
@@ -636,41 +634,43 @@ type ModelInspection = {
   reflectionLevels: string[];
   supportsReflection: boolean;
   supportsVision: boolean;
-  contextLimit: number;
+  /** The trained window, or `null` when nobody published one — the gauge
+   *  then reads "—" and the send path skips the pre-send compaction check
+   *  rather than measuring against a number nobody stands behind. */
+  contextLimit: number | null;
 };
 
 /**
- * Model metadata is intentionally inspected as one unit. Ollama's reflection
- * fallback is not just metadata: it can issue a tiny probe chat, which loads a
- * cold model. Keeping the calls behind this function lets a resumed transcript
- * remain a passive reader until send() explicitly activates it.
+ * Model metadata is one answer from Rust (`model_capabilities`), asked for as
+ * one unit. Ollama's reflection fallback is not just metadata: it can issue a
+ * tiny probe chat, which loads a cold model. Passing the flag through lets a
+ * resumed transcript remain a passive reader until send() explicitly
+ * activates it. An unreachable provider yields the conservative answer.
  */
 async function inspectModelForRun(
   provider: ProviderId,
   model: string,
   allowActivationProbe = true,
 ): Promise<ModelInspection> {
-  const [tools, reflection, vision, context] = await Promise.allSettled([
-    queryModelSupportsTools(provider, model),
-    allowActivationProbe
-      ? queryModelReflectionLevels(provider, model)
-      : Promise.resolve<string[]>([]),
-    queryModelSupportsVision(provider, model),
-    readProviderContextWindow(provider, model),
-  ]);
-  const reflectionLevels =
-    reflection.status === "fulfilled" ? sortReflectionLevels(reflection.value) : [];
-  return {
-    supportsTools:
-      tools.status === "fulfilled" ? tools.value : !isManagedLocalProvider(provider),
-    reflectionLevels,
-    supportsReflection: reflectionLevels.length > 0,
-    supportsVision: vision.status === "fulfilled" ? vision.value : false,
-    contextLimit:
-      context.status === "fulfilled" && Number.isFinite(context.value) && context.value > 0
-        ? context.value
-        : 128_000,
-  };
+  try {
+    const caps = await readModelCapabilities(provider, model, allowActivationProbe);
+    const reflectionLevels = sortReflectionLevels(caps.reasoningLevels);
+    return {
+      supportsTools: caps.supportsTools,
+      reflectionLevels,
+      supportsReflection: reflectionLevels.length > 0,
+      supportsVision: caps.supportsVision,
+      contextLimit: caps.contextWindow !== null && caps.contextWindow > 0 ? caps.contextWindow : null,
+    };
+  } catch {
+    return {
+      supportsTools: !isManagedLocalProvider(provider),
+      reflectionLevels: [],
+      supportsReflection: false,
+      supportsVision: false,
+      contextLimit: null,
+    };
+  }
 }
 
 export function AiPanel({
@@ -1008,7 +1008,7 @@ export function AiPanel({
     }
   }, [workspaceBranch]);
 
-  const [contextLimit, setContextLimit] = useState(128_000);
+  const [contextLimit, setContextLimit] = useState<number | null>(null);
   // The provider's own prompt-token count from the latest finished turn — the
   // authoritative "how full is the context" number (it's exactly what the
   // model counted: system prompt + tools + history). `null` until the first
@@ -1769,21 +1769,24 @@ export function AiPanel({
   // measures against the model's detected window, which no request can change.
   const ctxOverride = harnessSettings?.contextWindows?.[model];
   const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
+  // `contextWindow.ts` reads 0 as "not detected"; `null` is that, typed.
   const effectiveContextLimit = resolveGaugeWindow({
     provider,
-    detected: contextLimit,
+    detected: contextLimit ?? 0,
     override: ctxOverride,
     reported: reportedContextWindow,
     estimatedPromptTokens: measuredPromptTokens ?? messageTokens + toolSchemaTokens,
   });
   // A different model, or a different cap, sizes its own window.
   useEffect(() => setReportedContextWindow(null), [provider, model, ctxOverride]);
+  const trainedWindowPhrase =
+    contextLimit !== null ? `the ${contextSizeLabel(contextLimit)} the model is trained to` : "the model's trained window, which it did not report";
   const contextLimitNote = providerHasContextWindowSetting(provider)
     ? ctxOverride && ctxOverride > 0
-      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. The model is trained to ${contextSizeLabel(contextLimit)}.`
+      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. It grows up to ${trainedWindowPhrase}.`
       : reportedContextWindow !== null
-        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
-        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
+        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to ${trainedWindowPhrase}.`
+        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to ${trainedWindowPhrase}.`
     : isCustomProvider(provider)
       ? "Self-hosted endpoint: Klide cannot set context here. Configure the server/model window upstream."
       : isLocalProvider
@@ -3077,10 +3080,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function loadPricing() {
       try {
-        const p = await invoke<{ inputPerMillion: number; outputPerMillion: number } | null>(
-          "ai_model_pricing",
-          { model }
-        );
+        const p = await readModelPricing(provider, model);
         if (!cancelled) setPricing(p ?? null);
       } catch { if (!cancelled) setPricing(null); }
     }
@@ -3565,10 +3565,12 @@ This user request requires workspace inspection. Before answering, you MUST call
       }
       // Context window: num_ctx only matters for Ollama (other adapters
       // ignore it). This is the *ceiling* — the user's cap, else the model's
-      // trained window — and Rust sizes the working window under it.
-      const numCtx = providerHasContextWindowSetting(turn.provider)
-        ? contextCeiling(contextLimit, harnessSettings?.contextWindows?.[turn.model])
-        : undefined;
+      // trained window — and Rust sizes the working window under it. With
+      // neither known, Rust plans from its own answer instead.
+      const ctxCeiling = providerHasContextWindowSetting(turn.provider)
+        ? contextCeiling(contextLimit ?? 0, harnessSettings?.contextWindows?.[turn.model])
+        : 0;
+      const numCtx = ctxCeiling > 0 ? ctxCeiling : undefined;
       const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
       const numPredict =
         turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
@@ -3933,8 +3935,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     // before that message is appended or dispatched. On failure keep the draft
     // intact so retry cannot accidentally send an overflowing context.
     const contextLimitForTurn = providerHasContextWindowSetting(provider)
-      ? contextCeiling(modelInspection.contextLimit, ctxOverride)
-      : modelInspection.contextLimit;
+      ? contextCeiling(modelInspection.contextLimit ?? 0, ctxOverride)
+      : modelInspection.contextLimit ?? 0;
     const ratioAfterSend = contextLimitForTurn > 0 ? budget.used / contextLimitForTurn : 0;
     if (shouldAutoCompact({ trigger: "send", canCompact, ratioAfterSend })) {
       if (!(await compactConversation("agent", contextLimitForTurn))) return;

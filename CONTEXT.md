@@ -262,6 +262,19 @@ the reason and what was ruled out. Distinct from the Goal policy's `auto`
 _Avoid_: smart mode, auto-select, model router (the router is the mechanism;
 Auto is the choice the user makes)
 
+**Model capabilities**:
+The one answer to what a model can do — context window, tools, vision,
+reasoning levels, price class, maker — for one Provider + model pair
+(`src-tauri/src/model_capabilities.rs`). Resolved in one order: explicit
+override → provider metadata (a CLI's manifest, a `/models` listing, a
+registry row) → local probe (Ollama's `/api/show`) → name table; memoised per
+pair. The gauge, the router, the compaction threshold and the composer
+controls all read the same answer, so they cannot disagree. A window nobody
+published is unknown (`null`), not a default. The price class is decided by
+the Provider (subscription flag, `KeySource`), never by the model's name.
+_Avoid_: per-command heuristics, frontend fallbacks, model metadata (the
+listing is a source; this is the answer)
+
 ### Mission Control
 
 **Mission Control**:

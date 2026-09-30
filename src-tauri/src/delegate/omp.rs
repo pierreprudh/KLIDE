@@ -302,7 +302,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let cost_usd = if cost_sum > 0.0 {
         Some(cost_sum)
     } else {
-        crate::pricing::cost_for_run(model.as_deref().unwrap_or(""), input_tokens, output_tokens)
+        crate::pricing::list_price_cost(model.as_deref().unwrap_or(""), input_tokens, output_tokens)
     };
     Some(AgentRun {
         status: transcript_status(updated_ms, transcript_state),

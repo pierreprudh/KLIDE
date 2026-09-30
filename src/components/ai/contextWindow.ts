@@ -3,7 +3,8 @@
 // Two facts that used to be conflated:
 //
 //   * the model's *trained* window — a property of the model, detected once
-//     (`ai_context_window`): 128k for llama3.1, 200k for a Claude model;
+//     (`ai_model_capabilities`): 128k for llama3.1, 200k for a Claude model,
+//     or unknown (`null` on the wire, 0 in here) when nobody published one;
 //   * the window a turn actually *runs in* — for Ollama, the `num_ctx` Rust
 //     sizes per request (`adapters::working_num_ctx`): a flat 32k that grows
 //     with the conversation up to the trained window, or up to the user's cap.

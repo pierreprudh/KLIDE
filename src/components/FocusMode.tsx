@@ -1651,7 +1651,7 @@ function FocusComposer({
     setDetectedWindow(0);
     readProviderContextWindow(provider, model)
       .then((window) => {
-        if (!cancelled && Number.isFinite(window) && window > 0) setDetectedWindow(window);
+        if (!cancelled && window !== null && window > 0) setDetectedWindow(window);
       })
       .catch(() => {
         /* the label reads "auto ctx" until the model is reachable */

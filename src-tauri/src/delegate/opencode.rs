@@ -775,7 +775,7 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
     })()
     .unwrap_or(0);
 
-    let cost_usd = crate::pricing::cost_for_run(
+    let cost_usd = crate::pricing::list_price_cost(
         model_raw.as_deref().unwrap_or(""),
         input_tokens,
         output_tokens,

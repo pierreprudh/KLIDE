@@ -1,19 +1,23 @@
-// Per-model pricing for hosted inference providers. Mission Control surfaces
-// `cost_usd` on each run row so the user can see what a session actually
-// cost — but the model->price mapping is intentionally a small, hand-curated
-// table, not a live API.
+// Per-model list prices for hosted inference providers. Mission Control
+// surfaces `cost_usd` on each run row so the user can see what a session
+// actually cost — but the model->price mapping is intentionally a small,
+// hand-curated table, not a live API.
 //
 // Why hand-curated:
 //   - The prices we care about are the published list prices for the most
 //     common 2026 models. They change rarely (every few months) and are
 //     public. A live API would add a network dependency and a freshness
 //     question we don't need to answer.
-//   - Subscription CLIs (claude-code, codex, opencode) and local models
-//     (ollama, mlx, …) return `None` — there's no per-token bill to show.
-//     Pricing those would be misleading.
 //   - OpenRouter / arbitrary passthrough providers don't have a stable
 //     per-model price from the user's perspective; we return `None` rather
 //     than guess.
+//
+// This table answers one question — "what does this model id cost at list
+// price" — and nothing about *whether* a run is billed. That is the
+// Provider's call (`model_capabilities::price_class`): a subscription CLI or
+// a local runtime is free whatever the model is called, so a `mistral:7b`
+// under Ollama never reaches this table. Callers that only hold a model id
+// (the Delegate transcript readers) get a list-price estimate, and say so.
 //
 // Prices are in USD per million tokens (the standard unit the providers
 // themselves publish). Cache reads are *not* priced (the input_tokens we
@@ -33,37 +37,28 @@ pub struct ModelPricing {
     pub output_per_million: f64,
 }
 
-/// Resolve a per-model price. Returns `None` for local models, subscription
-/// CLIs, OpenRouter passthrough (the underlying model isn't known), and any
-/// model name we don't recognise — surfacing a cost on those would be
-/// misleading.
-pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
+impl ModelPricing {
+    /// The bill for a token count at this price. Counts are clamped at 0 — a
+    /// missing or negative field is zero, never a negative bill.
+    pub fn cost(&self, input_tokens: i64, output_tokens: i64) -> f64 {
+        let input = input_tokens.max(0) as f64;
+        let output = output_tokens.max(0) as f64;
+        input * self.input_per_million / 1_000_000.0 + output * self.output_per_million / 1_000_000.0
+    }
+}
+
+/// The list price for a model id. `None` for an OpenRouter passthrough slug
+/// (the underlying model isn't in the id) and any model name the table
+/// doesn't recognise. Says nothing about whether the run is billed — see
+/// `model_capabilities::price_class` for that.
+pub fn list_price_for_model(model: &str) -> Option<ModelPricing> {
     let m = model.trim().to_ascii_lowercase();
     if m.is_empty() {
         return None;
     }
-    // Local — free.
-    if m.starts_with("llama")
-        || m.starts_with("qwen")
-        || m.starts_with("gemma")
-        || m.starts_with("mistral:") // local mistral via ollama
-        || m.starts_with("phi")
-        || m.starts_with("lfm")
-        || m.starts_with("lfm2")
-        || m.starts_with("minimax")
-        // Tagged deepseek pulls (`deepseek-r1:8b`, `deepseek-coder:6.7b`) are
-        // Ollama-local and free. The hosted API's ids carry no `:` tag, so they
-        // fall through to the DeepSeek prices below.
-        || (m.starts_with("deepseek") && m.contains(':'))
-        || m.starts_with("codestral")
-        || m.contains("olmo")
-        || m.contains("starcoder")
-        || m.contains("granite")
-    {
-        return None;
-    }
-    // Subscription CLIs — the user already paid.
-    if m == "claude-code" || m == "codex" || m == "opencode" {
+    // An Ollama-style `name:tag` (no vendor segment) is a local pull's id,
+    // never a hosted API's — `deepseek-r1:8b` is not `deepseek-chat`.
+    if m.contains(':') && !m.contains('/') {
         return None;
     }
     // OpenRouter passthrough — the underlying model price isn't in the id.
@@ -155,17 +150,13 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     None
 }
 
-/// Compute the run's USD cost from a model + token counts. Returns `None` when
-/// the model has no known price (local, subscription, unknown). Token counts
-/// are clamped at 0 — a missing or negative field is treated as zero rather
-/// than producing a negative bill.
-pub fn cost_for_run(model: &str, input_tokens: i64, output_tokens: i64) -> Option<f64> {
-    let pricing = pricing_for_model(model)?;
-    let input = input_tokens.max(0) as f64;
-    let output = output_tokens.max(0) as f64;
-    let dollars = input * pricing.input_per_million / 1_000_000.0
-        + output * pricing.output_per_million / 1_000_000.0;
-    Some(dollars)
+/// What a run on this model id would have cost at list price. For a
+/// Delegate CLI's transcript, which names the model but runs on the user's
+/// subscription — the number is what the session *would* have billed, and
+/// the surfaces that show it say "cost" in that sense. A Harness run knows
+/// its Provider and asks `model_capabilities::cost_for_run` instead.
+pub fn list_price_cost(model: &str, input_tokens: i64, output_tokens: i64) -> Option<f64> {
+    Some(list_price_for_model(model)?.cost(input_tokens, output_tokens))
 }
 
 #[cfg(test)]
@@ -173,42 +164,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_models_are_free() {
-        for m in [
-            "llama3.1:8b",
-            "qwen3:14b",
-            "gemma2:9b",
-            "mistral:7b",
-            "phi3:14b",
-            "lfm2.5:1.2b",
-            "minimax:8b",
-            "deepseek-coder:6.7b",
-            "deepseek-r1:8b",
-        ] {
-            assert_eq!(pricing_for_model(m), None, "{m} should be free (local)");
-            assert_eq!(cost_for_run(m, 1_000_000, 1_000_000), None);
+    fn local_pulls_and_cli_names_are_simply_unknown_here() {
+        // Whether a run is billed is the Provider's call, not this table's:
+        // an Ollama pull with no hosted namesake is unknown, and one *with* a
+        // hosted namesake (`mistral:7b`) is priced like it — the class check
+        // in `model_capabilities` is what keeps a local run free.
+        for m in ["llama3.1:8b", "qwen3:14b", "gemma2:9b", "phi3:14b", "lfm2.5:1.2b", "claude-code", "codex", "omp"] {
+            assert_eq!(list_price_for_model(m), None, "{m}");
         }
-    }
-
-    #[test]
-    fn hosted_deepseek_is_priced_but_local_pulls_are_not() {
-        // The two are told apart by the `:tag` an Ollama pull carries — an
-        // untagged id is the hosted API.
+        // The two DeepSeek spellings are told apart by the `:tag` an Ollama
+        // pull carries — an untagged id is the hosted API.
         let hosted = Some(ModelPricing {
             input_per_million: 0.28,
             output_per_million: 0.42,
         });
-        assert_eq!(pricing_for_model("deepseek-chat"), hosted);
-        assert_eq!(pricing_for_model("deepseek-reasoner"), hosted);
-        assert_eq!(pricing_for_model("deepseek-r1:8b"), None);
-    }
-
-    #[test]
-    fn subscription_clis_are_free() {
-        for m in ["claude-code", "codex", "opencode"] {
-            assert_eq!(pricing_for_model(m), None);
-            assert_eq!(cost_for_run(m, 100, 100), None);
-        }
+        assert_eq!(list_price_for_model("deepseek-chat"), hosted);
+        assert_eq!(list_price_for_model("deepseek-reasoner"), hosted);
+        assert_eq!(list_price_for_model("deepseek-r1:8b"), None);
     }
 
     #[test]
@@ -219,28 +191,28 @@ mod tests {
             "openrouter/anthropic/claude-3.5-sonnet",
             "opencode-go/minimax-m3",
         ] {
-            assert_eq!(pricing_for_model(m), None, "{m} passthrough should be None");
+            assert_eq!(list_price_for_model(m), None, "{m} passthrough should be None");
         }
     }
 
     #[test]
     fn hosted_anthropic_matches_published_prices() {
         assert_eq!(
-            pricing_for_model("claude-opus-4-8"),
+            list_price_for_model("claude-opus-4-8"),
             Some(ModelPricing {
                 input_per_million: 15.0,
                 output_per_million: 75.0
             })
         );
         assert_eq!(
-            pricing_for_model("claude-sonnet-4-6"),
+            list_price_for_model("claude-sonnet-4-6"),
             Some(ModelPricing {
                 input_per_million: 3.0,
                 output_per_million: 15.0
             })
         );
         assert_eq!(
-            pricing_for_model("claude-haiku-4-5"),
+            list_price_for_model("claude-haiku-4-5"),
             Some(ModelPricing {
                 input_per_million: 0.80,
                 output_per_million: 4.0
@@ -251,14 +223,14 @@ mod tests {
     #[test]
     fn hosted_openai_matches_published_prices() {
         assert_eq!(
-            pricing_for_model("gpt-5"),
+            list_price_for_model("gpt-5"),
             Some(ModelPricing {
                 input_per_million: 2.5,
                 output_per_million: 10.0
             })
         );
         assert_eq!(
-            pricing_for_model("gpt-4.1"),
+            list_price_for_model("gpt-4.1"),
             Some(ModelPricing {
                 input_per_million: 2.5,
                 output_per_million: 10.0
@@ -269,10 +241,10 @@ mod tests {
     #[test]
     fn cost_scales_linearly_with_tokens() {
         // 1M input + 1M output at gpt-5 rates = 2.5 + 10 = 12.5 USD
-        let c = cost_for_run("gpt-5", 1_000_000, 1_000_000).unwrap();
+        let c = list_price_cost("gpt-5", 1_000_000, 1_000_000).unwrap();
         assert!((c - 12.5).abs() < 1e-9);
         // Half a million each = 6.25
-        let c = cost_for_run("gpt-5", 500_000, 500_000).unwrap();
+        let c = list_price_cost("gpt-5", 500_000, 500_000).unwrap();
         assert!((c - 6.25).abs() < 1e-9);
     }
 
@@ -280,7 +252,7 @@ mod tests {
     fn cost_clamps_negative_token_counts() {
         // A bad adapter could report a negative number if a wire format
         // changes. Don't produce a negative bill — treat it as zero.
-        let c = cost_for_run("gpt-5", -10, -20).unwrap();
+        let c = list_price_cost("gpt-5", -10, -20).unwrap();
         assert_eq!(c, 0.0);
     }
 
@@ -288,17 +260,17 @@ mod tests {
     fn case_insensitive_model_match() {
         // Model names from providers vary in case; we lowercase before matching.
         assert_eq!(
-            pricing_for_model("CLAUDE-SONNET-4-6"),
-            pricing_for_model("claude-sonnet-4-6")
+            list_price_for_model("CLAUDE-SONNET-4-6"),
+            list_price_for_model("claude-sonnet-4-6")
         );
-        assert_eq!(pricing_for_model("GPT-5"), pricing_for_model("gpt-5"));
+        assert_eq!(list_price_for_model("GPT-5"), list_price_for_model("gpt-5"));
     }
 
     #[test]
     fn empty_and_unknown_model_return_none() {
-        assert_eq!(pricing_for_model(""), None);
-        assert_eq!(pricing_for_model("   "), None);
-        assert_eq!(pricing_for_model("gpt-9001-future"), None);
-        assert_eq!(cost_for_run("gpt-9001-future", 1, 1), None);
+        assert_eq!(list_price_for_model(""), None);
+        assert_eq!(list_price_for_model("   "), None);
+        assert_eq!(list_price_for_model("gpt-9001-future"), None);
+        assert_eq!(list_price_cost("gpt-9001-future", 1, 1), None);
     }
 }
