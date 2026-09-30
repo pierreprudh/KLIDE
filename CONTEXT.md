@@ -101,6 +101,15 @@ forwards each operation to the journal's single writer gate, so a Delegate
 and a Harness Run share one authority and one change event.
 _Avoid_: MCP proxy, agent API, second journal writer, remote coordination endpoint
 
+**Coordination operation**:
+One of the five things a Run does on the journal — list, send, wait, cancel,
+read result — as a single core function that takes an actor a door already
+authenticated and returns one structured result rendered as one text. A door
+(the Harness's native Tools, the Delegate bridge) binds the actor and wraps
+the reply; it never decides what the operation does. One schema source lists
+the five for both doors.
+_Avoid_: bridge op, tool handler, per-door implementation, MCP tool (as the definition)
+
 **Coordination envelope**:
 A durable semantic payload addressed from an operator or authenticated Run to
 one stable Run id. It has an explicit kind, correlation/reply identity,

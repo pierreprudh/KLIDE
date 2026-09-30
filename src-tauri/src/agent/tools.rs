@@ -108,13 +108,14 @@ pub enum CoordinationFlavor {
 }
 
 pub fn coordination_flavor(name: &str) -> Option<CoordinationFlavor> {
+    use crate::coordination::ops;
     match name {
         "mission_orchestrate" => Some(CoordinationFlavor::Orchestrate),
-        "agent_list" => Some(CoordinationFlavor::List),
-        "agent_send" => Some(CoordinationFlavor::Send),
-        "agent_wait" => Some(CoordinationFlavor::Wait),
-        "agent_cancel" => Some(CoordinationFlavor::Cancel),
-        "agent_read_result" => Some(CoordinationFlavor::ReadResult),
+        ops::AGENT_LIST => Some(CoordinationFlavor::List),
+        ops::AGENT_SEND => Some(CoordinationFlavor::Send),
+        ops::AGENT_WAIT => Some(CoordinationFlavor::Wait),
+        ops::AGENT_CANCEL => Some(CoordinationFlavor::Cancel),
+        ops::AGENT_READ_RESULT => Some(CoordinationFlavor::ReadResult),
         _ => None,
     }
 }
@@ -594,6 +595,16 @@ fn schema(
     })
 }
 
+/// A Tool defined once in MCP shape (`name` / `description` / `inputSchema`)
+/// — the coordination operations and `mission_orchestrate` — as the provider
+/// wires want it. The MCP server lists the same object untouched, so a
+/// Harness Run and a Delegate read one text.
+fn function_schema(tool: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"type":"function","function":{
+        "name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]
+    }})
+}
+
 fn registry() -> Vec<ToolEntry> {
     vec![
         ToolEntry {
@@ -885,45 +896,21 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Coordination,
-            schema: {
-                let tool = crate::missions::orchestration::tool();
-                serde_json::json!({"type":"function","function":{
-                    "name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]
-                }})
-            },
+            schema: function_schema(&crate::missions::orchestration::tool()),
             run_read: None,
             run_write_preview: None,
             summary: |_| "coordinate approved Mission".into(),
         },
         ToolEntry {
             kind: ToolKind::Coordination,
-            schema: schema(
-                "agent_list",
-                "List the coordinated Runs this Run is authorized to contact: itself, direct parent/children, and peers in the same Mission. Returns durable state and labels; unrelated Runs are never exposed.",
-                serde_json::json!({}),
-                &[],
-            ),
+            schema: function_schema(&crate::coordination::ops::tool(crate::coordination::ops::AGENT_LIST)),
             run_read: None,
             run_write_preview: None,
             summary: |_| "inspect agent network".to_string(),
         },
         ToolEntry {
             kind: ToolKind::Coordination,
-            schema: schema(
-                "agent_send",
-                "Send a durable instruction, question, answer, progress update, or handoff to an authorized Run. Set waitForReply for an atomic ask-and-wait; delivery happens only at the recipient's safe turn boundary. deliveryState reports the sent message; replyStatus reports this call's wait. A timeout does not cancel the message.",
-                serde_json::json!({
-                    "toRunId": { "type": "string", "description": "Exact target Run id returned by agent_list." },
-                    "body": { "type": "string", "description": "The semantic message to deliver." },
-                    "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Message kind. Defaults to instruction, or answer when replyTo is set." },
-                    "replyTo": { "type": "string", "description": "Envelope id being answered. A reply is kind answer, one per message; you must be its original recipient and send back to its original sender." },
-                    "correlationId": { "type": "string", "description": "Optional stable id grouping a multi-message exchange." },
-                    "idempotencyKey": { "type": "string", "description": "Optional retry key. Reusing it with different intent is rejected." },
-                    "waitForReply": { "type": "boolean", "description": "When true, wait for a reply to this exact envelope before returning." },
-                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "description": "Wait timeout when waitForReply is true. Defaults to 30 seconds." }
-                }),
-                &["toRunId", "body"],
-            ),
+            schema: function_schema(&crate::coordination::ops::tool(crate::coordination::ops::AGENT_SEND)),
             run_read: None,
             run_write_preview: None,
             summary: |call| call.input.get("toRunId").and_then(|v| v.as_str())
@@ -932,16 +919,7 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Coordination,
-            schema: schema(
-                "agent_wait",
-                "Wait for a durable coordination message addressed to this Run. Optionally narrow to one sender or one envelope reply. The Run remains cancellable while waiting.",
-                serde_json::json!({
-                    "fromRunId": { "type": "string", "description": "Optional sender Run id to wait for." },
-                    "replyTo": { "type": "string", "description": "Optional envelope id whose reply should unblock the wait." },
-                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "description": "Maximum wait. Defaults to 30 seconds." }
-                }),
-                &[],
-            ),
+            schema: function_schema(&crate::coordination::ops::tool(crate::coordination::ops::AGENT_WAIT)),
             run_read: None,
             run_write_preview: None,
             summary: |call| call.input.get("fromRunId").and_then(|v| v.as_str())
@@ -950,15 +928,7 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Coordination,
-            schema: schema(
-                "agent_cancel",
-                "Request cancellation of this Run or one of its direct children. The durable request is recorded before the live cancellation token is triggered.",
-                serde_json::json!({
-                    "runId": { "type": "string", "description": "Target Run id." },
-                    "reason": { "type": "string", "description": "Optional concise cancellation reason." }
-                }),
-                &["runId"],
-            ),
+            schema: function_schema(&crate::coordination::ops::tool(crate::coordination::ops::AGENT_CANCEL)),
             run_read: None,
             run_write_preview: None,
             summary: |call| call.input.get("runId").and_then(|v| v.as_str())
@@ -967,14 +937,7 @@ fn registry() -> Vec<ToolEntry> {
         },
         ToolEntry {
             kind: ToolKind::Coordination,
-            schema: schema(
-                "agent_read_result",
-                "Read the structured result published by an authorized Run. Returns a calm not-ready response while the Run is still working.",
-                serde_json::json!({
-                    "runId": { "type": "string", "description": "Target Run id returned by agent_list." }
-                }),
-                &["runId"],
-            ),
+            schema: function_schema(&crate::coordination::ops::tool(crate::coordination::ops::AGENT_READ_RESULT)),
             run_read: None,
             run_write_preview: None,
             summary: |call| call.input.get("runId").and_then(|v| v.as_str())
@@ -4692,6 +4655,29 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 3, "expected the three Pause ceremonies");
+    }
+
+    /// The five coordination Tools are one object on both doors: what this
+    /// registry hands a provider (rewrapped as a function schema) and what
+    /// the MCP server lists are the same name, description and schema.
+    #[test]
+    fn the_harness_and_mcp_coordination_tools_are_the_same_objects() {
+        let harness = list_tools_for_workspace(&GateSubject::for_mode(AgentMode::Goal), None);
+        let listed = crate::mcp_server::tool_list();
+        for name in crate::coordination::ops::TOOL_NAMES {
+            let native = harness
+                .iter()
+                .find(|t| t["function"]["name"] == name)
+                .unwrap_or_else(|| panic!("Harness registry lacks {name}"));
+            let mcp = listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap_or_else(|| panic!("MCP list lacks {name}"));
+            assert_eq!(native["function"]["description"], mcp["description"], "{name}");
+            assert_eq!(native["function"]["parameters"], mcp["inputSchema"], "{name}");
+        }
     }
 
     #[test]

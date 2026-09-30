@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub mod ops;
+
 pub const COORDINATION_SCHEMA_VERSION: u8 = 1;
 const MAX_BODY_BYTES: usize = 32 * 1024;
 const MAX_SUMMARY_BYTES: usize = 64 * 1024;
@@ -2119,7 +2121,7 @@ mod tests {
 
     fn rust_event_types() -> Vec<String> {
         let source = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/coordination.rs"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/coordination/mod.rs"),
         )
         .expect("read coordination Rust source");
         let start = source

@@ -256,8 +256,11 @@ mod tests {
         assert!(!body.contains(&delivery.nonce));
     }
 
+    /// `render_mail` is what a wait and a send receipt hand back on both
+    /// doors (through `coordination::ops`); it carries the same preamble the
+    /// turn boundary does.
     #[test]
-    fn bridge_and_harness_render_identically() {
+    fn mail_handed_back_as_a_tool_result_carries_the_preamble() {
         let inbox = vec![
             mail("env_1", run("run_b"), "What changed?"),
             mail("env_2", CoordinationActor::Operator, "Stop after tests."),
@@ -266,12 +269,12 @@ mod tests {
             let start = text.find("klide-delivery-").unwrap() + "klide-delivery-".len();
             text.replace(&text[start..start + 24], "N")
         };
-        let bridge = crate::coordination_bridge::messages_text(&inbox).unwrap();
-        let harness = Delivery::new(inbox.iter().cloned().map(DeliveredItem::PeerMail).collect())
+        let handed_back = render_mail(&inbox).unwrap();
+        let boundary = Delivery::new(inbox.iter().cloned().map(DeliveredItem::PeerMail).collect())
             .unwrap()
             .render();
-        assert_eq!(normalize(&bridge), normalize(&harness));
-        assert!(bridge.contains(PREAMBLE), "the Delegate door carries the preamble too");
+        assert_eq!(normalize(&handed_back), normalize(&boundary));
+        assert!(handed_back.contains(PREAMBLE));
         assert_eq!(
             Delivery::new(inbox.into_iter().map(DeliveredItem::PeerMail).collect())
                 .unwrap()

@@ -142,6 +142,15 @@ accepted mail and marks it delivered and acknowledged in the same call, since
 handing the text back over the wire is the read. PTY bytes are never used for
 delivery.
 
+`delivered` means "about to be read", on both doors. The turn boundary hands
+the model every accepted envelope, so it marks them all (`ops::take_inbox`).
+A wait — native or over MCP — hands back only the envelopes that answered it,
+so it marks only those, delivered and then acknowledged in the same call
+(`ops::wait`); accepted mail the wait did not match stays `accepted` and gets
+its own delivery later. The Harness door used to mark everything accepted as
+delivered on every wait poll, so the journal claimed a Run had read mail its
+model never saw; the rule above is the one both doors now follow.
+
 Every door renders mail through one module, `agent/delivery.rs`: the turn
 boundary, an `agent_wait` result, the replies inside a send receipt, and the
 Delegate bridge's `agent_wait`. A preamble says once that none of it was
@@ -154,6 +163,58 @@ observer completions ride the same delivery — except on a full-auto turn,
 which leaves them pending for the observer's own Plan follow-up, because
 command output never rides a turn that runs commands unasked. A wake turn
 keeps the conversation's own Mode.
+
+## Two doors, one core per operation
+
+The five operations a Run performs on the journal — `agent_list`,
+`agent_send`, `agent_wait`, `agent_cancel`, `agent_read_result` — are each one
+function in `coordination/ops.rs`, taking an actor the door has already
+authenticated (Run id + Workspace root) and returning a structured result:
+
+| Operation | Core | Returns |
+|---|---|---|
+| `agent_list` | `ops::list` | `Vec<PeerRow>` — relation, state, live, worker kind, label |
+| `agent_send` | `ops::send` | `CoordinationSendReceipt`, including the idempotent-retry lookup and the optional reply wait |
+| `agent_wait` | `ops::wait` | `WaitOutcome::Delivered(mail)` or `TimedOut`; one clamp (1–120 s, default 30), one delivered rule, one wake |
+| `agent_cancel` | `ops::cancel` | `CancelOutcome` — recorded, and whether a live Run was signalled |
+| `agent_read_result` | `ops::read_result` | `Option<CoordinationResult>` |
+
+`ops::perform` runs one `Operation` (parsed from a tool call by
+`Operation::from_tool_call`, or mapped from the bridge wire) and renders it
+as one `OpReply { text, value }`, so a Harness Run and a Delegate read the
+same sentence for the same outcome. A result is handed over as its JSON
+record rather than prose: status, summary, artifacts and source references
+are exactly what the reader acts on, and a rewording loses the artifact list.
+`ops::tools()` is the one schema source: the Harness registry rewraps each
+entry as a function schema, the MCP server lists them untouched, and a test
+asserts the two are the same objects.
+
+What differs per door is what only a door knows, behind two small seams:
+
+- `CoordinationHost` — the journal's apply/snapshot, "is this Run live?",
+  and "signal this Run's cancellation". The Harness implements it over its
+  supervisor (live handles, cancellation tokens); the bridge over the store
+  plus the app's hooks (`is_live`, `cancel`).
+- `Park` — how the door blocks between two reads while a wait is open. The
+  Harness parks on the async journal `watch` beside the Run's cancellation
+  token; a bridge request thread parks on the journal's condvar and is never
+  cancelled. Both wakes are the same `Journal::announce`, and the 2 s floor
+  only bounds how late another process's append is noticed.
+
+Each door therefore keeps two jobs: bind the actor (the Harness from
+`ctx.id`, the bridge from the PTY session it authenticated) and wrap the reply
+in its transport (`ToolResult`, `BridgeResponse`). Nothing in either door
+decides what an operation does, and the security rules (actor never from a
+request field, a reply reverses its route, one answer per envelope, receipts
+read from the journal) stay where they are enforced: in the journal core,
+before an event is appended. `agent_cancel` reached the Delegate door this
+way for free — the bridge authenticates the session, and cancel is a journal
+command with the same visibility rule as the rest.
+
+`both_doors_perform_every_operation_with_one_effect_and_one_text`
+(agent/mod.rs) runs one scenario through both doors and asserts identical
+journal state and identical rendered text for every operation, including the
+error sentences.
 
 ## Snapshot and event cursors
 
@@ -213,9 +274,11 @@ owned by the Memory Engine.
 
 ### PR 4 — Embedded MCP and Delegate adapters (shipped 2026-09-10, PR #93)
 
-- expose identity-bound list/send/wait/result Tools over embedded MCP —
+- expose identity-bound list/send/wait/cancel/result Tools over embedded MCP —
   `klide mcp coordination`, the app binary as a stdio child of the CLI, plus
-  `agent_publish_result` because a CLI has to say when it is done;
+  `agent_publish_result` because a CLI has to say when it is done
+  (`agent_cancel` joined the MCP list with the one-core-per-operation
+  refactor, 2026-09-30);
 - relay over loopback HTTP to the in-app bridge rather than a socket: the
   journal has one writer gate and one change event, both in the app process;
 - map Delegate idle/blocked/waiting status hooks and PTY exit into normalized

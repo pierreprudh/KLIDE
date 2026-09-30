@@ -1266,7 +1266,7 @@ mod blocking_door_tests {
         ("gateway.rs", include_str!("gateway.rs")),
         ("connectors.rs", include_str!("connectors.rs")),
         ("models.rs", include_str!("models.rs")),
-        ("coordination.rs", include_str!("coordination.rs")),
+        ("coordination/mod.rs", include_str!("coordination/mod.rs")),
         ("storage.rs", include_str!("storage.rs")),
         ("providers.rs", include_str!("providers.rs")),
         ("agent/mod.rs", include_str!("agent/mod.rs")),

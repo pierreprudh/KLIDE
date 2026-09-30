@@ -65,10 +65,10 @@ use self::types::{
     PermissionOption, PermissionRequest, RouteDecision, StartRunRequest, StartRunResponse,
     SubmitUserTurnRequest, ToolResult,
 };
+use crate::coordination::ops;
 use crate::coordination::{
     CoordinationActor, CoordinationArtifact, CoordinationArtifactKind, CoordinationCommand,
-    CoordinationCommandOutcome, CoordinationDeliveryState, CoordinationEnvelopeKind,
-    CoordinationEnvelopeSnapshot, CoordinationResultStatus, CoordinationRunRegistration,
+    CoordinationCommandOutcome, CoordinationResultStatus, CoordinationRunRegistration,
     CoordinationRunState, CoordinationSnapshot, CoordinationSourceRef, CoordinationSourceType,
     CoordinationStoreState, CoordinationWorkerKind,
 };
@@ -1611,46 +1611,33 @@ fn register_coordination_run(
     Ok(())
 }
 
-/// Load the authenticated inbox and advance queued envelopes to delivered.
-/// Delivered-but-unacknowledged entries are returned again so a failed
-/// provider request retries semantic delivery instead of losing it.
-fn load_coordination_inbox(
-    sup: &dyn RunSupervisor,
-    workspace_root: &str,
-    run_id: &str,
-) -> Result<Vec<CoordinationEnvelopeSnapshot>, String> {
-    let snapshot = sup.coordination_snapshot(workspace_root)?;
-    let inbox = crate::coordination::inbox_for(&snapshot, run_id)?;
-    for entry in &inbox {
-        if entry.delivery_state == CoordinationDeliveryState::Accepted {
-            sup.coordination_apply(
-                workspace_root,
-                CoordinationCommand::MarkEnvelopeDelivered {
-                    run_id: run_id.to_string(),
-                    envelope_id: entry.envelope.id.clone(),
-                },
-            )?;
-        }
-    }
-    Ok(inbox)
-}
+/// The Harness as a coordination host: the supervisor's journal access, its
+/// live-handle map, and its cancellation tokens, behind the seam
+/// `coordination::ops` performs every operation through. The turn boundary
+/// and the native `agent_*` Tools both go through this one adapter.
+struct SupervisorHost<'a>(&'a dyn RunSupervisor);
 
-fn acknowledge_coordination_inbox(
-    sup: &dyn RunSupervisor,
-    workspace_root: &str,
-    run_id: &str,
-    inbox: &[CoordinationEnvelopeSnapshot],
-) -> Result<(), String> {
-    for entry in inbox {
-        sup.coordination_apply(
-            workspace_root,
-            CoordinationCommand::AcknowledgeEnvelope {
-                run_id: run_id.to_string(),
-                envelope_id: entry.envelope.id.clone(),
-            },
-        )?;
+impl ops::CoordinationHost for SupervisorHost<'_> {
+    fn apply(
+        &self,
+        workspace_root: &str,
+        command: CoordinationCommand,
+    ) -> Result<CoordinationCommandOutcome, String> {
+        self.0.coordination_apply(workspace_root, command)
     }
-    Ok(())
+
+    fn snapshot(&self, workspace_root: &str) -> Result<CoordinationSnapshot, String> {
+        self.0.coordination_snapshot(workspace_root)
+    }
+
+    fn is_live(&self, run_id: &str) -> bool {
+        self.0.is_live(run_id)
+    }
+
+    fn signal_cancel(&self, run_id: &str) -> bool {
+        self.0
+            .with_handle(run_id, &mut |handle| handle.cancel.cancel())
+    }
 }
 
 async fn start_run(
@@ -2283,7 +2270,13 @@ async fn run_agent_loop(
                         eprintln!("klide: run {id} skipped coordination review this turn: {error}");
                     }
                 }
-                load_coordination_inbox(sup, root, &id).unwrap_or_else(|error| {
+                // The boundary projects every accepted envelope into this
+                // turn, so every one of them is marked delivered here.
+                ops::take_inbox(
+                    &SupervisorHost(sup),
+                    ops::Actor { run_id: &id, workspace_root: root },
+                )
+                .unwrap_or_else(|error| {
                     eprintln!("klide: run {id} skipped coordination delivery this turn: {error}");
                     Vec::new()
                 })
@@ -2428,9 +2421,11 @@ async fn run_agent_loop(
                 // A failed acknowledgement leaves the entries `delivered`, so
                 // the next boundary offers them again. Duplicated delivery is
                 // the safe side of this error; a dead Run is not.
-                if let Err(error) =
-                    acknowledge_coordination_inbox(sup, root, &id, &coordination_inbox)
-                {
+                if let Err(error) = ops::acknowledge(
+                    &SupervisorHost(sup),
+                    ops::Actor { run_id: &id, workspace_root: root },
+                    &coordination_inbox,
+                ) {
                     eprintln!(
                         "klide: run {id} could not acknowledge coordination delivery: {error}"
                     );
@@ -4962,6 +4957,7 @@ mod test_support {
 mod run_supervisor_tests {
     use super::test_support::*;
     use super::*;
+    use crate::coordination::{CoordinationDeliveryState, CoordinationEnvelopeKind};
 
     #[test]
     fn set_status_and_with_run_handle_round_trip_off_tauri() {
@@ -5216,6 +5212,249 @@ mod run_supervisor_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Replace what the two journals cannot share — minted ids, delivery
+    /// nonces, timestamps — so two renderings of the same scenario compare.
+    fn normalise_coordination_text(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        'outer: while !rest.is_empty() {
+            for prefix in ["env_", "result_", "klide-delivery-"] {
+                if let Some(after) = rest.strip_prefix(prefix) {
+                    let hex = after.chars().take_while(|c| c.is_ascii_hexdigit()).count();
+                    if hex == 24 {
+                        out.push_str(prefix);
+                        out.push('X');
+                        rest = &after[24..];
+                        continue 'outer;
+                    }
+                }
+            }
+            if let Some(after) = rest.strip_prefix("AtMs\": ") {
+                let digits = after.chars().take_while(|c| c.is_ascii_digit()).count();
+                out.push_str("AtMs\": T");
+                rest = &after[digits..];
+                continue;
+            }
+            let ch = rest.chars().next().unwrap();
+            out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+        }
+        out
+    }
+
+    /// The journal as a door left it, minus ids and clocks.
+    fn coordination_effects(snapshot: &CoordinationSnapshot) -> Vec<String> {
+        let mut effects = Vec::new();
+        for run in &snapshot.runs {
+            effects.push(format!(
+                "run {} {:?} cancel={}",
+                run.registration.run_id,
+                run.state,
+                run.cancel_request.is_some()
+            ));
+        }
+        for entry in &snapshot.envelopes {
+            effects.push(format!(
+                "env {:?} -> {} {:?} {:?} reply={} {:?}",
+                entry.envelope.from,
+                entry.envelope.to_run_id,
+                entry.envelope.kind,
+                entry.envelope.body,
+                entry.envelope.reply_to.is_some(),
+                entry.delivery_state
+            ));
+        }
+        for result in &snapshot.results {
+            effects.push(format!("result {} {:?} {:?}", result.run_id, result.status, result.summary));
+        }
+        effects
+    }
+
+    /// One scenario, two doors. The Harness door is `process_coordination_tool`
+    /// over `FakeSupervisor`; the Delegate door is the bridge's `execute` over
+    /// a bound session. Each of the five operations must leave the same
+    /// journal behind and hand the model the same text. This is the test that
+    /// pins the two doors to one core: a divergence in either door fails here
+    /// before any CLI or panel sees it.
+    #[tokio::test]
+    async fn both_doors_perform_every_operation_with_one_effect_and_one_text() {
+        use crate::coordination::apply_coordination_command;
+        use crate::coordination_bridge::{
+            execute, BridgeHooks, BridgeSession, CoordinationBridgeState,
+        };
+
+        const ME: &str = "convo-1";
+        const PEER: &str = "run_kit";
+        const OTHER: &str = "run_other";
+
+        fn register(apply: &dyn Fn(CoordinationCommand), run_id: &str, label: &str) {
+            apply(CoordinationCommand::RegisterRun {
+                registration: CoordinationRunRegistration {
+                    run_id: run_id.to_string(),
+                    worker_kind: CoordinationWorkerKind::Harness,
+                    parent_run_id: None,
+                    mission_id: None,
+                    mission_task_id: None,
+                    label: Some(label.to_string()),
+                },
+                initial_state: Some(CoordinationRunState::Working),
+            });
+        }
+        fn accepted_mail(apply: &dyn Fn(CoordinationCommand), snapshot: &dyn Fn() -> CoordinationSnapshot, from: &str, body: &str) {
+            apply(CoordinationCommand::SendEnvelope {
+                from: CoordinationActor::Run { run_id: from.to_string() },
+                to_run_id: ME.to_string(),
+                kind: CoordinationEnvelopeKind::Instruction,
+                body: body.to_string(),
+                reply_to: None,
+                correlation_id: None,
+                idempotency_key: None,
+                source_refs: vec![],
+            });
+            let id = snapshot()
+                .envelopes
+                .into_iter()
+                .find(|e| e.envelope.body == body)
+                .unwrap()
+                .envelope
+                .id;
+            apply(CoordinationCommand::ReviewEnvelope {
+                actor: CoordinationActor::Operator,
+                run_id: ME.to_string(),
+                envelope_id: id,
+                accept: true,
+            });
+        }
+
+        // The scenario, as a list of (tool name, arguments) plus the journal
+        // events the operator or a peer adds between them.
+        let steps: Vec<(&str, serde_json::Value)> = vec![
+            ("agent_list", serde_json::json!({})),
+            ("agent_send", serde_json::json!({ "toRunId": PEER, "kind": "question", "body": " Is the merge yours? " })),
+            ("agent_wait", serde_json::json!({ "fromRunId": PEER, "timeoutSeconds": 1 })),
+            ("agent_wait", serde_json::json!({ "fromRunId": OTHER, "replyTo": "env_nothing", "timeoutSeconds": 1 })),
+            ("agent_read_result", serde_json::json!({ "runId": PEER })),
+            ("agent_read_result", serde_json::json!({ "runId": OTHER })),
+            ("agent_cancel", serde_json::json!({ "runId": ME, "reason": "done" })),
+            ("agent_send", serde_json::json!({ "toRunId": "", "body": "x" })),
+            ("agent_read_result", serde_json::json!({ "runId": "nobody" })),
+        ];
+
+        // ── Door 1: the Harness ────────────────────────────────────────
+        let sup = FakeSupervisor::with_run(ME);
+        let root = std::env::temp_dir().join(format!("klide-two-doors-harness-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root_text = root.to_string_lossy().to_string();
+        let apply = |command: CoordinationCommand| {
+            sup.coordination_apply(&root_text, command).unwrap();
+        };
+        let snapshot = || sup.coordination_snapshot(&root_text).unwrap();
+        register(&apply, PEER, "Fix the parser");
+        register(&apply, OTHER, "Write the changelog");
+        register(&apply, ME, "refactor the pty host");
+        accepted_mail(&apply, &snapshot, PEER, "Don't touch pty.rs, I'm in it.");
+        accepted_mail(&apply, &snapshot, OTHER, "Changelog is drafted.");
+        apply(CoordinationCommand::PublishResult {
+            run_id: OTHER.to_string(),
+            status: CoordinationResultStatus::Succeeded,
+            summary: "Changelog written.".to_string(),
+            artifacts: vec![],
+            source_refs: vec![],
+        });
+        let request = test_request(&root_text, &[]);
+        let cancel = CancellationToken::new();
+        let ctx = ToolCtx { sup: &sup, id: ME, request: &request, cancel: &cancel, runs_dir: root.as_path() };
+        let mut emit = |_: AgentEvent| Ok(());
+        let mut harness_texts = Vec::new();
+        for (index, (name, args)) in steps.iter().enumerate() {
+            let call = NormalizedToolCall { id: format!("c{index}"), name: name.to_string(), input: args.clone() };
+            let ToolOutcome::Produced(result) = process_coordination_tool(&ctx, &call, &mut emit).await.unwrap() else {
+                panic!("{name} was cancelled");
+            };
+            harness_texts.push((result.ok, normalise_coordination_text(&result.content)));
+        }
+        let harness_effects = coordination_effects(&snapshot());
+        let _ = std::fs::remove_dir_all(&root);
+
+        // ── Door 2: the Delegate bridge ────────────────────────────────
+        let store = CoordinationStoreState::default();
+        let bridge = CoordinationBridgeState::default();
+        let root = std::env::temp_dir().join(format!("klide-two-doors-bridge-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root_text = root.to_string_lossy().to_string();
+        let apply = |command: CoordinationCommand| {
+            apply_coordination_command(&store, &root_text, command).unwrap();
+        };
+        let snapshot = || crate::coordination::read_snapshot(&store, &root_text).unwrap();
+        register(&apply, PEER, "Fix the parser");
+        register(&apply, OTHER, "Write the changelog");
+        register(&apply, ME, "refactor the pty host");
+        accepted_mail(&apply, &snapshot, PEER, "Don't touch pty.rs, I'm in it.");
+        accepted_mail(&apply, &snapshot, OTHER, "Changelog is drafted.");
+        apply(CoordinationCommand::PublishResult {
+            run_id: OTHER.to_string(),
+            status: CoordinationResultStatus::Succeeded,
+            summary: "Changelog written.".to_string(),
+            artifacts: vec![],
+            source_refs: vec![],
+        });
+        let session = BridgeSession {
+            run_id: ME.to_string(),
+            workspace_root: root_text.clone(),
+            terminal: false,
+            secret_sha256: String::new(),
+        };
+        bridge.bind_session("convo-1:claude-code", session.clone());
+        let hooks = BridgeHooks {
+            // The Harness fake holds a handle for `ME` and nothing else.
+            is_live: Box::new(|id| id == ME),
+            cancel: Some(Box::new(|id| id == ME)),
+            ..BridgeHooks::silent()
+        };
+        let mut bridge_texts = Vec::new();
+        for (name, args) in &steps {
+            let request = crate::mcp_server::bridge_request_for(name, args);
+            let (ok, text) = match request {
+                Err(error) => (false, error),
+                Ok(request) => {
+                    let response = execute(&store, &hooks, &session, request);
+                    match response.ok {
+                        true => (true, response.value.unwrap()["text"].as_str().unwrap().to_string()),
+                        false => (false, response.error.unwrap()),
+                    }
+                }
+            };
+            bridge_texts.push((ok, normalise_coordination_text(&text)));
+        }
+        let bridge_effects = coordination_effects(&snapshot());
+        let _ = std::fs::remove_dir_all(&root);
+
+        // ── One core ───────────────────────────────────────────────────
+        for (index, (name, _)) in steps.iter().enumerate() {
+            assert_eq!(harness_texts[index], bridge_texts[index], "step {index}: {name}");
+        }
+        assert_eq!(harness_effects, bridge_effects);
+        // And the scenario really exercised what it claims to.
+        assert!(harness_texts[0].1.contains("\"relation\": \"self\""));
+        assert!(harness_texts[1].1.starts_with("Message env_X for @run_kit: awaiting review."));
+        assert!(harness_texts[2].1.contains("Don't touch pty.rs"), "{}", harness_texts[2].1);
+        assert!(!harness_texts[2].1.contains("Changelog is drafted"), "a wait hands back only what matched");
+        assert!(harness_texts[3].1.starts_with("No coordination message answering this wait"));
+        assert_eq!(harness_texts[4].1, "@run_kit has not published a result yet.");
+        assert!(harness_texts[5].1.contains("\"summary\": \"Changelog written.\""));
+        assert!(harness_texts[6].1.contains("live cancellation was signalled"));
+        assert!(!harness_texts[7].0 && harness_texts[7].1.contains("requires non-empty toRunId"));
+        assert!(!harness_texts[8].0 && harness_texts[8].1.contains("not registered"));
+        assert!(
+            harness_effects.iter().any(|e| e.contains("Changelog is drafted") && e.ends_with("Accepted")),
+            "mail the wait did not match stays accepted: {harness_effects:?}"
+        );
+        assert!(
+            harness_effects.iter().any(|e| e.contains("Don't touch pty.rs") && e.ends_with("Acknowledged")),
+            "{harness_effects:?}"
+        );
+    }
+
     fn request_event() -> AgentEvent {
         AgentEvent::RunResult {
             run_id: "run-1".to_string(),
@@ -5417,6 +5656,7 @@ mod run_loop_tests {
     //! surface, including event emission, transcript writes, and `settle_run`.
     use super::test_support::*;
     use super::*;
+    use crate::coordination::{CoordinationDeliveryState, CoordinationEnvelopeKind};
 
     /// A fresh sandbox: `(runs_dir, workspace_root)`.
     fn sandbox(name: &str) -> (PathBuf, String) {
