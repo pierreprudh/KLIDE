@@ -5,7 +5,7 @@ use super::runs::{
 use super::cli_commands::{CliCommands, SlashProbe};
 use super::chat_stream::{result_text, StreamItem};
 use super::{shell_quote, AgentRun, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// OpenCode — the SST CLI. The quirkiest of the three:
 ///
@@ -133,6 +133,13 @@ impl Delegate for OpenCode {
     /// `opencode run -s <id>` continues the named session.
     fn resumes_sessions(&self) -> bool {
         true
+    }
+
+    /// `opencode run --format json` prints a text part only once it is
+    /// finished, so an answer arrives in one piece at the end. Its server
+    /// streams every fragment (`message.part.delta`) — see `chat_server.rs`.
+    fn chat_server(&self, spec: &ChatSpec) -> Option<Box<dyn super::chat_server::ChatServer>> {
+        Some(Box::new(OpenCodeServer::new(spec.resume)))
     }
 
     /// OpenCode lists its commands — built-ins (`init`, `review`), the user's
@@ -479,6 +486,167 @@ fn model_label(raw: &str) -> Option<String> {
     match provider {
         Some(p) if !p.is_empty() => Some(format!("{p}/{id}")),
         _ => Some(id.to_string()),
+    }
+}
+
+/// OpenCode's server, as one turn uses it: `opencode serve` on a free port,
+/// `run --attach` against it, and its `/event` stream read into the same
+/// [`StreamItem`]s its stdout would have produced — only sooner.
+///
+/// The stream carries everything the server does, so it is narrowed to this
+/// turn: one root session (the resumed one, or the first created without a
+/// parent — a subagent's child session has one), assistant messages only (the
+/// prompt comes back as a text part too), and text parts only (reasoning
+/// streams through the same delta event).
+struct OpenCodeServer {
+    session: Option<String>,
+    assistant_messages: HashSet<String>,
+    part_types: HashMap<String, String>,
+    /// Each text part as written so far. Reported whole, as
+    /// [`StreamItem::TextPart`], so the runner's per-part bookkeeping streams
+    /// only what is new — and the finished part, which arrives again whole,
+    /// adds nothing.
+    text: HashMap<String, String>,
+    settled: bool,
+}
+
+impl OpenCodeServer {
+    fn new(resume: Option<&str>) -> Self {
+        Self {
+            session: resume.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+            assistant_messages: Default::default(),
+            part_types: HashMap::new(),
+            text: HashMap::new(),
+            settled: false,
+        }
+    }
+}
+
+impl super::chat_server::ChatServer for OpenCodeServer {
+    fn serve_args(&self) -> Vec<String> {
+        ["serve", "--port", "0", "--hostname", "127.0.0.1"].map(String::from).to_vec()
+    }
+
+    fn listening_url(&self, line: &str) -> Option<String> {
+        let url = line.split_once("listening on ")?.1.split_whitespace().next()?;
+        url.starts_with("http://127.0.0.1:").then(|| url.trim_end_matches('/').to_string())
+    }
+
+    /// `run --attach` reads the password from the same env var the server
+    /// does, so it never appears in an argument list.
+    fn attach_args(&self, url: &str) -> Vec<String> {
+        vec!["--attach".to_string(), url.to_string()]
+    }
+
+    fn events_url(&self, url: &str) -> String {
+        format!("{url}/event")
+    }
+
+    fn username(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn auth_env(&self, password: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("OPENCODE_SERVER_USERNAME", "opencode".to_string()),
+            ("OPENCODE_SERVER_PASSWORD", password.to_string()),
+        ]
+    }
+
+    fn feed(&mut self, data: &str) -> Vec<StreamItem> {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
+            return Vec::new();
+        };
+        let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+        let props = event.get("properties").cloned().unwrap_or_default();
+        let str_at = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).map(str::to_string);
+
+        if kind == "session.created" && self.session.is_none() {
+            let info = props.get("info").cloned().unwrap_or_default();
+            if info.get("parentID").is_none() {
+                if let Some(id) = str_at(&info, "id") {
+                    self.session = Some(id.clone());
+                    return vec![StreamItem::Session(id)];
+                }
+            }
+            return Vec::new();
+        }
+        // Everything else must belong to this turn's session.
+        if self.session.is_none() || str_at(&props, "sessionID") != self.session {
+            return Vec::new();
+        }
+        match kind {
+            "message.updated" => {
+                let info = props.get("info").cloned().unwrap_or_default();
+                if str_at(&info, "role").as_deref() == Some("assistant") {
+                    if let Some(id) = str_at(&info, "id") {
+                        self.assistant_messages.insert(id);
+                    }
+                }
+                Vec::new()
+            }
+            "message.part.updated" => {
+                let Some(part) = props.get("part") else { return Vec::new() };
+                let Some(message) = str_at(part, "messageID") else { return Vec::new() };
+                if !self.assistant_messages.contains(&message) {
+                    return Vec::new();
+                }
+                let (Some(id), Some(part_type)) = (str_at(part, "id"), str_at(part, "type")) else {
+                    return Vec::new();
+                };
+                self.part_types.insert(id.clone(), part_type.clone());
+                match part_type.as_str() {
+                    "text" => {
+                        let text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                        // An update never takes back what the deltas wrote.
+                        let known = self.text.entry(id.clone()).or_default();
+                        if text.len() >= known.len() {
+                            *known = text.to_string();
+                        }
+                        if known.is_empty() {
+                            return Vec::new();
+                        }
+                        vec![StreamItem::TextPart { id, text: known.clone() }]
+                    }
+                    // The same object stdout prints as `tool_use`; one reader.
+                    "tool" => OpenCode.parse_stream_line(
+                        &serde_json::json!({ "type": "tool_use", "part": part }).to_string(),
+                    ),
+                    _ => Vec::new(),
+                }
+            }
+            "message.part.delta" => {
+                if str_at(&props, "field").as_deref() != Some("text") {
+                    return Vec::new();
+                }
+                let (Some(id), Some(delta)) = (str_at(&props, "partID"), str_at(&props, "delta")) else {
+                    return Vec::new();
+                };
+                let is_answer = self.part_types.get(&id).map(String::as_str) == Some("text")
+                    && str_at(&props, "messageID").is_some_and(|m| self.assistant_messages.contains(&m));
+                if !is_answer || delta.is_empty() {
+                    return Vec::new();
+                }
+                let known = self.text.entry(id.clone()).or_default();
+                known.push_str(&delta);
+                vec![StreamItem::TextPart { id, text: known.clone() }]
+            }
+            "session.status" => {
+                if props.get("status").and_then(|s| s.get("type")).and_then(|v| v.as_str()) == Some("idle") {
+                    self.settled = true;
+                }
+                Vec::new()
+            }
+            "session.idle" => {
+                self.settled = true;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn settled(&self) -> bool {
+        self.settled
     }
 }
 
@@ -1064,5 +1232,63 @@ mod tests {
         let parser = OpenCode.run_parser(home.to_str().unwrap());
         assert!(parser.parse("oss-1").is_none());
         assert!(OpenCode.read_run(home.to_str().unwrap(), "oss-1").is_err());
+    }
+
+    // The shapes below are trimmed from a real `opencode serve` /event stream
+    // (1.18.33): a turn that reasons, calls bash, then answers — plus the
+    // prompt echoed back as a text part and a subagent's child session.
+    #[test]
+    fn the_server_stream_types_out_the_answer_and_nothing_else() {
+        use super::super::chat_server::ChatServer;
+        let events = [
+            r#"{"type":"server.connected","properties":{}}"#,
+            r#"{"type":"session.created","properties":{"sessionID":"ses_A","info":{"id":"ses_A"}}}"#,
+            r#"{"type":"message.updated","properties":{"sessionID":"ses_A","info":{"id":"msg_U","role":"user"}}}"#,
+            r#"{"type":"message.part.updated","properties":{"sessionID":"ses_A","part":{"type":"text","text":"the prompt","messageID":"msg_U","id":"prt_P"}}}"#,
+            r#"{"type":"message.updated","properties":{"sessionID":"ses_A","info":{"id":"msg_A","role":"assistant"}}}"#,
+            r#"{"type":"message.part.updated","properties":{"sessionID":"ses_A","part":{"id":"prt_R","messageID":"msg_A","type":"reasoning","text":""}}}"#,
+            r#"{"type":"message.part.delta","properties":{"sessionID":"ses_A","messageID":"msg_A","partID":"prt_R","field":"text","delta":"thinking…"}}"#,
+            r#"{"type":"message.part.updated","properties":{"sessionID":"ses_A","part":{"type":"tool","tool":"bash","callID":"c1","state":{"status":"completed","input":{"command":"echo hi"},"output":"hi\n"},"id":"prt_T","messageID":"msg_A"}}}"#,
+            r#"{"type":"session.created","properties":{"sessionID":"ses_C","info":{"id":"ses_C","parentID":"ses_A"}}}"#,
+            r#"{"type":"message.part.delta","properties":{"sessionID":"ses_C","messageID":"msg_C","partID":"prt_C","field":"text","delta":"child"}}"#,
+            r#"{"type":"message.part.updated","properties":{"sessionID":"ses_A","part":{"id":"prt_X","messageID":"msg_A","type":"text","text":""}}}"#,
+            r#"{"type":"message.part.delta","properties":{"sessionID":"ses_A","messageID":"msg_A","partID":"prt_X","field":"text","delta":"Hel"}}"#,
+            r#"{"type":"message.part.delta","properties":{"sessionID":"ses_A","messageID":"msg_A","partID":"prt_X","field":"text","delta":"lo!"}}"#,
+            r#"{"type":"message.part.updated","properties":{"sessionID":"ses_A","part":{"id":"prt_X","messageID":"msg_A","type":"text","text":"Hello!"}}}"#,
+            r#"{"type":"session.status","properties":{"sessionID":"ses_A","status":{"type":"idle"}}}"#,
+        ];
+        let mut server = OpenCodeServer::new(None);
+        let items: Vec<StreamItem> = events.iter().flat_map(|e| server.feed(e)).collect();
+
+        assert_eq!(items.first(), Some(&StreamItem::Session("ses_A".into())));
+        let texts: Vec<&str> = items
+            .iter()
+            .filter_map(|i| match i {
+                StreamItem::TextPart { id, text } => Some((id.as_str(), text.as_str())),
+                _ => None,
+            })
+            .inspect(|(id, _)| assert_eq!(*id, "prt_X", "only the answer part streams"))
+            .map(|(_, text)| text)
+            .collect();
+        // Fragment by fragment, then the finished part repeating what is known.
+        assert_eq!(texts, ["Hel", "Hello!", "Hello!"]);
+        assert!(items.iter().any(|i| matches!(i, StreamItem::ToolResult { id, ok: true, .. } if id == "c1")));
+        assert!(server.settled());
+    }
+
+    #[test]
+    fn a_resumed_turn_listens_to_the_session_it_continues() {
+        use super::super::chat_server::ChatServer;
+        let mut server = OpenCodeServer::new(Some("ses_OLD"));
+        for e in [
+            r#"{"type":"message.updated","properties":{"sessionID":"ses_OLD","info":{"id":"m","role":"assistant"}}}"#,
+            r#"{"type":"message.part.updated","properties":{"sessionID":"ses_OLD","part":{"id":"p","messageID":"m","type":"text","text":""}}}"#,
+        ] {
+            server.feed(e);
+        }
+        let got = server.feed(r#"{"type":"message.part.delta","properties":{"sessionID":"ses_OLD","messageID":"m","partID":"p","field":"text","delta":"again"}}"#);
+        assert_eq!(got, vec![StreamItem::TextPart { id: "p".into(), text: "again".into() }]);
+        assert_eq!(server.listening_url("opencode server listening on http://127.0.0.1:4096"), Some("http://127.0.0.1:4096".into()));
+        assert_eq!(server.listening_url("listening on http://0.0.0.0:4096"), None);
     }
 }

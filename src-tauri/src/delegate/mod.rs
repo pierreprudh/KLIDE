@@ -13,6 +13,7 @@
 // provided method does the assembly once.
 
 mod chat;
+mod chat_server;
 mod chat_stream;
 mod cli_commands;
 mod claude_code;
@@ -338,6 +339,13 @@ pub trait Delegate: Sync {
     /// error — a new line type in a future release must not fail a turn.
     fn parse_stream_line(&self, _line: &str) -> Vec<chat_stream::StreamItem> {
         Vec::new()
+    }
+
+    /// A local server that streams this CLI's turn while it is written, for a
+    /// CLI whose stdout only reports a text part once it is finished (see
+    /// `chat_server.rs`). `None` — the default — runs the turn on stdout alone.
+    fn chat_server(&self, _spec: &ChatSpec) -> Option<Box<dyn chat_server::ChatServer>> {
+        None
     }
 
     /// The structured-stream twin of [`Delegate::chat_invocation`]. `None` when
