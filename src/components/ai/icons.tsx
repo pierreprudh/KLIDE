@@ -1,6 +1,14 @@
 import { useState } from "react";
 import type { ReactElement } from "react";
 import type { ProviderId } from "../../agent/types";
+import { providerBrand, type ProviderBrand } from "../../agent/providerCatalog";
+
+/** What a mark hangs on. A registry row names its `brand`; every table in
+ *  this file is keyed by that, so two providers may share one mark and a
+ *  maker that is not a Provider (Google's Gemini star, worn by Gemma models on
+ *  a local runtime) can have one too. The drawing stays hand-made here; the
+ *  registry only says which key a provider wears. */
+export type BrandKey = ProviderBrand | "gemini";
 
 /**
  * The one `<img>` every brand mark is drawn with.
@@ -89,7 +97,7 @@ export function KlideMark({ size = 13, className }: { size?: number; className?:
 const OPENROUTER_PATH =
   "M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z";
 
-export const BRAND_LOGO_PATHS: Partial<Record<ProviderId, string>> = {
+export const BRAND_LOGO_PATHS: Partial<Record<BrandKey, string>> = {
   ollama:
     "M16.361 10.26a.894.894 0 0 0-.558.47l-.072.148.001.207c0 .193.004.217.059.353.076.193.152.312.291.448.24.238.51.3.872.205a.86.86 0 0 0 .517-.436.752.752 0 0 0 .08-.498c-.064-.453-.33-.782-.724-.897a1.06 1.06 0 0 0-.466 0zm-9.203.005c-.305.096-.533.32-.65.639a1.187 1.187 0 0 0-.06.52c.057.309.31.59.598.667.362.095.632.033.872-.205.14-.136.215-.255.291-.448.055-.136.059-.16.059-.353l.001-.207-.072-.148a.894.894 0 0 0-.565-.472 1.02 1.02 0 0 0-.474.007ZM12 11.13c-.131.071-.223.25-.195.383.031.143.157.288.353.407.105.063.112.072.117.136.004.038-.01.146-.029.243-.02.094-.036.194-.036.222.002.074.07.195.143.253.064.052.076.054.255.059.164.005.198.001.264-.03.169-.082.212-.234.15-.525-.052-.243-.042-.28.087-.355.137-.08.281-.219.324-.314a.365.365 0 0 0-.175-.48.394.394 0 0 0-.181-.033c-.126 0-.207.03-.355.124l-.085.053-.053-.032c-.219-.13-.259-.145-.391-.143a.396.396 0 0 0-.193.032zm.39-2.195c-.373.036-.475.05-.654.086-.291.06-.68.195-.951.328-.94.46-1.589 1.226-1.787 2.114-.04.176-.045.234-.045.53 0 .294.005.357.043.524.264 1.16 1.332 2.017 2.714 2.173.3.033 1.596.033 1.896 0 1.11-.125 2.064-.727 2.493-1.571.114-.226.169-.372.22-.602.039-.167.044-.23.044-.523 0-.297-.005-.355-.045-.531-.288-1.29-1.539-2.304-3.072-2.497a6.873 6.873 0 0 0-.855-.031zm.645.937a3.283 3.283 0 0 1 1.44.514c.223.148.537.458.671.662.166.251.26.508.303.82.02.143.01.251-.043.482-.08.345-.332.705-.672.957a3.115 3.115 0 0 1-.689.348c-.382.122-.632.144-1.525.138-.582-.006-.686-.01-.853-.042-.57-.107-1.022-.334-1.35-.68-.264-.28-.385-.535-.45-.946-.03-.192.025-.509.137-.776.136-.326.488-.73.836-.963.403-.269.934-.46 1.422-.512.187-.02.586-.02.773-.002z",
   openai:
@@ -98,7 +106,6 @@ export const BRAND_LOGO_PATHS: Partial<Record<ProviderId, string>> = {
     "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z",
   mistral:
     "M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z",
-  vllm: "m23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z",
   // xAI's real mark: the X's long backslash stroke, its "/" broken into an upper-right
   // blade and a lower-left one, plus the slant-topped "I" pillar. Traced from
   // the official art (four convex quads, so straight lines all the way) and
@@ -108,33 +115,44 @@ export const BRAND_LOGO_PATHS: Partial<Record<ProviderId, string>> = {
   openrouter: OPENROUTER_PATH,
 };
 
+// The one brand-colour table, keyed by brand. `mark` tints the logo itself;
+// `chart` is the chart-ramp step a brand wears in Stats and the balance
+// donuts — spaced steps (1/3/4/5/7) keep neighbours distinguishable, and a
+// brand with no step falls to the neutral ramp there. Mission Control once
+// kept a near-duplicate (`PROVIDER_ACCENT`) and Stats a second chart table
+// (`PROVIDER_BRAND_COLOR`); a row's accent depended on which surface drew it.
 // Claude Code and Codex are distinct *products*, not just the Anthropic /
-// OpenAI providers — render their own brand marks instead of aliasing to the
-// provider SVGs (see PROVIDER_LOGO_IMAGE below).
-const LOGO_ALIAS: Partial<Record<ProviderId, ProviderId>> = {};
-
-// The one brand-colour table. Mission Control kept a near-duplicate
-// (`PROVIDER_ACCENT`) which held `deepseek` but not `xai`, while this one held
-// `xai` but not `deepseek` — so neither was complete and a row's accent depended
-// on which surface drew it.
-const PROVIDER_LOGO_COLOR: Partial<Record<ProviderId, string>> = {
-  anthropic: "#D97757",
-  "claude-code": "#D97757",
-  openai: "var(--fg-strong)",
-  codex: "var(--fg-strong)",
-  opencode: "var(--fg-strong)",
-  xai: "var(--fg-strong)",
-  openrouter: "#4A6CF7",
-  deepseek: "#4D6BFE",
-  omp: "#7C6BAE",
+// OpenAI providers — they wear their own marks (see PROVIDER_LOGO_IMAGE).
+const BRAND_COLOR: Partial<Record<BrandKey, { mark?: string; chart?: string }>> = {
+  anthropic: { mark: "#D97757", chart: "var(--chart-1)" },
+  "claude-code": { mark: "#D97757", chart: "var(--chart-1)" },
+  openai: { mark: "var(--fg-strong)" },
+  codex: { mark: "var(--fg-strong)" },
+  opencode: { mark: "var(--fg-strong)" },
+  xai: { mark: "var(--fg-strong)" },
+  mistral: { chart: "var(--chart-3)" },
+  openrouter: { mark: "#4A6CF7", chart: "var(--chart-5)" },
+  deepseek: { mark: "#4D6BFE", chart: "var(--chart-4)" },
+  omp: { mark: "#7C6BAE", chart: "var(--chart-7)" },
 };
 
-/** A provider's brand colour, or `undefined` for one with no mark of its own. */
-export function providerBrandColor(id: ProviderId): string | undefined {
-  return PROVIDER_LOGO_COLOR[id];
+function brandColor(id: string): { mark?: string; chart?: string } | undefined {
+  return BRAND_COLOR[providerBrand(id) as BrandKey];
 }
 
-const PROVIDER_LOGO_IMAGE: Partial<Record<ProviderId, string>> = {
+/** A provider's brand colour, or `undefined` for one with no mark of its own. */
+export function providerBrandColor(id: ProviderId | BrandKey): string | undefined {
+  return brandColor(id)?.mark;
+}
+
+/** The chart-ramp step a provider's brand wears (Stats, balance donuts), or
+ *  `undefined` for a brand with no hue of its own. Accepts a run source too,
+ *  since a delegate is both a source and a Provider. */
+export function providerChartColor(id: string): string | undefined {
+  return brandColor(id)?.chart;
+}
+
+const PROVIDER_LOGO_IMAGE: Partial<Record<BrandKey, string>> = {
   ollama: "/ollama-logo.png",
   gemini: "/gemini-logo.png",
   mistral: "/mistral-logo.png",
@@ -147,7 +165,7 @@ const PROVIDER_LOGO_IMAGE: Partial<Record<ProviderId, string>> = {
 // - "provider-logo-img" (default): dark mark, inverted to white on dark themes.
 // - "color-logo-img": inherently colored, never inverted (keeps brand color).
 // - "white-logo-img": white mark, inverted to dark on light themes.
-const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<ProviderId, string>> = {
+const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<BrandKey, string>> = {
   "claude-code": "color-logo-img",
   codex: "white-logo-img",
   // DeepSeek's whale is brand blue on transparent — inverting it would turn it
@@ -157,8 +175,11 @@ const PROVIDER_LOGO_IMAGE_CLASS: Partial<Record<ProviderId, string>> = {
   gemini: "color-logo-img",
 };
 
-export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number }) {
-  if (id === "opencode") {
+/** The mark for a Provider id or a bare brand key. A registry row's `brand`
+ *  picks the drawing; `auto`, `custom:*` and `cli:*` have marks of their own. */
+export function ProviderLogo({ id, size = 14 }: { id: ProviderId | BrandKey; size?: number }) {
+  const brand = providerBrand(id) as BrandKey | "auto";
+  if (brand === "opencode") {
     return (
       <TwoToneMark
         light="/opencode-logo-light.svg"
@@ -168,18 +189,18 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
     );
   }
 
-  const image = PROVIDER_LOGO_IMAGE[id];
+  const image = PROVIDER_LOGO_IMAGE[brand as BrandKey];
   if (image) {
     return (
       <BrandImage
-        className={PROVIDER_LOGO_IMAGE_CLASS[id] ?? "provider-logo-img"}
+        className={PROVIDER_LOGO_IMAGE_CLASS[brand as BrandKey] ?? "provider-logo-img"}
         src={image}
         size={size}
       />
     );
   }
 
-  const color = PROVIDER_LOGO_COLOR[id] ?? "currentColor";
+  const color = providerBrandColor(id) ?? "currentColor";
   const base = {
     width: size,
     height: size,
@@ -187,11 +208,11 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
     "aria-hidden": true as const,
     style: { flexShrink: 0, color },
   };
-  const brand = BRAND_LOGO_PATHS[LOGO_ALIAS[id] ?? id];
-  if (brand) {
+  const path = BRAND_LOGO_PATHS[brand as BrandKey];
+  if (path) {
     return (
       <svg {...base} fill="currentColor">
-        <path d={brand} />
+        <path d={path} />
       </svg>
     );
   }
@@ -221,7 +242,7 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
       </svg>
     );
   }
-  switch (id) {
+  switch (brand) {
     case "auto":
       // The router: three lanes meeting one road. Hand-drawn like the other
       // provider marks, in currentColor so it themes with the row.
@@ -256,12 +277,6 @@ export function ProviderLogo({ id, size = 14 }: { id: ProviderId; size?: number 
         <svg {...line} strokeWidth="1.6">
           <rect x="3" y="3" width="18" height="18" rx="5" />
           <path d="M9 8v8M15 8v8" />
-        </svg>
-      );
-    case "llamacpp":
-      return (
-        <svg {...line} strokeWidth="1.8">
-          <path d="M9 7l-5 5 5 5M15 7l5 5-5 5" />
         </svg>
       );
     case "omp":

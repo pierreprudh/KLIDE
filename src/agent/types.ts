@@ -1,4 +1,5 @@
 import type { ProjectContextItem, ProjectContextMode } from "../contextTray";
+import type { BuiltinProviderId } from "./providerCatalog";
 
 export type AgentMode = "chat" | "plan" | "goal";
 
@@ -17,22 +18,9 @@ export type ProviderId =
   // sends when the user leaves the choice to Klide. See `AUTO_PROVIDER` in
   // ./providers.ts and `agent::routing` in Rust.
   | "auto"
-  | "ollama"
-  | "mlx"
-  | "lmstudio"
-  | "llamacpp"
-  | "vllm"
-  | "claude-code"
-  | "codex"
-  | "opencode"
-  | "omp"
-  | "anthropic"
-  | "openai"
-  | "gemini"
-  | "mistral"
-  | "xai"
-  | "deepseek"
-  | "openrouter"
+  // Every row of the Rust registry, by the ids the generated mirror carries
+  // (src/agent/providerCatalog.generated.ts) — never a list kept by hand here.
+  | BuiltinProviderId
   // Self-hosted (custom) OpenAI-compatible endpoints. The id is minted at
   // runtime (`custom:<slug>`); config lives in the Rust custom-provider
   // store, not the static registry. See src/customProviders.ts.

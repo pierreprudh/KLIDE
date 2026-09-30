@@ -8,16 +8,13 @@ import {
   stopLocalProvider,
 } from "../../ipc/aiProviders";
 import { Row, StatusText } from "./controls";
+import { providerDefaultModel, providerLabel } from "../../agent/providerCatalog";
 
-export function LocalServerRow({
-  provider,
-  title,
-  defaultModel,
-}: {
-  provider: string;
-  title: string;
-  defaultModel: string;
-}) {
+/** One managed local server (`isLocalServer` on its registry row). Its name
+ *  and the model it warms up with are the row's, not props. */
+export function LocalServerRow({ provider }: { provider: string }) {
+  const title = providerLabel(provider) ?? provider;
+  const defaultModel = providerDefaultModel(provider) ?? "";
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);

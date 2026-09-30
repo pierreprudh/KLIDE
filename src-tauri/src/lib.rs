@@ -998,6 +998,7 @@ pub fn run() {
             read_opencode_run,
             delegate_slash_commands,
             claude_code_settings,
+            providers::ai_list_providers,
             models::ai_provider_models,
             models::ai_provider_credits,
             models::ai_provider_model_meta,
@@ -1226,6 +1227,8 @@ mod blocking_door_tests {
         "ai_model_pricing",
         "ai_list_tools",
         "ai_tool_catalog",
+        // providers.rs — the registry as plain rows, no IO
+        "ai_list_providers",
         // lib.rs — a small JSON read; user-driven, not polled
         "accounts_list",
         // lib.rs — hand off to the native menu
