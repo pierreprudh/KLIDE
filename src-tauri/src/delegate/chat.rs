@@ -22,7 +22,7 @@ use super::{ChatSpec, Delegate};
 use crate::providers::{text_from_message, AiChatResponse, ObservedToolActivity, StreamChunk};
 
 /// Hard ceiling for one headless delegate turn. See `run_cli_with_stdin`.
-const CHAT_TURN_CEILING: Duration = Duration::from_secs(30 * 60);
+pub(super) const CHAT_TURN_CEILING: Duration = Duration::from_secs(30 * 60);
 
 /// The CLI session each conversation is talking to, keyed by run id + provider.
 ///
@@ -137,8 +137,9 @@ pub async fn run_subscription_chat(
     let content = match adapter.chat_stream_invocation(&cwd, &spec) {
         Some(command) => {
             let emitted = AtomicBool::new(false);
-            match run_cli_streaming(
+            match run_stream_turn(
                 adapter,
+                &spec,
                 with_command_instructions(command?, adapter, cli_command.as_deref(), &messages),
                 prompt,
                 label,
@@ -163,8 +164,9 @@ pub async fn run_subscription_chat(
                     let command = adapter
                         .chat_stream_invocation(&cwd, &cold)
                         .ok_or_else(|| format!("{label} has no structured mode"))??;
-                    run_cli_streaming(
+                    run_stream_turn(
                         adapter,
+                        &cold,
                         with_command_instructions(command, adapter, cli_command.as_deref(), &messages),
                         command_message.clone().unwrap_or_else(|| prompt_from_messages(&messages)),
                         label,
@@ -198,6 +200,64 @@ pub async fn run_subscription_chat(
     })
 }
 
+/// One structured turn: over the CLI's local server when it has one that
+/// streams (`chat_server.rs`), on its stdout otherwise — and on its stdout as
+/// well when that server could not be started, so a turn never fails for the
+/// sake of arriving sooner.
+#[allow(clippy::too_many_arguments)]
+async fn run_stream_turn(
+    adapter: &dyn Delegate,
+    spec: &ChatSpec<'_>,
+    command: TokioCommand,
+    prompt: String,
+    label: &str,
+    cwd: &str,
+    session_key: Option<&str>,
+    emitted: &AtomicBool,
+    on_chunk: &Channel<StreamChunk>,
+) -> Result<String, String> {
+    if let Some(server) = adapter.chat_server(spec) {
+        match super::chat_server::run_via_server(
+            adapter,
+            server,
+            copy_command(&command),
+            prompt.clone(),
+            label,
+            cwd,
+            session_key,
+            emitted,
+            on_chunk,
+        )
+        .await
+        {
+            super::chat_server::ServerTurn::Ran(outcome) => return outcome,
+            super::chat_server::ServerTurn::Unavailable(why) => {
+                eprintln!("[klide] {label}: streaming server unavailable, using stdout ({why})");
+            }
+        }
+    }
+    run_cli_streaming(adapter, command, prompt, label, cwd, session_key, emitted, on_chunk).await
+}
+
+/// A fresh command with the same program, arguments, directory and
+/// environment — a Command cannot be cloned, and the fallback needs the
+/// original untouched.
+fn copy_command(command: &TokioCommand) -> TokioCommand {
+    let std = command.as_std();
+    let mut copy = TokioCommand::new(std.get_program());
+    copy.args(std.get_args());
+    if let Some(dir) = std.get_current_dir() {
+        copy.current_dir(dir);
+    }
+    for (k, v) in std.get_envs() {
+        match v {
+            Some(v) => copy.env(k, v),
+            None => copy.env_remove(k),
+        };
+    }
+    copy
+}
+
 /// Drive a CLI that reports itself line by line: prompt on stdin, one JSON
 /// object per stdout line. Assistant prose is streamed as ordinary content;
 /// tool calls and their results are streamed as *observed* activity, which the
@@ -215,9 +275,6 @@ async fn run_cli_streaming(
     emitted: &AtomicBool,
     on_chunk: &Channel<StreamChunk>,
 ) -> Result<String, String> {
-    let provider_id = adapter.id();
-    use super::chat_stream::{summarize_call, StreamItem};
-
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -247,100 +304,17 @@ async fn run_cli_streaming(
 
     let answer = timeout(CHAT_TURN_CEILING, async {
         let mut lines = BufReader::new(stdout).lines();
-        let mut answer = String::new();
-        // With partial messages on, every block arrives twice: as deltas while
-        // it is written, then again whole. Deltas win — they are what makes the
-        // answer type out — so a completed block is dropped once any delta has
-        // been seen. (The flag is per-adapter, so the whole-block path still has
-        // to work for a CLI that streams no deltas.)
-        let mut saw_delta = false;
-        // How much of each named text part has already been streamed. OpenCode
-        // reports text per part rather than as deltas, and a part that is still
-        // growing may be re-sent whole; keeping the emitted length per id means
-        // only the new suffix goes out either way — no duplicated answer if it
-        // repeats, no lost text if it does not.
-        let mut emitted_parts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut emitter = Emitter::new(adapter, cwd, session_key, emitted, on_chunk);
         while let Some(line) = lines
             .next_line()
             .await
             .map_err(|e| format!("Unable to read {label} stdout: {e}"))?
         {
             for item in adapter.parse_stream_line(&line) {
-                match item {
-                    StreamItem::TextDelta(text) => {
-                        saw_delta = true;
-                        answer.push_str(&text);
-                        emitted.store(true, Ordering::Relaxed);
-                        let _ = on_chunk.send(StreamChunk::text(text));
-                    }
-                    StreamItem::TextPart { id, text } => {
-                        let already = emitted_parts.get(&id).copied().unwrap_or(0);
-                        // A part that shrank or was replaced is not a suffix of
-                        // what we sent; start it over rather than slicing at a
-                        // stale offset (which could also split a char boundary).
-                        let suffix = if text.len() > already && text.is_char_boundary(already) {
-                            &text[already..]
-                        } else if already == 0 {
-                            &text[..]
-                        } else {
-                            ""
-                        };
-                        if !suffix.is_empty() {
-                            answer.push_str(suffix);
-                            emitted.store(true, Ordering::Relaxed);
-                            let _ = on_chunk.send(StreamChunk::text(suffix.to_string()));
-                        }
-                        emitted_parts.insert(id, text.len());
-                    }
-                    StreamItem::Text(text) if saw_delta => {
-                        // Already streamed, character for character.
-                        let _ = text;
-                    }
-                    StreamItem::Text(text) => {
-                        answer.push_str(&text);
-                        answer.push('\n');
-                        emitted.store(true, Ordering::Relaxed);
-                        let _ = on_chunk.send(StreamChunk::text(format!("{text}\n")));
-                    }
-                    StreamItem::ToolCall { id, name, input } => {
-                        let summary = summarize_call(&name, &input);
-                        emitted.store(true, Ordering::Relaxed);
-                        let _ = on_chunk.send(StreamChunk {
-                            observed: Some(ObservedToolActivity::Call {
-                                id,
-                                name,
-                                input,
-                                provider: provider_id.to_string(),
-                                summary,
-                            }),
-                            ..Default::default()
-                        });
-                    }
-                    StreamItem::ToolResult { id, ok, content } => {
-                        let _ = on_chunk.send(StreamChunk {
-                            observed: Some(ObservedToolActivity::Result { id, ok, content }),
-                            ..Default::default()
-                        });
-                    }
-                    // Remember what to continue next turn. Recorded even on a
-                    // turn that was itself a resume: a CLI may answer with a new
-                    // id (a fork, a compaction), and the newest one is the live
-                    // session.
-                    StreamItem::Session(session) => {
-                        if let Some(key) = session_key {
-                            remember_session(key, &session);
-                        }
-                    }
-                    // Every turn refreshes the composer's `/` menu for free.
-                    StreamItem::Commands(commands) => {
-                        super::cli_commands::remember(provider_id, cwd, commands);
-                    }
-                    // Cost is not shown here; the harness reports run cost.
-                    StreamItem::Finished { .. } => {}
-                }
+                emitter.handle(item);
             }
         }
+        let answer = emitter.answer;
 
         let status = child
             .wait()
@@ -373,6 +347,130 @@ async fn run_cli_streaming(
     })??;
 
     Ok(answer)
+}
+
+/// Where a turn's [`StreamItem`]s go: text onto the answer and the channel,
+/// tools as observed activity, the session id into memory. One copy, shared by
+/// every transport — a CLI's own stdout and the local server that streams a
+/// turn as it is written (`chat_server.rs`) — so both read the same on screen.
+pub(super) struct Emitter<'a> {
+    provider_id: &'static str,
+    cwd: &'a str,
+    session_key: Option<&'a str>,
+    emitted: &'a AtomicBool,
+    on_chunk: &'a Channel<StreamChunk>,
+    /// The assistant text only — the answer — so a saved transcript reads as
+    /// prose rather than as a mixture of prose and tool logs.
+    pub(super) answer: String,
+    // With partial messages on, every block arrives twice: as deltas while
+    // it is written, then again whole. Deltas win — they are what makes the
+    // answer type out — so a completed block is dropped once any delta has
+    // been seen. (The flag is per-adapter, so the whole-block path still has
+    // to work for a CLI that streams no deltas.)
+    saw_delta: bool,
+    // How much of each named text part has already been streamed. OpenCode
+    // reports text per part rather than as deltas, and a part that is still
+    // growing may be re-sent whole; keeping the emitted length per id means
+    // only the new suffix goes out either way — no duplicated answer if it
+    // repeats, no lost text if it does not.
+    emitted_parts: HashMap<String, usize>,
+}
+
+impl<'a> Emitter<'a> {
+    pub(super) fn new(
+        adapter: &dyn Delegate,
+        cwd: &'a str,
+        session_key: Option<&'a str>,
+        emitted: &'a AtomicBool,
+        on_chunk: &'a Channel<StreamChunk>,
+    ) -> Self {
+        Self {
+            provider_id: adapter.id(),
+            cwd,
+            session_key,
+            emitted,
+            on_chunk,
+            answer: String::new(),
+            saw_delta: false,
+            emitted_parts: HashMap::new(),
+        }
+    }
+
+    pub(super) fn handle(&mut self, item: super::chat_stream::StreamItem) {
+        use super::chat_stream::{summarize_call, StreamItem};
+        match item {
+            StreamItem::TextDelta(text) => {
+                self.saw_delta = true;
+                self.answer.push_str(&text);
+                self.emitted.store(true, Ordering::Relaxed);
+                let _ = self.on_chunk.send(StreamChunk::text(text));
+            }
+            StreamItem::TextPart { id, text } => {
+                let already = self.emitted_parts.get(&id).copied().unwrap_or(0);
+                // A part that shrank or was replaced is not a suffix of
+                // what we sent; start it over rather than slicing at a
+                // stale offset (which could also split a char boundary).
+                let suffix = if text.len() > already && text.is_char_boundary(already) {
+                    &text[already..]
+                } else if already == 0 {
+                    &text[..]
+                } else {
+                    ""
+                };
+                if !suffix.is_empty() {
+                    self.answer.push_str(suffix);
+                    self.emitted.store(true, Ordering::Relaxed);
+                    let _ = self.on_chunk.send(StreamChunk::text(suffix.to_string()));
+                }
+                self.emitted_parts.insert(id, text.len());
+            }
+            StreamItem::Text(text) if self.saw_delta => {
+                // Already streamed, character for character.
+                let _ = text;
+            }
+            StreamItem::Text(text) => {
+                self.answer.push_str(&text);
+                self.answer.push('\n');
+                self.emitted.store(true, Ordering::Relaxed);
+                let _ = self.on_chunk.send(StreamChunk::text(format!("{text}\n")));
+            }
+            StreamItem::ToolCall { id, name, input } => {
+                let summary = summarize_call(&name, &input);
+                self.emitted.store(true, Ordering::Relaxed);
+                let _ = self.on_chunk.send(StreamChunk {
+                    observed: Some(ObservedToolActivity::Call {
+                        id,
+                        name,
+                        input,
+                        provider: self.provider_id.to_string(),
+                        summary,
+                    }),
+                    ..Default::default()
+                });
+            }
+            StreamItem::ToolResult { id, ok, content } => {
+                let _ = self.on_chunk.send(StreamChunk {
+                    observed: Some(ObservedToolActivity::Result { id, ok, content }),
+                    ..Default::default()
+                });
+            }
+            // Remember what to continue next turn. Recorded even on a
+            // turn that was itself a resume: a CLI may answer with a new
+            // id (a fork, a compaction), and the newest one is the live
+            // session.
+            StreamItem::Session(session) => {
+                if let Some(key) = self.session_key {
+                    remember_session(key, &session);
+                }
+            }
+            // Every turn refreshes the composer's `/` menu for free.
+            StreamItem::Commands(commands) => {
+                super::cli_commands::remember(self.provider_id, self.cwd, commands);
+            }
+            // Cost is not shown here; the harness reports run cost.
+            StreamItem::Finished { .. } => {}
+        }
+    }
 }
 
 fn with_command_instructions(
