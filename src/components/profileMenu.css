@@ -2,7 +2,7 @@
   position: absolute;
   left: 12px;
   bottom: 64px;
-  width: min(328px, calc(100vw - 24px));
+  width: min(340px, calc(100vw - 24px));
   max-height: calc(100dvh - 88px);
   overflow-y: auto;
   padding: 6px;
@@ -89,10 +89,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The plan at the row's ragged right. */
+/* The plan at the row's ragged right, in a fixed cell so a folded row's
+   bars don't shift with the plan's length. */
 .profile-account-plan {
+  flex: 0 0 40px;
   padding-right: 4px;
   font-size: 12px;
+  text-align: right;
 }
 .profile-usage {
   display: grid;
@@ -108,23 +111,31 @@
   color: var(--fg-subtle);
   font-variant-numeric: tabular-nums;
 }
+/* Folded rows share one grid — fixed width, one column per window, the
+   figure in a fixed right-aligned cell — so bars line up from row to row
+   whatever the name or plan beside them. */
 .profile-usage-compact {
-  flex: 1.4;
-  min-width: 0;
-  display: flex;
+  flex: 0 0 144px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  column-gap: 10px;
   align-items: center;
-  gap: 12px;
   font-size: 11.5px;
   color: var(--fg-subtle);
   font-variant-numeric: tabular-nums;
 }
 .profile-usage-compact-item {
-  flex: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
-.profile-usage-compact-item .profile-usage-track {
+.profile-usage-compact > .profile-usage-spend {
+  grid-column: 1 / -1;
+  text-align: right;
+}
+.profile-usage-track {
   flex: 1;
 }
 .profile-usage-track {

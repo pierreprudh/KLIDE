@@ -155,7 +155,9 @@ function CliAccount({
             <AccountControl provider={provider} title={title} connected={false} compact />
           </span>
         )}
-        {usage?.plan && <span className="profile-account-plan">{usage.plan}</span>}
+        {/* Always drawn, empty when the CLI names no plan, so every row keeps
+            the same right edge. */}
+        <span className="profile-account-plan">{usage?.plan ?? ""}</span>
       </div>
       {!collapsed && <UsageLines usage={usage} loading={loading} collapsed={false} />}
     </section>
