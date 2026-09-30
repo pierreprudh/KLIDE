@@ -1,10 +1,66 @@
 // Compact account popover above the bottom edge of the workspace.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AccountControl } from "./settings/accounts";
 import { GitHubAccountRow } from "./GitHubAccountRow";
+import { ProviderLogo } from "./ai/icons";
 import { Z } from "../zLayers";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
+import { notify } from "../toast";
+import { errMessage } from "../errors";
+import {
+  delegateLogout,
+  humanTokens,
+  resetLabel,
+  resetShort,
+  usageSnapshot,
+  usageTone,
+  type ToolUsage,
+} from "../ipc/usage";
 import "./profileMenu.css";
+
+/** The CLIs the menu lists, in order, and which of them can be signed out
+ *  from here (OpenCode signs in per provider, not as one account). */
+const CLIS = [
+  { provider: "claude-code", title: "Claude Code", logout: true },
+  { provider: "codex", title: "Codex", logout: true },
+  { provider: "opencode", title: "OpenCode", logout: false },
+] as const;
+
+// The Claude reading is a network call; opening the menu twice in a minute
+// should not make it twice.
+const FRESH_MS = 60_000;
+let lastUsage: { at: number; tools: ToolUsage[] } | null = null;
+
+function useUsage(open: boolean) {
+  const [tools, setTools] = useState<ToolUsage[] | null>(lastUsage?.tools ?? null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    if (lastUsage && Date.now() - lastUsage.at < FRESH_MS && tick === 0) {
+      setTools(lastUsage.tools);
+      return;
+    }
+    let cancelled = false;
+    usageSnapshot()
+      .then((next) => {
+        lastUsage = { at: Date.now(), tools: next };
+        if (!cancelled) setTools(next);
+      })
+      .catch(() => {
+        if (!cancelled) setTools([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, tick]);
+  return {
+    tools,
+    refresh: () => {
+      lastUsage = null;
+      setTick((n) => n + 1);
+    },
+  };
+}
 
 type Props = {
   open: boolean;
@@ -15,6 +71,7 @@ type Props = {
 export function ProfileModal({ open, onClose }: Props) {
   const { username, avatarUrl } = useUserInfo();
   const menuRef = useRef<HTMLDivElement>(null);
+  const { tools, refresh } = useUsage(open);
 
   useEffect(() => {
     if (!open) return;
@@ -54,11 +111,119 @@ export function ProfileModal({ open, onClose }: Props) {
         </div>
         <div className="profile-account-menu-rows">
           <GitHubAccountRow compact />
-          <AccountControl provider="codex" title="Codex" connected={false} compact />
-          <AccountControl provider="claude-code" title="Claude Code" connected={false} compact />
-          <AccountControl provider="opencode" title="OpenCode" connected={false} compact />
+          {CLIS.map((cli) => (
+            <CliAccount
+              key={cli.provider}
+              {...cli}
+              usage={tools?.find((t) => t.provider === cli.provider)}
+              loading={tools === null}
+              onSignedOut={refresh}
+            />
+          ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** One CLI: who it is signed in as, and how much of its allowance is spent. */
+function CliAccount({
+  provider,
+  title,
+  logout,
+  usage,
+  loading,
+  onSignedOut,
+}: {
+  provider: (typeof CLIS)[number]["provider"];
+  title: string;
+  logout: boolean;
+  usage: ToolUsage | undefined;
+  loading: boolean;
+  onSignedOut: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = window.setTimeout(() => setConfirming(false), 3_000);
+    return () => window.clearTimeout(t);
+  }, [confirming]);
+
+  async function signOut() {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await delegateLogout(provider);
+      notify(`${title}: logged out.`, { tone: "success" });
+      window.dispatchEvent(new Event("klide-accounts-changed"));
+      onSignedOut();
+    } catch (error) {
+      notify(errMessage(error), { tone: "error" });
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  const signedOut = !!usage?.error && /sign in/i.test(usage.error);
+  return (
+    <section aria-label={`${title} account`} className="profile-account-cli">
+      <div className="profile-account-menu-row">
+        <ProviderLogo id={provider} size={16} />
+        <span className="profile-account-title">
+          {title}
+          {usage?.plan && <span className="profile-account-plan"> · {usage.plan}</span>}
+        </span>
+        <AccountControl provider={provider} title={title} connected={false} compact />
+        {logout && !signedOut && (
+          <button
+            type="button"
+            className="profile-account-logout"
+            data-confirming={confirming || undefined}
+            disabled={busy}
+            onClick={() => void signOut()}
+            aria-label={confirming ? `Confirm logging out of ${title}` : `Log out of ${title}`}
+          >
+            {busy ? "Logging out…" : confirming ? "Confirm" : "Log out"}
+          </button>
+        )}
+      </div>
+      <UsageLines usage={usage} loading={loading} />
+    </section>
+  );
+}
+
+function UsageLines({ usage, loading }: { usage: ToolUsage | undefined; loading: boolean }) {
+  if (loading) return <div className="profile-usage-note">Reading usage…</div>;
+  if (!usage) return null;
+  if (usage.error) return <div className="profile-usage-note">{usage.error}</div>;
+  return (
+    <div className="profile-usage">
+      {usage.windows.map((w) => {
+        const percent = Math.max(0, Math.min(100, w.percent));
+        return (
+          <div key={w.label} className="profile-usage-line" title={resetLabel(w)}>
+            <span className="profile-usage-label">{w.label}</span>
+            <span className="profile-usage-track" aria-hidden>
+              <span className="profile-usage-fill" data-tone={usageTone(percent)} style={{ width: `${percent}%` }} />
+            </span>
+            <span className="profile-usage-value">{Math.round(percent)}%</span>
+            <span className="profile-usage-reset">{resetShort(w)}</span>
+          </div>
+        );
+      })}
+      {usage.spend && (
+        <div className="profile-usage-line">
+          <span className="profile-usage-label">This week</span>
+          <span className="profile-usage-spend">
+            ${usage.spend.costUsd.toFixed(2)} · {humanTokens(usage.spend.tokens)} tokens
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 mod visual_export;
 mod accounts;
+mod usage;
 mod adapters;
 mod blocking;
 mod cli;
@@ -205,6 +206,51 @@ async fn account_activate(app: tauri::AppHandle, provider: String, name: String)
         accounts::activate(&provider, &name)
     })
     .await
+}
+
+/// How much of each subscription CLI's allowance is spent (`usage.rs`).
+#[tauri::command]
+async fn usage_snapshot() -> Vec<usage::ToolUsage> {
+    usage::snapshot().await
+}
+
+/// Sign a delegate CLI out of its account with its own logout command. Refused
+/// while a session of it is live in Klide, for the same reason a switch is: a
+/// running CLI writes its token back to the store this clears.
+#[tauri::command]
+async fn delegate_logout(app: tauri::AppHandle, provider: String) -> Result<(), String> {
+    let adapter = delegate::lookup(&provider).ok_or_else(|| format!("Unknown CLI: {provider}"))?;
+    let args = adapter
+        .logout_args()
+        .ok_or_else(|| format!("{provider} has no logout command"))?;
+    let live = {
+        let app = app.clone();
+        let provider = provider.clone();
+        blocking::run(move || Ok(pty::provider_has_live_session(&app, &provider))).await?
+    };
+    if live {
+        return Err(format!(
+            "A {provider} session is live in Klide — finish or stop it before logging out."
+        ));
+    }
+    let name = adapter.binary().to_string();
+    // Resolving asks the login shell, which is a process of its own.
+    let binary = blocking::run(move || cli::resolve_command(&name)).await?;
+    let run = tokio::process::Command::new(binary)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(std::time::Duration::from_secs(20), run)
+        .await
+        .map_err(|_| "Logout timed out".to_string())?
+        .map_err(|e| format!("Unable to run the logout command: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if stderr.is_empty() { format!("Logout exited with {}", out.status) } else { stderr })
+    }
 }
 
 /// Tell the backend which folder is open, so `${VAR}` token references can
@@ -1030,6 +1076,8 @@ pub fn run() {
             custom_cli_upsert,
             custom_cli_remove,
             accounts_list,
+            usage_snapshot,
+            delegate_logout,
             account_save_current,
             account_activate,
             set_active_workspace,

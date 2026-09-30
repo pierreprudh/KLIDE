@@ -2,7 +2,7 @@
   position: absolute;
   left: 12px;
   bottom: 64px;
-  width: min(292px, calc(100vw - 24px));
+  width: min(328px, calc(100vw - 24px));
   max-height: calc(100dvh - 88px);
   overflow-y: auto;
   padding: 6px;
@@ -44,6 +44,100 @@
 .profile-account-menu-row:hover,
 .profile-account-menu-row:focus-within {
   background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+/* One CLI: its row, then its usage under the name. */
+.profile-account-cli {
+  padding-bottom: 6px;
+}
+.profile-account-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-account-plan,
+.profile-account-saved {
+  color: var(--fg-subtle);
+}
+.profile-account-saved {
+  font-size: 12px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Log out waits for the row: shown on hover or focus, never a standing
+   destructive button. The first click only arms it. */
+.profile-account-logout {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease-out, color 120ms ease-out;
+}
+.profile-account-cli:hover .profile-account-logout,
+.profile-account-logout:focus-visible,
+.profile-account-logout[data-confirming] {
+  opacity: 1;
+}
+.profile-account-logout:hover {
+  color: var(--fg);
+}
+.profile-account-logout[data-confirming] {
+  color: var(--danger);
+}
+.profile-usage {
+  display: grid;
+  gap: 5px;
+  padding: 0 10px 0 36px;
+}
+.profile-usage-line {
+  display: grid;
+  grid-template-columns: 62px minmax(48px, 1fr) 32px 68px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.profile-usage-track {
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  overflow: hidden;
+}
+.profile-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms ease-out;
+}
+.profile-usage-fill[data-tone="warning"] { background: var(--warning); }
+.profile-usage-fill[data-tone="danger"] { background: var(--danger); }
+.profile-usage-value {
+  text-align: right;
+  color: var(--fg);
+}
+.profile-usage-reset {
+  white-space: nowrap;
+}
+.profile-usage-spend {
+  grid-column: 2 / -1;
+  color: var(--fg);
+}
+.profile-usage-note {
+  padding: 0 10px 0 36px;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
 }
 @keyframes profile-menu-appear {
   from { opacity: 0; transform: translateY(4px) scale(0.98); }
