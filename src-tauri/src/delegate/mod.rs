@@ -421,13 +421,6 @@ pub trait Delegate: Sync {
         Vec::new()
     }
 
-    /// Arguments that sign this CLI out of its account, when it has a
-    /// non-interactive way to. Default: none — the account menu offers no
-    /// Log out for it (OpenCode signs in per provider, not as one account).
-    fn logout_args(&self) -> Option<Vec<String>> {
-        None
-    }
-
     /// Whether the CLI is currently authenticated, plus a human detail line.
     /// `command_path` is the resolved binary to invoke. Default: a CLI with no
     /// login is usable as soon as it is installed (OpenCode's posture).

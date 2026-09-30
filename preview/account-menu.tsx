@@ -55,9 +55,6 @@ const account = (name: string, active: boolean) => ({ name, active, identity: { 
           : args.provider === "codex"
             ? { accounts: [account("private", true)], currentUnsaved: null }
             : { accounts: [], currentUnsaved: null };
-      case "delegate_logout":
-        await new Promise((r) => setTimeout(r, 600));
-        return null;
       case "github_accounts":
         return { logins: ["pierreprudh", "Pierre-OTK"], active: "pierreprudh", pinned: "pierreprudh" };
       default:

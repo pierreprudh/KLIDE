@@ -109,10 +109,6 @@ impl Delegate for Codex {
         Ok(args)
     }
 
-    /// Signs this machine's CLI out, the same as its own logout command.
-    fn logout_args(&self) -> Option<Vec<String>> {
-        Some(["logout"].map(String::from).to_vec())
-    }
 
     fn login_commands(&self) -> Vec<String> {
         [

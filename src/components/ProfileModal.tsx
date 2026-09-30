@@ -5,10 +5,7 @@ import { GitHubAccountRow } from "./GitHubAccountRow";
 import { ProviderLogo } from "./ai/icons";
 import { Z } from "../zLayers";
 import { initialsOf, useUserInfo } from "../hooks/useUserInfo";
-import { notify } from "../toast";
-import { errMessage } from "../errors";
 import {
-  delegateLogout,
   humanTokens,
   resetLabel,
   resetShort,
@@ -18,12 +15,11 @@ import {
 } from "../ipc/usage";
 import "./profileMenu.css";
 
-/** The CLIs the menu lists, in order, and which of them can be signed out
- *  from here (OpenCode signs in per provider, not as one account). */
+/** The CLIs the menu lists, in order. */
 const CLIS = [
-  { provider: "claude-code", title: "Claude Code", logout: true },
-  { provider: "codex", title: "Codex", logout: true },
-  { provider: "opencode", title: "OpenCode", logout: false },
+  { provider: "claude-code", title: "Claude Code" },
+  { provider: "codex", title: "Codex" },
+  { provider: "opencode", title: "OpenCode" },
 ] as const;
 
 // The Claude reading is a network call; opening the menu twice in a minute
@@ -31,12 +27,11 @@ const CLIS = [
 const FRESH_MS = 60_000;
 let lastUsage: { at: number; tools: ToolUsage[] } | null = null;
 
-function useUsage(open: boolean) {
+function useUsage(open: boolean): ToolUsage[] | null {
   const [tools, setTools] = useState<ToolUsage[] | null>(lastUsage?.tools ?? null);
-  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!open) return;
-    if (lastUsage && Date.now() - lastUsage.at < FRESH_MS && tick === 0) {
+    if (lastUsage && Date.now() - lastUsage.at < FRESH_MS) {
       setTools(lastUsage.tools);
       return;
     }
@@ -52,14 +47,8 @@ function useUsage(open: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [open, tick]);
-  return {
-    tools,
-    refresh: () => {
-      lastUsage = null;
-      setTick((n) => n + 1);
-    },
-  };
+  }, [open]);
+  return tools;
 }
 
 type Props = {
@@ -71,7 +60,7 @@ type Props = {
 export function ProfileModal({ open, onClose }: Props) {
   const { username, avatarUrl } = useUserInfo();
   const menuRef = useRef<HTMLDivElement>(null);
-  const { tools, refresh } = useUsage(open);
+  const tools = useUsage(open);
 
   useEffect(() => {
     if (!open) return;
@@ -117,7 +106,6 @@ export function ProfileModal({ open, onClose }: Props) {
               {...cli}
               usage={tools?.find((t) => t.provider === cli.provider)}
               loading={tools === null}
-              onSignedOut={refresh}
             />
           ))}
         </div>
@@ -130,46 +118,14 @@ export function ProfileModal({ open, onClose }: Props) {
 function CliAccount({
   provider,
   title,
-  logout,
   usage,
   loading,
-  onSignedOut,
 }: {
   provider: (typeof CLIS)[number]["provider"];
   title: string;
-  logout: boolean;
   usage: ToolUsage | undefined;
   loading: boolean;
-  onSignedOut: () => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (!confirming) return;
-    const t = window.setTimeout(() => setConfirming(false), 3_000);
-    return () => window.clearTimeout(t);
-  }, [confirming]);
-
-  async function signOut() {
-    if (!confirming) {
-      setConfirming(true);
-      return;
-    }
-    setBusy(true);
-    try {
-      await delegateLogout(provider);
-      notify(`${title}: logged out.`, { tone: "success" });
-      window.dispatchEvent(new Event("klide-accounts-changed"));
-      onSignedOut();
-    } catch (error) {
-      notify(errMessage(error), { tone: "error" });
-    } finally {
-      setBusy(false);
-      setConfirming(false);
-    }
-  }
-
-  const signedOut = !!usage?.error && /sign in/i.test(usage.error);
   const [collapsed, setCollapsed] = useCollapsed(provider);
   const stop = (event: React.SyntheticEvent) => event.stopPropagation();
   return (
@@ -199,27 +155,7 @@ function CliAccount({
             <AccountControl provider={provider} title={title} connected={false} compact />
           </span>
         )}
-        {/* One slot at the ragged right: the plan, and Log out in its place
-            while the pointer is on the account. */}
-        <span className="profile-account-end">
-          {usage?.plan && <span className="profile-account-plan">{usage.plan}</span>}
-          {logout && !signedOut && (
-            <button
-              type="button"
-              className="profile-account-logout"
-              data-confirming={confirming || undefined}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void signOut();
-              }}
-              onKeyDown={stop}
-              aria-label={confirming ? `Confirm logging out of ${title}` : `Log out of ${title}`}
-            >
-              {busy ? "Logging out…" : confirming ? "Confirm" : "Log out"}
-            </button>
-          )}
-        </span>
+        {usage?.plan && <span className="profile-account-plan">{usage.plan}</span>}
       </div>
       {!collapsed && <UsageLines usage={usage} loading={loading} collapsed={false} />}
     </section>

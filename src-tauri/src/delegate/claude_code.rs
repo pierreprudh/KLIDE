@@ -264,10 +264,6 @@ impl Delegate for ClaudeCode {
         super::status::install_claude_hooks(home)
     }
 
-    /// Signs this machine's CLI out, the same as its own logout command.
-    fn logout_args(&self) -> Option<Vec<String>> {
-        Some(["auth", "logout"].map(String::from).to_vec())
-    }
 
     fn login_commands(&self) -> Vec<String> {
         ["--claudeai", "--console", "--sso"]
