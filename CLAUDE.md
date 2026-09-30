@@ -208,6 +208,7 @@ Klide/
 │   │       ├── replayConversation.ts On-disk transcript → resumable panel Conversation
 │   │       ├── transcriptReducer.ts  Live Msg[] view of one run's fold (region splice, stable refs)
 │   │       ├── turnDriver.ts      Streaming state machine for one turn
+│   │       ├── runController.ts   The panel's one owner of the turn queue, the live Run attachment and the gate table — no React
 │   │       ├── conversationSession.ts Atomic live Conversation identity
 │   │       ├── contextBudget.ts   Context-window accounting + auto-compaction threshold
 │   │       ├── autonomyLadder.ts  Mode choices + the Goal policy cycle (review/auto/full)
