@@ -1360,7 +1360,6 @@ export function WorkingSince({ since }: { since?: number }) {
     >
       <DotGridLoader size={11} label="Working" />
       <span className="ai-working-label">Working</span>
-      <span aria-hidden="true" style={{ opacity: 0.6 }}>·</span>
       <span style={{ fontVariantNumeric: "tabular-nums" }}>{clock}</span>
     </span>
   );
