@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const WINDOW: Duration = Duration::from_millis(150);
+pub(super) const WINDOW: Duration = Duration::from_millis(150);
 const MAX_PENDING_BYTES: usize = 8 * 1024;
 
 pub(super) type Broadcast = Box<dyn Fn(&str, u64, &AgentEvent) + Send + Sync>;

@@ -1,6 +1,7 @@
 mod approval_store;
 pub(crate) mod daemon;
 mod remote;
+mod run_host;
 mod stream_log;
 mod artifacts;
 mod background;
@@ -63,7 +64,7 @@ use self::types::{
     AgentContentBlock, AgentContextSnapshot, AgentError, AgentEvent, AgentMode, AgentRunStatus,
     AgentRunSummary, AgentTurnTiming, AgentUsage, DiffDecisionRequest, PermissionDecisionRequest,
     PermissionOption, PermissionRequest, RouteDecision, StartRunRequest, StartRunResponse,
-    SubmitUserTurnRequest, ToolResult,
+    ToolResult,
 };
 use crate::coordination::{
     CoordinationActor, CoordinationArtifact, CoordinationArtifactKind, CoordinationCommand,
@@ -135,34 +136,15 @@ impl Default for AgentSupervisorState {
     }
 }
 
-/// Whether this process still owns a live loop for `run_id`. Mission restart
-/// reconciliation uses this before calling an attempt orphaned: re-selecting a
-/// workspace in the same app process must never interrupt a real active Run.
+/// Whether some host still runs a live loop for `run_id` — see
+/// `run_host::is_active` for the one definition of "active".
 pub(crate) fn run_is_active(app: &tauri::AppHandle, run_id: &str) -> bool {
-    let state = app.state::<AgentSupervisorState>();
-    let local = state
-        .runs
-        .lock()
-        .ok()
-        .and_then(|runs| runs.get(run_id).map(|handle| handle.status))
-        .map(|status| {
-            matches!(
-                status,
-                AgentRunStatus::Queued
-                    | AgentRunStatus::Running
-                    | AgentRunStatus::WaitingForPermission
-                    | AgentRunStatus::WaitingForDiff
-                    | AgentRunStatus::Paused
-            )
-        })
-        .unwrap_or(false);
-    local || off_the_worker(|| remote::statuses(app).ok().is_some_and(|runs| runs.contains_key(run_id)))
+    run_host::is_active(app, run_id)
 }
 
 /// Storage relocation must not strand a writer in the previous directory.
 pub(crate) fn ensure_storage_idle(app: &tauri::AppHandle) -> Result<(), String> {
-    if !app.state::<AgentSupervisorState>().runs.lock().map_err(|_| "Agent state unavailable")?.is_empty()
-        || !remote::statuses(app)?.is_empty() {
+    if run_host::any_hosted(app)? {
         return Err("Finish or stop active conversations before changing the runs folder.".into());
     }
     Ok(())
@@ -317,6 +299,11 @@ trait RunSupervisor: Send + Sync {
     /// subscription runs persist and broadcast them as part of the same sequence.
     fn broadcast(&self, run_id: &str, seq: u64, event: &AgentEvent);
     fn persist_stream(&self) -> bool { false }
+    /// Whether this host can wake the conversation when a watched command
+    /// exits (`run_command(notifyOnExit)`). The app can; a host that cannot
+    /// says why, and the Tool refuses before a shell is started that nobody
+    /// would ever answer. Default: it can (the headless test host).
+    fn observer_support(&self) -> Result<(), String> { Ok(()) }
     fn watch_background(&self, _run_id: &str, _shell_id: &str, _request: &StartRunRequest) {}
     /// Feed the failure budget: a run settled in error (`failed`) or done.
     /// Default no-op keeps FakeSupervisor tests headless; the budget itself
@@ -424,6 +411,11 @@ fn coordination_state_for_status(
     }
 }
 
+/// The journal's `reason` for a status move — one spelling for both hosts.
+fn coordination_reason_for_status(status: AgentRunStatus) -> String {
+    run_status_wire(&status).replace('_', " ")
+}
+
 fn coordination_result_status(status: AgentRunStatus) -> Option<CoordinationResultStatus> {
     match status {
         AgentRunStatus::Done => Some(CoordinationResultStatus::Succeeded),
@@ -507,7 +499,7 @@ impl RunSupervisor for TauriSupervisor {
                 },
                 run_id: run_id.to_string(),
                 state: coordination_state_for_status(status, terminal_run),
-                reason: Some(run_status_wire(&status).replace('_', " ")),
+                reason: Some(coordination_reason_for_status(status)),
             },
         );
     }
@@ -1730,15 +1722,6 @@ async fn start_run(
             }
         }
     }
-    #[cfg(unix)]
-    if remote::eligible(&request) && done.is_none() && observer_shell_id.is_none() {
-        request.run_id = Some(id.clone());
-        return remote::start(app, request, runs_dir, on_event).await;
-    }
-    // A provider switch must not start a local writer beside a daemon-owned turn.
-    if remote::status(&app, &id).await?.is_some() {
-        return Err(format!("A run is already active for this conversation ({id}). Wait for it to finish or stop it first."));
-    }
     let mission_link = match (
         request.workspace_root.clone(),
         request.mission_id.clone(),
@@ -1753,11 +1736,12 @@ async fn start_run(
             )
         }
     };
-    let cancel = CancellationToken::new();
 
     // Crash-loop quarantine: a conversation whose recent runs all errored on
     // this provider/model is refused re-dispatch while the cooldown holds, so
     // a broken setup can't be hammered in a tight loop (human or orchestrated).
+    // Judged here, before the Run is placed: the app admits every Run, so this
+    // is the one budget whichever host ends up running the loop.
     if let Some(reason) =
         state
             .failure_budget
@@ -1765,40 +1749,35 @@ async fn start_run(
     {
         return Err(reason);
     }
-
-    // A handle remains owned through terminal summary write and retirement.
-    // Even a terminal status is busy until the old loop releases that handle;
-    // otherwise its settle_run could retire a newly started observer reply.
+    // Whichever host takes it, a conversation this process still holds a
+    // loop for is busy (the local admission below re-checks under its lock).
+    if state
+        .runs
+        .lock()
+        .map_err(|_| "Agent state is unavailable".to_string())?
+        .contains_key(&id)
     {
-        let mut runs = state
-            .runs
-            .lock()
-            .map_err(|_| "Agent state is unavailable".to_string())?;
-        if runs.contains_key(&id) {
-            return Err(format!(
-                "A run is already active for this conversation ({id}). Wait for it to finish or stop it first."
-            ));
-        }
+        return Err(run_host::busy(&id));
+    }
+    let nested = done.is_some() || observer_shell_id.is_some();
+    #[cfg(unix)]
+    if run_host::placement(&request, nested) == run_host::Placement::Background {
+        request.run_id = Some(id.clone());
+        return remote::start(app, request, runs_dir, on_event).await;
+    }
+    #[cfg(not(unix))]
+    let _ = nested;
+    // A provider switch must not start a local writer beside a daemon-owned turn.
+    if remote::status(&app, &id).await?.is_some() {
+        return Err(run_host::busy(&id));
+    }
+
+    let admitted = run_host::admit(&state.runs, &runs_dir, &id, &request, || {
         if observer_shell_id.is_some_and(|shell| !background::notification_pending(&id, shell)) {
             return Err("Observer completion was already delivered or cancelled.".into());
         }
-        runs.insert(
-            id.clone(),
-            AgentRunHandle {
-                status: AgentRunStatus::Running,
-                cancel: cancel.clone(),
-                coordination_workspace_root: coordination_workspace_for(&request)
-                    .map(str::to_string),
-                coordination_is_terminal_run: request.parent_id.is_some()
-                    || request.mission_id.is_some(),
-                pending_diff: std::sync::Mutex::new(None),
-                pending_question: std::sync::Mutex::new(None),
-                pending_permission: std::sync::Mutex::new(None),
-                trust: permission::TrustMemory::default(),
-                subject: permission::GateSubject::from_request(&request),
-            },
-        );
-    }
+        Ok(())
+    })?;
 
     // Register only after the live handle exists, so an accepted coordination
     // identity always has a cancellable process owner. Registration failing
@@ -1814,46 +1793,45 @@ async fn start_run(
     let supervisor: Arc<dyn RunSupervisor> = Arc::new(supervisor_impl);
     let mission_app = app.clone();
     let task_id = id.clone();
-    tauri::async_runtime::spawn(async move {
-        // The loop runs in a task of its own so a panic inside it surfaces
-        // here as a join error: its `RunLease` has already released the Run
-        // while unwinding, and the Mission write-back and `done` below still
-        // happen, in the same order as a normal exit.
-        let result = tauri::async_runtime::spawn(run_agent_loop(
-            supervisor,
-            runs_dir,
-            task_id.clone(),
-            request,
-            on_event,
-            cancel,
-            RealProviderCaller,
-        ))
-        .await
-        .unwrap_or_else(|_| Err("run panicked".to_string()));
-        if let Some((root, mission_id, mission_task_id)) = mission_link {
-            if let Err(err) = crate::missions::record_linked_attempt_validation(
-                &mission_app,
-                &root,
-                &mission_id,
-                &mission_task_id,
-                &task_id,
-            ) {
-                eprintln!("mission attempt {task_id} validation failed: {err}");
+    run_host::spawn_loop(
+        supervisor,
+        runs_dir,
+        id.clone(),
+        request,
+        on_event,
+        admitted,
+        RealProviderCaller,
+        move |result| {
+            if let Some((root, mission_id, mission_task_id)) = mission_link {
+                if let Err(err) = crate::missions::record_linked_attempt_validation(
+                    &mission_app,
+                    &root,
+                    &mission_id,
+                    &mission_task_id,
+                    &task_id,
+                ) {
+                    eprintln!("mission attempt {task_id} validation failed: {err}");
+                }
             }
-        }
-        if let Err(err) = &result {
-            eprintln!("agent run {task_id} failed: {err}");
-        }
-        // Signal completion last, after mission write-back, so a waiting parent
-        // never observes a child as settled before its validation landed.
-        if let Some(done) = done {
-            let _ = done.send(result);
-        }
-    });
+            if let Err(err) = &result {
+                eprintln!("agent run {task_id} failed: {err}");
+            }
+            // Signal completion last, after mission write-back, so a waiting
+            // parent never observes a child as settled before its validation
+            // landed.
+            if let Some(done) = done {
+                let _ = done.send(result);
+            }
+        },
+    );
 
     Ok(StartRunResponse { run_id: id })
 }
 
+/// The loop as a test drives it: no host admitted this Run, so the transcript
+/// is counted here. Every production host enters through
+/// `run_host::spawn_loop`, which admitted the Run and hands the count over.
+#[cfg(test)]
 async fn run_agent_loop(
     supervisor: Arc<dyn RunSupervisor>,
     runs_dir: PathBuf,
@@ -1863,16 +1841,71 @@ async fn run_agent_loop(
     cancel: CancellationToken,
     provider_caller: impl AgentProviderCaller,
 ) -> Result<(), String> {
+    let prior_events = read_events(&runs_dir, &id).unwrap_or_default();
+    let sequence = Arc::new(Mutex::new(prior_events.len() as u64));
+    hosted_loop(supervisor, runs_dir, id, request, on_event, cancel, provider_caller, sequence, prior_events).await
+}
+
+/// One Run's loop inside its lease. `sequence` is the Transcript index every
+/// writer of this Run shares — the `emit` closure, the stream log, and the
+/// host's backstop — so nothing this Run writes can land on an index twice.
+/// A loop that returns `Err` writes that backstop itself, *before* the lease
+/// releases the conversation, so no follow-up turn can be admitted between
+/// the release and the terminal event.
+#[allow(clippy::too_many_arguments)]
+async fn hosted_loop(
+    supervisor: Arc<dyn RunSupervisor>,
+    runs_dir: PathBuf,
+    id: String,
+    request: StartRunRequest,
+    on_event: Channel<AgentEvent>,
+    cancel: CancellationToken,
+    provider_caller: impl AgentProviderCaller,
+    sequence: Arc<Mutex<u64>>,
+    prior_events: Vec<AgentEvent>,
+) -> Result<(), String> {
     // First, before anything can fail: from here on every way out of the loop
     // releases what the Run holds (see `RunLease`).
     let mut lease = RunLease::new(supervisor.clone(), runs_dir.clone(), id.clone());
+    let result = loop_body(
+        &mut lease,
+        sequence.clone(),
+        prior_events,
+        supervisor.clone(),
+        runs_dir.clone(),
+        id.clone(),
+        request,
+        on_event.clone(),
+        cancel,
+        provider_caller,
+    )
+    .await;
+    if let Err(message) = &result {
+        run_host::settle_backstop(supervisor.as_ref(), &runs_dir, &id, &sequence, &on_event, message);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn loop_body(
+    mut lease: &mut RunLease,
+    sequence: Arc<Mutex<u64>>,
+    prior_events: Vec<AgentEvent>,
+    supervisor: Arc<dyn RunSupervisor>,
+    runs_dir: PathBuf,
+    id: String,
+    request: StartRunRequest,
+    on_event: Channel<AgentEvent>,
+    cancel: CancellationToken,
+    provider_caller: impl AgentProviderCaller,
+) -> Result<(), String> {
     // The loop touches run-scoped state only through this seam — no direct
     // AppHandle reach. Production passes a TauriSupervisor; tests pass a fake.
     let sup: &dyn RunSupervisor = supervisor.as_ref();
-    // Alternate/headless hosts enter through the loop directly in tests and
-    // future background runners. The production start path already registered
-    // before detaching; the journal command is idempotent there. Like every
-    // other coordination step, failure is logged and the Run goes on.
+    // Tests enter the loop directly, and the daemon host registers nothing
+    // before detaching. The app's start path already registered; the journal
+    // command is idempotent there. Like every other coordination step,
+    // failure is logged and the Run goes on.
     if let Err(error) = register_coordination_run(sup, &request, &id) {
         eprintln!("klide: run {id} is not coordination-addressable: {error}");
     }
@@ -1882,7 +1915,6 @@ async fn run_agent_loop(
     // of restarting it: pick up `seq` where we left off, skip the one-time
     // RunStarted/ContextSnapshot preamble, and offset tool-call ids past the
     // turns already on disk so checkpoint files never collide across turns.
-    let prior_events = read_events(&runs_dir, &id).unwrap_or_default();
     let resuming = !prior_events.is_empty();
     // Start this run's file-snapshot slate clean so a reused id never inherits
     // stale read/write hashes from a previous run (see tools::clear_run_snapshots).
@@ -1892,7 +1924,6 @@ async fn run_agent_loop(
         .filter(|e| matches!(e, AgentEvent::AssistantMessage { .. }))
         .count();
     let created_ms = now_ms();
-    let sequence = Arc::new(Mutex::new(prior_events.len() as u64));
     let event_channel = on_event.clone();
     // A wake turn: no words from the user, started by the panel so the Run
     // reads what another agent left for it once its user let that in. There
@@ -2909,44 +2940,23 @@ async fn run_agent_loop(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn agent_submit_user_turn(
-    _state: tauri::State<'_, AgentSupervisorState>,
-    _request: SubmitUserTurnRequest,
-) -> Result<(), String> {
-    Err("Continuing an existing harness run is not wired in this milestone".to_string())
-}
-
-// NOTE: deliberately hard errors, not silent no-ops. The harness does not
-// pause for permissions/diffs yet; writing fake "resolved" events here would
+// Deliberately hard errors, not silent no-ops: a decision with nothing to
+// answer is reported, never recorded as a fake "resolved" event that would
 // corrupt transcript ordering and let a UI believe approval was enforced.
+// Each command is one call into the Run host, which finds the Run wherever
+// it lives (this process or `klide ptyd`).
 #[tauri::command]
 pub async fn agent_resolve_permission(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
     decision: PermissionDecisionRequest,
 ) -> Result<(), String> {
-    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&decision.run_id) {
-        return remote::control(&app, decision.run_id.clone(), crate::pty_wire::ChatControl::Permission { decision: decision.decision }).await.map(|_| ());
-    }
-    let runs = state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?;
-    match runs.get(&decision.run_id) {
-        Some(handle) => {
-            let sender = handle.pending_permission.lock().unwrap().take();
-            if let Some(tx) = sender {
-                // Forward the full decision JSON; the run loop parses it back
-                // to read the behavior (allow/deny) and future scope.
-                let _ = tx.send(decision.decision.to_string());
-                Ok(())
-            } else {
-                Err("No pending permission request for this run.".to_string())
-            }
-        }
-        None => Err(format!("No known run with id {}", decision.run_id)),
-    }
+    run_host::control(
+        &app,
+        &decision.run_id,
+        crate::pty_wire::ChatControl::Permission { decision: decision.decision },
+    )
+    .await
+    .map(|_| ())
 }
 
 /// The command half of the Goal policy, applied to a live Run. The rung is per
@@ -2961,52 +2971,29 @@ pub async fn agent_resolve_permission(
 #[tauri::command]
 pub async fn agent_set_command_policy(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
     run_id: String,
     auto_approve_commands: bool,
 ) -> Result<bool, String> {
-    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&run_id) {
-        return remote::control(&app, run_id.clone(), crate::pty_wire::ChatControl::CommandPolicy { auto_approve: auto_approve_commands }).await;
-    }
-    let runs = state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?;
-    match runs.get(&run_id) {
-        Some(handle) => permission::apply_command_policy(handle, auto_approve_commands),
-        None => Err(format!("No known run with id {run_id}")),
-    }
+    run_host::control(
+        &app,
+        &run_id,
+        crate::pty_wire::ChatControl::CommandPolicy { auto_approve: auto_approve_commands },
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn agent_resolve_diff(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
     decision: DiffDecisionRequest,
 ) -> Result<(), String> {
-    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&decision.run_id) {
-        return remote::control(&app, decision.run_id.clone(), crate::pty_wire::ChatControl::Diff { decision: decision.decision }).await.map(|_| ());
-    }
-    let runs = state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?;
-    match runs.get(&decision.run_id) {
-        Some(handle) => {
-            let sender = handle.pending_diff.lock().unwrap().take();
-            if let Some(tx) = sender {
-                // Forward the full decision JSON; the write tool parses the
-                // behavior back out plus the optional review `note` — the
-                // user's line of feedback that turns a bare rejection into a
-                // steerable "request changes".
-                let _ = tx.send(decision.decision.to_string());
-                Ok(())
-            } else {
-                Err("No pending diff review for this run.".to_string())
-            }
-        }
-        None => Err(format!("No known run with id {}", decision.run_id)),
-    }
+    run_host::control(
+        &app,
+        &decision.run_id,
+        crate::pty_wire::ChatControl::Diff { decision: decision.decision },
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Wire shape for `agent_resolve_question`. The answer is whatever the user
@@ -3028,52 +3015,22 @@ pub struct UserQuestionDecisionRequest {
 #[tauri::command]
 pub async fn agent_resolve_question(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
     decision: UserQuestionDecisionRequest,
 ) -> Result<(), String> {
-    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&decision.run_id) {
-        return remote::control(&app, decision.run_id.clone(), crate::pty_wire::ChatControl::Question { answer: decision.answer }).await.map(|_| ());
-    }
-    let runs = state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?;
-    match runs.get(&decision.run_id) {
-        Some(handle) => {
-            let sender = handle.pending_question.lock().unwrap().take();
-            if let Some(tx) = sender {
-                let _ = tx.send(decision.answer);
-                Ok(())
-            } else {
-                Err("No pending question for this run.".to_string())
-            }
-        }
-        None => Err(format!("No known run with id {}", decision.run_id)),
-    }
+    run_host::control(
+        &app,
+        &decision.run_id,
+        crate::pty_wire::ChatControl::Question { answer: decision.answer },
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
-pub async fn agent_abort_run(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
-    run_id: String,
-) -> Result<(), String> {
-    if !state.runs.lock().map_err(|_| "Agent state unavailable")?.contains_key(&run_id) {
-        return remote::control(&app, run_id.clone(), crate::pty_wire::ChatControl::Stop).await.map(|_| ());
-    }
-    let runs = state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?;
-    match runs.get(&run_id) {
-        // Just cancel the token: the run loop observes it and settles the
-        // run (aborted event, summary, status) so there is a single writer.
-        Some(handle) => {
-            handle.cancel.cancel();
-            Ok(())
-        }
-        None => Err(format!("No known run with id {run_id}")),
-    }
+pub async fn agent_abort_run(app: tauri::AppHandle, run_id: String) -> Result<(), String> {
+    run_host::control(&app, &run_id, crate::pty_wire::ChatControl::Stop)
+        .await
+        .map(|_| ())
 }
 
 /// Live status of a run in the supervisor map, or `None` if no run with this id
@@ -3092,14 +3049,8 @@ pub struct RunState {
 }
 
 #[tauri::command]
-pub async fn agent_run_status(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
-    run_id: String,
-) -> Result<RunState, String> {
-    let local = state.runs.lock().ok().and_then(|runs| runs.get(&run_id).map(|h| run_status_wire(&h.status).to_string()));
-    if local.is_some() { return Ok(RunState { status: local, from_seq: None }); }
-    remote::state(&app, &run_id).await
+pub async fn agent_run_status(app: tauri::AppHandle, run_id: String) -> Result<RunState, String> {
+    run_host::state(&app, &run_id).await
 }
 
 pub(crate) fn shutdown_observers() { background::shutdown(); }
@@ -3201,51 +3152,26 @@ pub async fn agent_run_origins(
 #[tauri::command]
 pub async fn agent_list_runs(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AgentSupervisorState>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<AgentRunSummary>, String> {
     let runs_dir = app_runs_dir(&app)?;
-    let live_statuses = state
-        .runs
-        .lock()
-        .map_err(|_| "Agent state is unavailable".to_string())?
-        .iter()
-        .filter(|(_, handle)| {
-            matches!(
-                handle.status,
-                AgentRunStatus::Queued
-                    | AgentRunStatus::Running
-                    | AgentRunStatus::WaitingForPermission
-                    | AgentRunStatus::WaitingForDiff
-                    | AgentRunStatus::Paused
-            )
-        })
-        .map(|(id, handle)| (id.clone(), handle.status))
-        .collect::<HashMap<_, _>>();
+    // Every active Run in either host, by the one definition of active.
+    let live_statuses = run_host::active_statuses(&app).await?;
     // Every summary.json is read before `limit` applies — off the runtime
     // thread, like the Delegate scan next door in lib.rs.
     let scan_dir = runs_dir.clone();
     let mut summaries =
         crate::blocking::run(move || list_summaries(&scan_dir, limit, offset)).await?;
-    let remote_app = app.clone();
-    let remote_statuses = crate::blocking::run(move || remote::statuses(&remote_app)).await?;
     for summary in &mut summaries {
-        if let Some(status) = remote_statuses.get(&summary.id) { summary.status = status.clone(); }
-        if let Some(status) = live_statuses.get(&summary.id) {
-            summary.status = run_status_wire(status).to_string();
-        }
-        if matches!(
-            summary.status.as_str(),
-            "running"
-                | "queued"
-                | "waiting"
-                | "waiting_for_permission"
-                | "waiting_for_diff"
-                | "paused"
-        ) && !live_statuses.contains_key(&summary.id) && !remote_statuses.contains_key(&summary.id)
-        {
-            summary.status = "cancelled".to_string();
+        match live_statuses.get(&summary.id) {
+            Some(status) => summary.status = status.clone(),
+            // A summary that still says active with no loop behind it in any
+            // host was left by a process that died: show it settled.
+            None if run_host::is_active_wire(&summary.status) => {
+                summary.status = "cancelled".to_string();
+            }
+            None => {}
         }
         // Same filler the Delegate board uses, so the two cannot drift.
         crate::delegate::fill_worktree_evidence(

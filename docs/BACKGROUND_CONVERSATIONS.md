@@ -12,13 +12,28 @@ The computer must remain running; this is not a remote execution service.
 
 ## Ownership and recovery
 
-- `agent/daemon.rs` implements the existing `RunSupervisor` seam. It admits one
-  active turn per conversation and retains that ownership through settlement.
-- `agent/remote.rs` subscribes before dispatch, forwards events to the existing
-  request/global channels, and replays a durable gap after a socket reconnect.
+- `agent/run_host.rs` is the one door: the app decides once whether a Run goes
+  to the daemon (`placement`), judges the failure budget before that decision,
+  and both hosts admit, spawn and back-stop a Run with the same code.
+  `agent/daemon.rs` implements the existing `RunSupervisor` seam over that
+  door; it admits one active turn per conversation and its `RunLease` releases
+  the handle at settlement, after the loop's own backstop has written.
+- `agent/remote.rs` is the door's ptyd adapter: it subscribes before dispatch,
+  forwards events to the existing request/global channels, replays a durable
+  gap after a socket reconnect, relays the daemon's coordination-journal moves
+  to the app's panels, and feeds the app's failure budget with the Run's
+  durable terminal event.
 - Every daemon event, including streamed text and observed tool activity, uses
-  the same monotonic transcript sequence. Reopening reads the existing transcript;
-  it does not resend the prompt or spawn another CLI.
+  the same monotonic transcript sequence: the loop's `emit`, the stream log and
+  the host's backstop share one counter, seeded by admission under the lock
+  that claimed the conversation. Reopening reads the existing transcript; it
+  does not resend the prompt or spawn another CLI. The one event that is never
+  on disk is the app's own `run_host_disconnected`, delivered one past the last
+  durable index when the socket is lost for good.
+- A daemon-hosted Run cannot start a persistent observer
+  (`run_command(notifyOnExit)`): nothing in ptyd can start a new reply when
+  the command exits, so the Tool refuses and says to use `background: true`
+  with `read_command_output` instead.
 - Status includes the starting sequence of the current turn, so the previous
   turn's completion cannot settle a newly accepted follow-up.
 - Stop and approval responses are sent to the run's actual owner. Approvals

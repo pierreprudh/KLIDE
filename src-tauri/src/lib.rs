@@ -1049,7 +1049,6 @@ pub fn run() {
             connectors::connectors_add_github,
             connectors::connectors_status,
             agent::agent_start_run,
-            agent::agent_submit_user_turn,
             agent::agent_resolve_permission,
             agent::agent_set_command_policy,
             agent::agent_resolve_diff,

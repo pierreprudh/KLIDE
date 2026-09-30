@@ -2030,13 +2030,20 @@ pub(crate) fn emit_coordination_changed(
     workspace_root: &str,
     outcome: &CoordinationCommandOutcome,
 ) {
-    use tauri::Emitter;
     let Some(line) = &outcome.appended else { return };
+    announce_coordination_change(app, workspace_root, line.seq);
+}
+
+/// The same announcement for a move made elsewhere — a Run hosted by
+/// `klide ptyd` relays its journal moves here, so a panel hears them the way
+/// it hears the app's own.
+pub(crate) fn announce_coordination_change(app: &tauri::AppHandle, workspace_root: &str, seq: u64) {
+    use tauri::Emitter;
     let _ = app.emit(
         COORDINATION_CHANGED_EVENT,
         CoordinationChanged {
             workspace_root: workspace_root.to_string(),
-            seq: line.seq,
+            seq,
         },
     );
 }
