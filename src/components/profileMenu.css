@@ -89,45 +89,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The ragged-right slot: the plan at rest, Log out in its place while the
-   pointer is on the account. Stacked in one grid cell so neither shifts the
-   row when they trade places. */
-.profile-account-end {
-  display: grid;
-  justify-items: end;
-  min-width: 52px;
+/* The plan at the row's ragged right. */
+.profile-account-plan {
   padding-right: 4px;
   font-size: 12px;
-}
-.profile-account-end > * {
-  grid-area: 1 / 1;
-  transition: opacity 120ms ease-out, color 120ms ease-out;
-}
-.profile-account-logout {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  font: inherit;
-  color: var(--fg-subtle);
-  cursor: pointer;
-  opacity: 0;
-}
-.profile-account-cli:hover .profile-account-logout,
-.profile-account-logout:focus-visible,
-.profile-account-logout[data-confirming] {
-  opacity: 1;
-}
-.profile-account-cli:hover .profile-account-end:has(.profile-account-logout) .profile-account-plan,
-.profile-account-end:has(.profile-account-logout:focus-visible) .profile-account-plan,
-.profile-account-end:has([data-confirming]) .profile-account-plan {
-  opacity: 0;
-}
-.profile-account-logout:hover {
-  color: var(--fg);
-}
-.profile-account-logout[data-confirming] {
-  color: var(--danger);
 }
 .profile-usage {
   display: grid;

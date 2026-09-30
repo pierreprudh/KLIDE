@@ -1,5 +1,5 @@
-// usage_snapshot / delegate_logout — how much of each subscription CLI's
-// allowance is spent (src-tauri/src/usage.rs), and signing one out.
+// usage_snapshot — how much of each subscription CLI's allowance is spent
+// (src-tauri/src/usage.rs).
 import { invoke } from "@tauri-apps/api/core";
 
 export type UsageWindow = {
@@ -22,10 +22,6 @@ export type ToolUsage = {
 
 export function usageSnapshot(): Promise<ToolUsage[]> {
   return invoke<ToolUsage[]>("usage_snapshot");
-}
-
-export function delegateLogout(provider: string): Promise<void> {
-  return invoke("delegate_logout", { provider });
 }
 
 /** "Resets 17:30" within a day, "Resets Mon 17:30" beyond. */
