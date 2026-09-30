@@ -61,7 +61,7 @@ export function humanTokens(n: number): string {
   return String(Math.round(n));
 }
 
-/** The severity a bar is drawn in: calm, then warning at 70, danger at 90. */
-export function usageTone(percent: number): "calm" | "warning" | "danger" {
-  return percent >= 90 ? "danger" : percent >= 70 ? "warning" : "calm";
+/** A bar stays in its CLI's colour until the window is nearly spent. */
+export function usageTone(percent: number): "calm" | "danger" {
+  return percent >= 90 ? "danger" : "calm";
 }

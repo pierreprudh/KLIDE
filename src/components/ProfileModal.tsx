@@ -170,63 +170,154 @@ function CliAccount({
   }
 
   const signedOut = !!usage?.error && /sign in/i.test(usage.error);
+  const [collapsed, setCollapsed] = useCollapsed(provider);
+  const stop = (event: React.SyntheticEvent) => event.stopPropagation();
   return (
-    <section aria-label={`${title} account`} className="profile-account-cli">
-      <div className="profile-account-menu-row">
+    <section aria-label={`${title} account`} className="profile-account-cli" data-provider={provider}>
+      {/* The whole row folds the usage into one line; its own controls keep
+          their clicks. */}
+      <div
+        className="profile-account-menu-row profile-account-head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(!collapsed)}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setCollapsed(!collapsed);
+          }
+        }}
+      >
         <ProviderLogo id={provider} size={16} />
-        <span className="profile-account-title">
-          {title}
-          {usage?.plan && <span className="profile-account-plan"> · {usage.plan}</span>}
-        </span>
-        <AccountControl provider={provider} title={title} connected={false} compact />
-        {logout && !signedOut && (
-          <button
-            type="button"
-            className="profile-account-logout"
-            data-confirming={confirming || undefined}
-            disabled={busy}
-            onClick={() => void signOut()}
-            aria-label={confirming ? `Confirm logging out of ${title}` : `Log out of ${title}`}
-          >
-            {busy ? "Logging out…" : confirming ? "Confirm" : "Log out"}
-          </button>
+        <span className="profile-account-title">{title}</span>
+        {collapsed ? (
+          <UsageLines usage={usage} loading={loading} collapsed />
+        ) : (
+          <span className="profile-account-controls" onClick={stop} onKeyDown={stop}>
+            <AccountControl provider={provider} title={title} connected={false} compact />
+          </span>
         )}
+        {/* One slot at the ragged right: the plan, and Log out in its place
+            while the pointer is on the account. */}
+        <span className="profile-account-end">
+          {usage?.plan && <span className="profile-account-plan">{usage.plan}</span>}
+          {logout && !signedOut && (
+            <button
+              type="button"
+              className="profile-account-logout"
+              data-confirming={confirming || undefined}
+              disabled={busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                void signOut();
+              }}
+              onKeyDown={stop}
+              aria-label={confirming ? `Confirm logging out of ${title}` : `Log out of ${title}`}
+            >
+              {busy ? "Logging out…" : confirming ? "Confirm" : "Log out"}
+            </button>
+          )}
+        </span>
       </div>
-      <UsageLines usage={usage} loading={loading} />
+      {!collapsed && <UsageLines usage={usage} loading={loading} collapsed={false} />}
     </section>
   );
 }
 
-function UsageLines({ usage, loading }: { usage: ToolUsage | undefined; loading: boolean }) {
+const COLLAPSED_KEY = "klide.accountMenu.collapsed";
+
+/** Which accounts are folded to one line — remembered per viewer. */
+function useCollapsed(provider: string): [boolean, (next: boolean) => void] {
+  const read = (): string[] => {
+    try {
+      return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    } catch {
+      return [];
+    }
+  };
+  const [collapsed, setState] = useState(() => read().includes(provider));
+  return [
+    collapsed,
+    (next) => {
+      setState(next);
+      try {
+        const others = read().filter((p) => p !== provider);
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next ? [...others, provider] : others));
+      } catch {
+        /* storage unavailable — the fold just isn't remembered */
+      }
+    },
+  ];
+}
+
+function UsageLines({
+  usage,
+  loading,
+  collapsed,
+}: {
+  usage: ToolUsage | undefined;
+  loading: boolean;
+  collapsed: boolean;
+}) {
   if (loading) return <div className="profile-usage-note">Reading usage…</div>;
   if (!usage) return null;
   if (usage.error) return <div className="profile-usage-note">{usage.error}</div>;
+  const spend = usage.spend
+    ? `$${usage.spend.costUsd.toFixed(2)} · ${humanTokens(usage.spend.tokens)} tokens`
+    : null;
+  if (collapsed) {
+    // Folded into the account's own row: every window as a short bar and its
+    // figure, side by side.
+    return (
+      <div className="profile-usage-compact">
+        {usage.windows.map((w) => {
+          const percent = clamp(w.percent);
+          return (
+            <span key={w.label} className="profile-usage-compact-item" title={`${w.label} · ${resetLabel(w)}`}>
+              <Bar percent={percent} />
+              <span className="profile-usage-value">{Math.round(percent)}%</span>
+            </span>
+          );
+        })}
+        {spend && <span className="profile-usage-spend">{spend}</span>}
+      </div>
+    );
+  }
   return (
     <div className="profile-usage">
       {usage.windows.map((w) => {
-        const percent = Math.max(0, Math.min(100, w.percent));
+        const percent = clamp(w.percent);
         return (
           <div key={w.label} className="profile-usage-line" title={resetLabel(w)}>
             <span className="profile-usage-label">{w.label}</span>
-            <span className="profile-usage-track" aria-hidden>
-              <span className="profile-usage-fill" data-tone={usageTone(percent)} style={{ width: `${percent}%` }} />
-            </span>
+            <Bar percent={percent} />
             <span className="profile-usage-value">{Math.round(percent)}%</span>
             <span className="profile-usage-reset">{resetShort(w)}</span>
           </div>
         );
       })}
-      {usage.spend && (
+      {spend && (
         <div className="profile-usage-line">
           <span className="profile-usage-label">This week</span>
-          <span className="profile-usage-spend">
-            ${usage.spend.costUsd.toFixed(2)} · {humanTokens(usage.spend.tokens)} tokens
-          </span>
+          <span className="profile-usage-spend">{spend}</span>
         </div>
       )}
     </div>
   );
 }
+
+/** A thin bar in the CLI's own colour, red once the window is nearly spent. */
+function Bar({ percent }: { percent: number }) {
+  return (
+    <span className="profile-usage-track" aria-hidden>
+      <span className="profile-usage-fill" data-tone={usageTone(percent)} style={{ width: `${percent}%` }} />
+    </span>
+  );
+}
+
+const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
 function Avatar({ name, avatarUrl, size }: { name: string; avatarUrl: string; size: number }) {
   const initials = initialsOf(name);

@@ -8,8 +8,8 @@ describe("usage presentation", () => {
   it("marks a reset already in the past as in progress", () => {
     expect(resetLabel({ label: "Weekly", percent: 40, resetsAtMs: 1_000, seenAtMs: null }, 2_000)).toBe("Resetting…");
   });
-  it("turns severe at the same thresholds as the island", () => {
-    expect([usageTone(69), usageTone(70), usageTone(90)]).toEqual(["calm", "warning", "danger"]);
+  it("stays in the CLI's colour until the window is nearly spent", () => {
+    expect([usageTone(72), usageTone(89), usageTone(90)]).toEqual(["calm", "calm", "danger"]);
   });
   it("shortens token counts", () => {
     expect([humanTokens(4_044_730), humanTokens(812_400), humanTokens(90)]).toEqual(["4.0M", "812K", "90"]);
