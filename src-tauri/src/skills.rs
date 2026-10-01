@@ -216,7 +216,9 @@ pub(crate) fn scan_filesystem_skills(
         ),
         (
             "home-claude",
-            std::path::PathBuf::from(format!("{home}/.claude/skills")),
+            crate::delegate::ClaudeCode
+                .skills_dir(&crate::delegate::ProcessEnv)
+                .unwrap_or_default(),
         ),
     ];
 
@@ -326,13 +328,9 @@ pub(crate) async fn uninstall_skill(name: String) -> Result<SkillCommandResult, 
     }
     validate_skill_folder_name(&trimmed)?;
     let trimmed_skill_name = trimmed.clone();
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| "Could not resolve home directory.".to_string())?;
-    let target = home
-        .join(".claude")
-        .join("skills")
+    let target = crate::delegate::ClaudeCode
+        .skills_dir(&crate::delegate::ProcessEnv)
+        .ok_or_else(|| "Could not resolve home directory.".to_string())?
         .join(&trimmed_skill_name);
     if !target.exists() {
         return Ok(SkillCommandResult {

@@ -15,35 +15,12 @@ use crate::adapters::forwardable_image_media_type;
 use crate::providers::AiChatResponse;
 use crate::workspace;
 
-/// The handful of provider quirks the run loop's behavior depends on, gathered
-/// in one place so the loop asks about a capability instead of comparing
-/// provider names inline. Keyed on the provider id; add a quirk here rather
-/// than threading another `provider == "..."` branch through the loop.
-pub(super) struct ProviderCaps {
-    /// Replay continuation history as structured tool messages (assistant
-    /// `tool_calls` + `role:"tool"`). Ollama's native `/api/chat` is the lone
-    /// exception: the structured shape makes those models imitate fake tool
-    /// text, so it gets the text-fold workaround instead. Every OpenAI-wire
-    /// provider (including Ollama over `/v1`) gets the faithful structured replay.
-    pub(super) structured_replay: bool,
-    /// Keep Chat-mode context minimal — skip injecting the project TODO list.
-    /// Small local backends (MLX, Ollama) made a bare "hello" feel broken when
-    /// handed project metadata, so their chat turns stay tiny.
-    pub(super) minimal_chat_context: bool,
-    /// MLX prefix caches can reuse history only up to the first changed token.
-    /// Keep old TODO snapshots stable and append changes for this provider.
-    pub(super) append_todo_updates: bool,
-}
-
-impl ProviderCaps {
-    pub(super) fn for_provider(provider: &str) -> Self {
-        Self {
-            structured_replay: provider != "ollama",
-            minimal_chat_context: matches!(provider, "mlx" | "ollama"),
-            append_todo_updates: provider == "mlx",
-        }
-    }
-}
+/// The provider quirks the run loop's behaviour depends on. They live on the
+/// registry row (`providers::ProviderEntry::caps`) — the loop asks
+/// `ProviderCaps::for_provider(id)` about a capability and never compares
+/// provider names inline. Add a quirk to the row, not a `provider == "..."`
+/// branch here.
+pub(super) use crate::providers::ProviderCaps;
 
 
 // ── Attachment clamp ──

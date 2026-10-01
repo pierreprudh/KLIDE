@@ -138,6 +138,7 @@ impl Matcher {
 /// be 32k or 256k) and nothing here should pretend otherwise.
 struct Family {
     /// A label for the row, so a test can name it.
+    #[cfg(test)]
     name: &'static str,
     matchers: &'static [Matcher],
     window: Option<usize>,
@@ -153,6 +154,7 @@ const FAMILIES: &[Family] = &[
     Family {
         // The 3.5 Haiku line is Anthropic's one text-only chat model; sending
         // it an image 400s the whole turn.
+        #[cfg(test)]
         name: "claude-3-5-haiku",
         matchers: &[Matcher::Contains("claude-3-5-haiku")],
         window: Some(200_000),
@@ -161,6 +163,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Anthropic),
     },
     Family {
+        #[cfg(test)]
         name: "claude",
         matchers: &[Matcher::Prefix("claude-")],
         window: Some(200_000),
@@ -170,6 +173,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── OpenAI ──
     Family {
+        #[cfg(test)]
         name: "gpt-5",
         matchers: &[Matcher::Prefix("gpt-5")],
         window: Some(272_000),
@@ -178,6 +182,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::OpenAi),
     },
     Family {
+        #[cfg(test)]
         name: "gpt-4-1",
         matchers: &[Matcher::Prefix("gpt-4-1")],
         window: Some(1_000_000),
@@ -186,6 +191,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::OpenAi),
     },
     Family {
+        #[cfg(test)]
         name: "gpt-4o",
         matchers: &[
             Matcher::Prefix("gpt-4o"),
@@ -199,6 +205,7 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         // The o-series' text-only small builds (o4-mini *is* multimodal).
+        #[cfg(test)]
         name: "o-series-text-only",
         matchers: &[
             Matcher::Prefix("o1-mini"),
@@ -211,6 +218,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::OpenAi),
     },
     Family {
+        #[cfg(test)]
         name: "o-series",
         matchers: &[
             Matcher::Prefix("o1"),
@@ -224,6 +232,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::OpenAi),
     },
     Family {
+        #[cfg(test)]
         name: "gpt",
         matchers: &[Matcher::Prefix("gpt-"), Matcher::Prefix("codex")],
         window: None,
@@ -233,6 +242,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── Google ──
     Family {
+        #[cfg(test)]
         name: "gemini",
         matchers: &[Matcher::Prefix("gemini")],
         window: Some(1_000_000),
@@ -241,6 +251,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Google),
     },
     Family {
+        #[cfg(test)]
         name: "gemma",
         matchers: &[Matcher::Prefix("gemma")],
         window: Some(128_000),
@@ -250,6 +261,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── xAI ──
     Family {
+        #[cfg(test)]
         name: "grok-4",
         matchers: &[Matcher::Prefix("grok-4")],
         window: Some(256_000),
@@ -258,6 +270,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Xai),
     },
     Family {
+        #[cfg(test)]
         name: "grok",
         matchers: &[Matcher::Prefix("grok")],
         window: Some(256_000),
@@ -267,6 +280,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── Mistral ──
     Family {
+        #[cfg(test)]
         name: "pixtral",
         matchers: &[Matcher::Prefix("pixtral")],
         window: Some(128_000),
@@ -275,6 +289,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Mistral),
     },
     Family {
+        #[cfg(test)]
         name: "mistral-large",
         matchers: &[Matcher::Contains("mistral-large")],
         window: Some(128_000),
@@ -283,6 +298,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Mistral),
     },
     Family {
+        #[cfg(test)]
         name: "mistral",
         matchers: &[
             Matcher::Contains("mistral"),
@@ -301,6 +317,7 @@ const FAMILIES: &[Family] = &[
     Family {
         // Hosted ids (`deepseek-chat` / `deepseek-reasoner`) and the Ollama
         // pulls (`deepseek-r1:8b`) alike: the hosted API serves 128k.
+        #[cfg(test)]
         name: "deepseek",
         matchers: &[Matcher::Contains("deepseek")],
         window: Some(128_000),
@@ -311,6 +328,7 @@ const FAMILIES: &[Family] = &[
     // ── Alibaba ──
     Family {
         // Qwen2-VL / Qwen2.5-VL and friends.
+        #[cfg(test)]
         name: "qwen-vl",
         matchers: &[
             Matcher::Contains("qwen2-vl"),
@@ -323,6 +341,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Qwen),
     },
     Family {
+        #[cfg(test)]
         name: "qwen",
         matchers: &[Matcher::Contains("qwen")],
         window: None,
@@ -333,6 +352,7 @@ const FAMILIES: &[Family] = &[
     // ── Meta ──
     Family {
         // Llama 3.2's vision builds are the multimodal ones.
+        #[cfg(test)]
         name: "llama-3-2",
         matchers: &[Matcher::Contains("llama-3-2")],
         window: Some(128_000),
@@ -341,6 +361,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Meta),
     },
     Family {
+        #[cfg(test)]
         name: "llama",
         matchers: &[Matcher::Contains("llama")],
         window: Some(128_000),
@@ -350,6 +371,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── Liquid ──
     Family {
+        #[cfg(test)]
         name: "lfm",
         matchers: &[Matcher::Prefix("lfm"), Matcher::Contains("liquid")],
         window: Some(128_000),
@@ -359,6 +381,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── Microsoft ──
     Family {
+        #[cfg(test)]
         name: "phi",
         matchers: &[Matcher::Prefix("phi")],
         window: None,
@@ -368,6 +391,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── MiniMax / Moonshot / Z.ai / Sakana ──
     Family {
+        #[cfg(test)]
         name: "minimax",
         matchers: &[Matcher::Contains("minimax")],
         window: None,
@@ -376,6 +400,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::MiniMax),
     },
     Family {
+        #[cfg(test)]
         name: "kimi",
         matchers: &[Matcher::Contains("kimi"), Matcher::Contains("moonshot")],
         window: None,
@@ -384,6 +409,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Moonshot),
     },
     Family {
+        #[cfg(test)]
         name: "glm",
         matchers: &[Matcher::Prefix("glm")],
         window: None,
@@ -392,6 +418,7 @@ const FAMILIES: &[Family] = &[
         maker: Some(Maker::Zai),
     },
     Family {
+        #[cfg(test)]
         name: "sakana",
         matchers: &[Matcher::Contains("sakana")],
         window: None,
@@ -401,6 +428,7 @@ const FAMILIES: &[Family] = &[
     },
     // ── Multimodal families with no maker mark ──
     Family {
+        #[cfg(test)]
         name: "llava",
         matchers: &[Matcher::Prefix("llava")],
         window: None,
@@ -410,6 +438,7 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         // Any explicit "-vision" / "-vl" build the rows above did not name.
+        #[cfg(test)]
         name: "vision-build",
         matchers: &[
             Matcher::Contains("vision"),
@@ -1057,7 +1086,8 @@ mod tests {
         // pricing.rs used to list claude-code | codex | opencode and miss omp;
         // the class now comes from the registry's subscription flag, which
         // carries all four.
-        for provider in ["claude-code", "codex", "opencode", "omp"] {
+        for delegate in crate::delegate::ALL {
+            let provider = delegate.id();
             assert_eq!(
                 price_class(provider, "claude-sonnet-4-6"),
                 PriceClass::Subscription,

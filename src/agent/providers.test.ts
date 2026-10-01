@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_PROVIDERS,
+  AUTO_PROVIDER,
+  CLI_DEFAULT_MODEL,
   DEFAULT_MODELS,
   PROVIDER_CATALOG,
   PROVIDER_GROUPS,
@@ -13,6 +15,7 @@ import {
   providerShortName,
   selectableProviders,
 } from "./providers";
+import { PROVIDER_CATALOG_ROWS, providerRow } from "./providerCatalog";
 import { DELEGATE_IDS } from "../delegates";
 import { SOURCE_LABEL } from "../runs";
 
@@ -27,7 +30,7 @@ describe("Provider catalog", () => {
   it("offers DeepSeek as a hosted API Provider, not a delegate", () => {
     expect(PROVIDER_CATALOG.find((provider) => provider.id === "deepseek")).toMatchObject({
       name: "DeepSeek",
-      group: "api",
+      group: "hosted",
       runtime: "hosted",
       available: true,
       defaultModel: "deepseek-chat",
@@ -44,7 +47,9 @@ describe("Provider catalog", () => {
 
     expect(new Set(ids).size).toBe(ids.length);
     expect(ALL_PROVIDERS.map((provider) => provider.id)).toEqual(ids);
-    expect(groupedIds).toEqual(ids);
+    // Grouping loses no row and invents none. The picker orders its groups
+    // (Local, Subscription, API) independently of the registry's row order.
+    expect([...groupedIds].sort()).toEqual([...ids].sort());
     for (const provider of PROVIDER_CATALOG) {
       expect(DEFAULT_MODELS[provider.id]).toBe(provider.defaultModel);
       expect(defaultModelForProvider(provider.id)).toBe(provider.defaultModel);
@@ -56,8 +61,12 @@ describe("Provider catalog", () => {
 
     expect(selectable.every((provider) => provider.available)).toBe(true);
     expect(selectable.every((provider) => !isDelegateProvider(provider.id))).toBe(true);
-    expect(selectable.some((provider) => provider.id === "llamacpp")).toBe(false);
-    expect(selectable.some((provider) => provider.id === "gemini")).toBe(false);
+    // The placeholder rows an older catalog carried as `available: false`
+    // (`llamacpp`, `vllm`, `gemini`) are gone with the hand-kept table: the
+    // registry publishes only what Klide can actually dispatch to.
+    expect(selectable.map((provider) => provider.id)).toEqual(
+      PROVIDER_CATALOG.filter((p) => p.runtime !== "delegate").map((p) => p.id),
+    );
   });
 
   it("classifies only app-managed local servers as managed local", () => {
@@ -100,7 +109,6 @@ describe("one answer per provider name", () => {
   it("shortens only where the catalog says to", () => {
     expect(providerShortName("mlx")).toBe("MLX");
     expect(providerName("mlx")).toBe("MLX (Apple Silicon)");
-    expect(providerShortName("gemini")).toBe("Gemini");
     expect(providerShortName("xai")).toBe("xAI");
   });
 
@@ -116,5 +124,38 @@ describe("one answer per provider name", () => {
     expect(isKnownProvider("anthropic")).toBe(true);
     expect(isKnownProvider("custom:my-box")).toBe(false);
     expect(isKnownProvider("retired-provider")).toBe(false);
+  });
+});
+
+describe("the catalog is derived from the Rust registry", () => {
+  it("restates no fact the published row did not supply", () => {
+    // Every builtin picker row is one published registry row, transformed:
+    // name, short name, group and default model are read off it, never typed
+    // here. The only additions are `auto` (the router) and the runtime word,
+    // which is a function of two row facts (group + isLocalServer).
+    const builtin = PROVIDER_CATALOG.filter((p) => p.id !== AUTO_PROVIDER);
+    expect(builtin.map((p) => p.id)).toEqual(PROVIDER_CATALOG_ROWS.map((row) => row.id));
+    for (const p of builtin) {
+      const row = providerRow(p.id);
+      expect(row, p.id).toBeDefined();
+      expect(p.name).toBe(row!.label);
+      expect(p.shortName).toBe(row!.shortLabel ?? undefined);
+      expect(p.group).toBe(row!.group);
+      expect(p.available).toBe(true);
+      if (row!.group === "subscription") {
+        expect(p.runtime).toBe("delegate");
+        expect(p.defaultModel).toBe(CLI_DEFAULT_MODEL);
+      } else {
+        expect(p.defaultModel).toBe(row!.defaultModel);
+        expect(p.runtime).toBe(
+          row!.group === "hosted" ? "hosted" : row!.isLocalServer ? "managed-local" : "external-local",
+        );
+      }
+    }
+  });
+
+  it("keeps the router as the one row the registry does not publish", () => {
+    expect(PROVIDER_CATALOG[0]).toMatchObject({ id: AUTO_PROVIDER, group: "routed", runtime: "router" });
+    expect(providerRow(AUTO_PROVIDER)).toBeUndefined();
   });
 });

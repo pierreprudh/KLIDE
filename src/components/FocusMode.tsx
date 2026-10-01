@@ -110,6 +110,11 @@ import { usePresence } from "../hooks/usePresence";
 
 type Props = {
   workspaceRoot: string | null;
+  /** Text to put in the start screen's composer — a `klide://new` link's
+   *  prompt. Set, never sent; `id` changes per seed so the same text twice
+   *  still lands. Cleared through `onComposerSeedConsumed` once it's in. */
+  composerSeed?: { id: number; text: string } | null;
+  onComposerSeedConsumed?: () => void;
   branch: string | null;
   gitChangeCount: number;
   gitRefreshToken: string;
@@ -185,6 +190,8 @@ const iconProps = {
 
 export function FocusMode({
   workspaceRoot,
+  composerSeed = null,
+  onComposerSeedConsumed,
   branch,
   gitChangeCount,
   gitRefreshToken,
@@ -277,8 +284,12 @@ export function FocusMode({
       onAutoApproveCommandsChange,
       onOpenSettingsSection,
       skills,
+      seed: composerSeed,
+      onSeedConsumed: onComposerSeedConsumed,
     }),
     [
+      composerSeed,
+      onComposerSeedConsumed,
       workspaceRoot,
       provider,
       onProviderChange,
@@ -1481,6 +1492,9 @@ export type FocusSubmit = (
  *  dispatch controls bundled leaves FocusHome's boundary readable. */
 export type FocusComposerControls = {
   workspaceRoot: string | null;
+  /** A draft handed in from outside (a `klide://new` link), applied once. */
+  seed?: { id: number; text: string } | null;
+  onSeedConsumed?: () => void;
   provider: ProviderId;
   onProviderChange: (provider: ProviderId) => void;
   model: string;
@@ -1533,8 +1547,24 @@ function FocusComposer({
     onAutoApproveCommandsChange,
     onOpenSettingsSection,
     skills,
+    seed,
+    onSeedConsumed,
   } = controls;
   const [draft, setDraft] = useState("");
+  // A link's prompt replaces the draft and waits, cursor at the end, for you
+  // to read it and press Enter — a link can put words here but never send them.
+  useEffect(() => {
+    if (!seed) return;
+    setDraft(seed.text);
+    onSeedConsumed?.();
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.id]);
   const [artifactOutput, setArtifactOutput] = useState<ArtifactOutput | null>(null);
   const [focused, setFocused] = useState(false);
   // Photos and documents staged on the first turn. They ride the handoff into

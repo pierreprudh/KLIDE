@@ -13,17 +13,21 @@
 // read as 23% of 128k. Everything here is values in, values out, so the rule
 // is testable and the same for the Focus composer, Settings and the panel.
 
-/** Only Ollama exposes a per-request window (`num_ctx`). Every other
- *  provider's window is a fixed property of the model: a hosted API cannot be
- *  asked for a smaller one, and a self-hosted server owns its own. */
+import { providerHasNumCtx } from "../../agent/providerCatalog";
+
+/** Whether the Provider exposes a per-request window (`num_ctx`) — the
+ *  registry row says (`hasNumCtx`; today only Ollama). Every other provider's
+ *  window is a fixed property of the model: a hosted API cannot be asked for a
+ *  smaller one, and a self-hosted server owns its own. */
 export function providerHasContextWindowSetting(provider: string): boolean {
-  return provider === "ollama";
+  return providerHasNumCtx(provider);
 }
 
 /** Mirrors `adapters::working_num_ctx` for the moments before a turn has
  *  reported the real number: the window Klide *will* ask for, given the
  *  estimated prompt. Flat default, grow only for large conversations, never
- *  past the ceiling. Keep in step with the Rust constants. */
+ *  past the ceiling. Pinned to `adapters::WORKING_DEFAULT` by the Rust test
+ *  `frontend_working_window_default_matches`. */
 export const WORKING_WINDOW_DEFAULT = 32_768;
 const WORKING_WINDOW_HEADROOM = 4_096;
 

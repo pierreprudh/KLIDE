@@ -9,6 +9,9 @@ import {
   modelReflectionLevels,
   modelSupportsReflection,
   readProviderKeyStatus,
+  readModelCapabilities,
+  readModelPricing,
+  readProviderContextWindow,
   startLocalProvider,
 } from "./aiProviders";
 
@@ -56,6 +59,25 @@ describe("AI Provider IPC Adapter", () => {
       provider: "codex",
       model: "gpt-6-astra",
     });
+  });
+
+  it("keeps capability inspection passive when requested and preserves unknown windows", async () => {
+    const caps = { contextWindow: null, supportsTools: true, supportsVision: false,
+      reasoningLevels: [], priceClass: { kind: "unknown" }, maker: null };
+    invokeMock.mockResolvedValueOnce(caps).mockResolvedValueOnce(null);
+    await expect(readModelCapabilities("ollama", "unknown", false)).resolves.toEqual(caps);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "ai_model_capabilities", {
+      provider: "ollama", model: "unknown", allowActivationProbe: false,
+    });
+    await expect(readProviderContextWindow("ollama", "unknown")).resolves.toBeNull();
+  });
+
+  it("includes the provider when asking the price of the same model", async () => {
+    invokeMock.mockResolvedValueOnce(null).mockResolvedValueOnce({ inputPerMillion: 3, outputPerMillion: 15 });
+    await expect(readModelPricing("ollama", "claude-sonnet-4-6")).resolves.toBeNull();
+    await expect(readModelPricing("anthropic", "claude-sonnet-4-6")).resolves.toEqual({ inputPerMillion: 3, outputPerMillion: 15 });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "ai_model_pricing", { provider: "ollama", model: "claude-sonnet-4-6" });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "ai_model_pricing", { provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
   it("preserves optional local-server concurrency on the wire", async () => {

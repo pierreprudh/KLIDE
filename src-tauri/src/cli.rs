@@ -7,16 +7,10 @@
 use crate::{custom_cli, delegate, providers};
 use std::path::PathBuf;
 
-/// Resolve the user's home directory (HOME, or USERPROFILE on Windows).
+/// Resolve the user's home directory (HOME, or USERPROFILE on Windows) —
+/// the process's, through the one resolver in `delegate::home`.
 pub(crate) fn home_dir_path() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("HOME") {
-        return Some(PathBuf::from(home));
-    }
-    if cfg!(windows) {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    } else {
-        None
-    }
+    delegate::home_dir(&delegate::ProcessEnv)
 }
 
 pub(crate) fn shell_one_line(cmd: &str, arg: &str) -> Option<String> {
@@ -194,7 +188,7 @@ pub(crate) fn subscription_status(provider: String) -> Result<AiConnectionStatus
         .subscription
         .as_ref()
         .ok_or_else(|| format!("Provider \"{provider}\" is not a subscription CLI"))?;
-    let resolved = resolve_command(spec.cmd);
+    let resolved = resolve_command(spec.cmd());
     let command_path = resolved.as_ref().ok().cloned();
     let installed = resolved.is_ok();
 
@@ -207,14 +201,14 @@ pub(crate) fn subscription_status(provider: String) -> Result<AiConnectionStatus
             provider,
             installed: false,
             connected: false,
-            detail: format!("{} CLI is not installed or not on PATH", spec.cmd),
+            detail: format!("{} CLI is not installed or not on PATH", spec.cmd()),
             command_path: None,
             login_options,
         });
     }
 
     let (connected, detail) = match adapter {
-        Some(d) => d.check_auth(command_path.as_deref().unwrap_or(spec.cmd))?,
+        Some(d) => d.check_auth(command_path.as_deref().unwrap_or(spec.cmd()))?,
         None => (false, "Unknown provider".to_string()),
     };
 

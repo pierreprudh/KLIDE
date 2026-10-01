@@ -72,7 +72,8 @@ import {
   providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
-import { isDelegateId } from "../delegates";
+import { DELEGATE_IDS, isDelegateId } from "../delegates";
+import { providerCaps } from "../agent/providerCatalog";
 import {
   isCustomProvider,
   refreshCustomProviders,
@@ -121,7 +122,7 @@ import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
 import { conversationMark } from "../modelIdentity";
-import { buildSystemPrompt } from "./ai/system-prompt";
+import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
@@ -580,7 +581,7 @@ function switchModelForProvider(id: ProviderId): string {
 (() => {
   const FLAG = "klide.model.delegate-default-migrated-v2";
   if (localStorage.getItem(FLAG)) return;
-  const delegates = ["claude-code", "codex", "opencode", "omp"];
+  const delegates: readonly string[] = DELEGATE_IDS;
   for (const id of delegates) {
     if (localStorage.getItem(`klide.model.${id}`)) {
       localStorage.setItem(`klide.model.${id}`, CLI_DEFAULT_MODEL);
@@ -1832,12 +1833,8 @@ export function AiPanel({
     !providerDelegatesWork && modelSupportsTools && effectiveMode !== "chat";
   const systemPromptForDraft = useMemo(() => {
     let prompt: string;
-    if (effectiveMode === "chat" && (provider === "mlx" || provider === "ollama")) {
-      prompt = `You are Kit, Klide's coding assistant — a calm, warm pair-programmer. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation. If asked who you are, you're Kit; never claim to be Claude, GPT, or any other product.
-
-If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
-
-Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`;
+    if (effectiveMode === "chat" && providerCaps(provider).minimalChatContext) {
+      prompt = MINIMAL_CHAT_SYSTEM_PROMPT;
     } else {
       prompt = buildSystemPrompt(
         workspaceRoot,
@@ -3548,12 +3545,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     try {
       const toolsAvailable = turn.modelSupportsTools;
       const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
-      let systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
-        ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
-
-If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
-
-Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
+      // The same bare prompt the draft estimate used, chosen by the row's
+      // `minimalChatContext` — not by naming the two local providers twice.
+      let systemPrompt = turn.mode === "chat" && providerCaps(turn.provider).minimalChatContext
+        ? MINIMAL_CHAT_SYSTEM_PROMPT
         : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
       // Subagent turn: append the role specialisation to the base prompt.
       const subagentDef = turn.subagent ? resolveSubagent(turn.subagent) : undefined;
