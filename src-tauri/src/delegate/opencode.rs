@@ -244,6 +244,7 @@ impl Delegate for OpenCode {
         };
         let part = value.get("part");
         match value.get("type").and_then(|v| v.as_str()) {
+            Some("error") => vec![StreamItem::Error(opencode_error(value.get("error")))],
             Some("text") => {
                 let Some(part) = part else { return Vec::new() };
                 let text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
@@ -650,13 +651,23 @@ impl super::chat_server::ChatServer for OpenCodeServer {
             return Vec::new();
         }
         // Everything else must belong to this turn's session.
-        if self.session.is_none() || str_at(&props, "sessionID") != self.session {
+        let event_session = str_at(&props, "sessionID")
+            .or_else(|| props.get("info").and_then(|info| str_at(info, "sessionID")))
+            .or_else(|| props.get("part").and_then(|part| str_at(part, "sessionID")));
+        if self.session.is_none() || event_session != self.session {
             return Vec::new();
         }
         match kind {
+            "session.error" => {
+                self.settled = true;
+                vec![StreamItem::Error(opencode_error(props.get("error")))]
+            }
             "message.updated" => {
                 let info = props.get("info").cloned().unwrap_or_default();
                 if str_at(&info, "role").as_deref() == Some("assistant") {
+                    if let Some(error) = info.get("error").filter(|e| !e.is_null()) {
+                        return vec![StreamItem::Error(opencode_error(Some(error)))];
+                    }
                     if let Some(id) = str_at(&info, "id") {
                         self.assistant_messages.insert(id);
                     }
@@ -726,6 +737,14 @@ impl super::chat_server::ChatServer for OpenCodeServer {
     fn settled(&self) -> bool {
         self.settled
     }
+}
+
+fn opencode_error(error: Option<&serde_json::Value>) -> String {
+    error.and_then(|e| e.pointer("/data/message").or_else(|| e.get("message")).or(Some(e)))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("OpenCode reported a provider error without details")
+        .to_string()
 }
 
 struct OpenCodeRunParser {
@@ -1368,5 +1387,17 @@ mod tests {
         assert_eq!(got, vec![StreamItem::TextPart { id: "p".into(), text: "again".into() }]);
         assert_eq!(server.listening_url("opencode server listening on http://127.0.0.1:4096"), Some("http://127.0.0.1:4096".into()));
         assert_eq!(server.listening_url("listening on http://0.0.0.0:4096"), None);
+    }
+
+    #[test]
+    fn provider_errors_survive_stdout_and_server_streams() {
+        use super::super::chat_server::ChatServer;
+        let error = serde_json::json!({"name":"APIError","data":{"message":"This Go model requires Global regions.","isRetryable":false}});
+        let expected = vec![StreamItem::Error("This Go model requires Global regions.".into())];
+        assert_eq!(OpenCode.parse_stream_line(&serde_json::json!({"type":"error","error":error}).to_string()), expected);
+        let mut server = OpenCodeServer::new(Some("ses_A"));
+        assert!(server.feed(&serde_json::json!({"type":"session.error","properties":{"sessionID":"ses_other","error":error}}).to_string()).is_empty());
+        assert_eq!(server.feed(&serde_json::json!({"type":"session.error","properties":{"sessionID":"ses_A","error":error}}).to_string()), expected);
+        assert_eq!(server.feed(&serde_json::json!({"type":"message.updated","properties":{"info":{"sessionID":"ses_A","id":"m","role":"assistant","error":error}}}).to_string()), expected);
     }
 }
