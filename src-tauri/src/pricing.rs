@@ -62,8 +62,9 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     {
         return None;
     }
-    // Subscription CLIs — the user already paid.
-    if m == "claude-code" || m == "codex" || m == "opencode" {
+    // A Delegate CLI — the user pays its vendor (or brings their own keys,
+    // omp's case); Klide computes no per-token cost for any of them.
+    if crate::delegate::ALL.iter().any(|d| d.id() == m) {
         return None;
     }
     // OpenRouter passthrough — the underlying model price isn't in the id.
@@ -205,9 +206,12 @@ mod tests {
 
     #[test]
     fn subscription_clis_are_free() {
-        for m in ["claude-code", "codex", "opencode"] {
-            assert_eq!(pricing_for_model(m), None);
-            assert_eq!(cost_for_run(m, 100, 100), None);
+        // Every Delegate, from the registry — omp used to be missing here
+        // because the list was spelled by hand.
+        for d in crate::delegate::ALL {
+            let m = d.id();
+            assert_eq!(pricing_for_model(m), None, "{m}");
+            assert_eq!(cost_for_run(m, 100, 100), None, "{m}");
         }
     }
 

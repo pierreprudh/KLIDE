@@ -156,16 +156,17 @@ pub async fn cli_commands(adapter: &dyn Delegate, cwd: &str) -> Result<CliComman
 ///
 /// Top-level scalars only, keyed exactly as found. A setting the CLI stores
 /// under another name simply has no current value; nothing here maps names.
-pub fn claude_code_settings(home: &str, cwd: &str) -> HashMap<String, serde_json::Value> {
+pub fn claude_code_settings(env: &dyn super::Env, cwd: &str) -> HashMap<String, serde_json::Value> {
     let cwd = super::normalize_path(cwd);
+    let adapter = super::ClaudeCode;
     let files = [
-        format!("{home}/.claude.json"),
-        format!("{home}/.claude/settings.json"),
-        format!("{cwd}/.claude/settings.json"),
-        format!("{cwd}/.claude/settings.local.json"),
+        adapter.user_state_file(env),
+        adapter.config_file(env),
+        Some(std::path::PathBuf::from(format!("{cwd}/.claude/settings.json"))),
+        Some(std::path::PathBuf::from(format!("{cwd}/.claude/settings.local.json"))),
     ];
     let mut out = HashMap::new();
-    for file in files {
+    for file in files.into_iter().flatten() {
         let Ok(text) = std::fs::read_to_string(&file) else { continue };
         let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
         for (key, value) in map {
@@ -221,7 +222,7 @@ mod tests {
         std::fs::write(home.join(".claude.json"), r#"{"theme":"dark","autoConnectIde":true,"projects":{}}"#).unwrap();
         std::fs::write(home.join(".claude/settings.json"), r#"{"model":"opus","verbose":false}"#).unwrap();
         std::fs::write(ws.join(".claude/settings.local.json"), r#"{"model":"sonnet"}"#).unwrap();
-        let got = claude_code_settings(home.to_str().unwrap(), ws.to_str().unwrap());
+        let got = claude_code_settings(&crate::delegate::home::test_env(&home), ws.to_str().unwrap());
         assert_eq!(got.get("theme"), Some(&serde_json::json!("dark")));
         assert_eq!(got.get("verbose"), Some(&serde_json::json!(false)));
         assert_eq!(got.get("model"), Some(&serde_json::json!("sonnet")));

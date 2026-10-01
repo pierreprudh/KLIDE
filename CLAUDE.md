@@ -103,7 +103,7 @@ Klide/
 │   ├── tasks.ts                 Delegated tasks
 │   ├── klideConvos.ts           AI panel → Mission Control pub/sub
 │   ├── transcripts.ts           Pure conversation compaction + markdown export
-│   ├── delegates.ts             Canonical DelegateId list (mirrors Rust delegate::ALL)
+│   ├── delegates.ts             The Delegate catalog mirror — ids, labels, binaries, accounts flag (pinned to Rust delegate::catalog() by a drift test; delegateLabel is the one label source)
 │   ├── delegateStatusNotify.ts  Delegate-status events → toasts under a noise policy
 │   ├── diffComments.ts          Line-anchored diff comments sent back to running agents
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
@@ -132,6 +132,7 @@ Klide/
 │   │   ├── git.ts                 Every git_* / github_* / create_pr command + wire types
 │   │   ├── delegatePty.ts         Delegate PTY commands, events, reattach/replay handshake
 │   │   ├── aiProviders.ts         Provider key status, model metadata, local-server start
+│   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
 │   ├── hooks/
@@ -302,7 +303,7 @@ Klide/
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
-    │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
+    │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) — each owns its home (config/data dirs honouring CODEX_HOME / CLAUDE_CONFIG_DIR / XDG), label, login, accounts flag + home.rs the Env seam + source scan + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit

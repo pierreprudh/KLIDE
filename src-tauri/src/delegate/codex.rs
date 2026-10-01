@@ -2,7 +2,7 @@ use super::runs::{
     cap_messages, clean_title, mtime_ms, project_name, tool_file_path, transcript_status,
     TranscriptState,
 };
-use super::{shell_quote, AgentRun, Delegate, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
+use super::{shell_quote, AgentRun, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -21,10 +21,50 @@ impl Delegate for Codex {
         "codex"
     }
 
+    fn label(&self) -> &'static str {
+        "Codex"
+    }
+
+    /// `~/.codex`, or `$CODEX_HOME` when the user moved it — the same
+    /// variable `ocx` and the CLI itself read.
+    fn config_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        super::home::overridable(env, "CODEX_HOME", ".codex")
+    }
+
+    fn sessions_dir(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("sessions"))
+    }
+
+    /// `config.toml` — the `notify` hook goes in, the gateway's
+    /// `openai_base_url` comes out, connectors are read from it.
+    fn config_file(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("config.toml"))
+    }
+
+    /// One plaintext `auth.json` (`auth_mode`, `OPENAI_API_KEY`, `tokens`).
+    fn auth_files(&self, env: &dyn Env) -> Vec<std::path::PathBuf> {
+        self.config_home(env)
+            .map(|d| vec![d.join("auth.json")])
+            .unwrap_or_default()
+    }
+
+    /// The CLI's own model manifest, refreshed from OpenAI and then obeyed.
+    fn models_cache(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("models_cache.json"))
+    }
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
     /// Codex has no hooks, but its `notify` program covers turn ends and
     /// approvals — Klide's shim posts those (see status.rs).
-    fn ensure_status_hooks(&self, home: &str) -> Result<bool, String> {
-        super::status::install_codex_hooks(home)
+    fn ensure_status_hooks(&self, env: &dyn Env) -> Result<bool, String> {
+        let (Some(hooks), Some(config)) = (super::home::klide_hooks_dir(env), self.config_file(env))
+        else {
+            return Err("Could not resolve home directory".to_string());
+        };
+        super::status::install_codex_hooks(&hooks, &config)
     }
 
     fn model_arg(&self, model: &str) -> String {
@@ -158,10 +198,11 @@ impl Delegate for Codex {
         Some("@openai/codex")
     }
 
-    fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
-        let root = std::path::Path::new(home).join(".codex/sessions");
+    fn discover_runs(&self, env: &dyn Env) -> Vec<RunCandidate> {
         let mut files = Vec::new();
-        collect_rollouts(&root, &mut files);
+        if let Some(root) = self.sessions_dir(env) {
+            collect_rollouts(&root, &mut files);
+        }
         files
             .into_iter()
             .map(|p| RunCandidate {
@@ -171,19 +212,24 @@ impl Delegate for Codex {
             .collect()
     }
 
-    fn run_parser(&self, home: &str) -> Box<dyn RunParser> {
+    fn run_parser(&self, env: &dyn Env) -> Box<dyn RunParser> {
         Box::new(CodexRunParser {
-            index: load_index(home),
+            index: self
+                .session_index(env)
+                .map(|path| load_index(&path))
+                .unwrap_or_default(),
         })
     }
 
     /// The title comes from the session index, not the rollout file, so a
     /// remembered parse must move when the index does.
-    fn parse_inputs_stamp(&self, home: &str) -> u64 {
-        crate::file_memo::mtime_epoch(&std::path::Path::new(home).join(".codex/session_index.jsonl"))
+    fn parse_inputs_stamp(&self, env: &dyn Env) -> u64 {
+        self.session_index(env)
+            .map(|path| crate::file_memo::mtime_epoch(&path))
+            .unwrap_or(0)
     }
 
-    fn read_run(&self, _home: &str, key: &str) -> Result<Vec<RunMessage>, String> {
+    fn read_run(&self, _env: &dyn Env, key: &str) -> Result<Vec<RunMessage>, String> {
         let content = std::fs::read_to_string(key).map_err(|e| e.to_string())?;
         let mut msgs: Vec<RunMessage> = Vec::new();
         for line in content.lines() {
@@ -417,10 +463,16 @@ fn capture_session_meta(
     }
 }
 
-fn load_index(home: &str) -> HashMap<String, String> {
+impl Codex {
+    /// `session_index.jsonl` — the human thread names beside the rollouts.
+    fn session_index(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("session_index.jsonl"))
+    }
+}
+
+fn load_index(path: &std::path::Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let path = std::path::Path::new(home).join(".codex/session_index.jsonl");
-    if let Ok(content) = std::fs::read_to_string(&path) {
+    if let Ok(content) = std::fs::read_to_string(path) {
         for line in content.lines() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 if let (Some(id), Some(name)) = (
@@ -590,7 +642,7 @@ mod tests {
         std::fs::create_dir_all(&day).unwrap();
         std::fs::write(day.join("rollout-1.jsonl"), fixture()).unwrap();
         std::fs::write(day.join("other.jsonl"), "x").unwrap();
-        let found = Codex.discover_runs(home.to_str().unwrap());
+        let found = Codex.discover_runs(&crate::delegate::home::test_env(&home));
         assert_eq!(found.len(), 1);
         assert!(found[0].key.ends_with("rollout-1.jsonl"));
     }
@@ -602,7 +654,7 @@ mod tests {
         let extra = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"hi!"}]}}"#;
         let noise = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"text":"system stuff"}]}}"#;
         std::fs::write(&p, format!("{}{extra}\n{noise}\n", fixture())).unwrap();
-        let msgs = Codex.read_run("", p.to_str().unwrap()).unwrap();
+        let msgs = Codex.read_run(&crate::delegate::ProcessEnv, p.to_str().unwrap()).unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].text, "hello codex");
         assert_eq!(msgs[1].role, "assistant");
@@ -618,7 +670,7 @@ mod tests {
             r#"{"id":"sess-1","thread_name":"My thread"}"#,
         )
         .unwrap();
-        let map = load_index(home.to_str().unwrap());
+        let map = load_index(&codex.join("session_index.jsonl"));
         assert_eq!(map.get("sess-1").map(String::as_str), Some("My thread"));
     }
 }

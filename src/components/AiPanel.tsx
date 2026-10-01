@@ -74,8 +74,8 @@ import {
   providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
+import { DELEGATE_IDS, isDelegateId } from "../delegates";
 import { providerCaps } from "../agent/providerCatalog";
-import { isDelegateId } from "../delegates";
 import {
   isCustomProvider,
   refreshCustomProviders,
@@ -583,7 +583,7 @@ function switchModelForProvider(id: ProviderId): string {
 (() => {
   const FLAG = "klide.model.delegate-default-migrated-v2";
   if (localStorage.getItem(FLAG)) return;
-  const delegates = ["claude-code", "codex", "opencode", "omp"];
+  const delegates: readonly string[] = DELEGATE_IDS;
   for (const id of delegates) {
     if (localStorage.getItem(`klide.model.${id}`)) {
       localStorage.setItem(`klide.model.${id}`, CLI_DEFAULT_MODEL);

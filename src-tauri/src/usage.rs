@@ -19,6 +19,7 @@
 //! blanks the others.
 
 use serde::Serialize;
+use crate::delegate::{Codex, ClaudeCode, OpenCode, Delegate, Env, ProcessEnv};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -62,17 +63,24 @@ pub async fn snapshot() -> Vec<ToolUsage> {
     let (claude, rest) = tokio::join!(
         claude(),
         crate::blocking::run_infallible(|| {
-            let home = crate::cli::home_dir_path().unwrap_or_default();
-            let now = chrono::Utc::now().timestamp_millis();
-            vec![
-                codex(&home.join(".codex/sessions"), now),
-                opencode(&home.join(".local/share/opencode/opencode.db"), now),
-            ]
+            local_usage(&ProcessEnv, chrono::Utc::now().timestamp_millis())
         })
     );
     let mut out = vec![claude];
     out.extend(rest);
     out
+}
+
+fn local_usage(env: &dyn Env, now: i64) -> Vec<ToolUsage> {
+    let missing = |provider| ToolUsage {
+        provider,
+        error: Some("No CLI data directory available.".into()),
+        ..Default::default()
+    };
+    vec![
+        Codex.sessions_dir(env).map(|path| codex(&path, now)).unwrap_or_else(|| missing("codex")),
+        OpenCode.data_home(env).map(|path| opencode(&path.join("opencode.db"), now)).unwrap_or_else(|| missing("opencode")),
+    ]
 }
 
 // ── Claude Code ──────────────────────────────────────────────────────────
@@ -147,7 +155,7 @@ async fn claude_credentials() -> Option<(String, Option<String>)> {
             }
         }
     }
-    let file = crate::cli::home_dir_path()?.join(".claude/.credentials.json");
+    let file = ClaudeCode.config_home(&ProcessEnv)?.join(".credentials.json");
     decode_claude_blob(&std::fs::read(file).ok()?)
 }
 
@@ -401,6 +409,34 @@ mod tests {
     use super::*;
 
     const PLAN: &str = r#"{"timestamp":"2026-09-30T10:00:00Z","type":"event_msg","payload":{"rate_limits":{"limit_id":"codex","primary":{"used_percent":44.0,"window_minutes":300,"resets_at":1790796767},"secondary":{"used_percent":57.0,"window_minutes":10080,"resets_at":1791143762},"plan_type":"plus"}}}"#;
+
+    #[test]
+    fn usage_reads_the_overridden_cli_data_directories() {
+        use crate::delegate::home::MapEnv;
+        let root = std::env::temp_dir().join(format!("klide-usage-overrides-{}", std::process::id()));
+        let codex_home = root.join("moved-codex");
+        let data_home = root.join("moved-data");
+        std::fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        std::fs::create_dir_all(data_home.join("opencode")).unwrap();
+        let turn = r#"{"type":"turn_context","payload":{"model":"gpt-5.5"}}"#;
+        std::fs::write(codex_home.join("sessions/run.jsonl"), format!("{turn}\n{PLAN}\n")).unwrap();
+        let db = rusqlite::Connection::open(data_home.join("opencode/opencode.db")).unwrap();
+        db.execute_batch("CREATE TABLE message (data TEXT, time_created INTEGER);").unwrap();
+        db.execute("INSERT INTO message VALUES (?1, ?2)", rusqlite::params![r#"{"cost":2.5,"tokens":{"input":100}}"#, 1790790000000_i64]).unwrap();
+        drop(db);
+        let env = MapEnv::with_home(&root).set("CODEX_HOME", &codex_home).set("XDG_DATA_HOME", &data_home);
+        let readings = local_usage(&env, 1790790000000);
+        assert_eq!(readings[0].windows[0].percent, 44.0);
+        assert_eq!(readings[1].spend.as_ref().unwrap().cost_usd, 2.5);
+        assert!(readings.iter().all(|r| r.error.is_none()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn usage_without_a_home_does_not_read_relative_paths() {
+        let env = crate::delegate::home::MapEnv(Default::default());
+        assert!(local_usage(&env, 0).iter().all(|r| r.error.as_deref() == Some("No CLI data directory available.")));
+    }
 
     #[test]
     fn a_codex_log_reads_as_its_plan_windows() {

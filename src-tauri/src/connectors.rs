@@ -191,21 +191,27 @@ pub fn discover(workspace: Option<&Path>) -> Vec<Discovered> {
         found.push(candidate);
     };
 
-    if let Some(home) = crate::cli::home_dir_path() {
-        let claude = home.join(".claude.json");
+    // Where each CLI keeps its config is the adapter's knowledge — including
+    // a home the user moved (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, XDG).
+    use crate::delegate::{ClaudeCode, Codex, Delegate, OpenCode, ProcessEnv};
+    let env = ProcessEnv;
+    if let Some(claude) = ClaudeCode.user_state_file(&env) {
         for candidate in from_claude_json(&claude, workspace) {
             push(candidate);
         }
-        for candidate in from_mcp_servers_file(&home.join(".mcp.json"), "claude-code") {
+    }
+    if let Some(home) = crate::cli::home_dir_path() {
+        for candidate in from_mcp_servers_file(&home.join(".mcp.json"), ClaudeCode.id()) {
             push(candidate);
         }
-        for candidate in from_codex_toml(&home.join(".codex").join("config.toml")) {
+    }
+    if let Some(codex) = Codex.config_file(&env) {
+        for candidate in from_codex_toml(&codex) {
             push(candidate);
         }
-        for path in [
-            home.join(".config").join("opencode").join("opencode.json"),
-            home.join(".config").join("opencode").join("cli.json"),
-        ] {
+    }
+    if let Some(dir) = OpenCode.config_home(&env) {
+        for path in [dir.join("opencode.json"), dir.join("cli.json")] {
             for candidate in from_opencode_json(&path) {
                 push(candidate);
             }
@@ -790,7 +796,7 @@ startup_timeout_sec = 120
 
 [mcp_servers.node_repl.env]
 NODE_REPL_NODE_PATH = "/opt/node"
-CODEX_HOME = "/Users/x/.codex"
+NODE_REPL_HOME = "/Users/x/repl"
 
 [mcp_servers.computer-use]
 command = "/opt/sky"
@@ -805,7 +811,7 @@ web_search = true
         let ids: Vec<&str> = found.iter().map(|f| f.id.as_str()).collect();
         assert_eq!(ids, ["node-repl", "computer-use"], "{ids:?}");
         assert_eq!(stdio(&found[0].server).env["NODE_REPL_NODE_PATH"], "/opt/node");
-        assert_eq!(stdio(&found[0].server).env["CODEX_HOME"], "/Users/x/.codex");
+        assert_eq!(stdio(&found[0].server).env["NODE_REPL_HOME"], "/Users/x/repl");
         // A relative cwd means "wherever Codex ran", which Klide cannot honour.
         assert_eq!(stdio(&found[1].server).cwd, None);
     }
@@ -830,7 +836,7 @@ web_search = true
         let dir = temp_dir("claude");
         let path = write(
             &dir,
-            ".claude.json",
+            "claude-state.json",
             r#"{"mcpServers":{"global":{"command":"a"}},
                 "projects":{"/work/here":{"mcpServers":{"here":{"command":"b"}}},
                             "/work/elsewhere":{"mcpServers":{"elsewhere":{"command":"c"}}}}}"#,

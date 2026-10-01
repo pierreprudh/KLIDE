@@ -926,7 +926,7 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
     let author = if summary.model.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL) {
         crate::providers::lookup(&summary.provider)
             .and_then(|p| p.subscription)
-            .map(|s| s.label.to_string())
+            .map(|s| s.label().to_string())
             .unwrap_or_else(|| summary.provider.clone())
     } else {
         summary.model.clone()

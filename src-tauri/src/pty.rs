@@ -1047,8 +1047,8 @@ pub fn delegate_pty_spawn(
     // CLIs (no adapter) have no hook installer but still get the URL, so a
     // user-authored wrapper can post its own status.
     let adapter = delegate::lookup(&provider);
-    if let (Some(adapter), Ok(home)) = (adapter, std::env::var("HOME")) {
-        if let Err(e) = adapter.ensure_status_hooks(&home) {
+    if let Some(adapter) = adapter {
+        if let Err(e) = adapter.ensure_status_hooks(&delegate::ProcessEnv) {
             eprintln!("status hooks for {provider}: {e}");
         }
     }

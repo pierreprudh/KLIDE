@@ -547,7 +547,7 @@ async fn reveal_entry(workspace_root: String, path: String) -> Result<(), String
 // lives behind the Delegate seam (src/delegate/); these commands only add
 // the Tauri glue.
 
-use crate::delegate::{AgentRun, Delegate, RunMessage};
+use crate::delegate::{AgentRun, RunMessage};
 
 /// Paging the board walks the delegate log directories and parses transcripts —
 /// filesystem work measured in hundreds of megabytes on a busy machine. A sync
@@ -561,7 +561,6 @@ async fn list_agent_runs(
     offset: Option<usize>,
     workspace_root: Option<String>,
 ) -> Result<Vec<AgentRun>, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let limit = limit.unwrap_or(10);
     let offset = offset.unwrap_or(0);
     let scope = workspace_root
@@ -574,9 +573,10 @@ async fn list_agent_runs(
     // the await on the runtime thread.
     let scan_app = app.clone();
     let (mut runs, (by_delegate, by_external), hosted_statuses) = blocking::run(move || {
+        let env = delegate::ProcessEnv;
         let runs = match scope {
-            Some(root) => delegate::list_runs_for_workspace(&home, limit, offset, &root),
-            None => delegate::list_runs(&home, limit, offset),
+            Some(root) => delegate::list_runs_for_workspace(&env, limit, offset, &root),
+            None => delegate::list_runs(&env, limit, offset),
         };
         // Inject parent ids from the spawn mappings recorded at dispatch time.
         // Try by Klide's internal ID first, then by the external session ID
@@ -611,22 +611,21 @@ async fn list_agent_runs(
     Ok(runs)
 }
 
-/// Sandbox: only ever read the known agent-log directories. Both sides are
-/// canonicalized before the containment check — a raw `starts_with` would
-/// pass `~/.claude/../../etc/x` (the prefix matches textually while `..`
-/// escapes it) and would follow a symlink planted inside a log dir.
-fn resolve_agent_log_path(home: &str, path: &str) -> Result<std::path::PathBuf, String> {
+/// Sandbox: only ever read a Delegate's own sessions directory — the roots
+/// come from the adapters, so a moved home (`CODEX_HOME`) is honoured here
+/// too. Both sides are canonicalized before the containment check — a raw
+/// `starts_with` would pass `<sessions>/../../etc/x` (the prefix matches
+/// textually while `..` escapes it) and would follow a symlink planted
+/// inside a log dir.
+fn resolve_agent_log_path(env: &dyn delegate::Env, path: &str) -> Result<std::path::PathBuf, String> {
     let canonical = std::path::Path::new(path)
         .canonicalize()
         .map_err(|e| format!("Unable to resolve run path: {e}"))?;
-    let allowed = [".claude", ".codex", ".omp"];
-    let inside = allowed.iter().any(|dir| {
-        std::path::Path::new(home)
-            .join(dir)
-            .canonicalize()
-            .map(|base| canonical.starts_with(&base))
-            .unwrap_or(false)
-    });
+    let inside = delegate::ALL
+        .iter()
+        .filter(|d| d.run_key_is_path())
+        .filter_map(|d| d.sessions_dir(env))
+        .any(|root| delegate::home::is_under(&root, &canonical));
     if inside {
         Ok(canonical)
     } else {
@@ -637,26 +636,31 @@ fn resolve_agent_log_path(home: &str, path: &str) -> Result<std::path::PathBuf, 
 #[tauri::command]
 async fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, String> {
     blocking::run(move || {
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-        // (OpenCode runs go through read_opencode_run instead — their key is a
-        // session id, not a path under home.)
-        let path = resolve_agent_log_path(&home, &path)?;
+        let env = delegate::ProcessEnv;
         // Route through the registry so every delegate uses its own parser — an
         // unknown source errors loudly instead of being mis-read as Claude.
         let adapter = delegate::lookup(&source)
             .ok_or_else(|| format!("No delegate adapter for source: {source}"))?;
-        adapter.read_run(&home, &path.to_string_lossy())
+        // A key that is a transcript path must sit inside the adapter's own
+        // sessions dir; a key that is a session id (OpenCode's, looked up in
+        // its DB) has no path to contain and goes to the parser as is.
+        let key = if adapter.run_key_is_path() {
+            resolve_agent_log_path(&env, &path)?.to_string_lossy().to_string()
+        } else {
+            path
+        };
+        adapter.read_run(&env, &key)
     })
     .await
 }
 
+/// The Delegate CLIs Klide knows, as the facts a surface shows: id, name,
+/// binary, whether logins can be switched. `src/delegates.ts` keeps a pinned
+/// mirror for the synchronous callers (type unions, label maps); this is the
+/// same list over the wire. Pure — no IO, so nothing to send to the pool.
 #[tauri::command]
-async fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String> {
-    blocking::run(move || {
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-        delegate::OpenCode.read_run(&home, &session_id)
-    })
-    .await
+async fn delegate_catalog() -> Vec<delegate::DelegateFacts> {
+    delegate::catalog()
 }
 
 /// The `/` commands a delegate CLI answers itself in this workspace, for the
@@ -671,10 +675,7 @@ async fn delegate_slash_commands(provider: String, workspace_root: String) -> Re
 /// `delegate::claude_code_settings`).
 #[tauri::command]
 async fn claude_code_settings(workspace_root: String) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
-    blocking::run(move || {
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-        Ok(delegate::claude_code_settings(&home, &workspace_root))
-    })
+    blocking::run(move || Ok(delegate::claude_code_settings(&delegate::ProcessEnv, &workspace_root)))
     .await
 }
 
@@ -1018,8 +1019,8 @@ pub fn run() {
             git::git_branch_diff,
             list_agent_runs,
             read_agent_run,
-            read_opencode_run,
             delegate_slash_commands,
+            delegate_catalog,
             claude_code_settings,
             providers::ai_list_providers,
             models::ai_provider_models,
@@ -1157,29 +1158,45 @@ mod agent_log_path_tests {
 
     #[test]
     fn resolves_only_inside_the_known_log_dirs() {
+        use crate::delegate::Delegate;
         let home = std::env::temp_dir().join(format!("klide-loghome-{}", std::process::id()));
-        let logs = home.join(".claude").join("projects");
+        let _ = std::fs::remove_dir_all(&home);
+        let env = crate::delegate::home::test_env(&home);
+        let logs = crate::delegate::ClaudeCode.sessions_dir(&env).unwrap();
         std::fs::create_dir_all(&logs).unwrap();
         let transcript = logs.join("run.jsonl");
         std::fs::write(&transcript, "{}").unwrap();
         let outside = home.join("secret.txt");
         std::fs::write(&outside, "x").unwrap();
-        let home_str = home.to_string_lossy();
 
         // A real transcript resolves.
-        assert!(resolve_agent_log_path(&home_str, &transcript.to_string_lossy()).is_ok());
+        assert!(resolve_agent_log_path(&env, &transcript.to_string_lossy()).is_ok());
         // `..` escapes are caught even though the raw prefix matches.
-        let traversal = format!("{}/.claude/../secret.txt", home_str);
-        assert!(resolve_agent_log_path(&home_str, &traversal).is_err());
+        let traversal = format!("{}/../../secret.txt", logs.display());
+        assert!(resolve_agent_log_path(&env, &traversal).is_err());
         // Paths outside the log dirs are refused.
-        assert!(resolve_agent_log_path(&home_str, &outside.to_string_lossy()).is_err());
+        assert!(resolve_agent_log_path(&env, &outside.to_string_lossy()).is_err());
         // A symlink planted inside a log dir pointing outside is refused.
         #[cfg(unix)]
         {
             let link = logs.join("link.jsonl");
             std::os::unix::fs::symlink(&outside, &link).unwrap();
-            assert!(resolve_agent_log_path(&home_str, &link.to_string_lossy()).is_err());
+            assert!(resolve_agent_log_path(&env, &link.to_string_lossy()).is_err());
         }
+        // A moved Codex home is honoured: its rollouts resolve, ~/.codex's don't.
+        let moved = home.join("codex-elsewhere");
+        let env = env.set("CODEX_HOME", &moved);
+        let rollouts = crate::delegate::Codex.sessions_dir(&env).unwrap();
+        std::fs::create_dir_all(&rollouts).unwrap();
+        let rollout = rollouts.join("rollout-1.jsonl");
+        std::fs::write(&rollout, "{}").unwrap();
+        assert!(resolve_agent_log_path(&env, &rollout.to_string_lossy()).is_ok());
+        let stale = crate::delegate::Codex
+            .sessions_dir(&crate::delegate::home::test_env(&home))
+            .unwrap();
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("old.jsonl"), "{}").unwrap();
+        assert!(resolve_agent_log_path(&env, &stale.join("old.jsonl").to_string_lossy()).is_err());
 
         let _ = std::fs::remove_dir_all(&home);
     }

@@ -68,6 +68,7 @@ import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
 import { LocalServerRow } from "./settings/localServers";
 import { AccountControl, GitHubAccountRow } from "./settings/accounts";
+import { DELEGATES, type DelegateId } from "../delegates";
 import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
 import { StorageSection } from "./settings/storage";
@@ -119,7 +120,7 @@ type Props = {
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "omp" | `cli:${string}`;
+type SubscriptionProviderId = DelegateId | `cli:${string}`;
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -140,7 +141,7 @@ type OllamaAccountStatus = {
   detail: string;
 };
 
-const subscriptionProviders: {
+type SubscriptionProviderRow = {
   id: SubscriptionProviderId;
   title: string;
   command: string;
@@ -149,40 +150,36 @@ const subscriptionProviders: {
   accounts: boolean;
   /** One line under "Model Options" saying where the model list comes from. */
   modelNote: string;
-}[] = [
-  {
-    id: "claude-code",
-    title: "Claude Code",
-    command: "claude",
+};
+
+/** The prose this page adds to each Delegate — the facts (name, binary,
+ *  accounts) come from the catalog, never restated here. */
+const DELEGATE_COPY: Record<DelegateId, { description: string; modelNote: string }> = {
+  "claude-code": {
     description: "Subscription login, Console login, SSO, or long-lived setup token.",
-    accounts: true,
     modelNote: "Loaded from Claude Code's local model usage cache.",
   },
-  {
-    id: "codex",
-    title: "Codex",
-    command: "codex",
+  codex: {
     description: "ChatGPT login, device auth, API key, or access token.",
-    accounts: true,
     modelNote: "Loaded from the current Codex model cache when available.",
   },
-  {
-    id: "opencode",
-    title: "OpenCode",
-    command: "opencode",
+  opencode: {
     description: "Interactive OpenCode CLI, launched as a real delegate terminal.",
-    accounts: true,
     modelNote: "OpenCode chooses models inside its own interactive CLI.",
   },
-  {
-    id: "omp",
-    title: "Oh My Pi",
-    command: "omp",
+  omp: {
     description: "Terminal coding agent routing 40+ providers — keys come from your shell environment.",
-    accounts: false,
     modelNote: "Loaded from omp's model cache (providers it could actually reach).",
   },
-];
+};
+
+const subscriptionProviders: SubscriptionProviderRow[] = DELEGATES.map((d) => ({
+  id: d.id,
+  title: d.label,
+  command: d.binary,
+  accounts: d.supportsAccounts,
+  ...DELEGATE_COPY[d.id],
+}));
 
 const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "general", label: "General", icon: <GearIcon /> },

@@ -1,6 +1,7 @@
 // Compact account popover above the bottom edge of the workspace.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AccountControl } from "./settings/accounts";
+import { DELEGATES } from "../delegates";
 import { GitHubAccountRow } from "./GitHubAccountRow";
 import { ProviderLogo } from "./ai/icons";
 import { Z } from "../zLayers";
@@ -16,11 +17,9 @@ import {
 import "./profileMenu.css";
 
 /** The CLIs the menu lists, in order. */
-const CLIS = [
-  { provider: "claude-code", title: "Claude Code" },
-  { provider: "codex", title: "Codex" },
-  { provider: "opencode", title: "OpenCode" },
-] as const;
+const CLIS = DELEGATES.filter((d) => d.supportsAccounts).map((d) => ({
+  provider: d.id, title: d.label,
+}));
 
 // The Claude reading is a network call; opening the menu twice in a minute
 // should not make it twice.
