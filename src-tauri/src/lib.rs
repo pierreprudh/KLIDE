@@ -24,6 +24,7 @@ mod mcp_client;
 pub mod mcp_server;
 mod memory;
 mod missions;
+mod model_capabilities;
 mod models;
 mod preview;
 mod spreadsheet;
@@ -136,12 +137,17 @@ async fn ai_clear_provider_key(provider: String) -> Result<(), String> {
     .await
 }
 
-// Per-model list price (USD per million in/out tokens), or null for local /
-// subscription / unknown models. The AI panel fetches this once per model and
-// computes per-message + per-conversation cost from each turn's token usage.
+// The pair's list price (USD per million in/out tokens), or null unless the
+// Provider bills per token and the model is in the table — a subscription CLI
+// or a local runtime is free whatever the model is called. The AI panel
+// fetches this once per model and computes per-message + per-conversation
+// cost from each turn's token usage.
 #[tauri::command]
-fn ai_model_pricing(model: String) -> Option<pricing::ModelPricing> {
-    pricing::pricing_for_model(&model)
+fn ai_model_pricing(provider: String, model: String) -> Option<pricing::ModelPricing> {
+    match model_capabilities::price_class(&provider, &model) {
+        model_capabilities::PriceClass::Priced(price) => Some(price),
+        _ => None,
+    }
 }
 
 // The second key method for built-in providers: a `${VAR}` env reference
@@ -873,7 +879,6 @@ pub fn run() {
         .manage(coordination_bridge::CoordinationBridgeState::default())
         .manage(missions::MissionStoreState::default())
         .manage(local_servers::LocalServerState::default())
-        .manage(models::ReflectionProbeCache::default())
         .plugin(tauri_plugin_dialog::init())
         // The crate's `open_path` / `reveal_item_in_dir` are called directly
         // from Rust above and need no registration — but the frontend's
@@ -1033,6 +1038,7 @@ pub fn run() {
             cli_update::cli_update,
             app_user_info,
             menu_sync_projects,
+            models::ai_model_capabilities,
             models::ai_context_window,
             models::ai_model_supports_tools,
             models::ai_model_supports_vision,

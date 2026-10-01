@@ -407,7 +407,7 @@ fn parse_run(path: &std::path::Path, index: &HashMap<String, String>) -> Option<
     // Cost is computed from the same model + token totals we just summed; the
     // model is moved into AgentRun below, so capture the cost before then.
     let cost_usd =
-        crate::pricing::cost_for_run(model.as_deref().unwrap_or(""), input_tokens, output_tokens);
+        crate::pricing::list_price_cost(model.as_deref().unwrap_or(""), input_tokens, output_tokens);
     Some(AgentRun {
         status: transcript_status(updated_ms, transcript_state),
         title: index

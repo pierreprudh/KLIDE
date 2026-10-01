@@ -21,6 +21,42 @@ export type ProviderModelMetadata = {
   outputPerMillion?: number | null;
 };
 
+/** What a run on this pair costs the user — the Provider's call, never the
+ *  model name's (`model_capabilities::PriceClass`). */
+export type ModelPriceClass =
+  | { kind: "subscription" }
+  | { kind: "local" }
+  | { kind: "priced"; inputPerMillion: number; outputPerMillion: number }
+  | { kind: "unknown" };
+
+export type ModelMaker =
+  | "anthropic"
+  | "open-ai"
+  | "google"
+  | "meta"
+  | "mistral"
+  | "deep-seek"
+  | "qwen"
+  | "xai"
+  | "liquid-ai"
+  | "microsoft"
+  | "mini-max"
+  | "moonshot"
+  | "zai"
+  | "sakana";
+
+/** The one answer to "what can this model do" (`model_capabilities.rs`).
+ *  `contextWindow` is `null` when nobody published one — the gauge reads
+ *  "—" rather than a made-up number. `reasoningLevels` empty means no dial. */
+export type ModelCapabilities = {
+  contextWindow: number | null;
+  supportsTools: boolean;
+  supportsVision: boolean;
+  reasoningLevels: string[];
+  priceClass: ModelPriceClass;
+  maker: ModelMaker | null;
+};
+
 export type StartLocalProviderInput = {
   provider: string;
   model: string;
@@ -44,6 +80,34 @@ export function listProviderModelMetadata(
   return invoke<ProviderModelMetadata[]>("ai_provider_model_meta", { provider });
 }
 
+/** Every fact about a pair in one round-trip, memoised in Rust. Pass
+ *  `allowActivationProbe: false` to stay passive: Ollama's reasoning check can
+ *  issue a tiny chat that loads a cold model, and a resumed transcript must
+ *  not do that until its first send. */
+export function readModelCapabilities(
+  provider: string,
+  model: string,
+  allowActivationProbe = true,
+): Promise<ModelCapabilities> {
+  return invoke<ModelCapabilities>("ai_model_capabilities", {
+    provider,
+    model,
+    allowActivationProbe,
+  });
+}
+
+/** The pair's list price per million tokens, or `null` unless the Provider
+ *  bills per token and the model is in the table. */
+export function readModelPricing(
+  provider: string,
+  model: string,
+): Promise<{ inputPerMillion: number; outputPerMillion: number } | null> {
+  return invoke<{ inputPerMillion: number; outputPerMillion: number } | null>("ai_model_pricing", {
+    provider,
+    model,
+  });
+}
+
 export function modelSupportsTools(provider: string, model: string): Promise<boolean> {
   return invoke<boolean>("ai_model_supports_tools", { provider, model });
 }
@@ -63,8 +127,12 @@ export function modelSupportsVision(provider: string, model: string): Promise<bo
   return invoke<boolean>("ai_model_supports_vision", { provider, model });
 }
 
-export function readProviderContextWindow(provider: string, model: string): Promise<number> {
-  return invoke<number>("ai_context_window", { provider, model });
+/** The model's trained window, or `null` when nobody published one. */
+export function readProviderContextWindow(
+  provider: string,
+  model: string,
+): Promise<number | null> {
+  return invoke<number | null>("ai_context_window", { provider, model });
 }
 
 export function readLocalProviderStatus(provider: string): Promise<boolean> {

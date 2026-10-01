@@ -270,8 +270,9 @@ Klide/
     │   ├── providers.rs          Provider registry — one row is the whole provider (wire, key, models, label, group, defaults, brand, caps); publishes itself to TS
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints
     │   ├── custom_cli.rs         User-defined CLI agents via command templates
-    │   ├── models.rs             Model discovery — list models, context windows, tool support
-    │   ├── pricing.rs            Hand-curated per-model token prices for run cost
+    │   ├── models.rs             Model discovery — list models; reads the Codex manifest + OpenAI-wire `/models` listings
+    │   ├── model_capabilities.rs The one answer to what a model can do — window, tools, vision, reasoning levels, price class, maker; one order, one memo
+    │   ├── pricing.rs            Hand-curated per-model list prices (the price class is the Provider's call)
     │   ├── accounts.rs           Snapshot/list/restore delegate CLI login credentials
     │   ├── git/                  mod.rs: git shell-outs · github.rs: gh seam, PRs, avatars, pinned identity
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall

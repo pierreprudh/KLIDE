@@ -102,15 +102,21 @@ export async function callModel(
 // call to a fraction of `contextWindow`; an oversized history is summarized in
 // chunks and the chunk-summaries are then combined (map-reduce). Never returns
 // empty: if the model produces nothing, a deterministic fallback stands in.
+/** The chunking assumption when the model's window is unknown (Rust
+ *  answered `null`, or nothing has been detected yet): the smallest window
+ *  any model Klide serves, so a chunk fits wherever it lands. A conservative
+ *  policy with a name, not a guess at the model. */
+export const SMALLEST_SERVED_WINDOW = 8_192;
+
 export async function summarizeForCompaction(
   provider: string,
   model: string,
   older: Msg[],
-  contextWindow?: number
+  contextWindow?: number | null
 ): Promise<string> {
   // ~4 chars/token; spend ~45% of the window on input, leaving room for the
   // prompt scaffold and the model's reply. Floor keeps tiny windows workable.
-  const windowTokens = contextWindow && contextWindow > 0 ? contextWindow : 32_000;
+  const windowTokens = contextWindow && contextWindow > 0 ? contextWindow : SMALLEST_SERVED_WINDOW;
   const perCallChars = Math.max(8_000, Math.floor(windowTokens * 0.45) * 4);
 
   const convo = serializeConversation(older);

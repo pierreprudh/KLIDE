@@ -495,7 +495,7 @@ export function SettingsPanel({
     setDetectedWindow(0);
     readProviderContextWindow(settingsProvider, aiModel)
       .then((window) => {
-        if (!cancelled && Number.isFinite(window) && window > 0) setDetectedWindow(window);
+        if (!cancelled && window !== null && window > 0) setDetectedWindow(window);
       })
       .catch(() => {
         /* unreachable model: the row says so */
