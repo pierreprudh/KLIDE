@@ -1,5 +1,5 @@
 // Compact account popover above the bottom edge of the workspace.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AccountControl } from "./settings/accounts";
 import { GitHubAccountRow } from "./GitHubAccountRow";
 import { ProviderLogo } from "./ai/icons";
@@ -146,10 +146,23 @@ function CliAccount({
   usage: ToolUsage | undefined;
   loading: boolean;
 }) {
-  const [collapsed, setCollapsed] = useCollapsed(provider);
+  const [collapsed, setStoredCollapsed] = useCollapsed(provider);
+  const sectionRef = useRef<HTMLElement>(null);
+  const firstRects = useRef<Map<string, DOMRect> | null>(null);
+  // Fold or unfold, remembering where the shared pieces stood so they can
+  // glide to where they land (see `morphFrom`).
+  const setCollapsed = (next: boolean) => {
+    if (sectionRef.current) firstRects.current = morphRects(sectionRef.current, collapsed);
+    setStoredCollapsed(next);
+  };
+  useLayoutEffect(() => {
+    const first = firstRects.current;
+    firstRects.current = null;
+    if (first && sectionRef.current) morphFrom(sectionRef.current, collapsed, first);
+  }, [collapsed]);
   const stop = (event: React.SyntheticEvent) => event.stopPropagation();
   return (
-    <section aria-label={`${title} account`} className="profile-account-cli" data-provider={provider}>
+    <section ref={sectionRef} aria-label={`${title} account`} className="profile-account-cli" data-provider={provider}>
       {/* The whole row folds the usage into one line; its own controls keep
           their clicks. */}
       <div
@@ -241,11 +254,11 @@ function UsageLines({
       <div className="profile-usage-compact">
         {session && (
           <span className="profile-usage-compact-item" title={`Session · ${resetLabel(session)}`}>
-            <Bar percent={clamp(session.percent)} />
-            <span className="profile-usage-value">{Math.round(clamp(session.percent))}%</span>
+            <Bar percent={clamp(session.percent)} morph="bar" />
+            <span className="profile-usage-value" data-morph="value">{Math.round(clamp(session.percent))}%</span>
           </span>
         )}
-        {spend && <span className="profile-usage-spend">{spend}</span>}
+        {spend && <span className="profile-usage-spend" data-morph="spend">{spend}</span>}
       </div>
     );
   }
@@ -256,8 +269,10 @@ function UsageLines({
         return (
           <div key={w.label} className="profile-usage-line" title={resetLabel(w)}>
             <span className="profile-usage-label">{w.label}</span>
-            <Bar percent={percent} />
-            <span className="profile-usage-value">{Math.round(percent)}%</span>
+            <Bar percent={percent} morph={w.label === "Session" ? "bar" : undefined} />
+            <span className="profile-usage-value" data-morph={w.label === "Session" ? "value" : undefined}>
+              {Math.round(percent)}%
+            </span>
             <span className="profile-usage-reset">{resetShort(w)}</span>
           </div>
         );
@@ -265,7 +280,7 @@ function UsageLines({
       {spend && (
         <div className="profile-usage-line">
           <span className="profile-usage-label">This week</span>
-          <span className="profile-usage-spend">{spend}</span>
+          <span className="profile-usage-spend" data-morph="spend">{spend}</span>
         </div>
       )}
     </div>
@@ -273,15 +288,102 @@ function UsageLines({
 }
 
 /** A thin bar in the CLI's own colour, red once the window is nearly spent. */
-function Bar({ percent }: { percent: number }) {
+function Bar({ percent, morph }: { percent: number; morph?: string }) {
   return (
-    <span className="profile-usage-track" aria-hidden>
+    <span className="profile-usage-track" aria-hidden data-morph={morph}>
       <span className="profile-usage-fill" data-tone={usageTone(percent)} style={{ width: `${percent}%` }} />
     </span>
   );
 }
 
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
+
+// ── Morph ────────────────────────────────────────────────────────────────
+//
+// Folding moves the session bar, its figure and OpenCode's spend between the
+// open view and the account's own row. Each is drawn in both places, tagged
+// `data-morph`; a fold measures where the visible copy stands, lets React
+// swap, then flies a copy of the new one from the old place to the new
+// (FLIP). The copy rides above the menu, so the open view shrinking by
+// height never clips it, and the real element waits hidden until it lands.
+
+const MORPH_MS = 280;
+
+/** The visible copy of each morphing piece: in the row when folded, in the
+ *  open view otherwise. */
+function morphTargets(section: HTMLElement, collapsed: boolean): Map<string, HTMLElement> {
+  const scope = section.querySelector<HTMLElement>(
+    collapsed ? ".profile-account-head" : ".profile-usage-fold"
+  );
+  const found = new Map<string, HTMLElement>();
+  scope?.querySelectorAll<HTMLElement>("[data-morph]").forEach((el) => {
+    found.set(el.dataset.morph!, el);
+  });
+  return found;
+}
+
+function morphRects(section: HTMLElement, collapsed: boolean): Map<string, DOMRect> {
+  const rects = new Map<string, DOMRect>();
+  morphTargets(section, collapsed).forEach((el, key) => rects.set(key, el.getBoundingClientRect()));
+  return rects;
+}
+
+function morphFrom(section: HTMLElement, collapsed: boolean, first: Map<string, DOMRect>) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  morphTargets(section, collapsed).forEach((target, key) => {
+    const from = first.get(key);
+    if (!from || from.width === 0 || target.getBoundingClientRect().width === 0) return;
+    const ghost = target.cloneNode(true) as HTMLElement;
+    const style = getComputedStyle(target);
+    Object.assign(ghost.style, {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      margin: "0",
+      zIndex: String(Z.modal + 1),
+      pointerEvents: "none",
+      transformOrigin: "left top",
+      fontFamily: style.fontFamily,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
+      lineHeight: style.lineHeight,
+      fontVariantNumeric: style.fontVariantNumeric,
+      color: style.color,
+      textAlign: style.textAlign,
+      whiteSpace: "nowrap",
+    });
+    ghost.style.setProperty("--usage-color", style.getPropertyValue("--usage-color"));
+    document.body.appendChild(ghost);
+    target.style.visibility = "hidden";
+    // The menu is anchored by its bottom, so it moves while the open view
+    // grows or shrinks: the copy chases where the real piece is *now*, every
+    // frame, rather than where it was when the fold began.
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / MORPH_MS);
+      const e = easeOutQuint(t);
+      const to = target.getBoundingClientRect();
+      const left = from.left + (to.left - from.left) * e;
+      const top = from.top + (to.top - from.top) * e;
+      // Text keeps its size and only travels; a bar also stretches to length.
+      const width = key === "bar" ? from.width + (to.width - from.width) * e : to.width;
+      ghost.style.width = `${width}px`;
+      ghost.style.height = `${to.height}px`;
+      ghost.style.transform = `translate(${left}px, ${top}px)`;
+      if (t < 1 && ghost.isConnected) {
+        requestAnimationFrame(step);
+      } else {
+        ghost.remove();
+        target.style.visibility = "";
+      }
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+function easeOutQuint(t: number): number {
+  return 1 - Math.pow(1 - t, 5);
+}
 
 function Avatar({ name, avatarUrl, size }: { name: string; avatarUrl: string; size: number }) {
   const initials = initialsOf(name);

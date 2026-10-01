@@ -47,7 +47,7 @@ function clock(ms: number, now: number): string {
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   return Math.abs(ms - now) < 86_400_000
     ? time
-    : `${date.toLocaleDateString([], { weekday: "short" })} ${time}`;
+    : `${date.toLocaleDateString("en-US", { weekday: "short" })} ${time}`;
 }
 
 /** 4.0M, 812K, 90. */
