@@ -264,6 +264,7 @@ impl Delegate for ClaudeCode {
         super::status::install_claude_hooks(home)
     }
 
+
     fn login_commands(&self) -> Vec<String> {
         ["--claudeai", "--console", "--sso"]
             .iter()

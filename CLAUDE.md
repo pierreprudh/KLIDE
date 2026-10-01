@@ -108,6 +108,7 @@ Klide/
 │   ├── diffComments.ts          Line-anchored diff comments sent back to running agents
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
+│   ├── ipc/deepLink.ts          `klide://` link actions + drain (servicesMenu.ts: the Ask Kit toggle)
 │   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe, GitHub preset, pool status)
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
 │   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
@@ -262,6 +263,8 @@ Klide/
     │   ├── main.rs               Entry point (also the `klide ptyd` daemon entry)
     │   ├── lib.rs                Command registration + thin Tauri glue, AI chat dispatch, fs ops, app menu
     │   ├── cli.rs                Login-shell binary resolution + subscription-CLI install/auth status
+    │   ├── deep_link.rs          `klide://` links — new (pre-filled, never sent) / open file:line / project; parsed + path-checked in Rust, queued until the page drains them
+    │   ├── services_menu.rs      "Ask Kit" Services Quick Action — installed/removed from Settings, opens `klide://new?prompt=`
     │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
     │   ├── providers.rs          Provider registry — one row is the whole provider (wire, key, models, label, group, defaults, brand, caps); publishes itself to TS
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints
@@ -732,6 +735,7 @@ enforce wrapper coverage for the git family.
 - [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit
 - [x] Subagent watcher — the "Delegated to" row follows the child Run live; a failed child is a failed Tool result, dependent dispatches pin a source commit
 - [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
+- [x] `klide://` links + Ask Kit — Raycast, Shortcuts, a terminal or the Services menu open a pre-filled conversation, a file at a line, or a project (installed app only on macOS)
 
 ## Development
 

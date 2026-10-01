@@ -225,14 +225,13 @@ export function AccountControl({
   }
   const swapControl = canSwap ? <AccountSwapButton label={`Switch ${title} account`} busy={busy !== null || saving} onClick={() => void swap()} /> : null;
 
-  if (compact) return canSwap ? (
-    <section aria-label={`${title} account`} className="profile-account-menu-row">
-      <AccountIcon name={title} size={18} />
-      <span style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={active ? identityLabel(active.identity) : undefined}>
-        {title} · {active?.name}
-      </span>
+  // Compact: only the trailing cluster — the saved account's name and the
+  // swap — for a row the account menu draws itself.
+  if (compact) return active ? (
+    <>
+      <span className="profile-account-saved" title={identityLabel(active.identity)}>{active.name}</span>
       {swapControl}
-    </section>
+    </>
   ) : null;
 
   const menuWidth = 280;
