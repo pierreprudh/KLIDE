@@ -231,6 +231,58 @@ export type TodoStripSlot = "card" | "mark" | "none";
  *  left while the island is up (AiPanel), so the two never overlap. */
 export const ISLAND_WIDTH = 320;
 
+// Where a figure's ink actually sits. A line box centres the font's ascent +
+// descent, not the digit, and every mono face puts its figures somewhere
+// different inside that box — so the mark measures the glyph on a canvas once
+// per (font, text) and places the baseline where the ink's centre lands on
+// the ring's centre. Offsets are in em; re-measured once the webfont lands.
+type FigureInk = { dx: number; dy: number };
+const INK_ZERO: FigureInk = { dx: 0, dy: 0 };
+const inkMemo = new Map<string, FigureInk>();
+let inkCanvas: CanvasRenderingContext2D | null | undefined;
+function measureFigureInk(text: string): FigureInk {
+  if (typeof document === "undefined") return INK_ZERO;
+  const family = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
+  const key = `${family}|${text}`;
+  const hit = inkMemo.get(key);
+  if (hit) return hit;
+  if (inkCanvas === undefined) inkCanvas = document.createElement("canvas").getContext?.("2d") ?? null;
+  if (!inkCanvas) return INK_ZERO;
+  const ctx = inkCanvas;
+  const SIZE = 100;
+  ctx.font = `400 ${SIZE}px ${family}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  const m = ctx.measureText(text);
+  if (m.actualBoundingBoxAscent === undefined) return INK_ZERO;
+  const ink: FigureInk = {
+    // ink centre relative to the advance centre, rightwards
+    dx: (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2 / SIZE,
+    // ink centre above the baseline
+    dy: (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 / SIZE,
+  };
+  inkMemo.set(key, ink);
+  return ink;
+}
+function useFigureInk(text: string): FigureInk {
+  const [ink, setInk] = useState(() => measureFigureInk(text));
+  useEffect(() => {
+    let live = true;
+    setInk(measureFigureInk(text));
+    // The first measure may have hit the fallback face; measure again once
+    // the bundled font is in.
+    document.fonts?.ready.then(() => {
+      if (!live) return;
+      inkMemo.clear();
+      setInk(measureFigureInk(text));
+    });
+    return () => {
+      live = false;
+    };
+  }, [text]);
+  return ink;
+}
+
 export function StepMark({ index, state }: { index: number; state: "todo" | "active" | "done" }) {
   // A whole-pixel radius keeps the 1px track on the pixel grid: 7 at 16px puts
   // the hairline on 6.5–7.5, one crisp ring at 1x and a clean pair at 2x.
@@ -254,13 +306,6 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
         // opaque so the thread breaks cleanly at each node
         background: state === "done" ? "var(--accent)" : "var(--bg-elevated)",
         color: state === "done" ? "var(--bg-elevated)" : active ? "var(--fg-strong)" : "var(--fg-dim)",
-        fontFamily: "var(--font-mono)",
-        fontSize: 10,
-        // A bold figure inside a 16px ring reads as a badge; the regular cut
-        // sits in the circle like a figure on a dial.
-        fontWeight: 400,
-        lineHeight: 1,
-        fontVariantNumeric: "tabular-nums",
       }}
     >
       {state !== "done" && (
@@ -280,13 +325,30 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
           {ring("klide-todo-ring-head")}
         </svg>
       )}
-      {state === "done" ? <CheckIcon /> : (
-        // Monaspace's line box carries more descent than its figures use, so
-        // a centred box leaves the figure riding ~1px high in the ring (seen
-        // at 8x); settle the glyph, not the box.
-        <span className="klide-todo-figure" style={{ position: "relative", transform: "translateY(0.5px)" }}>{index + 1}</span>
-      )}
+      {state === "done" ? <CheckIcon /> : <Figure n={index + 1} />}
     </span>
+  );
+}
+
+const FIGURE_SIZE = 10;
+function Figure({ n }: { n: number }) {
+  const text = String(n);
+  const ink = useFigureInk(text);
+  return (
+    <svg className="klide-todo-figure" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "relative" }}>
+      <text
+        x={MARK / 2 - ink.dx * FIGURE_SIZE}
+        y={MARK / 2 + ink.dy * FIGURE_SIZE}
+        textAnchor="middle"
+        fill="currentColor"
+        fontFamily="var(--font-mono)"
+        fontSize={FIGURE_SIZE}
+        fontWeight={400}
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        {text}
+      </text>
+    </svg>
   );
 }
 

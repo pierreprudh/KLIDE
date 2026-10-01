@@ -162,9 +162,6 @@
 .klide-todo-mark[data-state="active"] .klide-todo-track circle {
   stroke: color-mix(in srgb, var(--fg-dim) 18%, transparent);
 }
-.klide-todo-mark .klide-todo-figure {
-  transition: color var(--motion-slower) var(--ease-soft);
-}
 .klide-todo-ring {
   position: absolute;
   inset: 0;
