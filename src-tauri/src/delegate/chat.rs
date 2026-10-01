@@ -314,7 +314,6 @@ async fn run_cli_streaming(
                 emitter.handle(item);
             }
         }
-        let answer = emitter.answer;
 
         let status = child
             .wait()
@@ -336,7 +335,7 @@ async fn run_cli_streaming(
                 format!("{label} exited with {status}: {stderr_text}")
             });
         }
-        Ok::<_, String>(answer.trim().to_string())
+        emitter.finish()
     })
     .await
     .map_err(|_| {
@@ -361,7 +360,8 @@ pub(super) struct Emitter<'a> {
     on_chunk: &'a Channel<StreamChunk>,
     /// The assistant text only — the answer — so a saved transcript reads as
     /// prose rather than as a mixture of prose and tool logs.
-    pub(super) answer: String,
+    answer: String,
+    error: Option<String>,
     // With partial messages on, every block arrives twice: as deltas while
     // it is written, then again whole. Deltas win — they are what makes the
     // answer type out — so a completed block is dropped once any delta has
@@ -391,14 +391,28 @@ impl<'a> Emitter<'a> {
             emitted,
             on_chunk,
             answer: String::new(),
+            error: None,
             saw_delta: false,
             emitted_parts: HashMap::new(),
         }
     }
 
+    pub(super) fn finish(self) -> Result<String, String> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        Ok(self.answer.trim().to_string())
+    }
+
     pub(super) fn handle(&mut self, item: super::chat_stream::StreamItem) {
         use super::chat_stream::{summarize_call, StreamItem};
         match item {
+            StreamItem::Error(message) => {
+                // A provider rejection is not a missing session: do not resend
+                // the prompt through the cold-session retry path.
+                self.emitted.store(true, Ordering::Relaxed);
+                self.error = Some(message);
+            }
             StreamItem::TextDelta(text) => {
                 self.saw_delta = true;
                 self.answer.push_str(&text);
@@ -731,5 +745,15 @@ mod tests {
         // cold start rather than a permanent failure.
         forget_session(&a);
         assert_eq!(remembered_session(&a), None);
+    }
+
+    #[test]
+    fn provider_failure_is_not_an_empty_success_or_a_cold_retry() {
+        let emitted = AtomicBool::new(false);
+        let channel = Channel::new(|_| Ok(()));
+        let mut emitter = Emitter::new(&super::super::opencode::OpenCode, "/tmp", None, &emitted, &channel);
+        emitter.handle(super::super::chat_stream::StreamItem::Error("Global regions required".into()));
+        assert!(emitted.load(Ordering::Relaxed));
+        assert_eq!(emitter.finish(), Err("Global regions required".into()));
     }
 }

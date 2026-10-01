@@ -1,3 +1,4 @@
+import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
 import { wakeTurnMode } from "./ai/wake";
@@ -4507,7 +4508,9 @@ This user request requires workspace inspection. Before answering, you MUST call
           // A background subagent's report bubble is empty while its child
           // works, but it is its own surface (an @role header + watcher), never
           // the main answer's "not yet started" dots.
-          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls && !m.subagent;
+          const placeholder = assistantPlaceholder(m, streaming, isLast);
+          if (placeholder === "hidden") return null;
+          const isAssistantPlaceholder = m.role === "assistant" && placeholder === "working";
           const previous = msgs[i - 1];
           const activeToolRunning =
             streaming &&

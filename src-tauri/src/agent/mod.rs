@@ -13,6 +13,8 @@ pub(crate) mod delivery;
 mod glob_match;
 #[cfg(test)]
 mod eval;
+#[cfg(test)]
+mod live_eval;
 pub mod evidence;
 pub mod failure_budget;
 mod network_allowlist;

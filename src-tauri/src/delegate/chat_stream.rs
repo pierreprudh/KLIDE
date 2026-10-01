@@ -20,6 +20,8 @@ use serde_json::Value;
 /// One meaningful thing found on one line of a delegate's stream.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum StreamItem {
+    /// A terminal provider failure, even when the CLI exits successfully.
+    Error(String),
     /// The session id this turn runs under — what `--resume` needs later.
     Session(String),
     /// The `/` commands this CLI answers itself (see `cli_commands.rs`).
