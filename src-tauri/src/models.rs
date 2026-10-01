@@ -35,6 +35,8 @@ pub(crate) struct ModelMeta {
     /// listing reports it (OpenRouter). `None` for endpoints that don't.
     pub(crate) input_per_million: Option<f64>,
     pub(crate) output_per_million: Option<f64>,
+    pub(crate) supports_vision: Option<bool>,
+    pub(crate) reasoning_levels: Option<Vec<String>>,
 }
 
 /// Cached `/models` metadata, keyed by provider id. OpenRouter's listing is
@@ -292,10 +294,17 @@ async fn fetch_ollama_tags() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+pub(crate) fn parse_anthropic_model(row: &serde_json::Value) -> ModelMeta {
+    let capabilities = row.get("capabilities");
+    let supported = |name: &str| capabilities.and_then(|c| c.get(name)).and_then(|v| v.get("supported")).and_then(|v| v.as_bool());
+    let reasoning_levels = capabilities.and_then(|c| c.get("effort")).and_then(|e| e.as_object()).map(|e| e.keys().filter(|k| k.as_str() != "supported").cloned().collect());
+    ModelMeta { context_length: row.get("max_input_tokens").and_then(|v| v.as_u64()).map(|v| v as usize), supports_tools: None, input_per_million: None, output_per_million: None, supports_vision: supported("image_input"), reasoning_levels }
+}
+
 async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
     let key = provider_key("anthropic")?.ok_or_else(|| "Missing API key".to_string())?;
     let res = reqwest::Client::new()
-        .get("https://api.anthropic.com/v1/models")
+        .get("https://api.anthropic.com/v1/models?limit=1000")
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)
         .send()
@@ -307,7 +316,19 @@ async fn fetch_anthropic_models() -> Result<Vec<String>, String> {
         return Err(response_error("Anthropic", status, &body));
     }
     let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    Ok(normalize_model_ids(&value))
+    let rows = value.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let mut metadata = HashMap::new();
+    for row in &rows {
+        if let Some(id) = row.get("id").and_then(|v| v.as_str()) { metadata.insert(id.to_string(), parse_anthropic_model(row)); }
+    }
+    OPENAI_MODEL_META_CACHE.lock().unwrap().insert("anthropic".into(), (Instant::now(), metadata));
+    Ok(rows.iter().filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(str::to_string)).collect())
+}
+
+pub(crate) async fn anthropic_model_meta() -> HashMap<String, ModelMeta> {
+    if let Some((ts, meta)) = OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic") { if ts.elapsed() < MODEL_META_TTL { return meta.clone(); } }
+    let _ = fetch_anthropic_models().await;
+    OPENAI_MODEL_META_CACHE.lock().unwrap().get("anthropic").map(|(_, m)| m.clone()).unwrap_or_default()
 }
 
 async fn fetch_openai_compatible_models(
@@ -381,6 +402,8 @@ fn parse_openai_models_meta(value: &serde_json::Value) -> HashMap<String, ModelM
                 supports_tools,
                 input_per_million: price("prompt"),
                 output_per_million: price("completion"),
+                supports_vision: None,
+                reasoning_levels: None,
             },
         );
     }
