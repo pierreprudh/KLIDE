@@ -15,6 +15,16 @@ Notable changes per milestone. Dates are completion dates.
 
 ## Unreleased
 
+### Approving from the keyboard
+
+- **↵ runs, Esc denies.** The command card the run is blocked on answers the
+  keyboard: ↵ approves once, Esc denies, from anywhere that isn't a text
+  field — and from the composer itself while it is empty, so you never leave
+  the field. Typed text keeps ↵ for queueing the message.
+- **The decision in words.** The card says Deny · Run (Allow, Accept,
+  Dispatch by kind) with its keys beside it; the scope options — this run,
+  this project, a pattern — stay as quiet icons behind a hairline.
+
 ### Delegates
 
 - **A CLI's home is honoured everywhere.** `CODEX_HOME`, `CLAUDE_CONFIG_DIR`

@@ -5214,6 +5214,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}
             onApprovePattern={(pattern) => approveCommand("project", pattern)}
+            hotkeys
           />
         )}
         {/* Everywhere but Focus the question waits above the composer: those
@@ -5368,6 +5369,14 @@ This user request requires workspace inspection. Before answering, you MUST call
                   return;
                 }
               }
+              // While the run waits on a command and nothing is typed, the
+              // composer's ⏎ is the approval and esc the denial — the card
+              // sits right above it and the user shouldn't have to leave the
+              // field. Typed text keeps ⏎ for queueing the message.
+              if (pendingPermission && input.trim() === "") {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); approveCommand("once"); return; }
+                if (e.key === "Escape") { e.preventDefault(); rejectCommand(); return; }
+              }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               else if (e.key === "Tab" && !delegateSession) { e.preventDefault(); toggleMode(); }
               else if (e.key === "Escape" && (streaming || serverStarting)) { e.preventDefault(); stopCurrentStream(); }
@@ -5377,7 +5386,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPaste={onComposerPaste}
             onDrop={onComposerDrop}
             onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === "file")) e.preventDefault(); }}
-            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
+            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : pendingPermission ? "↵ runs the command, Esc denies it — or queue a message…" : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
             style={{ width: "100%", minHeight: 40, maxHeight: "max(168px, 40vh)", resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}
