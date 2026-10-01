@@ -70,7 +70,12 @@ fn background_chat_survives_all_clients_disconnecting_and_finishes_once() {
     ));
     std::fs::create_dir_all(dir.join("bin")).unwrap();
     let script = dir.join("bin/opencode");
+    // The fixture is the CLI's stdout shape only. Asked to `serve` (the
+    // adapter tries its event stream first, since #136) it refuses at once, so
+    // the turn falls back to a plain `run` without waiting out SERVE_READY —
+    // on a slow runner that wait alone exceeded this test's 15 s patience.
     std::fs::write(&script, r##"#!/bin/sh
+case "$1" in serve) echo "fixture has no server" >&2; exit 1;; esac
 printf '%s\n' "$@" > args.txt
 cat > prompt.txt
 printf '%s\n' '{"type":"step_start","sessionID":"ses_background_fixture","part":{"id":"start","type":"step-start"}}'
