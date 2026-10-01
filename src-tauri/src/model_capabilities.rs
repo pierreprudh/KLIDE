@@ -795,6 +795,7 @@ async fn resolve_uncached(
     // (OpenRouter reports windows and tool support per model), the registry
     // row's fixed window, then the name table.
     let listing = match entry.map(|e| e.models) {
+        Some(providers::ModelsHandler::AnthropicModels) => crate::models::anthropic_model_meta().await.get(model).cloned(),
         Some(providers::ModelsHandler::OpenAiModels) => crate::models::openai_model_meta(provider)
             .await
             .get(model)
@@ -809,6 +810,7 @@ async fn resolve_uncached(
     // Tool calling is the optimistic default on a hosted wire: an endpoint
     // that does not say is assumed to accept `tools`.
     let supports_tools = listing.as_ref().and_then(|m| m.supports_tools).unwrap_or(true);
+    let api_reasoning_levels = listing.as_ref().and_then(|m| m.reasoning_levels.clone());
 
     // Provider facts the registry does not carry yet: mlx_lm.server is
     // text-only (vision on Apple silicon needs mlx-vlm), and only the wires
@@ -816,7 +818,7 @@ async fn resolve_uncached(
     // whether the *model* reasons is the name table's call.
     let (supports_vision, reasons) = match entry.map(|e| (e.id, e.wire)) {
         Some(("mlx", _)) => (false, false),
-        Some((_, providers::WireFormat::Anthropic)) => (names.vision, names.reasoning),
+        Some((_, providers::WireFormat::Anthropic)) => (listing.as_ref().and_then(|m| m.supports_vision).unwrap_or(names.vision), listing.as_ref().and_then(|m| m.reasoning_levels.as_ref()).is_some_and(|v| !v.is_empty()) || names.reasoning),
         Some((_, providers::WireFormat::OpenAi(cfg))) => {
             (names.vision, cfg.supports_reasoning_effort && names.reasoning)
         }
@@ -831,7 +833,7 @@ async fn resolve_uncached(
             context_window,
             supports_tools,
             supports_vision,
-            reasoning_levels: wire_levels_if(reasons),
+            reasoning_levels: api_reasoning_levels.unwrap_or_else(|| wire_levels_if(reasons)),
             price_class,
             maker: names.maker,
         },
@@ -884,6 +886,14 @@ pub fn cost_for_run(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn anthropic_api_window_reaches_gauge_and_router() {
+        let row = serde_json::json!({"id":"claude-sonnet-5-5", "max_input_tokens":1_000_000, "capabilities":{"image_input":{"supported":true},"effort":{"supported":true,"high":{"supported":true}}}});
+        let metadata = crate::models::parse_anthropic_model(&row);
+        assert_eq!(metadata.context_length, Some(1_000_000));
+        assert_eq!(metadata.supports_vision, Some(true));
+        assert_eq!(metadata.reasoning_levels.as_ref().unwrap(), &vec!["high".to_string()]);
+    }
     use super::*;
 
     fn facts(model: &str) -> NameFacts {
