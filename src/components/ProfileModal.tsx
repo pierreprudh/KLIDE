@@ -206,19 +206,17 @@ function UsageLines({
     ? `$${usage.spend.costUsd.toFixed(2)} · ${humanTokens(usage.spend.tokens)} tokens`
     : null;
   if (collapsed) {
-    // Folded into the account's own row: every window as a short bar and its
-    // figure, side by side.
+    // Folded into the account's own row: only the 5-hour session window, the
+    // one that runs out first.
+    const session = usage.windows.find((w) => w.label === "Session");
     return (
       <div className="profile-usage-compact">
-        {usage.windows.map((w) => {
-          const percent = clamp(w.percent);
-          return (
-            <span key={w.label} className="profile-usage-compact-item" title={`${w.label} · ${resetLabel(w)}`}>
-              <Bar percent={percent} />
-              <span className="profile-usage-value">{Math.round(percent)}%</span>
-            </span>
-          );
-        })}
+        {session && (
+          <span className="profile-usage-compact-item" title={`Session · ${resetLabel(session)}`}>
+            <Bar percent={clamp(session.percent)} />
+            <span className="profile-usage-value">{Math.round(clamp(session.percent))}%</span>
+          </span>
+        )}
         {spend && <span className="profile-usage-spend">{spend}</span>}
       </div>
     );
