@@ -15,7 +15,7 @@
   color: var(--fg);
   outline: none;
   transform-origin: bottom left;
-  animation: profile-menu-appear 140ms ease-out;
+  animation: profile-menu-appear 220ms var(--ease-out);
 }
 .profile-account-menu-header {
   display: flex;
@@ -49,11 +49,7 @@
    CLI's own brand colour (brand marks are exempt from the palette, like the
    logos beside them) and turns red once a window is nearly spent. */
 .profile-account-cli {
-  padding-bottom: 6px;
   --usage-color: var(--accent);
-}
-.profile-account-cli:has(.profile-account-head[aria-expanded="false"]) {
-  padding-bottom: 0;
 }
 .profile-account-cli[data-provider="claude-code"] { --usage-color: #d97757; }
 .profile-account-cli[data-provider="codex"] { --usage-color: #7885eb; }
@@ -170,9 +166,63 @@
   color: var(--fg-subtle);
 }
 @keyframes profile-menu-appear {
-  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+.profile-account-menu[data-leaving] {
+  animation: profile-menu-leave 150ms ease-in forwards;
+}
+@keyframes profile-menu-leave {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(4px) scale(0.99); }
+}
+
+/* Folding an account: the open view collapses by height (0fr ↔ 1fr) and
+   fades; the one-line figures fade in beside the name. */
+.profile-usage-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 240ms var(--ease-out),
+    opacity 160ms ease-out;
+}
+.profile-usage-fold[data-open] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 240ms var(--ease-out),
+    opacity 200ms ease-out 60ms;
+}
+.profile-usage-fold-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.profile-usage-fold-inner > * {
+  margin-bottom: 6px;
+}
+.profile-account-swap-in,
+.profile-account-controls {
+  display: flex;
+  align-items: center;
+  animation: profile-swap-in 200ms ease-out;
+}
+.profile-account-swap-in {
+  flex: 0 0 144px;
+}
+.profile-account-swap-in > .profile-usage-compact {
+  flex: 1;
+}
+@keyframes profile-swap-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .profile-account-menu { animation: none; }
+  .profile-account-menu,
+  .profile-account-menu[data-leaving],
+  .profile-account-swap-in,
+  .profile-account-controls { animation: none; }
+  .profile-usage-fold,
+  .profile-usage-fold[data-open] { transition: none; }
 }
