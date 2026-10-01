@@ -232,9 +232,13 @@ export type TodoStripSlot = "card" | "mark" | "none";
 export const ISLAND_WIDTH = 320;
 
 export function StepMark({ index, state }: { index: number; state: "todo" | "active" | "done" }) {
-  const r = (MARK - 1.5) / 2;
-  const c = 2 * Math.PI * r;
+  // A whole-pixel radius keeps the 1px track on the pixel grid: 7 at 16px puts
+  // the hairline on 6.5–7.5, one crisp ring at 1x and a clean pair at 2x.
+  const r = MARK / 2 - 1;
   const active = state === "active";
+  const ring = (cls: string) => (
+    <circle className={cls} cx={MARK / 2} cy={MARK / 2} r={r} fill="none" pathLength={100} strokeLinecap="round" />
+  );
   return (
     <span
       className="klide-todo-mark"
@@ -254,60 +258,33 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
         fontSize: 10,
         // A bold figure inside a 16px ring reads as a badge; the regular cut
         // sits in the circle like a figure on a dial.
-        fontWeight: 500,
+        fontWeight: 400,
         lineHeight: 1,
         fontVariantNumeric: "tabular-nums",
       }}
     >
       {state !== "done" && (
-        <svg width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "absolute", inset: 0 }}>
-          {/* The working step's track fades almost out so the arc is the only
-              stroke with weight — a track and an arc of equal weight is a
-              gauge, and this isn't measuring anything. */}
-          <circle
-            cx={MARK / 2}
-            cy={MARK / 2}
-            r={r}
-            fill="none"
-            stroke={active ? "color-mix(in srgb, var(--fg-dim) 18%, transparent)" : "color-mix(in srgb, var(--fg-dim) 45%, transparent)"}
-            strokeWidth={1}
-          />
+        // The track. On the working step it fades almost out (todoStrip.css)
+        // so the arc is the only stroke with weight — a track and an arc of
+        // equal weight is a gauge, and this isn't measuring anything.
+        <svg className="klide-todo-track" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "absolute", inset: 0 }}>
+          <circle cx={MARK / 2} cy={MARK / 2} r={r} fill="none" strokeWidth={1} />
         </svg>
       )}
       {active && (
+        // A comet, not a bean: a faint tail under a short bright head, both
+        // hairline, breathing as they turn. Dash lengths are percentages of
+        // the path (pathLength=100) so the stylesheet owns the motion.
         <svg className="klide-todo-ring" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden>
-          {/* A comet, not a bean: a faint tail sweeping half the ring under a
-              short bright head, both hairline. Round caps on a 1.25px stroke
-              stay points, not blobs. */}
-          <circle
-            cx={MARK / 2}
-            cy={MARK / 2}
-            r={r}
-            fill="none"
-            stroke="var(--accent)"
-            strokeOpacity={0.28}
-            strokeWidth={1.25}
-            strokeLinecap="round"
-            strokeDasharray={`${c * 0.5} ${c * 0.5}`}
-          />
-          <circle
-            cx={MARK / 2}
-            cy={MARK / 2}
-            r={r}
-            fill="none"
-            stroke="var(--accent)"
-            strokeWidth={1.25}
-            strokeLinecap="round"
-            strokeDasharray={`${c * 0.22} ${c * 0.78}`}
-            strokeDashoffset={-(c * 0.28)}
-          />
+          {ring("klide-todo-ring-tail")}
+          {ring("klide-todo-ring-head")}
         </svg>
       )}
       {state === "done" ? <CheckIcon /> : (
         // Monaspace's line box carries more descent than its figures use, so
         // a centred box leaves the figure riding ~1px high in the ring (seen
         // at 8x); settle the glyph, not the box.
-        <span style={{ position: "relative", transform: "translateY(0.5px)" }}>{index + 1}</span>
+        <span className="klide-todo-figure" style={{ position: "relative", transform: "translateY(0.5px)" }}>{index + 1}</span>
       )}
     </span>
   );
