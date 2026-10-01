@@ -234,6 +234,7 @@ export const ISLAND_WIDTH = 320;
 export function StepMark({ index, state }: { index: number; state: "todo" | "active" | "done" }) {
   const r = (MARK - 1.5) / 2;
   const c = 2 * Math.PI * r;
+  const active = state === "active";
   return (
     <span
       className="klide-todo-mark"
@@ -248,37 +249,57 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
         boxSizing: "border-box",
         // opaque so the thread breaks cleanly at each node
         background: state === "done" ? "var(--accent)" : "var(--bg-elevated)",
-        color: state === "done" ? "var(--bg-elevated)" : state === "active" ? "var(--fg-strong)" : "var(--fg-dim)",
+        color: state === "done" ? "var(--bg-elevated)" : active ? "var(--fg-strong)" : "var(--fg-dim)",
         fontFamily: "var(--font-mono)",
         fontSize: 9,
-        fontWeight: 600,
+        // A bold figure inside a 14px ring reads as a badge; the regular cut
+        // sits in the circle like a figure on a dial.
+        fontWeight: 500,
         lineHeight: 1,
         fontVariantNumeric: "tabular-nums",
       }}
     >
       {state !== "done" && (
         <svg width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "absolute", inset: 0 }}>
+          {/* The working step's track fades almost out so the arc is the only
+              stroke with weight — a track and an arc of equal weight is a
+              gauge, and this isn't measuring anything. */}
           <circle
             cx={MARK / 2}
             cy={MARK / 2}
             r={r}
             fill="none"
-            stroke={state === "active" ? "var(--border)" : "color-mix(in srgb, var(--fg-dim) 45%, transparent)"}
-            strokeWidth={state === "active" ? 1.5 : 1}
+            stroke={active ? "color-mix(in srgb, var(--fg-dim) 18%, transparent)" : "color-mix(in srgb, var(--fg-dim) 45%, transparent)"}
+            strokeWidth={1}
           />
         </svg>
       )}
-      {state === "active" && (
+      {active && (
         <svg className="klide-todo-ring" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden>
+          {/* A comet, not a bean: a faint tail sweeping half the ring under a
+              short bright head, both hairline. Round caps on a 1.25px stroke
+              stay points, not blobs. */}
           <circle
             cx={MARK / 2}
             cy={MARK / 2}
             r={r}
             fill="none"
             stroke="var(--accent)"
-            strokeWidth={1.5}
+            strokeOpacity={0.28}
+            strokeWidth={1.25}
             strokeLinecap="round"
-            strokeDasharray={`${c * 0.3} ${c * 0.7}`}
+            strokeDasharray={`${c * 0.5} ${c * 0.5}`}
+          />
+          <circle
+            cx={MARK / 2}
+            cy={MARK / 2}
+            r={r}
+            fill="none"
+            stroke="var(--accent)"
+            strokeWidth={1.25}
+            strokeLinecap="round"
+            strokeDasharray={`${c * 0.22} ${c * 0.78}`}
+            strokeDashoffset={-(c * 0.28)}
           />
         </svg>
       )}
