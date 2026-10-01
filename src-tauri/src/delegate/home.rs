@@ -206,6 +206,13 @@ mod tests {
         assert_eq!(OpenCode.sessions_dir(&env), Some(apple.clone()));
         assert_eq!(OpenCode.auth_files(&env)[1], apple.join("account.json"));
 
+        // An explicit override wins even before its directory is created.
+        let moved = home.join("new-data");
+        let overridden = MapEnv::with_home(&home).set("XDG_DATA_HOME", &moved);
+        assert_eq!(OpenCode.data_home(&overridden), Some(moved.join("opencode")));
+        let without_home = MapEnv(Default::default()).set("XDG_DATA_HOME", &moved);
+        assert_eq!(OpenCode.data_home(&without_home), Some(moved.join("opencode")));
+
         // The XDG dir wins as soon as it exists.
         let xdg = home.join(".local/share/opencode");
         std::fs::create_dir_all(&xdg).unwrap();

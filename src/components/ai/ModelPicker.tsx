@@ -10,7 +10,8 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { MLX_MODEL_PRESETS, OLLAMA_MODEL_PRESETS, providerName } from "../../agent/providers";
+import { providerName } from "../../agent/providers";
+import { providerGroup, providerPresets } from "../../agent/providerCatalog";
 import type { ProviderId } from "../../agent/types";
 import {
   listProviderModelMetadata,
@@ -67,23 +68,18 @@ export function modelOptionsFor(
 ): string[] {
   const options = [...availableModels];
   if (model && !options.includes(model)) options.unshift(model);
-  if (provider === "mlx") {
-    for (const preset of MLX_MODEL_PRESETS) {
-      if (!options.includes(preset)) options.push(preset);
-    }
-  }
-  // Klide's own fine-tune is offered on Ollama even before it's pulled, so it's
-  // discoverable in the picker (shown as not-installed until `ollama pull`).
-  // Ollama reports installed models with an explicit tag ("name:latest") while
-  // the preset is bare, so compare tag-insensitively — otherwise a pulled
-  // preset shows twice, once installed and once as a phantom "Stored" row.
-  if (provider === "ollama") {
-    const bareTag = (m: string) =>
-      m.endsWith(":latest") ? m.slice(0, -":latest".length) : m;
-    const present = new Set(options.map(bareTag));
-    for (const preset of OLLAMA_MODEL_PRESETS) {
-      if (!present.has(bareTag(preset))) options.push(preset);
-    }
+  // The registry row's presets are offered even before they're installed or
+  // listed (MLX's curated list; Klide's own Ollama fine-tune, shown as
+  // not-installed until `ollama pull`). Ollama reports installed models with
+  // an explicit tag ("name:latest") while a preset is bare, so compare
+  // tag-insensitively — otherwise a pulled preset shows twice, once installed
+  // and once as a phantom "Stored" row. (Rust's `routing::ollama_tag_matches`
+  // is the same rule.)
+  const bareTag = (m: string) =>
+    m.endsWith(":latest") ? m.slice(0, -":latest".length) : m;
+  const present = new Set(options.map(bareTag));
+  for (const preset of providerPresets(provider)) {
+    if (!present.has(bareTag(preset))) options.push(preset);
   }
   return options;
 }
@@ -98,32 +94,9 @@ export function modelLabel(name: string): string {
 
 // Local runtimes "install" models on disk; hosted catalogs merely "offer"
 // them. Pick the verb so a 339-model OpenRouter list doesn't claim 339 are
-// "installed" on the user's machine.
-const LOCAL_PROVIDERS: ReadonlySet<string> = new Set([
-  "ollama",
-  "mlx",
-  "lmstudio",
-  "llamacpp",
-  "vllm",
-]);
-
-function providerCaption(id: ProviderId): string {
-  switch (id) {
-    case "mlx": return "MLX · Apple Silicon";
-    case "ollama": return "Ollama";
-    case "lmstudio": return "LM Studio";
-    case "llamacpp": return "llama.cpp";
-    case "vllm": return "vLLM";
-    case "anthropic": return "Anthropic";
-    case "openai": return "OpenAI";
-    case "gemini": return "Google Gemini";
-    case "mistral": return "Mistral";
-    case "xai": return "xAI Grok";
-    case "deepseek": return "DeepSeek";
-    case "openrouter": return "OpenRouter";
-    // Delegates and self-hosted (custom:*) ids — the catalog's own name.
-    default: return providerName(id);
-  }
+// "installed" on the user's machine. The registry row's group decides.
+function modelsVerb(id: ProviderId): string {
+  return providerGroup(id) === "local" ? "installed" : "available";
 }
 
 export function ModelPicker({
@@ -479,11 +452,11 @@ export function ModelPicker({
                   letterSpacing: "-0.005em",
                 }}
               >
-                {providerCaption(provider)}
+                {providerName(provider)}
               </div>
               <div style={{ fontSize: 10, color: "var(--fg-dim)", marginTop: 1 }}>
                 {availableModels.length > 0
-                  ? `${availableModels.length} ${availableModels.length === 1 ? "model" : "models"} ${LOCAL_PROVIDERS.has(provider) ? "installed" : "available"}`
+                  ? `${availableModels.length} ${availableModels.length === 1 ? "model" : "models"} ${modelsVerb(provider)}`
                   : "No models detected"}
               </div>
             </div>

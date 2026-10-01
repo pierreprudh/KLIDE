@@ -1,8 +1,10 @@
 mod visual_export;
 mod accounts;
+mod usage;
 mod adapters;
 mod blocking;
 mod cli;
+mod deep_link;
 mod cli_update;
 mod agent;
 mod coordination;
@@ -36,6 +38,7 @@ pub mod pty_daemon;
 mod pty_host;
 mod pty_spawn;
 mod search;
+mod services_menu;
 mod skills;
 mod storage;
 mod workspace;
@@ -205,6 +208,12 @@ async fn account_activate(app: tauri::AppHandle, provider: String, name: String)
         accounts::activate(&provider, &name)
     })
     .await
+}
+
+/// How much of each subscription CLI's allowance is spent (`usage.rs`).
+#[tauri::command]
+async fn usage_snapshot() -> Vec<usage::ToolUsage> {
+    usage::snapshot().await
 }
 
 /// Tell the backend which folder is open, so `${VAR}` token references can
@@ -872,6 +881,7 @@ pub fn run() {
         // handler only exists once the plugin is initialized here. Without
         // this line a link in an answer answers "plugin opener not found".
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
         // the frontend finishing its first page load proves the packaged
         // binary, its dylibs, the webview entitlements, and the embedded
@@ -890,6 +900,19 @@ pub fn run() {
             use tauri::Manager;
 
             let handle = app.handle();
+
+            // `klide://` links: a link that launched the app, then every one
+            // that arrives while it runs. deep_link.rs parses and queues them.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let links = handle.clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::receive(&links, event.urls().into_iter().map(|u| u.to_string()));
+                });
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::receive(handle, urls.into_iter().map(|u| u.to_string()));
+                }
+            }
 
             // Persistent delegate sessions: reconnect to (or start) the ptyd
             // daemon when the toggle was left on last session. Skipped during
@@ -999,6 +1022,7 @@ pub fn run() {
             delegate_slash_commands,
             delegate_catalog,
             claude_code_settings,
+            providers::ai_list_providers,
             models::ai_provider_models,
             models::ai_provider_credits,
             models::ai_provider_model_meta,
@@ -1031,6 +1055,7 @@ pub fn run() {
             custom_cli_upsert,
             custom_cli_remove,
             accounts_list,
+            usage_snapshot,
             account_save_current,
             account_activate,
             set_active_workspace,
@@ -1047,6 +1072,9 @@ pub fn run() {
             connectors::connectors_remove,
             connectors::connectors_discover,
             connectors::connectors_probe,
+            deep_link::deep_link_take,
+            services_menu::services_ask_kit_status,
+            services_menu::services_ask_kit_set,
             connectors::connectors_add_github,
             connectors::connectors_status,
             agent::agent_start_run,
@@ -1243,6 +1271,8 @@ mod blocking_door_tests {
         "ai_model_pricing",
         "ai_list_tools",
         "ai_tool_catalog",
+        // providers.rs — the registry as plain rows, no IO
+        "ai_list_providers",
         // lib.rs — a small JSON read; user-driven, not polled
         "accounts_list",
         // lib.rs — hand off to the native menu
@@ -1282,6 +1312,8 @@ mod blocking_door_tests {
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
         ("connectors.rs", include_str!("connectors.rs")),
+        ("deep_link.rs", include_str!("deep_link.rs")),
+        ("services_menu.rs", include_str!("services_menu.rs")),
         ("models.rs", include_str!("models.rs")),
         ("coordination.rs", include_str!("coordination.rs")),
         ("storage.rs", include_str!("storage.rs")),

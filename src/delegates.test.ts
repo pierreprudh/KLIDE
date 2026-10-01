@@ -40,9 +40,9 @@ describe("the delegate catalog", () => {
 
   it("has no second label table for a delegate", () => {
     // "Oh My Pi" is the label most likely to be retyped; every surface reads
-    // it through delegateLabel / DELEGATES. agent/providers.ts keeps the
+    // it through delegateLabel / DELEGATES. agent/providerCatalog.generated.ts keeps the
     // Provider catalog's own row (that registry is published from Rust
     // separately); its test pins that row to SOURCE_LABEL.
-    expect(offenders(/"Oh My Pi"/)).toEqual(["agent/providers.ts"]);
+    expect(offenders(/"Oh My Pi"/)).toEqual(["agent/providerCatalog.generated.ts"]);
   });
 });

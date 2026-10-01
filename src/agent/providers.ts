@@ -2,13 +2,14 @@ import type { AgentMode, ProviderId } from "./types";
 import { customProviderSync, isCustomProvider } from "../customProviders";
 import { customCliSync, getCustomCliSync, isCustomCli } from "../customCli";
 import { isDelegateId } from "../delegates";
+import { PROVIDER_CATALOG_ROWS, type ProviderRow } from "./providerCatalog";
 
 export type ProviderGroup = {
   label: string;
   items: { id: ProviderId; name: string; available: boolean }[];
 };
 
-export type ProviderGroupId = "routed" | "local" | "subscription" | "api";
+export type ProviderGroupId = "routed" | "local" | "subscription" | "hosted";
 export type ProviderRuntime =
   | "managed-local"
   | "external-local"
@@ -19,9 +20,11 @@ export type ProviderRuntime =
    *  concrete one at run start. Needs no key, no server, no model list. */
   | "router";
 
-/** One frontend Provider row. Picker grouping, availability, defaults, and
- * runtime capabilities all derive from this catalog so adding a Provider is a
- * one-row change instead of a hunt through parallel maps and predicates. */
+/** One frontend Provider row, as the pickers read it. Every builtin row is
+ * *derived* from the Rust registry's published row (`providerCatalog.ts`) —
+ * name, group, runtime and default model are read off it, never typed here —
+ * so adding a Provider is one Rust row, and the only thing this file adds is
+ * the `auto` router and the shape custom endpoints / CLIs are presented in. */
 export type ProviderDefinition = {
   id: ProviderId;
   name: string;
@@ -33,20 +36,6 @@ export type ProviderDefinition = {
   available: boolean;
   defaultModel: string;
 };
-
-export const MLX_MODEL_PRESETS = [
-  "mlx-community/Llama-3.1-8B-Instruct-4bit",
-  "Qwen/Qwen3-4B-MLX-4bit",
-  "mlx-community/gemma-2-9b-it-4bit",
-  "mlx-community/gemma-4-E4B-it-qat-4bit",
-  "mlx-community/gemma-4-12B-it-qat-4bit",
-] as const;
-
-/** Curated Ollama models offered in the picker even before they're pulled.
- *  `pierreprudh/klide-8b` is Klide's own LoRA fine-tune (trained on agent
- *  traces to run this harness's tool/edit contract). Pull it with
- *  `ollama pull pierreprudh/klide-8b` — https://ollama.com/pierreprudh/klide-8b */
-export const OLLAMA_MODEL_PRESETS = ["pierreprudh/klide-8b"] as const;
 
 /** Sentinel model for delegate CLIs meaning "no model picked" — the Rust
  *  side (delegate::CLI_DEFAULT_MODEL) omits the model flag when it sees this,
@@ -68,31 +57,43 @@ export function isAutoProvider(id: string): boolean {
   return id === AUTO_PROVIDER;
 }
 
+/** How a published row runs, from two facts the row carries: its group, and
+ *  whether Klide itself manages the server. */
+function runtimeOf(row: ProviderRow): ProviderRuntime {
+  switch (row.group) {
+    case "local":
+      return row.isLocalServer ? "managed-local" : "external-local";
+    case "subscription":
+      return "delegate";
+    case "hosted":
+      return "hosted";
+  }
+}
+
+/** A published row as a picker row. A subscription row has no default model
+ *  of its own — the CLI's default wins — so it presents the sentinel. */
+function definitionOf(row: ProviderRow): ProviderDefinition {
+  return {
+    id: row.id as ProviderId,
+    name: row.label,
+    ...(row.shortLabel ? { shortName: row.shortLabel } : {}),
+    group: row.group,
+    runtime: runtimeOf(row),
+    available: true,
+    defaultModel: row.defaultModel ?? (row.group === "subscription" ? CLI_DEFAULT_MODEL : ""),
+  };
+}
+
 export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
   { id: AUTO_PROVIDER, name: "Auto", group: "routed", runtime: "router", available: true, defaultModel: AUTO_MODEL },
-  { id: "ollama", name: "Ollama", group: "local", runtime: "managed-local", available: true, defaultModel: "llama3.1:8b" },
-  { id: "mlx", name: "MLX (Apple Silicon)", shortName: "MLX", group: "local", runtime: "managed-local", available: true, defaultModel: MLX_MODEL_PRESETS[0] },
-  { id: "lmstudio", name: "LM Studio", group: "local", runtime: "external-local", available: true, defaultModel: "local-model" },
-  { id: "llamacpp", name: "llama.cpp", group: "local", runtime: "external-local", available: false, defaultModel: "local-model" },
-  { id: "vllm", name: "vLLM", group: "local", runtime: "external-local", available: false, defaultModel: "local-model" },
-  { id: "claude-code", name: "Claude Code", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
-  { id: "codex", name: "Codex", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
-  { id: "opencode", name: "OpenCode", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
-  { id: "omp", name: "Oh My Pi", group: "subscription", runtime: "delegate", available: true, defaultModel: CLI_DEFAULT_MODEL },
-  { id: "anthropic", name: "Anthropic", group: "api", runtime: "hosted", available: true, defaultModel: "claude-sonnet-4-6" },
-  { id: "openai", name: "OpenAI", group: "api", runtime: "hosted", available: true, defaultModel: "gpt-4.1" },
-  { id: "gemini", name: "Google Gemini", shortName: "Gemini", group: "api", runtime: "hosted", available: false, defaultModel: "gemini-2.5-pro" },
-  { id: "mistral", name: "Mistral", group: "api", runtime: "hosted", available: true, defaultModel: "mistral-large-latest" },
-  { id: "xai", name: "xAI Grok", shortName: "xAI", group: "api", runtime: "hosted", available: true, defaultModel: "grok-4" },
-  { id: "deepseek", name: "DeepSeek", group: "api", runtime: "hosted", available: true, defaultModel: "deepseek-chat" },
-  { id: "openrouter", name: "OpenRouter", group: "api", runtime: "hosted", available: true, defaultModel: "openai/gpt-4o" },
-] as const;
+  ...PROVIDER_CATALOG_ROWS.map(definitionOf),
+];
 
 const GROUPS: Array<{ id: ProviderGroupId; label: string }> = [
   { id: "routed", label: "Routed" },
   { id: "local", label: "Local" },
   { id: "subscription", label: "Subscription" },
-  { id: "api", label: "API" },
+  { id: "hosted", label: "API" },
 ];
 
 export const PROVIDER_GROUPS: ProviderGroup[] = GROUPS.map((group) => ({
@@ -126,7 +127,7 @@ export function providerDefinition(id: ProviderId): ProviderDefinition | undefin
     return {
       id,
       name: custom?.label ?? (id.slice("custom:".length) || "Custom"),
-      group: "api",
+      group: "hosted",
       runtime: "custom",
       available: true,
       defaultModel: custom?.defaultModel ?? "",

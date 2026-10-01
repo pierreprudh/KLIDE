@@ -1,4 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ProviderRow } from "../agent/providerCatalog";
+
+/** The Rust registry, one published row per Provider — the same rows the
+ *  generated mirror (`src/agent/providerCatalog.generated.ts`) holds for
+ *  first paint. Read live to verify the mirror, not to drive the picker. */
+export function listProviders(): Promise<ProviderRow[]> {
+  return invoke<ProviderRow[]>("ai_list_providers");
+}
 
 export type ProviderKeyStatus = {
   hasKey: boolean;

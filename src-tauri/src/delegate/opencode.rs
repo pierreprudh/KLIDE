@@ -54,10 +54,11 @@ impl Delegate for OpenCode {
     /// used to resolve this separately and could look at different installs.
     fn data_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
         let xdg = super::home::xdg(env, "XDG_DATA_HOME", ".local/share", "opencode")?;
-        if xdg.exists() {
+        if env.var("XDG_DATA_HOME").is_some() || xdg.exists() {
             return Some(xdg);
         }
-        let apple = super::home_dir(env)?.join("Library/Application Support/opencode");
+        let Some(home) = super::home_dir(env) else { return Some(xdg) };
+        let apple = home.join("Library/Application Support/opencode");
         Some(if apple.exists() { apple } else { xdg })
     }
 
