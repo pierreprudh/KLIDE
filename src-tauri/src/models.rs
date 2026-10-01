@@ -150,10 +150,15 @@ pub struct ProviderCredits {
 pub(crate) async fn ai_provider_credits(
     provider: String,
 ) -> Result<Option<ProviderCredits>, String> {
-    match provider.as_str() {
-        "openrouter" => fetch_openrouter_credits().await.map(Some),
-        "deepseek" => fetch_deepseek_credits().await,
-        _ => Ok(None),
+    // The row says which balance endpoint (if any) a provider has; the match
+    // is exhaustive, so a new `CreditsSource` cannot land as a silent `None`.
+    let source = providers::lookup(&provider)
+        .map(|entry| entry.credits)
+        .unwrap_or(providers::CreditsSource::None);
+    match source {
+        providers::CreditsSource::OpenRouter => fetch_openrouter_credits().await.map(Some),
+        providers::CreditsSource::DeepSeek => fetch_deepseek_credits().await,
+        providers::CreditsSource::None => Ok(None),
     }
 }
 

@@ -245,8 +245,26 @@ geometry is not fleet state; the layout module owns placement and persistence.
 _Avoid_: global panel state, panel list
 
 **Provider**:
-A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. Differs only in wire format; behaviour behind the seam is shared.
+A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. One
+row of the Rust registry (`src-tauri/src/providers.rs`) *is* the whole
+Provider: its wire, key source, label, group (local / hosted / subscription),
+default model, presets, brand key and run-loop quirks (`ProviderCaps`) are
+declared there and nowhere else. Behaviour behind the seam is shared; what
+differs is on the row. TypeScript reads the row through the Provider catalog,
+it never restates a fact about one.
 _Avoid_: vendor, backend, LLM
+
+**Provider catalog**:
+The Rust registry as the renderer reads it — every row published as plain
+data (`ai_list_providers`), mirrored into
+`src/agent/providerCatalog.generated.ts` by a Rust test that fails when the
+mirror is stale, and read through one TS door
+(`src/agent/providerCatalog.ts`). The picker's rows, the API-keys list, the
+local-server rows and the default-model fallbacks are all derived from it.
+`auto` and `custom:*` / `cli:*` ids are not rows; the door answers for them
+explicitly rather than with a builtin's value.
+_Avoid_: provider list, provider table, PROVIDER_CATALOG (that is the
+picker's derived view, not the catalog)
 
 **Auto**:
 The Provider the picker sends when the user leaves the model choice to Klide.

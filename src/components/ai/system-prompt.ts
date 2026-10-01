@@ -2,6 +2,18 @@ import { enabledSkillsPrompt, type Skill } from "../../skills";
 import type { AgentMode } from "../../agent/types";
 import spreadsheetGuide from "../../spreadsheets/agent-guide.md?raw";
 
+/** The bare Chat prompt for a Provider whose registry row says
+ *  `minimalChatContext` (small local backends — MLX, Ollama — where the full
+ *  prompt made a bare "hello" feel broken). One prompt, the same for the
+ *  draft's token estimate and the turn that is sent: the panel used to hold
+ *  two different ones for those two moments, and only this one kept the Kit
+ *  persona and the anti-misidentification guard. */
+export const MINIMAL_CHAT_SYSTEM_PROMPT = `You are Kit, Klide's coding assistant — a calm, warm pair-programmer. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation. If asked who you are, you're Kit; never claim to be Claude, GPT, or any other product.
+
+If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
+
+Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`;
+
 export function buildSystemPrompt(
   workspaceRoot: string | null,
   stopAfterRejection: boolean,

@@ -9,27 +9,28 @@ import {
   readProviderKeyStatus,
   type ProviderKeyStatus,
 } from "../../ipc/aiProviders";
-import { DotGridLoader, ProviderLogo } from "../ai/icons";
+import { DotGridLoader, ProviderLogo, providerChartColor } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
+import { hostedProviderRows } from "../../agent/providerCatalog";
 import { notify } from "../../toast";
 import { fetchAgentRunsCached, peekAgentRunsCache, type Run } from "../../runs";
 import { GhostButton, LinkButton, Panel, PencilIcon, Row, StatusText } from "./controls";
-import { DonutChart, PROVIDER_BRAND_COLOR, UsageHistogram, formatUsd, runCost } from "./stats";
+import { DonutChart, UsageHistogram, formatUsd, runCost } from "./stats";
 
-// API providers whose keys live in the OS keychain (managed from the API tab).
+// API providers whose keys live in the OS keychain (managed from the API tab):
+// the registry's hosted rows, each carrying the env var its key may also come
+// from and the shape of a key (`KeySource::Hosted` in providers.rs).
 export const API_KEY_PROVIDERS: {
   id: string;
   title: string;
   envVar: string;
   placeholder: string;
-}[] = [
-  { id: "anthropic", title: "Anthropic", envVar: "ANTHROPIC_API_KEY", placeholder: "sk-ant-..." },
-  { id: "openai", title: "OpenAI", envVar: "OPENAI_API_KEY", placeholder: "sk-..." },
-  { id: "mistral", title: "Mistral", envVar: "MISTRAL_API_KEY", placeholder: "..." },
-  { id: "xai", title: "xAI Grok", envVar: "XAI_API_KEY", placeholder: "xai-..." },
-  { id: "deepseek", title: "DeepSeek", envVar: "DEEPSEEK_API_KEY", placeholder: "sk-..." },
-  { id: "openrouter", title: "OpenRouter", envVar: "OPENROUTER_API_KEY", placeholder: "sk-or-..." },
-];
+}[] = hostedProviderRows().map((row) => ({
+  id: row.id,
+  title: row.label,
+  envVar: row.keyEnv,
+  placeholder: row.keyPlaceholder ?? "",
+}));
 
 export type KeyStatus = ProviderKeyStatus;
 
@@ -287,7 +288,7 @@ export function writeBudget(p: string, n: number | null) {
 }
 
 export function providerColor(id: string): string {
-  return PROVIDER_BRAND_COLOR[id] ?? "var(--accent)";
+  return providerChartColor(id) ?? "var(--accent)";
 }
 
 // One balance donut in the provider row: used vs left, with the remaining

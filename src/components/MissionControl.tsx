@@ -142,6 +142,7 @@ import {
   providerShortName,
   selectableProviders,
 } from "../agent/providers";
+import { providerRowsIn } from "../agent/providerCatalog";
 import { ModelPicker } from "./ai/ModelPicker";
 import { dispatchRace, PartialRaceError, type RaceAgentPick } from "../agent/race";
 import { listRaces, raceForRun, subscribeRaces, type RaceGroup, type RaceMember } from "../races";
@@ -303,13 +304,10 @@ const MODEL_PREFIX_PROVIDERS = new Set(["openrouter", "mlx"]);
 // subtitle mark shows the model's own maker (DeepSeek, Qwen, Google/Gemma, …)
 // rather than repeating the runtime logo the avatar already carries; it falls
 // back to the runtime mark when the maker isn't recognised.
+// Every local row of the registry, plus OpenRouter (a hosted router).
 const RUNTIME_MODEL_PROVIDERS = new Set([
   "openrouter",
-  "mlx",
-  "ollama",
-  "lmstudio",
-  "llamacpp",
-  "vllm",
+  ...providerRowsIn("local").map((row) => row.id),
 ]);
 
 // The model name as shown on a run row — "org/" prefix stripped for the
