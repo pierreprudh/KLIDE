@@ -153,8 +153,18 @@ export async function verifyProviderCatalog(
   const liveById = new Map(live.map((row) => [row.id, row]));
   for (const row of ROWS) {
     const theirs = liveById.get(row.id);
-    if (!theirs || JSON.stringify(theirs) !== JSON.stringify(row)) differing.push(row.id);
+    if (!theirs || catalogRowJson(theirs) !== catalogRowJson(row)) differing.push(row.id);
   }
   for (const row of live) if (!BY_ID.has(row.id)) differing.push(row.id);
   return differing;
+}
+
+// IPC serializers may reorder object keys; compare data, not insertion order.
+function catalogRowJson(row: ProviderRow): string {
+  return JSON.stringify(row, (_key, value: unknown) => {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return value;
+  });
 }

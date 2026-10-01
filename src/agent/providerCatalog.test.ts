@@ -95,6 +95,14 @@ describe("Provider catalog — the one TS door onto the Rust registry", () => {
     }
   });
 
+  it("ignores IPC object-key order, including nested capabilities", async () => {
+    const reordered: typeof PROVIDER_CATALOG_ROWS = JSON.parse(JSON.stringify(PROVIDER_CATALOG_ROWS.map((row) => ({
+      ...Object.fromEntries(Object.entries(row).reverse()),
+      caps: Object.fromEntries(Object.entries(row.caps).reverse()),
+    }))));
+    expect(await verifyProviderCatalog(async () => [...reordered])).toEqual([]);
+  });
+
   it("verifies the mirror against what Rust serves live", async () => {
     const same = await verifyProviderCatalog(async () => [...PROVIDER_CATALOG_ROWS]);
     expect(same).toEqual([]);
