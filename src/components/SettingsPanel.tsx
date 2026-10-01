@@ -4,6 +4,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { FromOtherApps } from "./settings/fromOtherApps";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
@@ -225,6 +226,7 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
 // toggles, key managers, whole panes — stay in the hand list below.
 type SettingIndexEntry = { label: string; section: SectionId; keywords: string };
 const panelOnlyIndex: SettingIndexEntry[] = [
+  { label: "Ask Kit from any app", section: "general", keywords: "services menu right click selection ask kit quick action raycast shortcuts deep link klide:// url scheme" },
   { label: "Panel visibility", section: "general", keywords: "explorer sidebar terminal ai panel show hide toggle" },
   { label: "Panel sizes", section: "layout", keywords: "layout width height size resize panel" },
   { label: "Layout presets", section: "layout", keywords: "layout preset bento grid workbench arrange" },
@@ -922,6 +924,9 @@ export function SettingsPanel({
                   }
                 />
               </Panel>
+            </SettingBlock>
+            <SettingBlock title="From other apps">
+              <FromOtherApps />
             </SettingBlock>
             <SettingBlock title="Files">
               <Panel>
