@@ -25,6 +25,8 @@ const CLIS = [
 // The Claude reading is a network call; opening the menu twice in a minute
 // should not make it twice.
 const FRESH_MS = 60_000;
+/** How long the menu takes to leave — matches `profile-menu-leave`. */
+const LEAVE_MS = 150;
 let lastUsage: { at: number; tools: ToolUsage[] } | null = null;
 
 function useUsage(open: boolean): ToolUsage[] | null {
@@ -61,6 +63,20 @@ export function ProfileModal({ open, onClose }: Props) {
   const { username, avatarUrl } = useUserInfo();
   const menuRef = useRef<HTMLDivElement>(null);
   const tools = useUsage(open);
+  // Stay on screen for the leave animation after the parent closes us,
+  // whoever closed it — Escape, the backdrop, or the rail button again.
+  const [leaving, setLeaving] = useState(false);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (wasOpen.current && !open) {
+      setLeaving(true);
+      const t = window.setTimeout(() => setLeaving(false), LEAVE_MS);
+      wasOpen.current = open;
+      return () => window.clearTimeout(t);
+    }
+    wasOpen.current = open;
+    setLeaving(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -89,11 +105,15 @@ export function ProfileModal({ open, onClose }: Props) {
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open && !leaving) return null;
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: Z.modal }} onClick={onClose}>
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: Z.modal, pointerEvents: open ? undefined : "none" }}
+      onClick={onClose}
+    >
       <div ref={menuRef} role="dialog" aria-modal="true" aria-label="Accounts" tabIndex={-1}
-        className="profile-account-menu" onClick={(event) => event.stopPropagation()}>
+        className="profile-account-menu" data-leaving={!open || undefined}
+        onClick={(event) => event.stopPropagation()}>
         <div className="profile-account-menu-header">
           <Avatar name={username || "you"} avatarUrl={avatarUrl} size={28} />
           <span>{username || "Local profile"}</span>
@@ -149,7 +169,9 @@ function CliAccount({
         <ProviderLogo id={provider} size={16} />
         <span className="profile-account-title">{title}</span>
         {collapsed ? (
-          <UsageLines usage={usage} loading={loading} collapsed />
+          <span className="profile-account-swap-in" key="compact">
+            <UsageLines usage={usage} loading={loading} collapsed />
+          </span>
         ) : (
           <span className="profile-account-controls" onClick={stop} onKeyDown={stop}>
             <AccountControl provider={provider} title={title} connected={false} compact />
@@ -159,7 +181,13 @@ function CliAccount({
             the same right edge. */}
         <span className="profile-account-plan">{usage?.plan ?? ""}</span>
       </div>
-      {!collapsed && <UsageLines usage={usage} loading={loading} collapsed={false} />}
+      {/* Kept mounted and folded by height, so opening and closing an
+          account slides rather than jumps. */}
+      <div className="profile-usage-fold" data-open={!collapsed || undefined} aria-hidden={collapsed || undefined}>
+        <div className="profile-usage-fold-inner">
+          <UsageLines usage={usage} loading={loading} collapsed={false} />
+        </div>
+      </div>
     </section>
   );
 }

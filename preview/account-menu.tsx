@@ -66,9 +66,21 @@ const account = (name: string, active: boolean) => ({ name, active, identity: { 
 const { ProfileModal } = await import("../src/components/ProfileModal");
 const { default: ToastHost } = await import("../src/components/ToastHost");
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
-    <ProfileModal open workspaceRoot="/Users/pierre/Documents/Private/KIDE" onClose={() => {}} />
-    <ToastHost />
-  </div>
-);
+const { useState } = await import("react");
+
+// A stand-in for the rail's identity button: opens and closes the menu, so
+// both animations can be watched.
+function Page() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+      <button id="toggle" onClick={() => setOpen((o) => !o)} style={{ position: "fixed", left: 12, bottom: 12 }}>
+        Toggle menu
+      </button>
+      <ProfileModal open={open} workspaceRoot="/Users/pierre/Documents/Private/KIDE" onClose={() => setOpen(false)} />
+      <ToastHost />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")!).render(<Page />);
