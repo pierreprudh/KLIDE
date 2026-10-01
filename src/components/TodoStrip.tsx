@@ -201,7 +201,7 @@ function GoalLine({ goal, size }: { goal: string; size: number }) {
 // a thin arc sweeping around that number, a finished step closes to a check.
 // Numbers instead of hollow circles — type over shape, and "3" already tells
 // you where in the plan you are.
-const MARK = 14;
+const MARK = 16;
 // The header ends in two 18px icon boxes (collapse, hide). Rows end in the same
 // width so their chevron sits under the header's, and the figures on every row
 // stop at the same x as the header count — one right edge for the whole strip.
@@ -251,8 +251,8 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
         background: state === "done" ? "var(--accent)" : "var(--bg-elevated)",
         color: state === "done" ? "var(--bg-elevated)" : active ? "var(--fg-strong)" : "var(--fg-dim)",
         fontFamily: "var(--font-mono)",
-        fontSize: 9,
-        // A bold figure inside a 14px ring reads as a badge; the regular cut
+        fontSize: 10,
+        // A bold figure inside a 16px ring reads as a badge; the regular cut
         // sits in the circle like a figure on a dial.
         fontWeight: 500,
         lineHeight: 1,
@@ -303,7 +303,12 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
           />
         </svg>
       )}
-      {state === "done" ? <CheckIcon /> : <span style={{ position: "relative" }}>{index + 1}</span>}
+      {state === "done" ? <CheckIcon /> : (
+        // Monaspace's line box carries more descent than its figures use, so
+        // a centred box leaves the figure riding ~1px high in the ring (seen
+        // at 8x); settle the glyph, not the box.
+        <span style={{ position: "relative", transform: "translateY(0.5px)" }}>{index + 1}</span>
+      )}
     </span>
   );
 }
@@ -439,7 +444,7 @@ function TodoRow({
           padding: 0,
         }}
       >
-        <span style={{ display: "grid", marginTop: roomy ? 8 : 0 }}>
+        <span style={{ display: "grid", marginTop: roomy ? 7 : 0 }}>
           <StepMark index={index} state={state} />
         </span>
         <span

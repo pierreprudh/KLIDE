@@ -2,6 +2,9 @@
 // change to the arc can be judged against the old one.
 import React from "react";
 import { createRoot } from "react-dom/client";
+import "@fontsource/atkinson-hyperlegible/400.css";
+import "@fontsource/monaspace-neon/400.css";
+import "@fontsource/monaspace-neon/700.css";
 import "../src/styles/tokens.css";
 import "../src/components/todoStrip.css";
 import { StepMark } from "../src/components/TodoStrip";
@@ -22,5 +25,6 @@ createRoot(document.getElementById("root")!).render(
   <div style={{ background: "var(--bg)", minHeight: "100vh", padding: 32, display: "grid", gap: 40, alignContent: "start" }}>
     <Row scale={1} />
     <Row scale={4} />
+    <Row scale={8} />
   </div>,
 );
