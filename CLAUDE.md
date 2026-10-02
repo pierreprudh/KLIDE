@@ -103,11 +103,12 @@ Klide/
 │   ├── tasks.ts                 Delegated tasks
 │   ├── klideConvos.ts           AI panel → Mission Control pub/sub
 │   ├── transcripts.ts           Pure conversation compaction + markdown export
-│   ├── delegates.ts             Canonical DelegateId list (mirrors Rust delegate::ALL)
+│   ├── delegates.ts             The Delegate catalog mirror — ids, labels, binaries, accounts flag (pinned to Rust delegate::catalog() by a drift test; delegateLabel is the one label source)
 │   ├── delegateStatusNotify.ts  Delegate-status events → toasts under a noise policy
 │   ├── diffComments.ts          Line-anchored diff comments sent back to running agents
 │   ├── customProviders.ts       Self-hosted OpenAI-wire providers (customCli.ts: user CLI agents)
 │   ├── gateway.ts               opencodex proxy registered as one self-hosted endpoint
+│   ├── ipc/deepLink.ts          `klide://` link actions + drain (servicesMenu.ts: the Ask Kit toggle)
 │   ├── ipc/connectors.ts        connectors_* wire — the MCP servers Klide connects to (store, discover, probe, GitHub preset, pool status)
 │   ├── memory.ts                Project Memory data layer (+ memoryDrafts.ts, memorySearch.ts)
 │   ├── gitStatus.ts             The one git-status store — one poll per root, identity changes only with the tree
@@ -131,6 +132,7 @@ Klide/
 │   │   ├── git.ts                 Every git_* / github_* / create_pr command + wire types
 │   │   ├── delegatePty.ts         Delegate PTY commands, events, reattach/replay handshake
 │   │   ├── aiProviders.ts         Provider key status, model metadata, local-server start
+│   │   ├── delegates.ts           delegate_catalog — the adapters' facts over the wire (src/delegates.ts is the pinned mirror)
 │   │   ├── storage.ts             app_storage_* — the folders Klide writes for itself, measured
 │   │   └── gateway.ts             opencodex proxy lifecycle — installed, running, start/stop
 │   ├── hooks/
@@ -235,7 +237,9 @@ Klide/
 │   │       ├── ConversationHistory.tsx / DelegateTerminal.tsx / RaceFollowUpBar.tsx
 │   └── agent/
 │       ├── types.ts             Agent protocol types (events, diffs, permissions)
-│       ├── providers.ts         Provider definitions (16 providers)
+│       ├── providers.ts         Picker rows — every builtin derived from providerCatalog.ts; adds only `auto` and the custom/CLI shapes
+│       ├── providerCatalog.ts   The one TS door onto the Rust Provider registry (label, group, default, presets, key env, brand, caps)
+│       ├── providerCatalog.generated.ts  GENERATED mirror of the registry rows — written by a Rust test, never edited
 │       ├── client.ts            Frontend agent harness client
 │       ├── foldEvents.ts        Sole owner of folding AgentEvent[] into conversation rows
 │       ├── completion.ts        Evidence for one completed attempt, from the shared transcript fold
@@ -260,12 +264,15 @@ Klide/
     │   ├── main.rs               Entry point (also the `klide ptyd` daemon entry)
     │   ├── lib.rs                Command registration + thin Tauri glue, AI chat dispatch, fs ops, app menu
     │   ├── cli.rs                Login-shell binary resolution + subscription-CLI install/auth status
+    │   ├── deep_link.rs          `klide://` links — new (pre-filled, never sent) / open file:line / project; parsed + path-checked in Rust, queued until the page drains them
+    │   ├── services_menu.rs      "Ask Kit" Services Quick Action — installed/removed from Settings, opens `klide://new?prompt=`
     │   ├── adapters.rs           Provider streaming trait + shared loop + 3 wire adapters (Ollama/OpenAI/Anthropic)
-    │   ├── providers.rs          Provider registry — one row per provider (wire, key, models, subscription)
+    │   ├── providers.rs          Provider registry — one row is the whole provider (wire, key, models, label, group, defaults, brand, caps); publishes itself to TS
     │   ├── custom_providers.rs   User-added self-hosted OpenAI-wire endpoints
     │   ├── custom_cli.rs         User-defined CLI agents via command templates
-    │   ├── models.rs             Model discovery — list models, context windows, tool support
-    │   ├── pricing.rs            Hand-curated per-model token prices for run cost
+    │   ├── models.rs             Model discovery — list models; reads the Codex manifest + OpenAI-wire `/models` listings
+    │   ├── model_capabilities.rs The one answer to what a model can do — window, tools, vision, reasoning levels, price class, maker; one order, one memo
+    │   ├── pricing.rs            Hand-curated per-model list prices (the price class is the Provider's call)
     │   ├── accounts.rs           Snapshot/list/restore delegate CLI login credentials
     │   ├── git/                  mod.rs: git shell-outs · github.rs: gh seam, PRs, avatars, pinned identity
     │   ├── skills.rs             Filesystem-skill loader (4 dirs, provenance) + install/uninstall
@@ -297,7 +304,7 @@ Klide/
     │   ├── coordination_bridge.rs Loopback door Delegate CLIs use to reach the journal — actor bound from the PTY session, never the caller
     │   ├── mcp_server.rs         `klide mcp coordination` — embedded stdio MCP server a Delegate runs; relays every tool call to the bridge
     │   ├── mcp_client.rs         Klide as an MCP client — one Session over stdio or Streamable HTTP: handshake, list tools, call one
-    │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
+    │   ├── delegate/             Adapter per CLI (claude_code/codex/opencode/omp) — each owns its home (config/data dirs honouring CODEX_HOME / CLAUDE_CONFIG_DIR / XDG), label, login, accounts flag + home.rs the Env seam + source scan + runs.rs shared types + chat.rs one-shot turns + chat_stream.rs structured-stream parsing + cli_commands.rs the CLI's own `/` commands + /config settings read + status.rs hook server
     │   └── agent/
     │       ├── mod.rs             Agent supervisor + run loop
     │       ├── daemon.rs          Background subscription chats — the Harness loop hosted in `klide ptyd`, survives app exit
@@ -603,6 +610,40 @@ AnthropicAdapter   (~95 lines)
 
 New provider (e.g. LM Studio) = one adapter, not 120 lines of duplicated infrastructure.
 
+### Provider registry (one row, published to the renderer)
+
+Provider *facts* are declared once, on the `ProviderEntry` row in
+`src-tauri/src/providers.rs`: id, label (+ short label), group
+(`local` / `hosted` / `subscription`), wire, key env var + placeholder,
+default model, presets, brand key, credits source, `is_local_server`,
+`has_num_ctx`, and the run-loop quirks (`ProviderCaps` — structured replay,
+minimal chat context, append-only TODO updates). Rust reads the row
+everywhere it used to compare ids inline (`ProviderCaps::for_provider`,
+`local_servers::is_local_server_provider`, `ai_provider_credits`, the
+Anthropic dispatch key).
+
+The row reaches TypeScript through one seam. `catalog()` is what the sync
+command `ai_list_providers` returns, and the Rust test
+`provider_catalog_mirror_is_current` writes the same rows into
+`src/agent/providerCatalog.generated.ts` (regenerate with
+`KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_is_current`; the
+test fails with that instruction when the file is stale). The mirror exists so
+the picker has every row synchronously at first paint and so the `ProviderId`
+union is *derived* from the row ids rather than kept beside them.
+`src/agent/providerCatalog.ts` is the one TS door (`providerLabel`,
+`providerGroup`, `providerDefaultModel`, `providerPresets`, `providerKeyEnv`,
+`providerBrand`, `providerCaps`, …); `auto` and `custom:*` / `cli:*` are
+answered explicitly, never with a builtin's value. Every TS table that used to
+restate a fact — the picker catalog, the API-keys rows, the local-server rows,
+the settings default model, the `num_ctx` check, the MLX/Ollama presets, the
+two `mlx || ollama` chat-prompt branches — now reads the door.
+
+**New provider = one row** in `PROVIDERS`, then regenerate the mirror. What a
+new provider still touches beyond the row, honestly: its logo (hand-drawn in
+`src/components/ai/icons.tsx`, keyed by the row's `brand`) and, for a new wire
+shape, an adapter. A hosted row also gets a key placeholder and an env var on
+the row itself — Settings reads them from there.
+
 ### Auto model routing
 
 `auto` is a Provider id the picker can send, not a backend. Every run enters
@@ -704,6 +745,7 @@ enforce wrapper coverage for the git family.
 - [x] Background shells — `run_command(background: true)` + `read_command_output` / `kill_command`, run-scoped, reaped at settle; a shell can wake the conversation on exit
 - [x] Subagent watcher — the "Delegated to" row follows the child Run live; a failed child is a failed Tool result, dependent dispatches pin a source commit
 - [x] Links and places — a URL in an answer opens in the browser under its name, a rooted path in Finder, a file of the open project in an editor tab
+- [x] `klide://` links + Ask Kit — Raycast, Shortcuts, a terminal or the Services menu open a pre-filled conversation, a file at a line, or a project (installed app only on macOS)
 
 ## Development
 

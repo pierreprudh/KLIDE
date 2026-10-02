@@ -116,19 +116,19 @@ async fn gateway_running() -> bool {
         .is_ok()
 }
 
-/// `$CODEX_HOME/config.toml`, the file `ocx start` injects into.
-fn codex_config_path() -> Option<std::path::PathBuf> {
-    if let Some(home) = std::env::var_os("CODEX_HOME") {
-        return Some(std::path::PathBuf::from(home).join("config.toml"));
-    }
-    crate::cli::home_dir_path().map(|home| home.join(".codex").join("config.toml"))
+/// `$CODEX_HOME/config.toml`, the file `ocx start` injects into — the same
+/// file the Codex adapter names for its status hook, so the two can never
+/// disagree about where the CLI's config lives.
+pub(crate) fn codex_config_path(env: &dyn crate::delegate::Env) -> Option<std::path::PathBuf> {
+    use crate::delegate::Delegate;
+    crate::delegate::Codex.config_file(env)
 }
 
 /// Whether the Codex CLI is currently pointed at the proxy. Read from the file
 /// rather than remembered, so a `ocx restore back` run in a terminal — or a
 /// leftover injection from before Klide started — is reported truthfully.
 fn codex_routed_to_gateway() -> bool {
-    let Some(path) = codex_config_path() else {
+    let Some(path) = codex_config_path(&crate::delegate::ProcessEnv) else {
         return false;
     };
     let Ok(config) = std::fs::read_to_string(path) else {

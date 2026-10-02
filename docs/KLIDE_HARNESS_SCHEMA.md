@@ -159,6 +159,14 @@ Four adapters, each running the actual binary and reading its on-disk sessions
 | `opencode` | `opencode` | SQLite `~/.local/share/opencode/opencode.db` |
 | `omp` (Pi) | `omp` | `~/.omp/agent/sessions/**` |
 
+The `~/…` roots are the defaults: each adapter resolves its own home through
+the CLI's override (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` /
+`XDG_DATA_HOME` for OpenCode, with the older macOS `Library/Application
+Support/opencode` as a fallback) and every read — sessions, the hook config,
+login files, connector discovery, the gateway un-inject — asks the adapter for
+the path (`Delegate::config_home` / `sessions_dir` / `config_file` /
+`auth_files` / `models_cache`, `src-tauri/src/delegate/home.rs`).
+
 Mission Control aggregates runs from Klide's own loop **and** all four delegates
 into one board.
 

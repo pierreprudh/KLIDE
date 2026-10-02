@@ -1,8 +1,10 @@
 mod visual_export;
 mod accounts;
+mod usage;
 mod adapters;
 mod blocking;
 mod cli;
+mod deep_link;
 mod cli_update;
 mod agent;
 mod coordination;
@@ -22,6 +24,7 @@ mod mcp_client;
 pub mod mcp_server;
 mod memory;
 mod missions;
+mod model_capabilities;
 mod models;
 mod preview;
 mod spreadsheet;
@@ -36,6 +39,7 @@ pub mod pty_daemon;
 mod pty_host;
 mod pty_spawn;
 mod search;
+mod services_menu;
 mod skills;
 mod storage;
 mod workspace;
@@ -133,12 +137,17 @@ async fn ai_clear_provider_key(provider: String) -> Result<(), String> {
     .await
 }
 
-// Per-model list price (USD per million in/out tokens), or null for local /
-// subscription / unknown models. The AI panel fetches this once per model and
-// computes per-message + per-conversation cost from each turn's token usage.
+// The pair's list price (USD per million in/out tokens), or null unless the
+// Provider bills per token and the model is in the table — a subscription CLI
+// or a local runtime is free whatever the model is called. The AI panel
+// fetches this once per model and computes per-message + per-conversation
+// cost from each turn's token usage.
 #[tauri::command]
-fn ai_model_pricing(model: String) -> Option<pricing::ModelPricing> {
-    pricing::pricing_for_model(&model)
+fn ai_model_pricing(provider: String, model: String) -> Option<pricing::ModelPricing> {
+    match model_capabilities::price_class(&provider, &model) {
+        model_capabilities::PriceClass::Priced(price) => Some(price),
+        _ => None,
+    }
 }
 
 // The second key method for built-in providers: a `${VAR}` env reference
@@ -205,6 +214,12 @@ async fn account_activate(app: tauri::AppHandle, provider: String, name: String)
         accounts::activate(&provider, &name)
     })
     .await
+}
+
+/// How much of each subscription CLI's allowance is spent (`usage.rs`).
+#[tauri::command]
+async fn usage_snapshot() -> Vec<usage::ToolUsage> {
+    usage::snapshot().await
 }
 
 /// Tell the backend which folder is open, so `${VAR}` token references can
@@ -538,7 +553,7 @@ async fn reveal_entry(workspace_root: String, path: String) -> Result<(), String
 // lives behind the Delegate seam (src/delegate/); these commands only add
 // the Tauri glue.
 
-use crate::delegate::{AgentRun, Delegate, RunMessage};
+use crate::delegate::{AgentRun, RunMessage};
 
 /// Paging the board walks the delegate log directories and parses transcripts —
 /// filesystem work measured in hundreds of megabytes on a busy machine. A sync
@@ -552,7 +567,6 @@ async fn list_agent_runs(
     offset: Option<usize>,
     workspace_root: Option<String>,
 ) -> Result<Vec<AgentRun>, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let limit = limit.unwrap_or(10);
     let offset = offset.unwrap_or(0);
     let scope = workspace_root
@@ -565,9 +579,10 @@ async fn list_agent_runs(
     // the await on the runtime thread.
     let scan_app = app.clone();
     let (mut runs, (by_delegate, by_external), hosted_statuses) = blocking::run(move || {
+        let env = delegate::ProcessEnv;
         let runs = match scope {
-            Some(root) => delegate::list_runs_for_workspace(&home, limit, offset, &root),
-            None => delegate::list_runs(&home, limit, offset),
+            Some(root) => delegate::list_runs_for_workspace(&env, limit, offset, &root),
+            None => delegate::list_runs(&env, limit, offset),
         };
         // Inject parent ids from the spawn mappings recorded at dispatch time.
         // Try by Klide's internal ID first, then by the external session ID
@@ -602,22 +617,21 @@ async fn list_agent_runs(
     Ok(runs)
 }
 
-/// Sandbox: only ever read the known agent-log directories. Both sides are
-/// canonicalized before the containment check — a raw `starts_with` would
-/// pass `~/.claude/../../etc/x` (the prefix matches textually while `..`
-/// escapes it) and would follow a symlink planted inside a log dir.
-fn resolve_agent_log_path(home: &str, path: &str) -> Result<std::path::PathBuf, String> {
+/// Sandbox: only ever read a Delegate's own sessions directory — the roots
+/// come from the adapters, so a moved home (`CODEX_HOME`) is honoured here
+/// too. Both sides are canonicalized before the containment check — a raw
+/// `starts_with` would pass `<sessions>/../../etc/x` (the prefix matches
+/// textually while `..` escapes it) and would follow a symlink planted
+/// inside a log dir.
+fn resolve_agent_log_path(env: &dyn delegate::Env, path: &str) -> Result<std::path::PathBuf, String> {
     let canonical = std::path::Path::new(path)
         .canonicalize()
         .map_err(|e| format!("Unable to resolve run path: {e}"))?;
-    let allowed = [".claude", ".codex", ".omp"];
-    let inside = allowed.iter().any(|dir| {
-        std::path::Path::new(home)
-            .join(dir)
-            .canonicalize()
-            .map(|base| canonical.starts_with(&base))
-            .unwrap_or(false)
-    });
+    let inside = delegate::ALL
+        .iter()
+        .filter(|d| d.run_key_is_path())
+        .filter_map(|d| d.sessions_dir(env))
+        .any(|root| delegate::home::is_under(&root, &canonical));
     if inside {
         Ok(canonical)
     } else {
@@ -628,26 +642,31 @@ fn resolve_agent_log_path(home: &str, path: &str) -> Result<std::path::PathBuf, 
 #[tauri::command]
 async fn read_agent_run(path: String, source: String) -> Result<Vec<RunMessage>, String> {
     blocking::run(move || {
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-        // (OpenCode runs go through read_opencode_run instead — their key is a
-        // session id, not a path under home.)
-        let path = resolve_agent_log_path(&home, &path)?;
+        let env = delegate::ProcessEnv;
         // Route through the registry so every delegate uses its own parser — an
         // unknown source errors loudly instead of being mis-read as Claude.
         let adapter = delegate::lookup(&source)
             .ok_or_else(|| format!("No delegate adapter for source: {source}"))?;
-        adapter.read_run(&home, &path.to_string_lossy())
+        // A key that is a transcript path must sit inside the adapter's own
+        // sessions dir; a key that is a session id (OpenCode's, looked up in
+        // its DB) has no path to contain and goes to the parser as is.
+        let key = if adapter.run_key_is_path() {
+            resolve_agent_log_path(&env, &path)?.to_string_lossy().to_string()
+        } else {
+            path
+        };
+        adapter.read_run(&env, &key)
     })
     .await
 }
 
+/// The Delegate CLIs Klide knows, as the facts a surface shows: id, name,
+/// binary, whether logins can be switched. `src/delegates.ts` keeps a pinned
+/// mirror for the synchronous callers (type unions, label maps); this is the
+/// same list over the wire. Pure — no IO, so nothing to send to the pool.
 #[tauri::command]
-async fn read_opencode_run(session_id: String) -> Result<Vec<RunMessage>, String> {
-    blocking::run(move || {
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-        delegate::OpenCode.read_run(&home, &session_id)
-    })
-    .await
+async fn delegate_catalog() -> Vec<delegate::DelegateFacts> {
+    delegate::catalog()
 }
 
 /// The `/` commands a delegate CLI answers itself in this workspace, for the
@@ -662,10 +681,7 @@ async fn delegate_slash_commands(provider: String, workspace_root: String) -> Re
 /// `delegate::claude_code_settings`).
 #[tauri::command]
 async fn claude_code_settings(workspace_root: String) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
-    blocking::run(move || {
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-        Ok(delegate::claude_code_settings(&home, &workspace_root))
-    })
+    blocking::run(move || Ok(delegate::claude_code_settings(&delegate::ProcessEnv, &workspace_root)))
     .await
 }
 
@@ -863,7 +879,6 @@ pub fn run() {
         .manage(coordination_bridge::CoordinationBridgeState::default())
         .manage(missions::MissionStoreState::default())
         .manage(local_servers::LocalServerState::default())
-        .manage(models::ReflectionProbeCache::default())
         .plugin(tauri_plugin_dialog::init())
         // The crate's `open_path` / `reveal_item_in_dir` are called directly
         // from Rust above and need no registration — but the frontend's
@@ -871,6 +886,7 @@ pub fn run() {
         // handler only exists once the plugin is initialized here. Without
         // this line a link in an answer answers "plugin opener not found".
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         // KLIDE_SMOKE=1 is the bundle boot check (scripts/verify-bundle.sh):
         // the frontend finishing its first page load proves the packaged
         // binary, its dylibs, the webview entitlements, and the embedded
@@ -889,6 +905,19 @@ pub fn run() {
             use tauri::Manager;
 
             let handle = app.handle();
+
+            // `klide://` links: a link that launched the app, then every one
+            // that arrives while it runs. deep_link.rs parses and queues them.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let links = handle.clone();
+                app.deep_link().on_open_url(move |event| {
+                    deep_link::receive(&links, event.urls().into_iter().map(|u| u.to_string()));
+                });
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    deep_link::receive(handle, urls.into_iter().map(|u| u.to_string()));
+                }
+            }
 
             // Persistent delegate sessions: reconnect to (or start) the ptyd
             // daemon when the toggle was left on last session. Skipped during
@@ -995,9 +1024,10 @@ pub fn run() {
             git::git_branch_diff,
             list_agent_runs,
             read_agent_run,
-            read_opencode_run,
             delegate_slash_commands,
+            delegate_catalog,
             claude_code_settings,
+            providers::ai_list_providers,
             models::ai_provider_models,
             models::ai_provider_credits,
             models::ai_provider_model_meta,
@@ -1008,6 +1038,7 @@ pub fn run() {
             cli_update::cli_update,
             app_user_info,
             menu_sync_projects,
+            models::ai_model_capabilities,
             models::ai_context_window,
             models::ai_model_supports_tools,
             models::ai_model_supports_vision,
@@ -1030,6 +1061,7 @@ pub fn run() {
             custom_cli_upsert,
             custom_cli_remove,
             accounts_list,
+            usage_snapshot,
             account_save_current,
             account_activate,
             set_active_workspace,
@@ -1046,6 +1078,9 @@ pub fn run() {
             connectors::connectors_remove,
             connectors::connectors_discover,
             connectors::connectors_probe,
+            deep_link::deep_link_take,
+            services_menu::services_ask_kit_status,
+            services_menu::services_ask_kit_set,
             connectors::connectors_add_github,
             connectors::connectors_status,
             agent::agent_start_run,
@@ -1129,29 +1164,45 @@ mod agent_log_path_tests {
 
     #[test]
     fn resolves_only_inside_the_known_log_dirs() {
+        use crate::delegate::Delegate;
         let home = std::env::temp_dir().join(format!("klide-loghome-{}", std::process::id()));
-        let logs = home.join(".claude").join("projects");
+        let _ = std::fs::remove_dir_all(&home);
+        let env = crate::delegate::home::test_env(&home);
+        let logs = crate::delegate::ClaudeCode.sessions_dir(&env).unwrap();
         std::fs::create_dir_all(&logs).unwrap();
         let transcript = logs.join("run.jsonl");
         std::fs::write(&transcript, "{}").unwrap();
         let outside = home.join("secret.txt");
         std::fs::write(&outside, "x").unwrap();
-        let home_str = home.to_string_lossy();
 
         // A real transcript resolves.
-        assert!(resolve_agent_log_path(&home_str, &transcript.to_string_lossy()).is_ok());
+        assert!(resolve_agent_log_path(&env, &transcript.to_string_lossy()).is_ok());
         // `..` escapes are caught even though the raw prefix matches.
-        let traversal = format!("{}/.claude/../secret.txt", home_str);
-        assert!(resolve_agent_log_path(&home_str, &traversal).is_err());
+        let traversal = format!("{}/../../secret.txt", logs.display());
+        assert!(resolve_agent_log_path(&env, &traversal).is_err());
         // Paths outside the log dirs are refused.
-        assert!(resolve_agent_log_path(&home_str, &outside.to_string_lossy()).is_err());
+        assert!(resolve_agent_log_path(&env, &outside.to_string_lossy()).is_err());
         // A symlink planted inside a log dir pointing outside is refused.
         #[cfg(unix)]
         {
             let link = logs.join("link.jsonl");
             std::os::unix::fs::symlink(&outside, &link).unwrap();
-            assert!(resolve_agent_log_path(&home_str, &link.to_string_lossy()).is_err());
+            assert!(resolve_agent_log_path(&env, &link.to_string_lossy()).is_err());
         }
+        // A moved Codex home is honoured: its rollouts resolve, ~/.codex's don't.
+        let moved = home.join("codex-elsewhere");
+        let env = env.set("CODEX_HOME", &moved);
+        let rollouts = crate::delegate::Codex.sessions_dir(&env).unwrap();
+        std::fs::create_dir_all(&rollouts).unwrap();
+        let rollout = rollouts.join("rollout-1.jsonl");
+        std::fs::write(&rollout, "{}").unwrap();
+        assert!(resolve_agent_log_path(&env, &rollout.to_string_lossy()).is_ok());
+        let stale = crate::delegate::Codex
+            .sessions_dir(&crate::delegate::home::test_env(&home))
+            .unwrap();
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("old.jsonl"), "{}").unwrap();
+        assert!(resolve_agent_log_path(&env, &stale.join("old.jsonl").to_string_lossy()).is_err());
 
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -1226,6 +1277,8 @@ mod blocking_door_tests {
         "ai_model_pricing",
         "ai_list_tools",
         "ai_tool_catalog",
+        // providers.rs — the registry as plain rows, no IO
+        "ai_list_providers",
         // lib.rs — a small JSON read; user-driven, not polled
         "accounts_list",
         // lib.rs — hand off to the native menu
@@ -1265,6 +1318,8 @@ mod blocking_door_tests {
         ("local_servers.rs", include_str!("local_servers.rs")),
         ("gateway.rs", include_str!("gateway.rs")),
         ("connectors.rs", include_str!("connectors.rs")),
+        ("deep_link.rs", include_str!("deep_link.rs")),
+        ("services_menu.rs", include_str!("services_menu.rs")),
         ("models.rs", include_str!("models.rs")),
         ("coordination/mod.rs", include_str!("coordination/mod.rs")),
         ("storage.rs", include_str!("storage.rs")),

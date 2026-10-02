@@ -2,7 +2,7 @@
   position: absolute;
   left: 12px;
   bottom: 64px;
-  width: min(292px, calc(100vw - 24px));
+  width: min(340px, calc(100vw - 24px));
   max-height: calc(100dvh - 88px);
   overflow-y: auto;
   padding: 6px;
@@ -15,7 +15,7 @@
   color: var(--fg);
   outline: none;
   transform-origin: bottom left;
-  animation: profile-menu-appear 140ms ease-out;
+  animation: profile-menu-appear 220ms var(--ease-out);
 }
 .profile-account-menu-header {
   display: flex;
@@ -45,10 +45,184 @@
 .profile-account-menu-row:focus-within {
   background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
+/* One CLI: its row, then its usage under the name. Each bar is drawn in the
+   CLI's own brand colour (brand marks are exempt from the palette, like the
+   logos beside them) and turns red once a window is nearly spent. */
+.profile-account-cli {
+  --usage-color: var(--accent);
+}
+.profile-account-cli[data-provider="claude-code"] { --usage-color: #d97757; }
+.profile-account-cli[data-provider="codex"] { --usage-color: #7885eb; }
+.profile-account-cli[data-provider="opencode"] { --usage-color: #738cf2; }
+.profile-account-head {
+  cursor: pointer;
+  outline: none;
+}
+.profile-account-head:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.profile-account-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-account-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.profile-account-plan,
+.profile-account-saved {
+  color: var(--fg-subtle);
+}
+.profile-account-saved {
+  font-size: 12px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The plan at the row's ragged right, in a fixed cell so a folded row's
+   bars don't shift with the plan's length. */
+.profile-account-plan {
+  flex: 0 0 40px;
+  padding-right: 4px;
+  font-size: 12px;
+  text-align: right;
+}
+.profile-usage {
+  display: grid;
+  gap: 5px;
+  padding: 0 10px 0 36px;
+}
+.profile-usage-line {
+  display: grid;
+  grid-template-columns: 62px minmax(48px, 1fr) 32px 68px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+/* Folded rows share one grid — fixed width, one column per window, the
+   figure in a fixed right-aligned cell — so bars line up from row to row
+   whatever the name or plan beside them. */
+.profile-usage-compact {
+  flex: 0 0 144px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.profile-usage-compact-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 5px;
+}
+.profile-usage-compact > .profile-usage-spend {
+  grid-column: 1 / -1;
+  text-align: right;
+}
+.profile-usage-track {
+  flex: 1;
+}
+.profile-usage-track {
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  overflow: hidden;
+}
+.profile-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--usage-color);
+  transition: width 240ms ease-out;
+}
+.profile-usage-fill[data-tone="danger"] { background: var(--danger); }
+.profile-usage-value {
+  text-align: right;
+  color: var(--fg);
+}
+.profile-usage-reset {
+  text-align: right;
+  white-space: nowrap;
+}
+.profile-usage-spend {
+  grid-column: 2 / -1;
+  color: var(--fg);
+}
+.profile-usage-note {
+  padding: 0 10px 0 36px;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+}
 @keyframes profile-menu-appear {
-  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+.profile-account-menu[data-leaving] {
+  animation: profile-menu-leave 150ms ease-in forwards;
+}
+@keyframes profile-menu-leave {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(4px) scale(0.99); }
+}
+
+/* Folding an account: the open view collapses by height (0fr ↔ 1fr) and
+   fades; the one-line figures fade in beside the name. */
+.profile-usage-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 240ms var(--ease-out),
+    opacity 160ms ease-out;
+}
+.profile-usage-fold[data-open] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 240ms var(--ease-out),
+    opacity 200ms ease-out 60ms;
+}
+.profile-usage-fold-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.profile-usage-fold-inner > * {
+  margin-bottom: 6px;
+}
+.profile-account-swap-in,
+.profile-account-controls {
+  display: flex;
+  align-items: center;
+  animation: profile-swap-in 200ms ease-out;
+}
+.profile-account-swap-in {
+  flex: 0 0 144px;
+}
+.profile-account-swap-in > .profile-usage-compact {
+  flex: 1;
+}
+@keyframes profile-swap-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .profile-account-menu { animation: none; }
+  .profile-account-menu,
+  .profile-account-menu[data-leaving],
+  .profile-account-swap-in,
+  .profile-account-controls { animation: none; }
+  .profile-usage-fold,
+  .profile-usage-fold[data-open] { transition: none; }
 }

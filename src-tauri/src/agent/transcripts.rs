@@ -135,7 +135,12 @@ pub fn write_summary(runs_dir: &Path, summary: &AgentRunSummary) -> Result<(), S
             summary.input_tokens = input;
             summary.output_tokens = output;
             summary.files_touched = files;
-            summary.cost_usd = crate::pricing::cost_for_run(&summary.model, input, output);
+            summary.cost_usd = crate::model_capabilities::cost_for_run(
+                &summary.provider,
+                &summary.model,
+                input,
+                output,
+            );
         }
         // last_event tracks the *latest* assistant turn, so recompute it every
         // write — the transcript grows as the run progresses. Klide's own

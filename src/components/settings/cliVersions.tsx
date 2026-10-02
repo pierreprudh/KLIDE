@@ -20,17 +20,10 @@ import {
 } from "../../ipc/cliUpdates";
 import { ProviderLogo } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
+import { delegateLabel } from "../../delegates";
 import { errMessage } from "../../errors";
 import { notify } from "../../toast";
 import { CenteredLoader, LinkButton, Panel, SettingBlock } from "./controls";
-
-/** Title per delegate id — the same words the Connections rows use. */
-const TITLES: Record<string, string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-  opencode: "OpenCode",
-  omp: "Oh My Pi",
-};
 
 /**
  * An installer's output through a PTY carries escape sequences and progress
@@ -125,7 +118,7 @@ function CliRow({
 }) {
   const [output, setOutput] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const title = TITLES[row.provider] ?? row.provider;
+  const title = delegateLabel(row.provider);
 
   async function update() {
     if (running || !row.updateCommand) return;
@@ -255,7 +248,7 @@ export function CliVersionsBlock() {
         behind.length === 0
           ? "Every CLI is on its latest release."
           : behind.length === 1
-          ? `${TITLES[behind[0].provider] ?? behind[0].provider} has ${behind[0].latest}.`
+          ? `${delegateLabel(behind[0].provider)} has ${behind[0].latest}.`
           : `${behind.length} CLIs have a newer release.`,
         { tone: behind.length === 0 ? "success" : "info" },
       );

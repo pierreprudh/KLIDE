@@ -13,6 +13,8 @@ pub(crate) mod delivery;
 mod glob_match;
 #[cfg(test)]
 mod eval;
+#[cfg(test)]
+mod live_eval;
 pub mod evidence;
 pub mod failure_budget;
 mod network_allowlist;
@@ -926,7 +928,7 @@ fn commit_worktree_on_done(summary: &AgentRunSummary) {
     let author = if summary.model.eq_ignore_ascii_case(crate::delegate::CLI_DEFAULT_MODEL) {
         crate::providers::lookup(&summary.provider)
             .and_then(|p| p.subscription)
-            .map(|s| s.label.to_string())
+            .map(|s| s.label().to_string())
             .unwrap_or_else(|| summary.provider.clone())
     } else {
         summary.model.clone()
@@ -1285,19 +1287,21 @@ fn reconstruct_structured_messages(
 /// Map the private provider-side `AiUsage` into the wire-format
 /// `AgentUsage` so the frontend can decode it without depending on a
 /// private type. Cheap (four `Option<u64>`s); done on every turn.
-fn agent_usage_from(usage: Option<AiUsage>, model: &str) -> Option<AgentUsage> {
+fn agent_usage_from(usage: Option<AiUsage>, provider: &str, model: &str) -> Option<AgentUsage> {
     let u = usage?;
     if u.is_empty() {
         return None;
     }
     // Cost, in priority order: the provider's real charged amount
-    // (OpenRouter) wins; otherwise estimate from the local pricing table ×
-    // token counts (Anthropic/OpenAI direct). `None` for local /
-    // subscription / unknown-price models.
+    // (OpenRouter) wins; otherwise the Provider's price class × token counts
+    // (a list price for Anthropic/OpenAI direct). `None` for local /
+    // subscription / unknown-price pairs.
     let cost_usd = u
         .cost_usd
         .or_else(|| match (u.prompt_tokens, u.completion_tokens) {
-            (Some(p), Some(c)) => crate::pricing::cost_for_run(model, p as i64, c as i64),
+            (Some(p), Some(c)) => {
+                crate::model_capabilities::cost_for_run(provider, model, p as i64, c as i64)
+            }
             _ => None,
         });
     Some(AgentUsage {
@@ -2035,12 +2039,17 @@ async fn run_agent_loop(
         .unwrap_or(DEFAULT_MAX_TURNS)
         .clamp(1, 1000);
     // Compaction is token-budget driven, not message-count driven: resolve the
-    // model's context window once (explicit `num_ctx` override, else the
-    // provider's advertised per-model window — OpenRouter — else a per-family
-    // fallback) and only trim once the prompt actually crowds it.
+    // model's context window once — an explicit `num_ctx` override, else the
+    // one capabilities answer (the same number the gauge shows; an unknown
+    // window plans as its named default) — and only trim once the prompt
+    // actually crowds it. A probe that cannot be reached is not fatal here:
+    // the turn itself will report that, with a better message.
     let context_window = match request.num_ctx {
         Some(n) => n,
-        None => crate::models::resolve_context_window(&request.provider, &request.model).await,
+        None => crate::model_capabilities::capabilities(&request.provider, &request.model, false)
+            .await
+            .map(|caps| caps.window_for_planning())
+            .unwrap_or(crate::model_capabilities::DEFAULT_CONTEXT_WINDOW),
     };
     let compact_threshold =
         compaction_threshold(context_window, request.num_predict.unwrap_or(4096));
@@ -2482,7 +2491,7 @@ async fn run_agent_loop(
         // Resolve this turn's usage once, then fold it into the run totals so
         // Mission Control can show a running token + cost tally. The same
         // value is attached to the assistant_message event below.
-        let turn_usage = agent_usage_from(response.usage.clone(), &summary.model);
+        let turn_usage = agent_usage_from(response.usage.clone(), &summary.provider, &summary.model);
         if let Some(u) = &turn_usage {
             summary.input_tokens = summary
                 .input_tokens

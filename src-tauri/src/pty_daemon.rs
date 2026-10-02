@@ -92,15 +92,9 @@ pub fn ensure_token(data_dir: &Path) -> Result<String, String> {
     getrandom::fill(&mut bytes).map_err(|e| format!("OS RNG unavailable: {e}"))?;
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(|e| format!("write ptyd token: {e}"))?;
-    write!(file, "{token}").map_err(|e| format!("write ptyd token: {e}"))?;
+    // The path is also the client's startup signal. Publish only the complete
+    // private token, so a client cannot authenticate with a just-created empty file.
+    crate::durable::write_atomic_private(&path, token.as_bytes())?;
     Ok(token)
 }
 
@@ -550,6 +544,45 @@ pub fn test_state(data_dir: PathBuf) -> Arc<DaemonState> {
 mod tests {
     use super::*;
     use std::io::BufRead;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn published_token_is_complete_before_a_client_reads_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "klide-token-publication-{}-{}", std::process::id(), crate::pty_host::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for attempt in 0..128 {
+            let root = dir.join(attempt.to_string());
+            std::fs::create_dir_all(&root).unwrap();
+            let path = token_path(&root);
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let reader_barrier = barrier.clone();
+            let reader = std::thread::spawn(move || {
+                reader_barrier.wait();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    match std::fs::read_to_string(&path) {
+                        Ok(token) => return token,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            assert!(Instant::now() < deadline, "token was never published");
+                            std::thread::yield_now();
+                        }
+                        Err(error) => panic!("cannot read published token: {error}"),
+                    }
+                }
+            });
+            barrier.wait();
+            let expected = ensure_token(&root).unwrap();
+            let observed = reader.join().unwrap();
+            if observed != expected {
+                std::fs::remove_dir_all(&dir).unwrap();
+                panic!("client read an incomplete token on attempt {attempt}: {} bytes instead of {}", observed.len(), expected.len());
+            }
+            assert_eq!(ensure_token(&root).unwrap(), expected, "restart preserves the token");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     struct TestServer {
         dir: PathBuf,

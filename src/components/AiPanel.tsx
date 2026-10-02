@@ -1,3 +1,4 @@
+import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
 import { wakeTurnMode } from "./ai/wake";
@@ -20,11 +21,9 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
-  modelReflectionLevels as queryModelReflectionLevels,
-  modelSupportsTools as queryModelSupportsTools,
-  modelSupportsVision as queryModelSupportsVision,
+  readModelCapabilities,
+  readModelPricing,
   readLocalProviderStatus,
-  readProviderContextWindow,
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
@@ -74,7 +73,8 @@ import {
   providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
-import { isDelegateId } from "../delegates";
+import { DELEGATE_IDS, isDelegateId } from "../delegates";
+import { providerCaps } from "../agent/providerCatalog";
 import {
   isCustomProvider,
   refreshCustomProviders,
@@ -123,7 +123,7 @@ import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
 import { conversationMark } from "../modelIdentity";
-import { buildSystemPrompt } from "./ai/system-prompt";
+import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
@@ -582,7 +582,7 @@ function switchModelForProvider(id: ProviderId): string {
 (() => {
   const FLAG = "klide.model.delegate-default-migrated-v2";
   if (localStorage.getItem(FLAG)) return;
-  const delegates = ["claude-code", "codex", "opencode", "omp"];
+  const delegates: readonly string[] = DELEGATE_IDS;
   for (const id of delegates) {
     if (localStorage.getItem(`klide.model.${id}`)) {
       localStorage.setItem(`klide.model.${id}`, CLI_DEFAULT_MODEL);
@@ -636,41 +636,43 @@ type ModelInspection = {
   reflectionLevels: string[];
   supportsReflection: boolean;
   supportsVision: boolean;
-  contextLimit: number;
+  /** The trained window, or `null` when nobody published one — the gauge
+   *  then reads "—" and the send path skips the pre-send compaction check
+   *  rather than measuring against a number nobody stands behind. */
+  contextLimit: number | null;
 };
 
 /**
- * Model metadata is intentionally inspected as one unit. Ollama's reflection
- * fallback is not just metadata: it can issue a tiny probe chat, which loads a
- * cold model. Keeping the calls behind this function lets a resumed transcript
- * remain a passive reader until send() explicitly activates it.
+ * Model metadata is one answer from Rust (`model_capabilities`), asked for as
+ * one unit. Ollama's reflection fallback is not just metadata: it can issue a
+ * tiny probe chat, which loads a cold model. Passing the flag through lets a
+ * resumed transcript remain a passive reader until send() explicitly
+ * activates it. An unreachable provider yields the conservative answer.
  */
 async function inspectModelForRun(
   provider: ProviderId,
   model: string,
   allowActivationProbe = true,
 ): Promise<ModelInspection> {
-  const [tools, reflection, vision, context] = await Promise.allSettled([
-    queryModelSupportsTools(provider, model),
-    allowActivationProbe
-      ? queryModelReflectionLevels(provider, model)
-      : Promise.resolve<string[]>([]),
-    queryModelSupportsVision(provider, model),
-    readProviderContextWindow(provider, model),
-  ]);
-  const reflectionLevels =
-    reflection.status === "fulfilled" ? sortReflectionLevels(reflection.value) : [];
-  return {
-    supportsTools:
-      tools.status === "fulfilled" ? tools.value : !isManagedLocalProvider(provider),
-    reflectionLevels,
-    supportsReflection: reflectionLevels.length > 0,
-    supportsVision: vision.status === "fulfilled" ? vision.value : false,
-    contextLimit:
-      context.status === "fulfilled" && Number.isFinite(context.value) && context.value > 0
-        ? context.value
-        : 128_000,
-  };
+  try {
+    const caps = await readModelCapabilities(provider, model, allowActivationProbe);
+    const reflectionLevels = sortReflectionLevels(caps.reasoningLevels);
+    return {
+      supportsTools: caps.supportsTools,
+      reflectionLevels,
+      supportsReflection: reflectionLevels.length > 0,
+      supportsVision: caps.supportsVision,
+      contextLimit: caps.contextWindow !== null && caps.contextWindow > 0 ? caps.contextWindow : null,
+    };
+  } catch {
+    return {
+      supportsTools: !isManagedLocalProvider(provider),
+      reflectionLevels: [],
+      supportsReflection: false,
+      supportsVision: false,
+      contextLimit: null,
+    };
+  }
 }
 
 export function AiPanel({
@@ -1008,7 +1010,7 @@ export function AiPanel({
     }
   }, [workspaceBranch]);
 
-  const [contextLimit, setContextLimit] = useState(128_000);
+  const [contextLimit, setContextLimit] = useState<number | null>(null);
   // The provider's own prompt-token count from the latest finished turn — the
   // authoritative "how full is the context" number (it's exactly what the
   // model counted: system prompt + tools + history). `null` until the first
@@ -1769,21 +1771,24 @@ export function AiPanel({
   // measures against the model's detected window, which no request can change.
   const ctxOverride = harnessSettings?.contextWindows?.[model];
   const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
+  // `contextWindow.ts` reads 0 as "not detected"; `null` is that, typed.
   const effectiveContextLimit = resolveGaugeWindow({
     provider,
-    detected: contextLimit,
+    detected: contextLimit ?? 0,
     override: ctxOverride,
     reported: reportedContextWindow,
     estimatedPromptTokens: measuredPromptTokens ?? messageTokens + toolSchemaTokens,
   });
   // A different model, or a different cap, sizes its own window.
   useEffect(() => setReportedContextWindow(null), [provider, model, ctxOverride]);
+  const trainedWindowPhrase =
+    contextLimit !== null ? `the ${contextSizeLabel(contextLimit)} the model is trained to` : "the model's trained window, which it did not report";
   const contextLimitNote = providerHasContextWindowSetting(provider)
     ? ctxOverride && ctxOverride > 0
-      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. The model is trained to ${contextSizeLabel(contextLimit)}.`
+      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. It grows up to ${trainedWindowPhrase}.`
       : reportedContextWindow !== null
-        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
-        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
+        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to ${trainedWindowPhrase}.`
+        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to ${trainedWindowPhrase}.`
     : isCustomProvider(provider)
       ? "Self-hosted endpoint: Klide cannot set context here. Configure the server/model window upstream."
       : isLocalProvider
@@ -1829,12 +1834,8 @@ export function AiPanel({
     !providerDelegatesWork && modelSupportsTools && effectiveMode !== "chat";
   const systemPromptForDraft = useMemo(() => {
     let prompt: string;
-    if (effectiveMode === "chat" && (provider === "mlx" || provider === "ollama")) {
-      prompt = `You are Kit, Klide's coding assistant — a calm, warm pair-programmer. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation. If asked who you are, you're Kit; never claim to be Claude, GPT, or any other product.
-
-If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
-
-Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`;
+    if (effectiveMode === "chat" && providerCaps(provider).minimalChatContext) {
+      prompt = MINIMAL_CHAT_SYSTEM_PROMPT;
     } else {
       prompt = buildSystemPrompt(
         workspaceRoot,
@@ -3077,10 +3078,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function loadPricing() {
       try {
-        const p = await invoke<{ inputPerMillion: number; outputPerMillion: number } | null>(
-          "ai_model_pricing",
-          { model }
-        );
+        const p = await readModelPricing(provider, model);
         if (!cancelled) setPricing(p ?? null);
       } catch { if (!cancelled) setPricing(null); }
     }
@@ -3548,12 +3546,10 @@ This user request requires workspace inspection. Before answering, you MUST call
     try {
       const toolsAvailable = turn.modelSupportsTools;
       const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
-      let systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
-        ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
-
-If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
-
-Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
+      // The same bare prompt the draft estimate used, chosen by the row's
+      // `minimalChatContext` — not by naming the two local providers twice.
+      let systemPrompt = turn.mode === "chat" && providerCaps(turn.provider).minimalChatContext
+        ? MINIMAL_CHAT_SYSTEM_PROMPT
         : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
       // Subagent turn: append the role specialisation to the base prompt.
       const subagentDef = turn.subagent ? resolveSubagent(turn.subagent) : undefined;
@@ -3565,10 +3561,12 @@ This user request requires workspace inspection. Before answering, you MUST call
       }
       // Context window: num_ctx only matters for Ollama (other adapters
       // ignore it). This is the *ceiling* — the user's cap, else the model's
-      // trained window — and Rust sizes the working window under it.
-      const numCtx = providerHasContextWindowSetting(turn.provider)
-        ? contextCeiling(contextLimit, harnessSettings?.contextWindows?.[turn.model])
-        : undefined;
+      // trained window — and Rust sizes the working window under it. With
+      // neither known, Rust plans from its own answer instead.
+      const ctxCeiling = providerHasContextWindowSetting(turn.provider)
+        ? contextCeiling(contextLimit ?? 0, harnessSettings?.contextWindows?.[turn.model])
+        : 0;
+      const numCtx = ctxCeiling > 0 ? ctxCeiling : undefined;
       const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
       const numPredict =
         turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
@@ -3933,8 +3931,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     // before that message is appended or dispatched. On failure keep the draft
     // intact so retry cannot accidentally send an overflowing context.
     const contextLimitForTurn = providerHasContextWindowSetting(provider)
-      ? contextCeiling(modelInspection.contextLimit, ctxOverride)
-      : modelInspection.contextLimit;
+      ? contextCeiling(modelInspection.contextLimit ?? 0, ctxOverride)
+      : modelInspection.contextLimit ?? 0;
     const ratioAfterSend = contextLimitForTurn > 0 ? budget.used / contextLimitForTurn : 0;
     if (shouldAutoCompact({ trigger: "send", canCompact, ratioAfterSend })) {
       if (!(await compactConversation("agent", contextLimitForTurn))) return;
@@ -4510,7 +4508,9 @@ This user request requires workspace inspection. Before answering, you MUST call
           // A background subagent's report bubble is empty while its child
           // works, but it is its own surface (an @role header + watcher), never
           // the main answer's "not yet started" dots.
-          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls && !m.subagent;
+          const placeholder = assistantPlaceholder(m, streaming, isLast);
+          if (placeholder === "hidden") return null;
+          const isAssistantPlaceholder = m.role === "assistant" && placeholder === "working";
           const previous = msgs[i - 1];
           const activeToolRunning =
             streaming &&
@@ -5217,6 +5217,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}
             onApprovePattern={(pattern) => approveCommand("project", pattern)}
+            hotkeys
           />
         )}
         {/* Everywhere but Focus the question waits above the composer: those
@@ -5371,6 +5372,14 @@ This user request requires workspace inspection. Before answering, you MUST call
                   return;
                 }
               }
+              // While the run waits on a command and nothing is typed, the
+              // composer's ⏎ is the approval and esc the denial — the card
+              // sits right above it and the user shouldn't have to leave the
+              // field. Typed text keeps ⏎ for queueing the message.
+              if (pendingPermission && input.trim() === "") {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); approveCommand("once"); return; }
+                if (e.key === "Escape") { e.preventDefault(); rejectCommand(); return; }
+              }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               else if (e.key === "Tab" && !delegateSession) { e.preventDefault(); toggleMode(); }
               else if (e.key === "Escape" && (streaming || serverStarting)) { e.preventDefault(); stopCurrentStream(); }
@@ -5380,7 +5389,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPaste={onComposerPaste}
             onDrop={onComposerDrop}
             onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === "file")) e.preventDefault(); }}
-            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
+            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : pendingPermission ? "↵ runs the command, Esc denies it — or queue a message…" : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
             style={{ width: "100%", minHeight: 40, maxHeight: "max(168px, 40vh)", resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}

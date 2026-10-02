@@ -365,14 +365,15 @@ fn merge_klide_hooks(settings: &serde_json::Value) -> (serde_json::Value, bool) 
     (out, changed)
 }
 
-/// Install (or refresh) Klide's status hooks in `~/.claude/settings.json`.
-/// Returns whether the file was written. A settings file that exists but
-/// doesn't parse is left strictly alone — never risk clobbering a
-/// hand-edited config for a status label.
-pub fn install_claude_hooks(home: &str) -> Result<bool, String> {
-    let dir = std::path::Path::new(home).join(".claude");
-    let path = dir.join("settings.json");
-    let current = match std::fs::read_to_string(&path) {
+/// Install (or refresh) Klide's status hooks in Claude Code's `settings.json`
+/// (`path`, from `ClaudeCode::config_file`). Returns whether the file was
+/// written. A settings file that exists but doesn't parse is left strictly
+/// alone — never risk clobbering a hand-edited config for a status label.
+pub fn install_claude_hooks(path: &std::path::Path) -> Result<bool, String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| "settings path has no parent".to_string())?;
+    let current = match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
             .map_err(|e| format!("~/.claude/settings.json didn't parse ({e}) — left untouched"))?,
         Err(_) => serde_json::json!({}),
@@ -381,16 +382,16 @@ pub fn install_claude_hooks(home: &str) -> Result<bool, String> {
     if !changed {
         return Ok(false);
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create ~/.claude: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     // One rolling backup the first time Klide ever touches the file, so a
     // hand-edited settings.json is always recoverable.
     let backup = dir.join("settings.json.klide-bak");
     if path.exists() && !backup.exists() {
-        let _ = std::fs::copy(&path, &backup);
+        let _ = std::fs::copy(path, &backup);
     }
     let pretty =
         serde_json::to_string_pretty(&merged).map_err(|e| format!("serialize settings: {e}"))?;
-    std::fs::write(&path, pretty).map_err(|e| format!("write settings.json: {e}"))?;
+    std::fs::write(path, pretty).map_err(|e| format!("write settings.json: {e}"))?;
     Ok(true)
 }
 
@@ -448,12 +449,17 @@ fn merge_codex_config(text: &str, shim_path: &str) -> Option<String> {
     })
 }
 
-pub fn install_codex_hooks(home: &str) -> Result<bool, String> {
-    let hooks_dir = std::path::Path::new(home).join(".klide/hooks");
+/// `hooks_dir` is Klide's own shim directory (`home::klide_hooks_dir`);
+/// `config_path` is Codex's `config.toml` as `Codex::config_file` resolves
+/// it — honouring `CODEX_HOME`, so the hook lands in the file the CLI reads.
+pub fn install_codex_hooks(
+    hooks_dir: &std::path::Path,
+    config_path: &std::path::Path,
+) -> Result<bool, String> {
     let shim = hooks_dir.join("codex-status.sh");
     let mut changed = false;
     if std::fs::read_to_string(&shim).ok().as_deref() != Some(codex_shim_source()) {
-        std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("create ~/.klide/hooks: {e}"))?;
+        std::fs::create_dir_all(hooks_dir).map_err(|e| format!("create {}: {e}", hooks_dir.display()))?;
         std::fs::write(&shim, codex_shim_source()).map_err(|e| format!("write codex shim: {e}"))?;
         #[cfg(unix)]
         {
@@ -463,17 +469,18 @@ pub fn install_codex_hooks(home: &str) -> Result<bool, String> {
         changed = true;
     }
 
-    let config_dir = std::path::Path::new(home).join(".codex");
-    let config_path = config_dir.join("config.toml");
-    let text = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let config_dir = config_path
+        .parent()
+        .ok_or_else(|| "codex config path has no parent".to_string())?;
+    let text = std::fs::read_to_string(config_path).unwrap_or_default();
     let shim_str = shim.to_string_lossy();
     if let Some(merged) = merge_codex_config(&text, &shim_str) {
-        std::fs::create_dir_all(&config_dir).map_err(|e| format!("create ~/.codex: {e}"))?;
+        std::fs::create_dir_all(config_dir).map_err(|e| format!("create {}: {e}", config_dir.display()))?;
         let backup = config_dir.join("config.toml.klide-bak");
         if config_path.exists() && !backup.exists() {
-            let _ = std::fs::copy(&config_path, &backup);
+            let _ = std::fs::copy(config_path, &backup);
         }
-        std::fs::write(&config_path, merged).map_err(|e| format!("write codex config: {e}"))?;
+        std::fs::write(config_path, merged).map_err(|e| format!("write codex config: {e}"))?;
         changed = true;
     }
     Ok(changed)
@@ -510,13 +517,14 @@ export const KlideStatus = async () => {
 }
 "#;
 
-pub fn install_opencode_hooks(home: &str) -> Result<bool, String> {
-    let dir = std::path::Path::new(home).join(".config/opencode/plugin");
+/// `dir` is OpenCode's plugin directory (`<config_home>/plugin`, from the
+/// adapter).
+pub fn install_opencode_hooks(dir: &std::path::Path) -> Result<bool, String> {
     let path = dir.join("klide-status.js");
     if std::fs::read_to_string(&path).ok().as_deref() == Some(OPENCODE_PLUGIN_SOURCE) {
         return Ok(false);
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create opencode plugin dir: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("create opencode plugin dir: {e}"))?;
     std::fs::write(&path, OPENCODE_PLUGIN_SOURCE)
         .map_err(|e| format!("write opencode plugin: {e}"))?;
     Ok(true)
@@ -755,9 +763,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex/config.toml"), "model = \"o4\"\n").unwrap();
-        let home_s = home.to_str().unwrap();
 
-        assert_eq!(install_codex_hooks(home_s), Ok(true));
+        assert_eq!(install_codex_hooks(&home.join(".klide/hooks"), &home.join(".codex/config.toml")), Ok(true));
         let shim = home.join(".klide/hooks/codex-status.sh");
         let shim_source = std::fs::read_to_string(&shim).unwrap();
         assert!(shim_source.contains("KLIDE_HOOK_URL"));
@@ -783,7 +790,7 @@ mod tests {
             "first touch snapshots the original"
         );
         // Second run: nothing left to do.
-        assert_eq!(install_codex_hooks(home_s), Ok(false));
+        assert_eq!(install_codex_hooks(&home.join(".klide/hooks"), &home.join(".codex/config.toml")), Ok(false));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -792,17 +799,16 @@ mod tests {
         let home = std::env::temp_dir().join(format!("klide-oc-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        let home_s = home.to_str().unwrap();
 
-        assert_eq!(install_opencode_hooks(home_s), Ok(true));
+        assert_eq!(install_opencode_hooks(&home.join(".config/opencode/plugin")), Ok(true));
         let plugin = home.join(".config/opencode/plugin/klide-status.js");
         let source = std::fs::read_to_string(&plugin).unwrap();
         assert!(source.contains("KLIDE_HOOK_URL"));
-        assert_eq!(install_opencode_hooks(home_s), Ok(false));
+        assert_eq!(install_opencode_hooks(&home.join(".config/opencode/plugin")), Ok(false));
 
         // A stale/hand-edited copy is refreshed back to the current source.
         std::fs::write(&plugin, "// old").unwrap();
-        assert_eq!(install_opencode_hooks(home_s), Ok(true));
+        assert_eq!(install_opencode_hooks(&home.join(".config/opencode/plugin")), Ok(true));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -811,13 +817,12 @@ mod tests {
         let home = std::env::temp_dir().join(format!("klide-hooks-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".claude")).unwrap();
-        let home_s = home.to_str().unwrap();
         let settings = home.join(".claude/settings.json");
         let backup = home.join(".claude/settings.json.klide-bak");
 
         // Existing user settings: install merges, keeps user keys, backs up.
         std::fs::write(&settings, r#"{"model":"opus"}"#).unwrap();
-        assert_eq!(install_claude_hooks(home_s), Ok(true));
+        assert_eq!(install_claude_hooks(&home.join(".claude/settings.json")), Ok(true));
         assert_eq!(
             std::fs::read_to_string(&backup).unwrap(),
             r#"{"model":"opus"}"#,
@@ -829,11 +834,11 @@ mod tests {
         assert!(written["hooks"]["Stop"].is_array());
 
         // Second install is a no-op — nothing to write.
-        assert_eq!(install_claude_hooks(home_s), Ok(false));
+        assert_eq!(install_claude_hooks(&home.join(".claude/settings.json")), Ok(false));
 
         // A file that doesn't parse is refused, not overwritten.
         std::fs::write(&settings, "{ not json").unwrap();
-        assert!(install_claude_hooks(home_s).is_err());
+        assert!(install_claude_hooks(&home.join(".claude/settings.json")).is_err());
         assert_eq!(
             std::fs::read_to_string(&settings).unwrap(),
             "{ not json",
