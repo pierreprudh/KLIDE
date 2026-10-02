@@ -88,8 +88,9 @@ export function eventsToMsgs(events: AgentEvent[]): Msg[] {
 /**
  * The replay a live panel should adopt over what it currently shows.
  *
- * Two paths need this and must agree: the mount reconnect (`followConversationRun`)
- * and the post-turn heal that runs when a turn stopped reaching the screen.
+ * Two paths need this and must agree: the reconnect (`attach` in
+ * `runController.ts`) and the post-turn heal that runs when a turn stopped
+ * reaching the screen.
  * Both add back the turns queued locally — a queued turn was typed ahead and
  * has not been sent, so the Transcript cannot know about it — and both refuse a
  * replay carrying *less conversation* than what is on screen, which is how a

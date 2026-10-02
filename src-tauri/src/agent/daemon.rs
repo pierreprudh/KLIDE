@@ -199,6 +199,7 @@ impl RunHost {
                     }
                 }),
                 is_live: Box::new(move |id| live.upgrade().is_some_and(|h| h.is_live(id))),
+                cancel: None,
                 resolve_session: Box::new(|_| None),
             },
         ) {

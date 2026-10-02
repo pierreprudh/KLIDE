@@ -8,7 +8,7 @@ A local-first coding workspace for running local models and subscription coding 
 
 <br/>
 
-![Version](https://img.shields.io/badge/version-0.6.1-7A9F4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.5-7A9F4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS-555555?style=flat-square)
 [![License](https://img.shields.io/badge/license-MIT-1c1c1c?style=flat-square)](./LICENSE)
 
@@ -82,15 +82,20 @@ Klide has three capability modes:
 | Area | Included |
 |---|---|
 | **Agent operations** | Mission Control, shared run lifecycle, attention queue, transcripts, session resume, cross-agent handoff, sub-agent visibility |
-| **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, and another agent's words are reviewed before they reach a conversation |
+| **Agent coordination** | One Rust-owned journal: runs address each other by a stable id, delegate CLIs join through an embedded MCP server, each Delegate session proves itself with its own secret, and another agent's words arrive in one fenced delivery, reviewed before they reach a conversation |
+| **Connectors** | The MCP servers you already configured in Claude Code, Codex, or OpenCode, local or remote; the assistant calls them in Plan and Goal (reads free, writes gated per tool), and GitHub connects in one click as the pinned account |
+| **Background work** | Background shells a Run can read, stop, or be woken by; GitHub CI observer cards that follow a pinned run and open its PR in Git Review; subscription conversations that keep running after the app quits |
+| **Workers** | `spawn_subagent` hands a task to a Delegate CLI as an approved, isolated Run of its own, watched live from the parent conversation |
 | **Documents** | Native workbook tools that create and revise a recalculated `.xlsx` through the normal review path, plus a built-in sheet surface for `.xlsx` and `.sheet.json` |
-| **Review and evidence** | Diff comments sent to agents, command approval, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
+| **Review and evidence** | Diff comments sent to agents, command approval, per-mode tool toggles enforced at dispatch, checkpoints, validation status, files touched, tokens, cost, and stop reasons |
 | **Parallel work** | Git worktrees, worktree setup recipes, agent races on the same task, evidence comparison, and merge controls |
-| **Editor and shell** | Monaco editor, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
+| **Editor and shell** | Monaco editor with eight themes, file explorer, tabs, search, command palette, Git review, commit graph, and persistent PTY terminals |
 | **Workspace surfaces** | Welcome launcher, focus mode, free-mode floating panels, fixed layout presets, and a freeform grid builder |
-| **Models** | Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, and OpenAI-compatible endpoints |
-| **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, and native recall over reviewed Project Memory with provenance |
-| **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, network permissions, and a user-choosable transcript folder |
+| **Models** | Ollama, MLX, Anthropic, OpenAI, Mistral, xAI, DeepSeek, OpenRouter, OpenAI-compatible endpoints, about forty more behind the opencodex gateway, and `auto` resolved once in Rust at run start |
+| **Delegate CLIs** | Claude Code, Codex, OpenCode, and OMP in persistent PTYs or as streaming Focus turns; each CLI's own `/` commands in the composer, Claude Code's reasoning effort levels, `/config` drawn as a settings card, version and updater per CLI, and per-login usage in the account menu |
+| **Project context** | `AGENTS.md`, `CLAUDE.md`, file mentions, image and document attachments, skills, dynamic tools, search over previous conversations, native recall over reviewed Project Memory with provenance, and `html` / `svg` visuals drawn in the answer |
+| **From other apps** | `klide://` links open a pre-filled conversation, a file at a line, or a project; Ask Kit in the macOS Services menu sends selected text to a new conversation |
+| **Local security** | Workspace-rooted file access, operating-system keychain storage, project command allowlists, network permissions, a user-choosable transcript folder with measured cleanup, and Rust deciding what a run may open, reveal, or must refuse |
 
 ## Get started
 
@@ -168,7 +173,22 @@ The [Agent Coordination architecture](./docs/AGENT_COORDINATION.md) and [coordin
 
 Klide is under active development. Its frontend tests, production build, Rust suite, PTY socket integration, and release-bundle boot check pass. Unsigned Apple Silicon bundles and source builds are available now. Distribution is GitHub Releases only and the bundle is ad-hoc signed; notarization is deferred by choice, so first launch needs one pass through Privacy & Security.
 
-v0.6.5 — Shells, Watchers, Links is the current release (2026-09-23). A Run can start a command in the background and keep working — read what it wrote since last time, stop it, or be woken when it exits — instead of sitting on a deploy until a timer kills it. A delegated subagent is watched live in the parent conversation, and a worker that failed comes back as a failure with its checkout as Git saw it. And what an answer names is something you can open: a URL under its name in the browser, a rooted path in Finder, a file of the open project in an editor tab.
+Since v0.6.5, main has gained the following, each under the name it shipped with:
+
+- **GitHub observer cards** — a `gh run watch` becomes a live CI card in the conversation and the Focus side panel; it names failed checks and opens the PR in Git Review
+- **Claude Code effort** — low to max reasoning effort for terminal and Focus turns
+- **Connectors: the assistant can call them, GitHub connects in one click** — reads run as asked, writes ask per tool; remote servers and `${VAR}` references work
+- **Each CLI's own commands in the `/` menu** — Claude Code, OpenCode, and Oh My Pi bring theirs, and Claude Code's `/config` answer is drawn as a settings card
+- **`klide://` links and Ask Kit in the Services menu** — Raycast, Shortcuts, a terminal, or selected text in any app opens a pre-filled conversation, a file at a line, or a project
+- **Keep subscription conversations running after app exit** — the turn finishes in the background host and reattaches on reopen; Settings → Storage lists and cleans saved conversations
+- **OpenCode turns type out as they're written** — streamed from `opencode serve` instead of landing in one block
+- **Account menu: usage per CLI** — each login shows its session and weekly allowance, with account switching
+- **Cerulean theme**, an **editor dock with a clean full-height top**, and a composer that grows for a long paste behind one provider-picker design
+- **Settings → Harness → Tools per mode now takes effect** — a turned-off Tool is neither offered nor dispatched
+
+Underneath, the September architecture review landed as nine merged pull requests: **one Gate subject** every permission check reads, **a Run lease** that releases everything it holds however the loop ends, **one fenced delivery** for everything the operator did not type, **a per-session bridge secret** for Delegate CLIs, **a real CSS tokenizer** in the visual sanitizer, **Rust deciding Open / Reveal / Refuse** for documents, **one process module** for every command a Run starts, **the Mission supervisor as the only dispatcher**, and **a coordination journal store that is safe across processes**.
+
+v0.6.5 — Shells, Watchers, Links is the latest tagged release (2026-09-23). A Run can start a command in the background and keep working — read what it wrote since last time, stop it, or be woken when it exits — instead of sitting on a deploy until a timer kills it. A delegated subagent is watched live in the parent conversation, and a worker that failed comes back as a failure with its checkout as Git saw it. And what an answer names is something you can open: a URL under its name in the browser, a rooted path in Finder, a file of the open project in an editor tab.
 
 v0.6.4 — Workers, Connectors, Visuals (2026-09-20) precedes it. A Harness Run can hand a task to another CLI agent as a worker — a dispatch the operator approves, an isolated worktree, a Run of its own — instead of shelling out to `claude -p`. Klide connects to the MCP servers already configured in the tools you use. And an answer can draw: an `html` or `svg` fence renders as a sanitized, themed picture in the conversation.
 
@@ -178,6 +198,7 @@ The v0.6 orchestration milestone itself — Missions as outcomes, budget and cap
 
 Current priorities:
 
+- Next cut: dogfood the unreleased work above, then tag v0.6.6
 - v0.5.1: dogfood the full race/restart/permission/merge/cleanup path
 - v0.5.1: publish a signed/notarized macOS build, then validate Windows and Linux
 - v0.6: make Missions, budgets, capacity, routing, and validation contracts one dependable orchestration layer

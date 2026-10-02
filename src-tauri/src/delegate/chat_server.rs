@@ -249,7 +249,7 @@ pub(super) async fn run_via_server(
                 format!("{label} exited with {status}: {stderr_text}")
             });
         }
-        Ok(emitter.answer.trim().to_string())
+        emitter.finish()
     })
     .await
     .unwrap_or_else(|_| {

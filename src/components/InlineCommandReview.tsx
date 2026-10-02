@@ -1,7 +1,8 @@
-import { type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type { ProviderId } from "../agent/types";
 import { ProviderLogo } from "./ai/icons";
 import { ConnectorMark } from "./linkMark";
+import { Kbd } from "./Kbd";
 
 type Props = {
   command: string;
@@ -27,10 +28,25 @@ type Props = {
   onApproveForProject?: () => void;
   pattern?: string;
   onApprovePattern?: (pattern: string) => void;
+  /** The card the run is blocked on answers the keyboard: ⏎ approves once,
+   *  esc denies — from anywhere that isn't a text field. (The composer
+   *  handles its own ⏎ / esc while it is empty, so the user never has to
+   *  leave it.) Only one card on screen may hold this. */
+  hotkeys?: boolean;
 };
 
+/** Is this key event already owned by a text field? Then the card stays out. */
+function targetIsEditable(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  if (!t) return false;
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
+}
+
 /** A bare icon action — no container, just the glyph, coloring on hover. Keeps
- *  the command card minimal per the design direction. */
+ *  the command card minimal per the design direction. The scope actions
+ *  (this run, this project, a pattern) wear this: they are the quiet
+ *  options, dimmer than the decision itself. */
 function BareAction({
   label,
   tone,
@@ -58,24 +74,73 @@ function BareAction({
         padding: 0,
         border: "none",
         background: "transparent",
-        color: "var(--fg-subtle)",
+        color: "var(--fg-dim)",
         cursor: "pointer",
         transition: "color var(--motion-fast) var(--ease-out)",
       }}
       onMouseEnter={(e) => (e.currentTarget.style.color = hoverFg)}
-      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-subtle)")}
+      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-dim)")}
     >
       {children}
     </button>
   );
 }
 
-/** Shell-command approval — minimal: the command in mono with a `$` prompt and
- *  bare icon actions (cancel ✗, optional approve-for-run 📌, optional
- *  approve-for-project 🗂, approve-once ✓). No heavy framing, no icon
- *  containers. Lives inline under the requesting turn. A network target and a
- *  message from another agent take the same card: the message shows the peer
- *  where the `$` would be, then the text. */
+/** The decision itself, said in a word — "Run", "Deny" — with its key beside
+ *  it when the card answers the keyboard. Text, not a glyph: a decision the
+ *  run is blocked on should not have to be decoded from a check mark. No
+ *  container; the accent colour alone marks the primary one. */
+function WordAction({
+  label,
+  tone,
+  keycap,
+  onClick,
+}: {
+  label: string;
+  tone: "danger" | "accent";
+  keycap?: string;
+  onClick: () => void;
+}) {
+  const fg = tone === "accent" ? "var(--accent)" : "var(--fg-subtle)";
+  const hoverFg = tone === "accent" ? "var(--accent-hover)" : "var(--diff-remove)";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={keycap ? `${label} (${keycap})` : label}
+      title={keycap ? `${label} (${keycap})` : label}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        height: 22,
+        padding: "0 2px",
+        border: "none",
+        background: "transparent",
+        color: fg,
+        font: "inherit",
+        fontSize: 12,
+        fontWeight: tone === "accent" ? 500 : 400,
+        cursor: "pointer",
+        transition: "color var(--motion-fast) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = hoverFg)}
+      onMouseLeave={(e) => (e.currentTarget.style.color = fg)}
+    >
+      {label}
+      {keycap && <Kbd keys={[keycap]} />}
+    </button>
+  );
+}
+
+/** Shell-command approval — minimal: the command in mono with a `$` prompt,
+ *  the quiet scope options as bare icons (approve-for-run 📌,
+ *  approve-for-project 🗂, pattern), a hairline, then the decision in words
+ *  (Deny · Run) with its keys when the card answers them. No heavy framing,
+ *  no icon containers. Lives inline under the requesting turn. A network
+ *  target and a message from another agent take the same card: the message
+ *  shows the peer where the `$` would be, then the text. */
 export function InlineCommandReview({
   command,
   kind = "command",
@@ -90,14 +155,36 @@ export function InlineCommandReview({
   onApproveForProject,
   pattern,
   onApprovePattern,
+  hotkeys = false,
 }: Props) {
   const canApprovePattern = !!pattern && !!onApprovePattern && pattern !== command;
+  // ⏎ approves once, esc denies — but only when no text field owns the key,
+  // and never a key something else already answered (the composer prevents
+  // default on the ⏎ it handles, so an approval is never counted twice).
+  useEffect(() => {
+    if (!hotkeys) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || targetIsEditable(e)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Enter") { e.preventDefault(); onApproveOnce(); }
+      else if (e.key === "Escape") { e.preventDefault(); onReject(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hotkeys, onApproveOnce, onReject]);
   const approveRunLabel =
     kind === "connector" ? "Approve this tool for this run"
       : kind === "network" ? "Approve target for this run"
       : kind === "message" ? "Approve messages from this agent for this run"
         : "Approve for this run";
-  const approveOnceLabel = kind === "worker" ? "Dispatch" : "Approve";
+  // The decision, in the verb the kind calls for.
+  const approveOnceLabel =
+    kind === "worker" ? "Dispatch"
+      : kind === "message" ? "Accept"
+      : kind === "command" ? "Run"
+        : "Allow";
+  const rejectLabel = kind === "message" ? "Decline" : kind === "worker" ? "Cancel" : "Deny";
+  const hasScopeActions = !!onApproveForRun || !!onApproveForProject || (kind === "command" && canApprovePattern);
   const approveProjectLabel =
     kind === "connector" ? "Approve this tool for this project"
       : kind === "network" ? "Approve target for this project"
@@ -177,11 +264,6 @@ export function InlineCommandReview({
         )}
       </span>
       <span style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        <BareAction label="Cancel" tone="danger" onClick={onReject}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </BareAction>
         {onApproveForRun && (
           <BareAction label={approveRunLabel} tone="neutral" onClick={onApproveForRun}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -205,11 +287,13 @@ export function InlineCommandReview({
             </svg>
           </BareAction>
         )}
-        <BareAction label={approveOnceLabel} tone="accent" onClick={onApproveOnce}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 6 9 17l-5-5" />
-          </svg>
-        </BareAction>
+        {hasScopeActions && (
+          // A hairline between the options and the decision, the card's one
+          // divider.
+          <span aria-hidden="true" style={{ width: 1, height: 14, background: "var(--border)", margin: "0 2px" }} />
+        )}
+        <WordAction label={rejectLabel} tone="danger" keycap={hotkeys ? "Esc" : undefined} onClick={onReject} />
+        <WordAction label={approveOnceLabel} tone="accent" keycap={hotkeys ? "↵" : undefined} onClick={onApproveOnce} />
       </span>
     </div>
   );

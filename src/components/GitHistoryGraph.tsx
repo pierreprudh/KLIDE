@@ -17,7 +17,7 @@ import { layoutGraph, splitRefs, type GraphCommit, type GraphRow } from "../gitG
 import { gitGraph, githubCommitAvatars, type CommitDetails } from "../ipc/git";
 import { parseDiffBlocks, DiffView, FileStatusIcon } from "./diffView";
 import { renderMarkdown } from "./markdown";
-import { ProviderLogo } from "./ai/icons";
+import { ProviderLogo, type BrandKey } from "./ai/icons";
 import type { ProviderId } from "../agent/types";
 
 const GRAPH_PAD = 8;
@@ -418,7 +418,7 @@ function reflowCommitBody(text: string): string {
 
 /** Recognize AI co-author trailers so they get their provider's mark —
  *  "Co-Authored-By: Claude Fable 5 <…>" reads as an Anthropic credit line. */
-function trailerProvider(trailer: string): ProviderId | null {
+function trailerProvider(trailer: string): BrandKey | null {
   if (!/^co-authored-by:/i.test(trailer)) return null;
   const v = trailer.toLowerCase();
   if (/(claude|anthropic|fable|mythos|opus|sonnet|haiku)/.test(v)) return "anthropic";

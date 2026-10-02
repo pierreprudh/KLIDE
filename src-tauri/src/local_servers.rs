@@ -29,8 +29,12 @@ impl LocalServerState {
     }
 }
 
+/// A server Klide itself starts and reaps — the registry row says so
+/// (`ProviderEntry::is_local_server`); LM Studio is local but user-run.
 fn is_local_server_provider(provider: &str) -> bool {
-    matches!(provider, "ollama" | "mlx")
+    crate::providers::lookup(provider)
+        .map(|entry| entry.is_local_server)
+        .unwrap_or(false)
 }
 
 /// Whether a managed local server is up right now. `false` for a provider that

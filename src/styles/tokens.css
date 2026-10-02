@@ -2670,7 +2670,8 @@ textarea.klide-diff-comment-input:focus-visible {
 .klide-todo-mark {
   transition:
     background var(--motion-slow) var(--ease-soft),
-    border-color var(--motion-slow) var(--ease-soft);
+    border-color var(--motion-slow) var(--ease-soft),
+    color var(--motion-slower) var(--ease-soft);
 }
 
 /* Completing a task lands with the house spring — a small overshoot, then settle. */

@@ -78,11 +78,15 @@ model. What the gate asks:
 |---|---|---|
 | hosted Provider has a key | `providers::provider_key` | `no API key` |
 | local server is up | `local_servers::local_server_is_up` | `server not running` |
-| tool support, when the Mode is Plan or Goal | `models::ai_model_supports_tools` | `cannot use tools` |
-| context window ≥ 2 × prompt tokens + 4 096 | `models::resolve_context_window` | `Nk window, job needs Mk` |
+| tool support, when the Mode is Plan or Goal | `model_capabilities::capabilities` | `cannot use tools` |
+| context window ≥ 2 × prompt tokens + 4 096 | `model_capabilities::capabilities` | `Nk window, job needs Mk` |
 
 Chat does not require tools. The window floor is deliberately unclever: the
 prompt needs room to be answered and to grow a few turns before compaction.
+Both facts come from the one capabilities answer the gauge also shows — an
+Ollama candidate's window is the daemon's probed number, not a name guess —
+and a window nobody published plans as `DEFAULT_CONTEXT_WINDOW` (128k), the
+one place that number lives.
 
 **Lock.** A continuation of an `auto` conversation reuses the pair its own
 Transcript recorded (`read_run_origin`) and emits no `RouteResolved`. Context
@@ -161,7 +165,8 @@ Four things every router above agrees on, all of which this follows:
   landed on, never `auto`, and continuing one re-locks to that origin in Rust.
 - Model inspection commands answer for `auto` without a network call: tools
   `true` (guaranteed by the gate), vision and reflection `false` (unknown
-  until routed), context window the name heuristic's floor.
+  until routed), context window unknown (`null`) — the gauge measures against
+  the resolved model once the run starts.
 
 ## Next
 

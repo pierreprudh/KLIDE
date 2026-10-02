@@ -112,6 +112,15 @@ forwards each operation to the journal's single writer gate, so a Delegate
 and a Harness Run share one authority and one change event.
 _Avoid_: MCP proxy, agent API, second journal writer, remote coordination endpoint
 
+**Coordination operation**:
+One of the five things a Run does on the journal — list, send, wait, cancel,
+read result — as a single core function that takes an actor a door already
+authenticated and returns one structured result rendered as one text. A door
+(the Harness's native Tools, the Delegate bridge) binds the actor and wraps
+the reply; it never decides what the operation does. One schema source lists
+the five for both doors.
+_Avoid_: bridge op, tool handler, per-door implementation, MCP tool (as the definition)
+
 **Coordination envelope**:
 A durable semantic payload addressed from an operator or authenticated Run to
 one stable Run id. It has an explicit kind, correlation/reply identity,
@@ -228,6 +237,20 @@ between fresh, restored, resumed, and branched Conversations; it is not itself
 a Run, because one Conversation session may be idle between Runs.
 _Avoid_: chat state, thread state, panel globals
 
+**Run controller**:
+The AI panel's one owner of the turn queue, the live Run attachment and the
+gate table for a Conversation session (`src/components/ai/runController.ts`).
+A sent turn queues and drains one at a time behind whatever Run is already in
+the thread; a Run is followed through its channel or, after a remount, the
+reattach broadcast; and everything a Run parks on — a diff, a permission, a
+question — sits in one table, so leaving the conversation for any reason
+(new chat, another thread, a deletion, an unmount, a Stop) takes one recipe
+and clears all of them. It is a plain module with no React in it: AiPanel
+renders the view it publishes and hands back the answers to its cards. It
+does not build a turn's request or decide what follows a turn — the panel
+supplies those as functions the controller calls at the moment it acts.
+_Avoid_: queue refs, panel globals, run loop (that is the Harness)
+
 **Project Memory**:
 Reviewed, Workspace-scoped knowledge that survives Runs: decisions,
 conventions, facts, failures, patterns, and handoffs. One entry is a versioned
@@ -256,8 +279,26 @@ geometry is not fleet state; the layout module owns placement and persistence.
 _Avoid_: global panel state, panel list
 
 **Provider**:
-A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. Differs only in wire format; behaviour behind the seam is shared.
+A model backend Klide can talk to — Ollama, LM Studio, Anthropic, OpenAI. One
+row of the Rust registry (`src-tauri/src/providers.rs`) *is* the whole
+Provider: its wire, key source, label, group (local / hosted / subscription),
+default model, presets, brand key and run-loop quirks (`ProviderCaps`) are
+declared there and nowhere else. Behaviour behind the seam is shared; what
+differs is on the row. TypeScript reads the row through the Provider catalog,
+it never restates a fact about one.
 _Avoid_: vendor, backend, LLM
+
+**Provider catalog**:
+The Rust registry as the renderer reads it — every row published as plain
+data (`ai_list_providers`), mirrored into
+`src/agent/providerCatalog.generated.ts` by a Rust test that fails when the
+mirror is stale, and read through one TS door
+(`src/agent/providerCatalog.ts`). The picker's rows, the API-keys list, the
+local-server rows and the default-model fallbacks are all derived from it.
+`auto` and `custom:*` / `cli:*` ids are not rows; the door answers for them
+explicitly rather than with a builtin's value.
+_Avoid_: provider list, provider table, PROVIDER_CATALOG (that is the
+picker's derived view, not the catalog)
 
 **Auto**:
 The Provider the picker sends when the user leaves the model choice to Klide.
@@ -272,6 +313,19 @@ the reason and what was ruled out. Distinct from the Goal policy's `auto`
 (edits apply without review): that is a review setting, this is a Provider.
 _Avoid_: smart mode, auto-select, model router (the router is the mechanism;
 Auto is the choice the user makes)
+
+**Model capabilities**:
+The one answer to what a model can do — context window, tools, vision,
+reasoning levels, price class, maker — for one Provider + model pair
+(`src-tauri/src/model_capabilities.rs`). Resolved in one order: explicit
+override → provider metadata (a CLI's manifest, a `/models` listing, a
+registry row) → local probe (Ollama's `/api/show`) → name table; memoised per
+pair. The gauge, the router, the compaction threshold and the composer
+controls all read the same answer, so they cannot disagree. A window nobody
+published is unknown (`null`), not a default. The price class is decided by
+the Provider (subscription flag, `KeySource`), never by the model's name.
+_Avoid_: per-command heuristics, frontend fallbacks, model metadata (the
+listing is a source; this is the answer)
 
 ### Mission Control
 
@@ -290,8 +344,12 @@ A queued todo on Mission Control. Starts as a plain item; "send an agent" dispat
 _Avoid_: ticket, issue, todo
 
 **Delegate**:
-An external CLI agent (Claude Code, Codex, OpenCode) dispatched into the workspace through a PTY session. Klide observes its output; it does not drive its loop. All per-CLI knowledge — spawn syntax, resume flags, session-id detection, transcript parsing — lives in the Delegate module (`src-tauri/src/delegate/`), one adapter per CLI; pty.rs and Mission Control consume the interface and know nothing CLI-specific.
+An external CLI agent (Claude Code, Codex, OpenCode, Oh My Pi) dispatched into the workspace through a PTY session. Klide observes its output; it does not drive its loop. All per-CLI knowledge lives in the Delegate module (`src-tauri/src/delegate/`), one adapter per CLI: spawn syntax, resume flags, session-id detection, transcript parsing — and the CLI's *facts*: its label and binary, its login commands and auth check, whether its login can be switched (`supports_accounts`), and its **home** — the config and data directories honouring the CLI's own override (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, XDG for OpenCode) and the paths under them (sessions, the config file Klide writes hooks into, auth files, model cache). Every other module asks the adapter for a path; none spells `~/.codex` itself (a source scan in `delegate/home.rs` enforces it). Resolution reads through an `Env` so a test can move a home without touching the process.
 _Avoid_: external agent, subprocess, CLI tool
+
+**Delegate catalog**:
+The Delegate facts a surface shows without spawning one — id, label, binary, `supportsAccounts` — as `delegate::catalog()` in Rust, mirrored verbatim in `src/delegates.ts` (the frontend's one source: the `DelegateId` union, `delegateLabel`, every label map and the account-switcher flag derive from it) and served live by `delegate_catalog`. The Rust test `frontend_catalog_matches_all` pins the mirror to the adapters; a vitest source scan pins the rest of `src/` to the mirror.
+_Avoid_: delegate list, provider table
 
 **Klide convo**:
 A snapshot of an AI-panel conversation published to Mission Control, so it stays on the board after its panel closes.
@@ -302,7 +360,7 @@ A saved copy of the credentials a Delegate CLI already wrote, captured so Klide 
 _Avoid_: login, credential, token
 
 **Account provider**:
-The per-CLI seam for Account snapshots (`src-tauri/src/accounts.rs`) — one `AccountProvider` adapter per CLI (Codex / Claude Code / OpenCode) behind a trait, resolved by a single `provider(id)` registry. Mirrors the Delegate seam: where a login lives, how to read its identity, and how to capture and restore it all sit behind the trait; the generic save / list / activate flow knows nothing CLI-specific.
+The per-CLI seam for Account snapshots (`src-tauri/src/accounts.rs`) — one `AccountProvider` backend per CLI whose Delegate says `supports_accounts` (Codex / Claude Code / OpenCode) behind a trait. A backend names its Delegate and reads the CLI's id, label, login command and login files from that adapter — it keeps no id list, label or path of its own; what stays here is how to read the identity, and how to capture and restore it. The generic save / list / activate flow knows nothing CLI-specific.
 _Avoid_: account manager, credential handler
 
 ### Prompt assembly

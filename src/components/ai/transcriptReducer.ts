@@ -32,7 +32,7 @@ import {
 import type { Msg } from "./types";
 
 /** Delegate-console tagging carried on every assistant row of a turn. */
-export type TranscriptDelegate = { delegateConsole?: boolean; delegateProvider?: string };
+export type TranscriptDelegate = { delegateConsole?: boolean; delegateProvider?: string; delegateHeadless?: true };
 
 export type Pricing = { inputPerMillion: number; outputPerMillion: number } | null;
 

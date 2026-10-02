@@ -4,6 +4,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { FromOtherApps } from "./settings/fromOtherApps";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
@@ -67,6 +68,7 @@ import { ConnectorsSection } from "./settings/connectors";
 import { GatewayBlock } from "./settings/gateway";
 import { LocalServerRow } from "./settings/localServers";
 import { AccountControl, GitHubAccountRow } from "./settings/accounts";
+import { DELEGATES, type DelegateId } from "../delegates";
 import { CliVersionsBlock } from "./settings/cliVersions";
 import { StatsSection } from "./settings/stats";
 import { StorageSection } from "./settings/storage";
@@ -118,7 +120,7 @@ type Props = {
   onBack: () => void;
 };
 
-type SubscriptionProviderId = "claude-code" | "codex" | "opencode" | "omp" | `cli:${string}`;
+type SubscriptionProviderId = DelegateId | `cli:${string}`;
 
 type SubscriptionStatus = {
   provider: SubscriptionProviderId;
@@ -139,7 +141,7 @@ type OllamaAccountStatus = {
   detail: string;
 };
 
-const subscriptionProviders: {
+type SubscriptionProviderRow = {
   id: SubscriptionProviderId;
   title: string;
   command: string;
@@ -148,40 +150,36 @@ const subscriptionProviders: {
   accounts: boolean;
   /** One line under "Model Options" saying where the model list comes from. */
   modelNote: string;
-}[] = [
-  {
-    id: "claude-code",
-    title: "Claude Code",
-    command: "claude",
+};
+
+/** The prose this page adds to each Delegate — the facts (name, binary,
+ *  accounts) come from the catalog, never restated here. */
+const DELEGATE_COPY: Record<DelegateId, { description: string; modelNote: string }> = {
+  "claude-code": {
     description: "Subscription login, Console login, SSO, or long-lived setup token.",
-    accounts: true,
     modelNote: "Loaded from Claude Code's local model usage cache.",
   },
-  {
-    id: "codex",
-    title: "Codex",
-    command: "codex",
+  codex: {
     description: "ChatGPT login, device auth, API key, or access token.",
-    accounts: true,
     modelNote: "Loaded from the current Codex model cache when available.",
   },
-  {
-    id: "opencode",
-    title: "OpenCode",
-    command: "opencode",
+  opencode: {
     description: "Interactive OpenCode CLI, launched as a real delegate terminal.",
-    accounts: true,
     modelNote: "OpenCode chooses models inside its own interactive CLI.",
   },
-  {
-    id: "omp",
-    title: "Oh My Pi",
-    command: "omp",
+  omp: {
     description: "Terminal coding agent routing 40+ providers — keys come from your shell environment.",
-    accounts: false,
     modelNote: "Loaded from omp's model cache (providers it could actually reach).",
   },
-];
+};
+
+const subscriptionProviders: SubscriptionProviderRow[] = DELEGATES.map((d) => ({
+  id: d.id,
+  title: d.label,
+  command: d.binary,
+  accounts: d.supportsAccounts,
+  ...DELEGATE_COPY[d.id],
+}));
 
 const sections: { id: SectionId; label: string; icon: ReactNode }[] = [
   { id: "general", label: "General", icon: <GearIcon /> },
@@ -225,6 +223,7 @@ const SECTION_SUBTITLES: Record<SectionId, string> = {
 // toggles, key managers, whole panes — stay in the hand list below.
 type SettingIndexEntry = { label: string; section: SectionId; keywords: string };
 const panelOnlyIndex: SettingIndexEntry[] = [
+  { label: "Ask Kit from any app", section: "general", keywords: "services menu right click selection ask kit quick action raycast shortcuts deep link klide:// url scheme" },
   { label: "Panel visibility", section: "general", keywords: "explorer sidebar terminal ai panel show hide toggle" },
   { label: "Panel sizes", section: "layout", keywords: "layout width height size resize panel" },
   { label: "Layout presets", section: "layout", keywords: "layout preset bento grid workbench arrange" },
@@ -496,7 +495,7 @@ export function SettingsPanel({
     setDetectedWindow(0);
     readProviderContextWindow(settingsProvider, aiModel)
       .then((window) => {
-        if (!cancelled && Number.isFinite(window) && window > 0) setDetectedWindow(window);
+        if (!cancelled && window !== null && window > 0) setDetectedWindow(window);
       })
       .catch(() => {
         /* unreachable model: the row says so */
@@ -922,6 +921,9 @@ export function SettingsPanel({
                   }
                 />
               </Panel>
+            </SettingBlock>
+            <SettingBlock title="From other apps">
+              <FromOtherApps />
             </SettingBlock>
             <SettingBlock title="Files">
               <Panel>
@@ -1760,8 +1762,8 @@ export function SettingsPanel({
           <Section id="local-ai" active={activeSection} mounted={visitedSections.has("local-ai")}>
               <SettingBlock title="Local Servers">
                 <Panel>
-                  <LocalServerRow provider="ollama" title="Ollama" defaultModel="llama3.1:8b" />
-                  <LocalServerRow provider="mlx" title="MLX" defaultModel="mlx-community/Llama-3.1-8B-Instruct-4bit" />
+                  <LocalServerRow provider="ollama" />
+                  <LocalServerRow provider="mlx" />
                 </Panel>
               </SettingBlock>
               <SettingBlock title="Notes">

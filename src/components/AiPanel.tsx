@@ -1,3 +1,4 @@
+import { assistantPlaceholder } from "./ai/assistantPlaceholder";
 import { ObserverConnections } from "./ai/ObserverConnections";
 import { ConversationObservers } from "./ai/ConversationObservers";
 import { wakeTurnMode } from "./ai/wake";
@@ -12,6 +13,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -20,11 +22,9 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   listProviderModels,
-  modelReflectionLevels as queryModelReflectionLevels,
-  modelSupportsTools as queryModelSupportsTools,
-  modelSupportsVision as queryModelSupportsVision,
+  readModelCapabilities,
+  readModelPricing,
   readLocalProviderStatus,
-  readProviderContextWindow,
   readProviderKeyStatus,
   startLocalProvider,
 } from "../ipc/aiProviders";
@@ -39,8 +39,7 @@ import { usePortalMenu } from "../hooks/usePortalMenu";
 import { usePresence } from "../hooks/usePresence";
 import { Kbd } from "./Kbd";
 import { keysFor } from "../shortcuts";
-import { errMessage, providerFailureMessage, RunBusyError } from "../errors";
-import { nextBusyWait } from "./ai/runBusyRetry";
+import { errMessage, providerFailureMessage } from "../errors";
 import { InlineDiffReview } from "./InlineDiffReview";
 import { InlineCommandReview } from "./InlineCommandReview";
 import { conversationToConvo, deleteKlideConvo, publishKlideConvo, settleKlideConvo } from "../klideConvos";
@@ -49,7 +48,8 @@ import {
   type ProjectContextMode,
   type ProjectContextSnapshot,
 } from "../contextTray";
-import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunState, isActiveRunStatus, isRunBusyError, reattachAgentRun, type RunReattachment } from "../agent/client";
+import { acceptRunCheckpoints, readAgentRunEvents, startAgentRun, stopAgentRun, resolveDiff, resolveUserQuestion, resolvePermission, revertRunCheckpoints, setRunCommandPolicy, getAgentRunState, reattachAgentRun } from "../agent/client";
+import { createRunController, type GateDecision, type RunClient, type RunControllerDeps } from "./ai/runController";
 import { parseSubagentDirective, resolveSubagent, buildSubagentSystemPrompt, matchSubagents, extractInlineSubagentCalls, type Subagent } from "../agent/subagents";
 import { resolveAdvisor } from "../agent/advisor";
 import { serviceAdvisorConsult } from "../agent/advisorConsult";
@@ -60,6 +60,20 @@ import { TodoStrip, type TodoStripSlot } from "./TodoStrip";
 import { columnGeometry, showsVisuals } from "./ai/canvasColumn";
 
 /** The documents a completion produced, as the viewer's rail wants them. */
+// The slice of the harness client the run controller drives. One object at
+// module scope: the controller is created once per panel and the wire never
+// changes under it.
+const runClient: RunClient = {
+  startAgentRun,
+  stopAgentRun,
+  reattachAgentRun,
+  getAgentRunState,
+  readAgentRunEvents,
+  resolveDiff,
+  resolvePermission,
+  resolveUserQuestion,
+};
+
 function documentSet(completion: RunCompletion): { path: string; bytes: number }[] {
   return completionDocuments(completion).map((artifact) => ({ path: artifact.path, bytes: artifact.bytes }));
 }
@@ -74,7 +88,8 @@ import {
   providerGroupsWithCustom,
   providerName,
 } from "../agent/providers";
-import { isDelegateId } from "../delegates";
+import { DELEGATE_IDS, isDelegateId } from "../delegates";
+import { providerCaps } from "../agent/providerCatalog";
 import {
   isCustomProvider,
   refreshCustomProviders,
@@ -86,12 +101,10 @@ import {
 } from "../customCli";
 import type {
   AgentAttachment as Attachment,
-  AgentEvent,
   AgentMode,
   ProviderId,
-  QuestionChoices,
-  DiffProposal,
   PermissionRequest,
+  StartAgentRunInput,
 } from "../agent/types";
 import { enabledSkillsPrompt, type Skill } from "../skills";
 
@@ -123,7 +136,7 @@ import { AgentActivity } from "./ai/AgentActivity";
 import { reviewEnvelope } from "../agent/coordination";
 import { allFavModels, favModelsFor } from "../favModels";
 import { conversationMark } from "../modelIdentity";
-import { buildSystemPrompt } from "./ai/system-prompt";
+import { MINIMAL_CHAT_SYSTEM_PROMPT, buildSystemPrompt } from "./ai/system-prompt";
 import { ATTACH_ACCEPT, isPhotoAttachment, stageFiles, stagedImageBytes } from "./ai/attachments";
 import { AttachmentTray } from "./ai/AttachmentTray";
 import { useCliSlashCommands, withCliCommands } from "./ai/cliSlashCommands";
@@ -139,11 +152,8 @@ import { navigatePromptHistory, promptHistoryEntries } from "./ai/promptHistory"
 import { summarizeAndHandoff, generateMemoryNote, detectAndGenerateSkill, summarizeForCompaction } from "./ai/summarize";
 import { addMemoryDraft } from "../memoryDrafts";
 import { writeMemory } from "../memory";
-import { hasOpenTurn, isSilentRunError, replayForAdoption, shouldHealFromTranscript } from "./ai/replayConversation";
-import { createTurnDriver } from "./ai/turnDriver";
-import { decideOnLeavingRun, shouldReadoptConversation, type RunLeaveDecision } from "./ai/leavingRun";
-import { compactionMsg, extractAssistantText, interruptedMsg } from "../agent/foldEvents";
-import { pendingGatesFromEvents } from "../agent/pendingGates";
+import { shouldReadoptConversation } from "./ai/leavingRun";
+import { extractAssistantText } from "../agent/foldEvents";
 import {
   applyConversationSessionTransition,
   conversationSessionReducer,
@@ -582,7 +592,7 @@ function switchModelForProvider(id: ProviderId): string {
 (() => {
   const FLAG = "klide.model.delegate-default-migrated-v2";
   if (localStorage.getItem(FLAG)) return;
-  const delegates = ["claude-code", "codex", "opencode", "omp"];
+  const delegates: readonly string[] = DELEGATE_IDS;
   for (const id of delegates) {
     if (localStorage.getItem(`klide.model.${id}`)) {
       localStorage.setItem(`klide.model.${id}`, CLI_DEFAULT_MODEL);
@@ -636,41 +646,43 @@ type ModelInspection = {
   reflectionLevels: string[];
   supportsReflection: boolean;
   supportsVision: boolean;
-  contextLimit: number;
+  /** The trained window, or `null` when nobody published one — the gauge
+   *  then reads "—" and the send path skips the pre-send compaction check
+   *  rather than measuring against a number nobody stands behind. */
+  contextLimit: number | null;
 };
 
 /**
- * Model metadata is intentionally inspected as one unit. Ollama's reflection
- * fallback is not just metadata: it can issue a tiny probe chat, which loads a
- * cold model. Keeping the calls behind this function lets a resumed transcript
- * remain a passive reader until send() explicitly activates it.
+ * Model metadata is one answer from Rust (`model_capabilities`), asked for as
+ * one unit. Ollama's reflection fallback is not just metadata: it can issue a
+ * tiny probe chat, which loads a cold model. Passing the flag through lets a
+ * resumed transcript remain a passive reader until send() explicitly
+ * activates it. An unreachable provider yields the conservative answer.
  */
 async function inspectModelForRun(
   provider: ProviderId,
   model: string,
   allowActivationProbe = true,
 ): Promise<ModelInspection> {
-  const [tools, reflection, vision, context] = await Promise.allSettled([
-    queryModelSupportsTools(provider, model),
-    allowActivationProbe
-      ? queryModelReflectionLevels(provider, model)
-      : Promise.resolve<string[]>([]),
-    queryModelSupportsVision(provider, model),
-    readProviderContextWindow(provider, model),
-  ]);
-  const reflectionLevels =
-    reflection.status === "fulfilled" ? sortReflectionLevels(reflection.value) : [];
-  return {
-    supportsTools:
-      tools.status === "fulfilled" ? tools.value : !isManagedLocalProvider(provider),
-    reflectionLevels,
-    supportsReflection: reflectionLevels.length > 0,
-    supportsVision: vision.status === "fulfilled" ? vision.value : false,
-    contextLimit:
-      context.status === "fulfilled" && Number.isFinite(context.value) && context.value > 0
-        ? context.value
-        : 128_000,
-  };
+  try {
+    const caps = await readModelCapabilities(provider, model, allowActivationProbe);
+    const reflectionLevels = sortReflectionLevels(caps.reasoningLevels);
+    return {
+      supportsTools: caps.supportsTools,
+      reflectionLevels,
+      supportsReflection: reflectionLevels.length > 0,
+      supportsVision: caps.supportsVision,
+      contextLimit: caps.contextWindow !== null && caps.contextWindow > 0 ? caps.contextWindow : null,
+    };
+  } catch {
+    return {
+      supportsTools: !isManagedLocalProvider(provider),
+      reflectionLevels: [],
+      supportsReflection: false,
+      supportsVision: false,
+      contextLimit: null,
+    };
+  }
 }
 
 export function AiPanel({
@@ -1008,7 +1020,7 @@ export function AiPanel({
     }
   }, [workspaceBranch]);
 
-  const [contextLimit, setContextLimit] = useState(128_000);
+  const [contextLimit, setContextLimit] = useState<number | null>(null);
   // The provider's own prompt-token count from the latest finished turn — the
   // authoritative "how full is the context" number (it's exactly what the
   // model counted: system prompt + tools + history). `null` until the first
@@ -1769,21 +1781,24 @@ export function AiPanel({
   // measures against the model's detected window, which no request can change.
   const ctxOverride = harnessSettings?.contextWindows?.[model];
   const messageTokens = useMemo(() => conversationTokenEstimate(msgs), [msgs]);
+  // `contextWindow.ts` reads 0 as "not detected"; `null` is that, typed.
   const effectiveContextLimit = resolveGaugeWindow({
     provider,
-    detected: contextLimit,
+    detected: contextLimit ?? 0,
     override: ctxOverride,
     reported: reportedContextWindow,
     estimatedPromptTokens: measuredPromptTokens ?? messageTokens + toolSchemaTokens,
   });
   // A different model, or a different cap, sizes its own window.
   useEffect(() => setReportedContextWindow(null), [provider, model, ctxOverride]);
+  const trainedWindowPhrase =
+    contextLimit !== null ? `the ${contextSizeLabel(contextLimit)} the model is trained to` : "the model's trained window, which it did not report";
   const contextLimitNote = providerHasContextWindowSetting(provider)
     ? ctxOverride && ctxOverride > 0
-      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. The model is trained to ${contextSizeLabel(contextLimit)}.`
+      ? `Capped at ${contextSizeLabel(ctxOverride)} by your setting — sent to Ollama as num_ctx. It grows up to ${trainedWindowPhrase}.`
       : reportedContextWindow !== null
-        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
-        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to the ${contextSizeLabel(contextLimit)} the model is trained to.`
+        ? `Running in a ${contextSizeLabel(effectiveContextLimit)} window sized from the conversation; it grows up to ${trainedWindowPhrase}.`
+        : `Expected ${contextSizeLabel(effectiveContextLimit)} working window; it grows up to ${trainedWindowPhrase}.`
     : isCustomProvider(provider)
       ? "Self-hosted endpoint: Klide cannot set context here. Configure the server/model window upstream."
       : isLocalProvider
@@ -1829,12 +1844,8 @@ export function AiPanel({
     !providerDelegatesWork && modelSupportsTools && effectiveMode !== "chat";
   const systemPromptForDraft = useMemo(() => {
     let prompt: string;
-    if (effectiveMode === "chat" && (provider === "mlx" || provider === "ollama")) {
-      prompt = `You are Kit, Klide's coding assistant — a calm, warm pair-programmer. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation. If asked who you are, you're Kit; never claim to be Claude, GPT, or any other product.
-
-If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
-
-Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`;
+    if (effectiveMode === "chat" && providerCaps(provider).minimalChatContext) {
+      prompt = MINIMAL_CHAT_SYSTEM_PROMPT;
     } else {
       prompt = buildSystemPrompt(
         workspaceRoot,
@@ -1963,8 +1974,11 @@ This user request requires workspace inspection. Before answering, you MUST call
     setCompacting(true);
     setCompactError(null);
     try {
-      const older = msgs.slice(0, msgs.length - COMPACT_KEEP_RECENT);
-      const recent = msgs.slice(msgs.length - COMPACT_KEEP_RECENT);
+      // The ref, not the rendered `msgs`: `send` awaits before calling this,
+      // and the transcript may have moved on since the closure was made.
+      const current = msgsRef.current;
+      const older = current.slice(0, current.length - COMPACT_KEEP_RECENT);
+      const recent = current.slice(current.length - COMPACT_KEEP_RECENT);
       if (older.length === 0) return false;
       const summary = await summarizeForCompaction(oneShotProvider, oneShotModel, older, contextWindow);
       if (!summary) throw new Error("Could not build a summary to compact with.");
@@ -2016,18 +2030,16 @@ This user request requires workspace inspection. Before answering, you MUST call
     window.addEventListener(CONVERSATIONS_CHANGED_EVENT, reload);
     return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, reload);
   }, []);
-  const queueRef = useRef<QueuedTurn[]>([]);
-  const processingQueueRef = useRef(false);
-  const queueGenerationRef = useRef(0);
-  const activeHarnessRunRef = useRef<string | null>(null);
-  // The Goal policy the *next* request carries, read through refs at send
-  // time. The queue drain is one closure for as long as it loops, so a turn
-  // queued behind a live one would otherwise carry the rung as it was when
-  // the loop started, not as it is now.
-  const requireDiffReviewRef = useRef(requireDiffReview);
-  const autoApproveCommandsRef = useRef(autoApproveCommands);
-  useEffect(() => { requireDiffReviewRef.current = requireDiffReview; }, [requireDiffReview]);
-  useEffect(() => { autoApproveCommandsRef.current = autoApproveCommands; }, [autoApproveCommands]);
+  // The run controller owns the turn queue, the live Run attachment and the
+  // gate table (see ai/runController.ts); this panel renders its view and
+  // hands it decisions. Its dependencies are read through a ref assigned on
+  // every render (just before RENDER, once every handler exists), so the
+  // controller always acts on this render's props and state — the Goal
+  // policy a queued turn dispatches with is the rung as it is *now*, not as
+  // it was when the drain loop started.
+  const controllerDepsRef = useRef<RunControllerDeps>(null as unknown as RunControllerDeps);
+  const [controller] = useState(() => createRunController(() => controllerDepsRef.current));
+  const runView = useSyncExternalStore(controller.subscribe, controller.getState);
   // The rung flipped while this conversation's Run works: tell that Run. Full
   // auto answers a command card it has up and silences the ones to come;
   // stepping back down makes it ask again. Nothing to tell on mount — a fresh
@@ -2037,14 +2049,10 @@ This user request requires workspace inspection. Before answering, you MUST call
   useEffect(() => {
     if (commandsPolicyToldRef.current === autoApproveCommands) return;
     commandsPolicyToldRef.current = autoApproveCommands;
-    const runId = activeHarnessRunRef.current;
+    const runId = controller.getState().activeRunId;
     if (!runId) return;
     void setRunCommandPolicy({ runId, autoApproveCommands }).catch(() => {});
-  }, [autoApproveCommands]);
-  // Live subscription to a run that was still going when this panel mounted
-  // (see the mount reconnect effect). Held so we can detach on unmount / when
-  // the run settles, and so a conversation switch doesn't leave it listening.
-  const reattachRef = useRef<RunReattachment | null>(null);
+  }, [autoApproveCommands, controller]);
   // MLX's port can be up while the model is still cold (false readiness), which
   // makes the first message stream-error. We warm the model on the first send
   // for a given model and remember it here so later sends skip the round-trip;
@@ -2084,42 +2092,24 @@ This user request requires workspace inspection. Before answering, you MUST call
     };
   }, [msgs, provider, model, modelActivationDeferred, isLocalProvider]);
 
-  function abortActiveHarnessRun() {
-    const runId = activeHarnessRunRef.current;
-    if (!runId) return;
-    activeHarnessRunRef.current = null;
-    void stopAgentRun(runId).catch((e) => console.error("Failed to abort harness run:", e));
-  }
-
   function stopCurrentStream() {
     // Stop pressed during warm-up: no harness run exists yet, so flag the
     // pending send to bail once the server is ready (see send()).
     if (serverStarting) cancelledWarmupRef.current = true;
-    abortActiveHarnessRun();
+    // Aborts the Run, retires the turn so the drain cannot start another,
+    // settles the session and takes every card down — a question whose
+    // answer can never arrive, and a diff whose apply can never land.
+    controller.stop();
     if (delegateSession) { void stopDelegatePty(delegateSessionId(currentId, provider)); }
-    // Bump the queue generation so any in-flight runProcessQueue sees its
-    // tokens as stale and bails before it can start another turn.
-    queueGenerationRef.current += 1;
-    processingQueueRef.current = false;
-    settleConversationRun();
-    // The harness is being aborted; the run loop will emit a paused-state
-    // exit on its own. Clear any visible Q&A card so the UI doesn't show a
-    // question whose answer can never arrive.
-    setPendingQuestion(null);
-    setPendingPermission(null);
-    setQuestionAnswer("");
   }
 
   // Switching conversations (or loading one from history) starts a fresh
   // revert scope — the previous run's changes are no longer "what I just did".
-  // Also drop any mount-time reattach listener bound to the previous id (the
-  // reconnect effect is mount-only, so it won't re-follow the new one — the
-  // adopt guard already blocks stale writes; this just stops the leak).
+  // (Any follower bound to the previous id was dropped by the controller's
+  // `leave` on the way here.)
   useEffect(() => {
     runChangedPathsRef.current = new Set();
     setRevertableFiles(0);
-    reattachRef.current?.detach();
-    reattachRef.current = null;
   }, [currentId]);
 
   // One-click undo of every file this run wrote, then re-sync the open editors
@@ -2250,232 +2240,26 @@ This user request requires workspace inspection. Before answering, you MUST call
   // they disagree. That is one way a run's final answer ends up on disk and
   // never on screen.
 
-  /**
-   * Reconnect a conversation to the Harness Run still working on it, if there
-   * is one. The harness keeps running in Rust and writing its transcript, but
-   * the request-scoped event channel from `startAgentRun` belongs to the mount
-   * — and the turn generation — that opened it. So we (1) rebuild from the
-   * on-disk transcript, which has the (possibly finished) reply, and (2) if the
-   * run is STILL going, follow the global reattach stream so it keeps updating
-   * instead of freezing at a stale snapshot.
-   *
-   * Called on mount and on every conversation adoption. Leaving a thread no
-   * longer stops its agent (see `detachFromActiveRun`), so coming back to one
-   * has to pick its live stream up again — otherwise the row animates in the
-   * rail while the panel shows a frozen transcript.
-   *
-   * Klide runs only: conversation id == transcript id. A delegate *session*
-   * streams through the PTY and has no transcript to re-read; a delegate run
-   * on the headless Focus path does, and follows like any other.
-   */
-  function followConversationRun(conversationId: string, runProvider: ProviderId) {
-    if (isDelegateProvider(runProvider) && variant !== "focus") return;
-    {
-      const reattachId = conversationId;
-      const baseLen = msgsRef.current.length;
-      void (async () => {
-        let latestAdoptedLength = 0;
-        // Re-read the transcript and adopt the replay, guarding against a
-        // conversation switch mid-await and against clobbering typing. Reports
-        // the event count and whether the transcript *tail* is terminal — the
-        // harness writes RunResult/RunError to disk before it flips the run's
-        // status, so the tail is the authoritative "is this turn done" signal.
-        const adopt = async (
-          guardBaseLen?: number,
-        ): Promise<{ len: number; terminal: boolean; events: AgentEvent[] }> => {
-          const events = await readAgentRunEvents(reattachId);
-          // Turns queued locally (waiting for this external run to settle)
-          // aren't in the transcript yet — carry them across the replay or a
-          // long-running race run would silently swallow an "ask both" send.
-          // That rule, and the refusal to adopt a replay shorter than what is
-          // on screen, live in `replayForAdoption`: the post-turn heal in
-          // `runHarnessTurn` adopts on exactly the same terms.
-          const replayed = replayForAdoption(events, msgsRef.current,
-            isActiveRunStatus(status) ? {
-              provider: runProvider,
-              delegateHeadless: isDelegateProvider(runProvider) ? true : undefined,
-            } : undefined);
-          const safe =
-            replayed !== null &&
-            events.length >= latestAdoptedLength &&
-            conversationSessionRef.current.conversationId === reattachId &&
-            (guardBaseLen === undefined || msgsRef.current.length === guardBaseLen);
-          if (safe) { latestAdoptedLength = events.length; msgsRef.current = replayed; setMsgs(replayed); }
-          const tail = events[events.length - 1]?.type;
-          return {
-            len: events.length,
-            terminal: tail === "run_result" || tail === "run_error",
-            events,
-          };
-        };
-
-        /**
-         * Put back whatever the run is parked on. The card is drawn by the
-         * panel and answered by the panel, so a run that asked while nobody was
-         * watching would otherwise wait on a question with no surface — and the
-         * queue waits with it, since a parked run never settles.
-         *
-         * Only ever called for a run Rust still holds. A transcript can end on
-         * an unanswered request with no terminal event — that is exactly what a
-         * run killed with the app looks like — and restoring a card for a run
-         * that no longer exists would offer an approval nothing is listening
-         * for. See agent/pendingGates.ts.
-         */
-        const restoreGates = (events: AgentEvent[]) => {
-          if (conversationSessionRef.current.conversationId !== reattachId) return;
-          const gates = pendingGatesFromEvents(events);
-          setPendingPermission((current) =>
-            gates.permission
-              ? current?.requestId === gates.permission.id
-                ? current
-                : permissionCard(reattachId, gates.permission)
-              : current?.runId === reattachId
-                ? null
-                : current,
-          );
-          setPendingDiff((current) =>
-            gates.diff
-              ? current?.id === gates.diff.id
-                ? current
-                : gates.diff
-              : current?.runId === reattachId
-                ? null
-                : current,
-          );
-          setPendingQuestion((current) =>
-            gates.question
-              ? current?.requestId === gates.question.requestId
-                ? current
-                : gates.question
-              : current?.runId === reattachId
-                ? null
-                : current,
-          );
-        };
-
-        // Ask the owner before reading disk: completion between these calls
-        // is included in the snapshot. A prior turn's terminal event is not
-        // evidence that a newly accepted background turn has already finished.
-        let status: string | null;
-        let fromSeq: number | null;
-        try { ({ status, fromSeq } = await getAgentRunState(reattachId)); }
-        catch { return; } // an unreachable owner is not proof of interruption
-        if (conversationSessionRef.current.conversationId !== reattachId) return;
-        let snapshot: { len: number; terminal: boolean; events: AgentEvent[] };
-        try {
-          snapshot = await adopt(baseLen);
-        } catch {
-          if (!isActiveRunStatus(status)) return;
-          snapshot = { len: 0, terminal: false, events: [] };
-        }
-        const thisTurnFinished = (value: { len: number; terminal: boolean }) =>
-          value.terminal && (fromSeq === null || value.len > fromSeq);
-        if (thisTurnFinished(snapshot)) return;
-
-        if (!isActiveRunStatus(status)) {
-          // No live run, and a turn that never settled: it died with the app.
-          // Say so where the answer would have been, or the user message just
-          // sits there and reads as a lost conversation. Tail case only — once
-          // a later turn is written the fold draws the same line itself.
-          if (hasOpenTurn(snapshot.events)) {
-            const current = msgsRef.current;
-            const last = current[current.length - 1];
-            if (!(last?.role === "system" && last.runInterrupted)) {
-              setMsgs([...current, interruptedMsg()]);
-            }
-          }
-          return;
-        }
-
-        // Follow it live. Every persisted event just signals "re-read the
-        // transcript" — disk is the source of truth, so there are no gaps to
-        // reconcile and dedup is implicit in the full replay.
-        startConversationRun();
-        activeHarnessRunRef.current = reattachId;
-        restoreGates(snapshot.events);
-        const settle = () => {
-          settleConversationRun();
-          if (activeHarnessRunRef.current === reattachId) activeHarnessRunRef.current = null;
-          reattachRef.current?.detach();
-          reattachRef.current = null;
-        };
-        const reatt = await reattachAgentRun(reattachId, snapshot.len, (event) => {
-          void adopt().then((next) => restoreGates(next.events)).catch(() => {});
-          if (event.type === "run_result" || event.type === "run_error") settle();
-        });
-        // A conversation switch during the listen await would have moved
-        // currentId — drop the fresh listener instead of leaking it.
-        if (conversationSessionRef.current.conversationId !== reattachId) {
-          reatt.detach();
-          settleConversationRun();
-          return;
-        }
-        reattachRef.current = reatt;
-        // Close the snapshot→subscribe race: a terminal event emitted while we
-        // were registering the listener won't arrive live. Re-read the tail
-        // (authoritative) and settle if the run already finished.
-        try {
-          const post = await adopt();
-          restoreGates(post.events);
-          if (thisTurnFinished(post)) settle();
-        } catch { /* ignore transient read error */ }
-      })();
-    }
-  }
-
-  /**
-   * Stop following this panel's run — without stopping the run.
-   *
-   * Leaving a conversation is navigation, not a decision to kill the agent
-   * working in it. The loop lives in Rust, so the panel only has to stop
-   * listening: the live channel from `startAgentRun` can't be closed from
-   * here, so its turn generation is retired instead (`handleEvent` drops
-   * everything from the old turn) and any reattach listener is dropped. The
-   * run keeps going, its rail row keeps animating, and `followConversationRun`
-   * picks it back up when you return.
-   *
-   * A run parked on a diff, a permission or a question survives too: the panel
-   * drops its card here and rebuilds it from the transcript on return (see
-   * `agent/pendingGates.ts`). Returns the decision from `ai/leavingRun.ts` so
-   * the caller can keep the run board in step with it.
-   */
-  function detachFromActiveRun(): RunLeaveDecision {
-    const decision = decideOnLeavingRun({
-      hasActiveRun: activeHarnessRunRef.current !== null,
-    });
-    // Retire the turn generation: the live channel's events now fall out of
-    // `handleEvent` instead of landing in whatever conversation is adopted
-    // next, and any queue drain for the thread we're leaving bails.
-    queueGenerationRef.current += 1;
-    processingQueueRef.current = false;
-    if (decision.abort) abortActiveHarnessRun();
-    else activeHarnessRunRef.current = null;
-    reattachRef.current?.detach();
-    reattachRef.current = null;
-    settleConversationRun();
-    return decision;
-  }
-
   // Restoration itself is synchronous and atomic in Conversation Session. This
   // mount-only effect reconnects the restored identity to its run, if it has
   // one. Intentionally only the *initial* conversation matters — subsequent
   // edits (loadConversation, newConversation) follow their own.
   useEffect(() => {
     const restored = conversationSessionRef.current;
-    followConversationRun(restored.conversationId, restored.provider);
+    controller.attach({ conversationId: restored.conversationId, provider: restored.provider });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Clear any pending auto-save notice when the panel unmounts (timer would
-  // otherwise fire setState on a dead component). Also drop any live reattach
-  // listener — the run keeps going in Rust and the next mount reattaches fresh.
+  // otherwise fire setState on a dead component). Also let go of the Run —
+  // it keeps going in Rust and the next mount reattaches fresh.
   useEffect(() => () => {
     if (autoMemoryTimerRef.current !== null) {
       clearTimeout(autoMemoryTimerRef.current);
       autoMemoryTimerRef.current = null;
     }
-    reattachRef.current?.detach();
-    reattachRef.current = null;
+    controller.leave("unmount");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -2495,7 +2279,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     // Mark the previous chat as done on the run board so a "new chat" doesn't
     // leave a stale "running" row — unless it really is still running, which it
     // now can be: starting a fresh chat leaves the previous agent working.
-    const leaving = detachFromActiveRun();
+    // Leaving retires the turn, drops the queue and every card (a fresh chat
+    // must not inherit the previous turn's question), and settles the session.
+    const leaving = controller.leave("new");
     if (leaving.settle) settleKlideConvo(currentId);
     const nid = genId();
     setModelActivationDeferred(false);
@@ -2505,9 +2291,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     setMeasuredUsageTokens(null);
     setReportedContextWindow(null);
     setCompactError(null);
-    queueRef.current = [];
-    queueGenerationRef.current += 1;
-    processingQueueRef.current = false;
     setInput("");
     // The auto-save notice belongs to the previous conversation — clear it
     // so the fresh chat starts on a clean slate.
@@ -2516,11 +2299,6 @@ This user request requires workspace inspection. Before answering, you MUST call
       autoMemoryTimerRef.current = null;
     }
     setAutoMemoryNotice(null);
-    // Same for any in-flight Q&A card — a fresh chat shouldn't inherit
-    // the previous turn's question.
-    setPendingQuestion(null);
-    setPendingPermission(null);
-    setQuestionAnswer("");
     // Fresh id per chat — the prior "reset to panelId" pattern was
     // re-threading the previous transcript into the new run via the
     // agent harness's replay path, so "new conversation" silently
@@ -2701,7 +2479,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     if (
       !shouldReadoptConversation({
         sameConversation: c.id === conversationSessionRef.current.conversationId,
-        followingLiveRun: activeHarnessRunRef.current !== null,
+        followingLiveRun: controller.getState().activeRunId !== null,
       })
     ) {
       forceStickToBottom();
@@ -2709,8 +2487,9 @@ This user request requires workspace inspection. Before answering, you MUST call
     }
     // Opening another thread used to abort whatever this one was running —
     // clicking a sibling row in the rail silently killed a working agent. The
-    // run is left alone now; only this panel's subscription to it ends.
-    detachFromActiveRun();
+    // run is left alone now; only this panel's subscription to it ends — with
+    // its queue and its cards (loaded history can't have a live Q&A pending).
+    controller.leave("load");
     // Adopting history must not become an implicit model request. The saved
     // Provider/model pair is shown immediately, but inspection + warm-up wait
     // for the first real send from this transcript.
@@ -2731,8 +2510,6 @@ This user request requires workspace inspection. Before answering, you MUST call
     setMeasuredUsageTokens(null);
     setReportedContextWindow(null);
     setCompactError(null);
-    queueRef.current = [];
-    queueGenerationRef.current += 1;
     // Drop the previous chat's auto-save notice so the loaded history
     // doesn't display a stale "Auto-saved" pill.
     if (autoMemoryTimerRef.current !== null) {
@@ -2740,11 +2517,6 @@ This user request requires workspace inspection. Before answering, you MUST call
       autoMemoryTimerRef.current = null;
     }
     setAutoMemoryNotice(null);
-    // Loaded history can't have a live Q&A pending — clear the card so
-    // we don't show a question the new run hasn't asked yet.
-    setPendingQuestion(null);
-    setPendingPermission(null);
-    setQuestionAnswer("");
     // Switching conversations is a navigation event: jump to the bottom
     // of the new chat. Without this, an old scroll position from the
     // previous chat sticks, and the user has to scroll to find the
@@ -2754,7 +2526,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // here and walked away from, or one another panel left behind. Pick its
     // live stream back up rather than showing the transcript as it stood when
     // you left.
-    followConversationRun(c.id, c.provider ?? provider);
+    controller.attach({ conversationId: c.id, provider: c.provider ?? provider });
   }
 
   function deleteConversation(id: string, e: ReactMouseEvent) {
@@ -2775,6 +2547,9 @@ This user request requires workspace inspection. Before answering, you MUST call
   const onConversationDeletedRef = useRef<(deletedId: string) => void>(() => {});
   onConversationDeletedRef.current = (deletedId) => {
     if (deletedId !== currentId) return;
+    // The same leave as a new chat: a live Run's events must not keep landing
+    // in the fresh conversation, and its cards go with it.
+    controller.leave("deleted");
     const nid = genId();
     transitionConversation({ type: "fresh-started", conversationId: nid, branch: workspaceBranch });
     setMeasuredPromptTokens(null);
@@ -3077,10 +2852,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     let cancelled = false;
     async function loadPricing() {
       try {
-        const p = await invoke<{ inputPerMillion: number; outputPerMillion: number } | null>(
-          "ai_model_pricing",
-          { model }
-        );
+        const p = await readModelPricing(provider, model);
         if (!cancelled) setPricing(p ?? null);
       } catch { if (!cancelled) setPricing(null); }
     }
@@ -3089,20 +2861,18 @@ This user request requires workspace inspection. Before answering, you MUST call
   }, [provider, model]);
 
   // ── Agent loop (harness-only) ──
-  const [pendingDiff, setPendingDiff] = useState<DiffProposal | null>(null);
+  // The cards the Run is parked on come from the controller's gate table;
+  // the panel only draws them and hands back answers.
+  const pendingDiff = runView.gates.diff;
   // A free-form Q&A the model is asking via the `userAnswerQuestion` tool.
   // The harness is paused waiting for the answer; this card collects it
-  // and calls `agent_resolve_question` to unblock. Cleared on submit,
-  // skip, abort, and conversation reset.
-  const [pendingQuestion, setPendingQuestion] = useState<{
-    runId: string;
-    requestId: string;
-    question: string;
-    /** Short answers to draw as rows, and a provider whose models the card
-     *  may also offer — a "which model" question carries both. */
-    choices?: QuestionChoices;
-  } | null>(null);
+  // and calls `agent_resolve_question` to unblock.
+  const pendingQuestion = runView.gates.question;
+  // The typed draft belongs to one question: it starts empty for each new
+  // request and is dropped with the card, whichever way the card went.
   const [questionAnswer, setQuestionAnswer] = useState("");
+  const pendingQuestionRequestId = pendingQuestion?.requestId;
+  useEffect(() => { setQuestionAnswer(""); }, [pendingQuestionRequestId]);
 
   // The Focus variant's reading column: instead of restructuring the
   // transcript/composer DOM, the horizontal padding grows to center a
@@ -3254,27 +3024,14 @@ This user request requires workspace inspection. Before answering, you MUST call
   // Permission gate: the harness pauses and emits a request — a shell command,
   // a network target, or a message to another agent — and the user approves or
   // rejects (approveCommand / rejectCommand) before it runs. The card renders
-  // from `pendingPermission`.
-  const [pendingPermission, setPendingPermission] = useState<{
-    runId: string;
-    requestId: string;
-    toolName: string;
-    kind: "command" | "network" | "message" | "worker" | "connector";
-    command: string;
-    /** For a connector tool: the connector id, for its mark. */
-    connector?: string;
-    /** For a message: who wrote it, by thread title when known, and which
-     *  envelope — so the pre-turn card for the same message is not drawn twice.
-     *  For a worker dispatch: who is being sent and as what. */
-    peer?: string;
-    /** For a worker dispatch: the Delegate's provider id, for its mark. */
-    worker?: ProviderId;
-    envelopeId?: string;
-    summary: string;
-    reason: string;
-    externalPaths: string[];
-    suggestedPattern?: string;
-  } | null>(null);
+  // from `pendingPermission` — the controller's raw request, drawn through
+  // `permissionCard` so a recovered request and a live one look the same.
+  const pendingPermissionGate = runView.gates.permission;
+  const pendingPermission = useMemo(
+    () => pendingPermissionGate ? permissionCard(pendingPermissionGate.runId, pendingPermissionGate.request) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pendingPermissionGate, peerIndex],
+  );
 
   function suggestCommandPattern(command: string): string | undefined {
     const words = (command.match(/"[^"]+"|'[^']+'|\S+/g) ?? [])
@@ -3332,414 +3089,62 @@ This user request requires workspace inspection. Before answering, you MUST call
     };
   }
 
-  async function runHarnessTurn(turn: QueuedTurn, generation: number) {
-    if (queueGenerationRef.current !== generation) return;
-    let userIndex = msgsRef.current.findIndex((m) => m.role === "user" && m.queueId === turn.clientId);
-    if (userIndex < 0) return;
-    let nextMsgs = [...msgsRef.current];
-    const userMsg = nextMsgs[userIndex];
-    if (userMsg.role !== "user") return;
-    nextMsgs[userIndex] = { ...userMsg, queueState: "running" };
-    // A console block is how you read a CLI's raw stdout. The headless
-    // one-shot path returns the assistant's prose (`--output-format text`), so
-    // in Focus it is rendered as an ordinary message instead — same chat, a
-    // different engine behind it.
-    const delegateConsole = isDelegateProvider(turn.provider) && variant !== "focus";
-    const delegateProvider = providerName(turn.provider);
-    // The headless path hands back the whole reply at once, so its placeholder
-    // shows a status word and a clock instead of the streaming loader.
-    const delegateHeadless = isDelegateProvider(turn.provider) && variant === "focus" ? (true as const) : undefined;
-    nextMsgs.splice(userIndex + 1, 0, { role: "assistant", content: "", delegateConsole, delegateProvider, delegateHeadless });
-    const assistantIndex = userIndex + 1;
-    msgsRef.current = nextMsgs;
-    setMsgs(nextMsgs);
-    // The turn carries the pair it actually dispatches with, which stamps the
-    // thread's origin on its first Run.
-    startConversationRun("thinking", { provider: turn.provider, model: turn.model });
-    // A fresh assistant turn is the one place we want to yank the user
-    // back to the bottom even if they were scrolled up reading context.
-    // Their action (sending a message) implies "I want to see the reply".
-    forceStickToBottom();
-
-    // Why this turn's view is short of the Run's Transcript, when it is. Two
-    // things can stop a turn reaching the screen while the Run keeps working:
-    // the region splice detaching, and events dropped for a retired turn
-    // generation. Both are silent by construction, and both strand the Run's
-    // later turns — its *answer*, usually, since a tool phase comes first — on
-    // disk and nowhere else. Set by whichever fires, read once the Run settles.
-    //
-    // Turn-local, not a panel ref: a Run keeps streaming after its turn is
-    // retired, so the handler closures of *older* turns are still firing. On a
-    // shared ref, one of them could fabricate a signal for whatever turn is
-    // live now, or a late settle could clear the signal a live turn just set.
-    const viewBehind: { reason: "region-detached" | "generation-retired" | null } = { reason: null };
-
-    let harnessError: Error | null = null;
-    // Track user-initiated stops so the auto-memory hook can distinguish a
-    // clean run_result from a `run_error` with code "aborted". We don't
-    // auto-summarize cancelled runs — the user already knows they stopped
-    // the run, and a half-finished note is more noise than signal.
-    let abortedByUser = false;
-
-    // All event handling transforms msgsRef.current (the single source of
-    // truth, kept in sync by enqueueTurn too) and pushes plain values via
-    // commit(). Never use functional setMsgs updaters with side effects
-    // here: StrictMode double-invokes updaters, which double-incremented
-    // the turn cursor and left tool rows stuck on "Running…" forever.
-    const commit = (next: Msg[]) => {
-      msgsRef.current = next;
-      setMsgs(next);
-    };
-
-    const delegate = { delegateConsole, delegateProvider, delegateHeadless };
-
-    // The streaming state machine for this turn — delta batching, TTFT/turn
-    // timing, the assistant-index cursor, flush-before-finalize. See
-    // ai/turnDriver.ts; fixture-tested there without React or Tauri.
-    const driver = createTurnDriver({
-      assistantIndex,
-      delegate,
-      pricing,
-      read: () => msgsRef.current,
-      commit,
-      onMeasuredPromptTokens: setMeasuredPromptTokens,
-      onMeasuredUsage: setMeasuredUsageTokens,
-      onMeasuredContextWindow: setReportedContextWindow,
-      onDetached: () => {
-        viewBehind.reason = "region-detached";
-      },
-    });
-
-    // The executor (this run's model) called `consult_advisor` and is parked on
-    // the shared question oneshot. Put its question to a STRONGER advisor model
-    // as a one-shot chat run (no tools), nested by parentId, and resolve the
-    // parent with the advice — that text becomes the tool result. The executor
-    // then continues its own loop. This is the advisor strategy: small model
-    // drives, big model advises only at the fork it flagged.
-    const runAdvisorConsult = (event: Extract<AgentEvent, { type: "advisor_requested" }>) =>
-      // AI-panel runs use the global advisor setting. (Orchestrator-dispatched
-      // runs pass a per-tier advisor to the same helper — see advisorConsult.ts.)
-      serviceAdvisorConsult({ event, advisor: resolveAdvisor(harnessSettings), workspaceRoot });
-
-    const handleEvent = (event: AgentEvent) => {
-      if (queueGenerationRef.current !== generation) {
-        // This turn's generation was retired mid-Run (the panel left the
-        // conversation, or a Stop bumped it). Dropping the event is right — it
-        // must not land in whatever conversation is adopted next — but the Run
-        // is still working, so what we have on screen is now short of the
-        // Transcript. Say so, rather than letting the turn look finished.
-        viewBehind.reason = "generation-retired";
-        return;
-      }
-      // Transcript events (deltas, finalized messages, tool cards) belong to
-      // the turn driver; everything below is panel behaviour.
-      if (driver.handleEvent(event)) return;
-
-      switch (event.type) {
-        case "context_compacted": {
-          // The Rust auto-compactor collapsed the older turns mid-run. Without
-          // this the conversation just silently loses its early context and the
-          // marker only appears after a reload (via foldEvents).
-          const priorMsgs = msgsRef.current;
-          commit([...priorMsgs, compactionMsg(priorMsgs.length, event.summary)]);
-          break;
-        }
-        case "diff_proposed": {
-          setPendingDiff(event.proposal);
-          break;
-        }
-        case "diff_resolved": {
-          setPendingDiff(null);
-          break;
-        }
-        case "user_question_requested": {
-          setPendingQuestion({ runId: event.runId, requestId: event.requestId, question: event.question, choices: event.choices });
-          setQuestionAnswer("");
-          break;
-        }
-        case "user_question_resolved": {
-          // Only clear if the resolved id matches what we're showing — the
-          // harness might have resolved an older request we already moved
-          // past, and we don't want to clobber the current question.
-          setPendingQuestion((current) => (current && current.requestId === event.requestId ? null : current));
-          if (!pendingQuestion || pendingQuestion.requestId === event.requestId) {
-            setQuestionAnswer("");
-          }
-          break;
-        }
-        // Both halves of a subagent exchange are display-only here: the Rust
-        // harness resolves the role, runs the child, and feeds its report back
-        // as the tool result, so the pair survives this panel unmounting
-        // mid-subagent. The transcript rows come from the turn driver.
-        case "subagent_requested": {
-          break;
-        }
-        case "subagent_resolved": {
-          break;
-        }
-        case "advisor_requested": {
-          void runAdvisorConsult(event);
-          break;
-        }
-        case "advisor_resolved": {
-          break;
-        }
-        case "permission_requested": {
-          setPendingPermission(permissionCard(event.runId, event.request));
-          break;
-        }
-        case "permission_resolved": {
-          setPendingPermission((current) =>
-            current && current.requestId === event.requestId ? null : current
-          );
-          break;
-        }
-        case "file_changed": {
-          runChangedPathsRef.current.add(event.path);
-          setRevertableFiles(runChangedPathsRef.current.size);
-          if (workspaceRoot && onFileWritten) {
-            void (async () => {
-              try {
-                const content = await readWorkspaceTextFile(workspaceRoot, event.path);
-                onFileWritten(event.path, content);
-              } catch { /* file may not exist yet */ }
-            })();
-          }
-          // Refresh git status (sidebar decorations, project graph) so the
-          // edit shows up in the workbench the moment the harness writes it —
-          // the watcher would catch it eventually but with a 250ms delay and
-          // only on file events, not for create/delete-then-recreate.
-          onWorkspaceChanged?.();
-          break;
-        }
-        case "run_result": {
-          const next = [...msgsRef.current];
-          const existingUser = next[userIndex];
-          if (existingUser?.role === "user") {
-            next[userIndex] = { ...existingUser, queueState: undefined, queueId: undefined };
-            commit(next);
-          }
-          // Exit the working state as soon as the terminal event is *observed*,
-          // not only when `await session.done` resolves — that promise can hang
-          // if the channel was disrupted, leaving "Working…" stuck. Safe: this
-          // fires once per finished run, never mid-run, so it can't race a
-          // queued turn into a concurrent run. The post-await cleanup still runs.
-          settleConversationRun();
-          break;
-        }
-        case "run_error": {
-          // A user-initiated Stop is delivered as a RunError with
-          // `code: "aborted"`. It's not a harness failure — the partial
-          // answer should stay on screen with no error banner, and the
-          // connection-suggestion copy in the catch block would be wrong.
-          if (!isSilentRunError(event.error.code)) {
-            harnessError = new Error(event.error.message);
-          } else {
-            abortedByUser = true;
-          }
-          // Same safety as run_result: leave the working state on the observed
-          // terminal event, not only via `await session.done`.
-          settleConversationRun();
-          break;
-        }
-      }
-    };
-
-    try {
-      const toolsAvailable = turn.modelSupportsTools;
-      const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
-      let systemPrompt = turn.mode === "chat" && (turn.provider === "mlx" || turn.provider === "ollama")
-        ? `You are Klide's local chat assistant. Answer the user's latest message directly and concisely. You have no tools in this turn, so do not claim you can inspect or edit files unless file text was attached in the conversation.
-
-If the user asks about folders, files, the current directory, repository structure, git state, or anything that requires inspecting the workspace, do not answer from memory or earlier conversation. Say that this needs Plan or Goal mode so Klide can use read-only tools.
-
-Important: do not output JSON, structured plans, or fake tool-call blocks. Just answer in natural language. The chat surface in this app renders any JSON you emit as raw noise, and the user won't see a clean answer.`
-        : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
-      // Subagent turn: append the role specialisation to the base prompt.
-      const subagentDef = turn.subagent ? resolveSubagent(turn.subagent) : undefined;
-      if (subagentDef) systemPrompt = buildSubagentSystemPrompt(subagentDef, systemPrompt);
-      if (turn.mode !== "chat" && toolsAvailable && asksForWorkspaceInspection(turn.text)) {
-        systemPrompt += `
+  /**
+   * Everything the harness needs to start one turn — the system prompt, the
+   * harness settings, the Goal policy as it stands *now*. Called by the run
+   * controller at dispatch, so a turn that waited behind a busy Run carries
+   * the rung as it is when its Run actually starts, not as it was when the
+   * message was typed. Identity (run id, parent) is the controller's.
+   */
+  function buildTurnRequest(turn: QueuedTurn): Omit<StartAgentRunInput, "runId" | "parentId"> {
+    const toolsAvailable = turn.modelSupportsTools;
+    const disabledTools = disabledToolsFor(turn.mode, harnessSettings?.toolOverrides);
+    // Use the same provider capability and prompt as the draft estimate.
+    let systemPrompt = turn.mode === "chat" && providerCaps(turn.provider).minimalChatContext
+      ? MINIMAL_CHAT_SYSTEM_PROMPT
+      : buildSystemPrompt(workspaceRoot, stopAfterRejection, skills, turn.mode, toolsAvailable && turn.mode !== "chat", projectRules, harnessSettings, turn.model);
+    // Subagent turn: append the role specialisation to the base prompt.
+    const subagentDef = turn.subagent ? resolveSubagent(turn.subagent) : undefined;
+    if (subagentDef) systemPrompt = buildSubagentSystemPrompt(subagentDef, systemPrompt);
+    if (turn.mode !== "chat" && toolsAvailable && asksForWorkspaceInspection(turn.text)) {
+      systemPrompt += `
 
 This user request requires workspace inspection. Before answering, you MUST call list_dir with path "." (or the requested relative directory) and wait for its tool result. Do not answer from memory, do not infer from prior conversation, and do not say you used list_dir unless an actual list_dir tool result appears in this turn. For folder questions, answer only from the tool result's Folders section.`;
-      }
-      // Context window: num_ctx only matters for Ollama (other adapters
-      // ignore it). This is the *ceiling* — the user's cap, else the model's
-      // trained window — and Rust sizes the working window under it.
-      const numCtx = providerHasContextWindowSetting(turn.provider)
-        ? contextCeiling(contextLimit, harnessSettings?.contextWindows?.[turn.model])
-        : undefined;
-      const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
-      const numPredict =
-        turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
-      const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
-      const maxParallelTools = harnessSettings?.maxParallelTools;
-      const maxTurns = harnessSettings?.maxTurns;
-      const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
-      const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
-      // The binding is durable before the Run starts — the `run-started`
-      // transition at the top of this turn persisted it — so a mid-run view
-      // switch reattaches to this Conversation.
-      // A subagent turn runs as its OWN child run (parentId = the conversation
-      // run), so Mission Control nests it under the convo. Events still stream
-      // through `handleEvent`, so the delegation + any diffs render inline here.
-      const turnRunId = turn.subagent ? `${currentId}-at-${turn.clientId}` : currentId;
-      const startSession = () => startAgentRun({
-        runId: turnRunId,
-        parentId: turn.subagent ? currentId : undefined,
-        workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
-        text: turn.text, attachments: turn.attachments,
-        context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
-        systemPrompt,
-        disabledTools: disabledTools.length > 0 ? disabledTools : undefined,
-        numCtx,
-        numPredict,
-        reflectionLevel,
-        maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
-        maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
-        commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
-        requireDiffReview: requireDiffReviewRef.current,
-        autoApproveCommands: autoApproveCommandsRef.current || undefined,
-        testAfterEditCommand: testAfterEditCommand || undefined,
-        // Stars are the router's strongest preference and live only in this
-        // renderer's storage, so an `auto` turn carries them along.
-        preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
-      }, handleEvent);
-      // The user message wears `queued` while it waits on a busy Run, and
-      // `running` again once its own Run has started.
-      const markUser = (queueState: "queued" | "running") => {
-        const next = [...msgsRef.current];
-        const user = next[userIndex];
-        if (user?.role !== "user" || user.queueState === queueState) return;
-        next[userIndex] = { ...user, queueState };
-        commit(next);
-      };
-      let session;
-      const busySince = Date.now();
-      for (let attempt = 0; ; attempt++) {
-        if (queueGenerationRef.current !== generation) return;
-        try { session = await startSession(); break; }
-        catch (error) {
-          // A completion-triggered reply may win the atomic backend guard
-          // between our queue check and dispatch. Preserve this user's turn —
-          // for a while (runBusyRetry.ts), then say so and hand it back.
-          if (!isRunBusyError(error)) throw error;
-          viewBehind.reason = "region-detached";
-          const wait = nextBusyWait(attempt, Date.now() - busySince);
-          if (wait === null) throw new RunBusyError();
-          markUser("queued");
-          await new Promise((resolve) => setTimeout(resolve, wait));
-        }
-      }
-      markUser("running");
-      activeHarnessRunRef.current = session.runId;
-      try { await session.done; } finally { activeHarnessRunRef.current = null; }
-      if (harnessError) throw harnessError;
-    } catch (e) {
-      if (queueGenerationRef.current !== generation) return;
-      const located = driver.ensureAssistant();
-      const next = [...located.msgs];
-      const i = located.index;
-      const failedUser = next[userIndex];
-      if (failedUser?.role === "user") next[userIndex] = { ...failedUser, queueState: undefined, queueId: undefined };
-      // `providerFailureMessage` also drops the `(e as Error)` cast: a rejected
-      // Tauri command throws a bare string, which rendered as "undefined".
-      next[i] = { role: "assistant", content: `⚠ ${providerFailureMessage(e, providerName(turn.provider))}` };
-      // A failed MLX stream may mean the model went cold — re-warm next send.
-      if (turn.provider === "mlx") mlxWarmedRef.current = null;
-      commit(next);
     }
-    // Cancel the batch timer + render any delta still pending.
-    driver.finish();
-    // The turn stopped reaching the screen partway through. The Run itself kept
-    // going in Rust and wrote every turn to its Transcript, so the answer is not
-    // lost — it is simply not here. Re-read the Transcript and adopt it, the
-    // same heal a remount gets from `followConversationRun`, instead of leaving
-    // a conversation that ends on a tool call and looks like a model that said
-    // nothing.
-    //
-    // Two Runs are deliberately not healed this way. A Delegate conversation
-    // outside Focus has no Transcript of its own to read. And a subagent turn
-    // is its OWN child Run: its events stream into this panel but land in the
-    // child's Transcript, so the conversation's own Transcript is not the
-    // record of what was on screen and adopting it would be a different kind of
-    // wrong from the one being fixed.
-    if (driver.isDetached()) viewBehind.reason ??= "region-detached";
-    const behind = viewBehind.reason;
-    // The conditions — and what is pointedly not one of them — live in
-    // `shouldHealFromTranscript`, where they are tested.
-    if (
-      shouldHealFromTranscript({
-        behind,
-        stillOnConversation: conversationSessionRef.current.conversationId === currentId,
-        subagent: Boolean(turn.subagent),
-        delegateWithoutTranscript: isDelegateProvider(turn.provider) && variant !== "focus",
-      })
-    ) {
-      // Loud on purpose. This is the diagnostic that was missing: the last time
-      // a turn went dark, the only evidence was a conversation that looked like
-      // it ended on a tool call, and finding out why meant reading the
-      // Transcript off disk by hand.
-      console.warn(`Klide: turn stopped reaching the view (${behind}) — healing from the transcript.`);
-      try {
-        const healed = replayForAdoption(await readAgentRunEvents(currentId), msgsRef.current);
-        if (healed) commit(healed);
-      } catch {
-        // A Transcript that cannot be read leaves the view as it stands. The
-        // turn is already over; failing loudly here would replace a short
-        // conversation with an error about a file the user never asked about.
-      }
-    }
-    settleConversationRun();
-    setPendingDiff(null);
-    if (isDelegateProvider(turn.provider)) onWorkspaceChanged?.();
-    // Auto-summarize on a clean `run_result` (no harness error, not user-
-    // cancelled, harness feature flag on, at least one real exchange).
-    // Delegate providers have their own session memory on disk; skip them.
-    if (
-      !harnessError &&
-      !abortedByUser &&
-      harnessSettings?.autoMemoryOnRunDone !== false &&
-      !providerDelegatesWork
-    ) {
-      void runAutoSummarize(turn);
-    }
-  }
-
-  function enqueueTurn(turn: QueuedTurn) {
-    queueRef.current = [...queueRef.current, turn];
-    // Stamped at send, not at dispatch: a turn can sit queued behind a running
-    // one, and the conversation's start time is when the user actually asked.
-    const queuedMessage: Msg = { role: "user", content: turn.text, attachments: turn.attachments.length ? turn.attachments : undefined, projectContext: turn.projectContext, queueState: "queued", queueId: turn.clientId, subagent: turn.subagent, wake: turn.wake, ts: Date.now() };
-    msgsRef.current = [...msgsRef.current, queuedMessage];
-    setMsgs(msgsRef.current);
-    // The user just hit send. Even if they were scrolled up reading old
-    // context, "send" is a clear navigation signal — pull them to the
-    // bottom so they can watch their message + the reply.
-    forceStickToBottom();
-    void drainQueue();
-  }
-
-  async function drainQueue() {
-    if (processingQueueRef.current) return;
-    processingQueueRef.current = true;
-    const generation = queueGenerationRef.current;
-    try {
-      while (queueRef.current.length > 0 && queueGenerationRef.current === generation) {
-        // An externally-started run (race watch, resumed live run) is still
-        // streaming into this conversation via the reattach follower.
-        // Starting a queued turn now would run two harness loops over one
-        // transcript — wait for it to settle, then re-check the queue.
-        const follow = reattachRef.current;
-        if (follow) {
-          await follow.done;
-          continue;
-        }
-        const [turn, ...rest] = queueRef.current;
-        queueRef.current = rest;
-        await runHarnessTurn(turn, generation);
-      }
-    } finally { processingQueueRef.current = false; }
+    // Context window: num_ctx only matters for Ollama (other adapters
+    // ignore it). This is the *ceiling* — the user's cap, else the model's
+    // trained window — and Rust sizes the working window under it.
+    const ctxCeiling = providerHasContextWindowSetting(turn.provider)
+      ? contextCeiling(contextLimit ?? 0, harnessSettings?.contextWindows?.[turn.model])
+      : 0;
+    const numCtx = ctxCeiling > 0 ? ctxCeiling : undefined;
+    const effortBudget = harnessSettings?.effortBudgets?.[turn.model];
+    const numPredict =
+      turn.provider === "ollama" && effortBudget && effortBudget > 0 ? effortBudget : undefined;
+    const reflectionLevel = turn.modelSupportsReflection ? turn.reflectionLevel : undefined;
+    const maxParallelTools = harnessSettings?.maxParallelTools;
+    const maxTurns = harnessSettings?.maxTurns;
+    const commandTimeoutSecs = harnessSettings?.commandTimeoutSecs;
+    const testAfterEditCommand = harnessSettings?.testAfterEditCommand?.trim();
+    return {
+      workspaceRoot, mode: turn.mode, provider: turn.provider, model: turn.model,
+      text: turn.text, attachments: turn.attachments,
+      context: { workspaceRoot, attachments: turn.attachments, lensItems: turn.projectContext?.items ?? [], estimatedTokens: 0, omitted: [] },
+      systemPrompt,
+      disabledTools: disabledTools.length > 0 ? disabledTools : undefined,
+      numCtx,
+      numPredict,
+      reflectionLevel,
+      maxParallelTools: maxParallelTools && maxParallelTools > 1 ? maxParallelTools : undefined,
+      maxTurns: maxTurns && maxTurns > 0 ? maxTurns : undefined,
+      commandTimeoutSecs: commandTimeoutSecs && commandTimeoutSecs > 0 ? commandTimeoutSecs : undefined,
+      requireDiffReview,
+      autoApproveCommands: autoApproveCommands || undefined,
+      testAfterEditCommand: testAfterEditCommand || undefined,
+      // Stars are the router's strongest preference and live only in this
+      // renderer's storage, so an `auto` turn carries them along.
+      preferredModels: isAutoProvider(turn.provider) ? allFavModels() : undefined,
+    };
   }
 
   async function ensureLocalServerReady(): Promise<boolean> {
@@ -3933,8 +3338,8 @@ This user request requires workspace inspection. Before answering, you MUST call
     // before that message is appended or dispatched. On failure keep the draft
     // intact so retry cannot accidentally send an overflowing context.
     const contextLimitForTurn = providerHasContextWindowSetting(provider)
-      ? contextCeiling(modelInspection.contextLimit, ctxOverride)
-      : modelInspection.contextLimit;
+      ? contextCeiling(modelInspection.contextLimit ?? 0, ctxOverride)
+      : modelInspection.contextLimit ?? 0;
     const ratioAfterSend = contextLimitForTurn > 0 ? budget.used / contextLimitForTurn : 0;
     if (shouldAutoCompact({ trigger: "send", canCompact, ratioAfterSend })) {
       if (!(await compactConversation("agent", contextLimitForTurn))) return;
@@ -3962,7 +3367,7 @@ This user request requires workspace inspection. Before answering, you MUST call
     // Staged photos/documents ride ahead of @-mention file attachments.
     const attachments = [...stagedFiles, ...collected];
     const activeProjectContext = lensItemsForPrompt(projectContext, effectiveText, contextMode);
-    enqueueTurn({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
+    controller.send({ clientId: genId(), text: effectiveText, mode, provider, model: subagentModel ?? model, modelSupportsTools: supportsToolsForTurn, modelSupportsReflection: supportsReflectionForTurn, reflectionLevel: supportsReflectionForTurn ? panelReflectionLevel : undefined, attachments, subagent: directive?.subagent.id, projectContext: activeProjectContext.length > 0 ? { mode: contextMode, items: activeProjectContext } : undefined });
     // A subagent named *inside* a larger message (not a leading directive) runs
     // in the background, concurrent with the main answer above.
     if (!directive) {
@@ -4017,15 +3422,14 @@ This user request requires workspace inspection. Before answering, you MUST call
     setMsgs(next);
   }
 
+  // Every card answer goes through `controller.resolve`, which reads the card
+  // on screen at that moment and reports a refusal through `onGateFailed`
+  // (below) — the one snapshot → clear → resolve → notify shape, once.
   async function handleDiffApply() {
     if (!pendingDiff || acceptingChanges) return;
-    const proposal = pendingDiff;
     setAcceptingChanges(true);
     try {
-      await resolveDiff({ runId: proposal.runId, proposalId: proposal.id, decision: { behavior: "apply" } });
-    } catch (e) {
-      console.error("Failed to accept proposed modification:", e);
-      notify(`Couldn't accept the modification: ${e instanceof Error ? e.message : String(e)}`, { tone: "error" });
+      await controller.resolve({ gate: "diff", decision: { behavior: "apply" } });
     } finally {
       setAcceptingChanges(false);
     }
@@ -4036,66 +3440,37 @@ This user request requires workspace inspection. Before answering, you MUST call
   // covers every later turn (plus lights the right rung in the + menu).
   async function handleDiffApplyAll() {
     if (!pendingDiff || acceptingChanges) return;
-    const proposal = pendingDiff;
     setAcceptingChanges(true);
     try {
-      await resolveDiff({ runId: proposal.runId, proposalId: proposal.id, decision: { behavior: "apply", scope: "run" } });
-      onRequireDiffReviewChange?.(false);
-    } catch (e) {
-      console.error("Failed to accept proposed modification:", e);
-      notify(`Couldn't accept the modification: ${e instanceof Error ? e.message : String(e)}`, { tone: "error" });
+      if (await controller.resolve({ gate: "diff", decision: { behavior: "apply", scope: "run" } })) {
+        onRequireDiffReviewChange?.(false);
+      }
     } finally {
       setAcceptingChanges(false);
     }
   }
 
   async function handleDiffReject() {
-    if (!pendingDiff) return;
-    await resolveDiff({ runId: pendingDiff.runId, proposalId: pendingDiff.id, decision: { behavior: "reject" } });
+    await controller.resolve({ gate: "diff", decision: { behavior: "reject" } });
   }
 
   // "Request changes" — reject with the user's review note attached, so the
   // model revises the edit toward the feedback instead of abandoning course.
   async function handleDiffRequestChanges(note: string) {
-    if (!pendingDiff) return;
-    await resolveDiff({
-      runId: pendingDiff.runId,
-      proposalId: pendingDiff.id,
-      decision: { behavior: "reject", note },
-    });
+    await controller.resolve({ gate: "diff", decision: { behavior: "reject", note } });
   }
 
-  // Q&A submit: send the typed answer to the harness and let the
-  // user_question_resolved event clear the card. The Rust side replaces
+  // Q&A submit: send the typed answer to the harness. The Rust side replaces
   // the literal "(skipped)" with a friendlier marker before returning it
   // to the model — we send the sentinel ourselves for Skip.
   // `picked` is a clicked choice: it answers at once, without touching the
   // typed draft.
   async function submitQuestion(picked?: string) {
-    if (!pendingQuestion) return;
-    const snapshot = pendingQuestion;
-    const answer = picked ?? questionAnswer;
-    setPendingQuestion(null);
-    setPendingPermission(null);
-    setQuestionAnswer("");
-    try {
-      await resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer });
-    } catch (err) {
-      console.error("Failed to submit answer:", err);
-      notify(`Couldn't send your answer: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
-    }
+    await controller.resolve({ gate: "question", answer: picked ?? questionAnswer });
   }
 
   function skipQuestion() {
-    if (!pendingQuestion) return;
-    const snapshot = pendingQuestion;
-    setPendingQuestion(null);
-    setPendingPermission(null);
-    setQuestionAnswer("");
-    void resolveUserQuestion({ runId: snapshot.runId, requestId: snapshot.requestId, answer: "(skipped)" }).catch((err) => {
-      console.error("Failed to skip question:", err);
-      notify(`Couldn't skip the question: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
-    });
+    void controller.resolve({ gate: "question", answer: "(skipped)" });
   }
 
   // Letting a peer's message in should not leave it waiting for the user to
@@ -4104,10 +3479,11 @@ This user request requires workspace inspection. Before answering, you MUST call
   // reaches the boundary on its own. The wake keeps the thread's own Mode:
   // Chat reads its inbox too, and a peer's message never earns more tools.
   async function wakeForInbox() {
-    if (streaming || queueRef.current.length > 0 || reattachRef.current) return;
+    const state = controller.getState();
+    if (streaming || state.queued > 0 || state.following) return;
     const mode = wakeTurnMode(agentModeRef.current);
     const modelInspection = await activateModelInspectionForSend();
-    enqueueTurn({
+    controller.send({
       clientId: genId(),
       text: "",
       wake: true,
@@ -4122,32 +3498,102 @@ This user request requires workspace inspection. Before answering, you MUST call
   }
 
   function approveCommand(scope: "once" | "run" | "project" = "once", pattern?: string) {
-    if (!pendingPermission) return;
-    const snapshot = pendingPermission;
-    setPendingPermission(null);
-    void resolvePermission({
-      runId: snapshot.runId,
-      requestId: snapshot.requestId,
+    void controller.resolve({
+      gate: "permission",
       decision: pattern ? { behavior: "allow", scope, pattern } : { behavior: "allow", scope },
-    }).catch((err) => {
-      console.error("Failed to approve command:", err);
-      notify(`Couldn't approve the command: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
     });
   }
 
   function rejectCommand() {
-    if (!pendingPermission) return;
-    const snapshot = pendingPermission;
-    setPendingPermission(null);
-    void resolvePermission({
-      runId: snapshot.runId,
-      requestId: snapshot.requestId,
-      decision: { behavior: "deny" },
-    }).catch((err) => {
-      console.error("Failed to reject command:", err);
-      notify(`Couldn't reject the command: ${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
-    });
+    void controller.resolve({ gate: "permission", decision: { behavior: "deny" } });
   }
+
+  /** What a refused card answer says, by what was being answered. */
+  function gateFailureLabel(decision: GateDecision): string {
+    switch (decision.gate) {
+      case "diff":
+        return decision.decision.behavior === "apply" ? "Couldn't accept the modification" : "Couldn't reject the modification";
+      case "permission":
+        return decision.decision.behavior === "allow" ? "Couldn't approve the command" : "Couldn't reject the command";
+      case "question":
+        return decision.answer === "(skipped)" ? "Couldn't skip the question" : "Couldn't send your answer";
+    }
+  }
+
+  // The controller's dependencies, as of this render. Assigned every render
+  // (see where the controller is created) so an async drain, a resolve or a
+  // follower always acts on current props and state, never on the closure of
+  // the render that started it.
+  controllerDepsRef.current = {
+    client: runClient,
+    transcript: {
+      read: () => msgsRef.current,
+      // `setMsgs` advances `msgsRef` synchronously through the one transition
+      // function, ahead of the React commit — the run callbacks are async and
+      // need the latest array before React has rendered it.
+      commit: setMsgs,
+    },
+    conversationId: () => conversationSessionRef.current.conversationId,
+    session: { runStarted: startConversationRun, runSettled: settleConversationRun },
+    delegateStyle: variant === "focus" ? "headless" : "console",
+    pricing,
+    request: buildTurnRequest,
+    // `providerFailureMessage` drops the `(e as Error)` cast: a rejected Tauri
+    // command throws a bare string, which rendered as "undefined".
+    failureText: (error, turn) => providerFailureMessage(error, providerName(turn.provider)),
+    hooks: {
+      // Sending, and a fresh assistant turn, are the two places we yank the
+      // user back to the bottom even if they were scrolled up reading
+      // context: the action implies "I want to see the reply".
+      onTurnQueued: forceStickToBottom,
+      onTurnStarted: forceStickToBottom,
+      onMeasuredPromptTokens: setMeasuredPromptTokens,
+      onMeasuredUsage: setMeasuredUsageTokens,
+      onMeasuredContextWindow: setReportedContextWindow,
+      onFileChanged: (path) => {
+        runChangedPathsRef.current.add(path);
+        setRevertableFiles(runChangedPathsRef.current.size);
+        if (workspaceRoot && onFileWritten) {
+          void (async () => {
+            try {
+              const content = await readWorkspaceTextFile(workspaceRoot, path);
+              onFileWritten(path, content);
+            } catch { /* file may not exist yet */ }
+          })();
+        }
+        // Refresh git status (sidebar decorations, project graph) so the
+        // edit shows up in the workbench the moment the harness writes it —
+        // the watcher would catch it eventually but with a 250ms delay and
+        // only on file events, not for create/delete-then-recreate.
+        onWorkspaceChanged?.();
+      },
+      // The executor (this run's model) called `consult_advisor` and is parked
+      // on the shared question oneshot. Put its question to a STRONGER advisor
+      // model as a one-shot chat run (no tools), nested by parentId, and
+      // resolve the parent with the advice — that text becomes the tool
+      // result. AI-panel runs use the global advisor setting.
+      onAdvisorRequested: (event) => {
+        void serviceAdvisorConsult({ event, advisor: resolveAdvisor(harnessSettings), workspaceRoot });
+      },
+      // A failed MLX stream may mean the model went cold — re-warm next send.
+      onTurnFailed: (turn) => {
+        if (turn.provider === "mlx") mlxWarmedRef.current = null;
+      },
+      onTurnSettled: (turn, outcome) => {
+        if (isDelegateProvider(turn.provider)) onWorkspaceChanged?.();
+        // Auto-summarize on a clean `run_result` (no harness error, not user-
+        // cancelled, not a turn the panel stopped watching, harness feature
+        // flag on). Delegate providers have their own session memory on disk.
+        if (outcome === "done" && harnessSettings?.autoMemoryOnRunDone !== false && !isDelegateProvider(turn.provider)) {
+          void runAutoSummarize(turn);
+        }
+      },
+      onGateFailed: (decision, error) => {
+        console.error(`${gateFailureLabel(decision)}:`, error);
+        notify(`${gateFailureLabel(decision)}: ${errMessage(error)}`, { tone: "error" });
+      },
+    },
+  };
 
   // ── RENDER ──
 
@@ -4413,7 +3859,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             providerId={provider}
             provider={providerName(provider)}
             workspaceRoot={workspaceRoot}
-            parentRunId={activeHarnessRunRef.current ?? currentId}
+            parentRunId={runView.activeRunId ?? currentId}
             resumeSessionId={initialResumeSessionId ?? null}
             // The spawn model comes from the per-provider store, NOT the
             // `model` prop: on relaunch the prop is App's last value for the
@@ -4510,7 +3956,9 @@ This user request requires workspace inspection. Before answering, you MUST call
           // A background subagent's report bubble is empty while its child
           // works, but it is its own surface (an @role header + watcher), never
           // the main answer's "not yet started" dots.
-          const isAssistantPlaceholder = streaming && m.role === "assistant" && m.content === "" && !m.thinking && !m.toolCalls && !m.subagent;
+          const placeholder = assistantPlaceholder(m, streaming, isLast);
+          if (placeholder === "hidden") return null;
+          const isAssistantPlaceholder = m.role === "assistant" && placeholder === "working";
           const previous = msgs[i - 1];
           const activeToolRunning =
             streaming &&
@@ -4880,8 +4328,8 @@ This user request requires workspace inspection. Before answering, you MUST call
           onGithubPresence={onGithubPresence}
           sidebar={variant === "focus" ? { target: observerSidebarTarget, folded: column.planFolded, onUnfold: () => setSidePanelHidden(false) } : undefined}
           onFollowup={() => {
-          if (processingQueueRef.current || reattachRef.current) return false;
-          followConversationRun(currentId, provider);
+          if (runView.processing || runView.following) return false;
+          controller.attach({ conversationId: currentId, provider });
           return true;
         }} />
         {/* "Working" heartbeat — shown while a run is in progress but nothing
@@ -5217,6 +4665,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onApproveForProject={pendingPermission.kind === "message" || pendingPermission.kind === "worker" ? undefined : () => approveCommand("project")}
             pattern={pendingPermission.suggestedPattern}
             onApprovePattern={(pattern) => approveCommand("project", pattern)}
+            hotkeys
           />
         )}
         {/* Everywhere but Focus the question waits above the composer: those
@@ -5371,6 +4820,14 @@ This user request requires workspace inspection. Before answering, you MUST call
                   return;
                 }
               }
+              // While the run waits on a command and nothing is typed, the
+              // composer's ⏎ is the approval and esc the denial — the card
+              // sits right above it and the user shouldn't have to leave the
+              // field. Typed text keeps ⏎ for queueing the message.
+              if (pendingPermission && input.trim() === "") {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); approveCommand("once"); return; }
+                if (e.key === "Escape") { e.preventDefault(); rejectCommand(); return; }
+              }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               else if (e.key === "Tab" && !delegateSession) { e.preventDefault(); toggleMode(); }
               else if (e.key === "Escape" && (streaming || serverStarting)) { e.preventDefault(); stopCurrentStream(); }
@@ -5380,7 +4837,7 @@ This user request requires workspace inspection. Before answering, you MUST call
             onPaste={onComposerPaste}
             onDrop={onComposerDrop}
             onDragOver={(e) => { if (canAttachFiles && Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === "file")) e.preventDefault(); }}
-            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
+            placeholder={serverStarting ? `Starting ${providerName(provider)}...` : pendingPermission ? "↵ runs the command, Esc denies it — or queue a message…" : streaming ? "Queue another message…" : canAttachFiles ? "Ask anything, @ to attach a file, drop a photo or document…" : "Ask anything, @ to attach a file…"}
             rows={1}
             data-ai-composer
             style={{ width: "100%", minHeight: 40, maxHeight: "max(168px, 40vh)", resize: "none", background: "transparent", border: "none", color: highlighted ? "transparent" : "var(--fg-strong)", caretColor: "var(--fg-strong)", position: "relative", font: "inherit", fontSize: 14, lineHeight: 1.58, padding: "12px 14px 8px", outline: "none", display: "block", textIndent: skillToken ? ledeIndent : undefined }}

@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { readAgentRunEvents } from "./agent/client";
 import { foldAgentEvents, foldedToRunMessages } from "./agent/foldEvents";
 
-import { isDelegateId, type DelegateId } from "./delegates";
+import { DELEGATES, isDelegateId, type DelegateId } from "./delegates";
 import {
   presentBoardSection,
   presentLifecycle,
@@ -422,11 +422,10 @@ export const LIFECYCLE_COLOR: Record<RunLifecycleStatus, string> = Object.fromEn
   LIFECYCLE_STATUSES.map((s) => [s, toneColor(presentLifecycle(s).tone)])
 ) as Record<RunLifecycleStatus, string>;
 
+// Delegate names come from the one catalog (src/delegates.ts); Klide's own
+// runs are the one row that isn't a Delegate.
 export const SOURCE_LABEL: Record<RunSource, string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-  opencode: "OpenCode",
-  omp: "Oh My Pi",
+  ...(Object.fromEntries(DELEGATES.map((d) => [d.id, d.label])) as Record<DelegateId, string>),
   klide: "Klide",
 };
 
@@ -659,11 +658,8 @@ export async function fetchRunMessages(run: Run): Promise<RunMessage[]> {
     const events = await readAgentRunEvents(run.id);
     return foldedToRunMessages(foldAgentEvents(events));
   }
-  if (run.source === "opencode") {
-    // OpenCode stores its history in SQLite (opencode.db), so the read path
-    // takes the session id instead of a file path on disk.
-    return invoke<RunMessage[]>("read_opencode_run", { sessionId: run.id });
-  }
+  // One read for every Delegate: `path` is whatever key the adapter listed
+  // (a transcript path, or OpenCode's session id — the adapter says which).
   return invoke<RunMessage[]>("read_agent_run", {
     path: run.path,
     source: run.source,

@@ -12,6 +12,9 @@ import {
   healStoredConversationsFromTranscripts,
 } from "./components/ai/conversationOriginHeal";
 import { fetchRunOrigins } from "./runs";
+import { verifyProviderCatalog } from "./agent/providerCatalog";
+import { listProviders } from "./ipc/aiProviders";
+import { notify } from "./toast";
 
 // Repair conversations whose Provider label an older build overwrote (a Claude
 // Code thread showing as OpenRouter). Runs before the first surface reads the
@@ -30,6 +33,24 @@ try {
 void healStoredConversationsFromTranscripts(fetchRunOrigins).catch(() => {
   /* no transcripts readable (or not running under Tauri) — labels stand */
 });
+
+// Dev only: the picker reads the generated Provider catalog mirror at first
+// paint; `cargo test` fails when it is stale, but a `tauri dev` that skipped
+// the tests would silently show old rows. Compare with what Rust serves now.
+if (import.meta.env.DEV) {
+  void verifyProviderCatalog(listProviders)
+    .then((ids) => {
+      if (ids.length > 0) {
+        notify(
+          `Provider catalog mirror is stale (${ids.join(", ")}) — run KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_is_current`,
+          { tone: "warn" },
+        );
+      }
+    })
+    .catch(() => {
+      /* not running under Tauri — nothing to compare against */
+    });
+}
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

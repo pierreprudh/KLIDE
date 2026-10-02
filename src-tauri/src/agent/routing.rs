@@ -80,6 +80,16 @@ pub struct Facts {
     pub context_window: usize,
 }
 
+/// The gate's view of the one capabilities answer. The window is the same
+/// number the gauge shows — probed from Ollama, read from a listing or a
+/// manifest — and only an unknown one plans as the module's named default.
+pub fn facts_from(caps: &crate::model_capabilities::ModelCapabilities) -> Facts {
+    Facts {
+        supports_tools: caps.supports_tools,
+        context_window: caps.window_for_planning(),
+    }
+}
+
 /// Why a Candidate was ruled out. Recorded on the `RouteResolved` event so the
 /// Transcript shows not just the pick but what it beat and why.
 #[derive(Clone, Debug, PartialEq)]
@@ -338,18 +348,10 @@ async fn inspect(candidate: Candidate) -> Result<Facts, Rejection> {
         // no key gate; an unreachable host surfaces from the tools probe.
         None => {}
     }
-    let supports_tools = crate::models::ai_model_supports_tools(
-        candidate.provider.clone(),
-        candidate.model.clone(),
-    )
-    .await
-    .map_err(Rejection::Unreachable)?;
-    let context_window =
-        crate::models::resolve_context_window(&candidate.provider, &candidate.model).await;
-    Ok(Facts {
-        supports_tools,
-        context_window,
-    })
+    let caps = crate::model_capabilities::capabilities(&candidate.provider, &candidate.model, false)
+        .await
+        .map_err(Rejection::Unreachable)?;
+    Ok(facts_from(&caps))
 }
 
 /// Route one `auto` request: build the pool from the request's stars and the

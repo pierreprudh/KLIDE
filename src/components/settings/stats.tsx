@@ -2,7 +2,7 @@
 // cost/token metrics over agent runs. Extracted from SettingsPanel.tsx.
 
 import { useCallback, useMemo, useState, type CSSProperties } from "react";
-import { ProviderLogo } from "../ai/icons";
+import { ProviderLogo, providerChartColor } from "../ai/icons";
 import type { ProviderId } from "../../agent/types";
 import {
   ActivityHeatmap,
@@ -22,18 +22,10 @@ import { Panel, SettingBlock } from "./controls";
 
 export type StatsMetric = "conversations" | "tokens" | "cost";
 
-// Chart-ramp steps assigned stably per AI provider id OR delegate source, so
-// a provider keeps the same hue across renders and metric switches. Spaced
-// steps (1/3/5/7) keep neighbours distinguishable; providers not listed here
-// fall to the neutral ramp instead.
-export const PROVIDER_BRAND_COLOR: Record<string, string> = {
-  anthropic: "var(--chart-1)",
-  "claude-code": "var(--chart-1)",
-  mistral: "var(--chart-3)",
-  deepseek: "var(--chart-4)",
-  openrouter: "var(--chart-5)",
-  omp: "var(--chart-7)",
-};
+// A provider's chart hue comes from the one brand table in ai/icons.tsx
+// (`providerChartColor`), keyed by the registry row's brand, so a provider
+// keeps the same hue across renders and metric switches; brands without a
+// step fall to the neutral ramp below.
 
 // Graduated neutral steps for providers with no brand hue. Cycled by order of
 // appearance so two "neutral" providers still read apart in the donut.
@@ -57,7 +49,7 @@ export function assignGroupColors(groups: ProviderGroup[]): Map<string, string> 
   const out = new Map<string, string>();
   let neutral = 0;
   for (const g of groups) {
-    const brand = PROVIDER_BRAND_COLOR[groupProviderId(g)];
+    const brand = providerChartColor(groupProviderId(g));
     out.set(g.key, brand ?? NEUTRAL_STEPS[neutral++ % NEUTRAL_STEPS.length]);
   }
   return out;
@@ -910,7 +902,7 @@ export function StatsSection() {
           // Base colour; the render reassigns via assignGroupColors so neutral
           // providers get distinct steps. This is only a sensible fallback.
           color:
-            PROVIDER_BRAND_COLOR[isKlide ? r.provider ?? "" : r.source] ?? "var(--fg-subtle)",
+            providerChartColor(isKlide ? r.provider ?? "" : r.source) ?? "var(--fg-subtle)",
           source: r.source,
           provider: r.provider ?? null,
           conversations: 0,

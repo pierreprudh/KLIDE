@@ -18,6 +18,7 @@ mod chat_stream;
 mod cli_commands;
 mod claude_code;
 mod codex;
+pub mod home;
 mod omp;
 mod opencode;
 mod runs;
@@ -28,6 +29,7 @@ pub use cli_commands::{claude_code_settings, cli_commands, CliCommands};
 pub use claude_code::ClaudeCode;
 pub use claude_code::EFFORT_LEVELS as CLAUDE_EFFORT_LEVELS;
 pub use codex::Codex;
+pub use home::{home_dir, Env, ProcessEnv};
 pub use omp::Omp;
 pub use opencode::OpenCode;
 pub(crate) use runs::{fill_worktree_evidence, retain_candidates_in_workspace, worktree_label};
@@ -135,6 +137,69 @@ pub trait Delegate: Sync {
 
     /// The CLI binary name, resolved through the user's login shell PATH.
     fn binary(&self) -> &'static str;
+
+    /// The human name every surface uses — "Claude Code", not "claude-code".
+    /// One truth: the Provider registry's subscription row, the account
+    /// switcher, the commit co-author line and the frontend's mirror
+    /// (`src/delegates.ts`) all read it from here.
+    fn label(&self) -> &'static str;
+
+    // ── Home ─────────────────────────────────────────────────────────────
+    //
+    // Where this CLI keeps its config, sessions and logins — honouring the
+    // CLI's own override variable, read through `env` so a test can move a
+    // home without touching the process. Every other module asks these;
+    // none spells `~/.codex` itself (home.rs has the source scan that keeps
+    // it so). `None` only when there is no home to resolve against.
+
+    /// The CLI's configuration root (`$CODEX_HOME`, `$CLAUDE_CONFIG_DIR`,
+    /// `$XDG_CONFIG_HOME/opencode`, `~/.omp`).
+    fn config_home(&self, env: &dyn Env) -> Option<std::path::PathBuf>;
+
+    /// Where the CLI records its sessions and state. Default: the config
+    /// root — only OpenCode keeps an XDG data dir apart from its config.
+    fn data_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env)
+    }
+
+    /// The directory `discover_runs` walks — the root Klide is allowed to
+    /// read transcripts from. Default: the data root.
+    fn sessions_dir(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.data_home(env)
+    }
+
+    /// The config file Klide reads or writes on this CLI's behalf — the
+    /// status-hook installer, the gateway's un-inject, connector discovery
+    /// all name this one file. `None`: the CLI has no such file Klide touches.
+    fn config_file(&self, _env: &dyn Env) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// The files holding this CLI's login, in the order the account switcher
+    /// snapshots them. Empty for a CLI whose login is not a file (Claude
+    /// Code's is in the keychain; omp's keys ride the shell environment).
+    fn auth_files(&self, _env: &dyn Env) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    /// The CLI's own on-disk model list, when it keeps one Klide reads.
+    fn models_cache(&self, _env: &dyn Env) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// Whether Klide can snapshot and switch this CLI's login (accounts.rs).
+    /// True exactly for the CLIs with an `AccountProvider`; the test
+    /// `every_delegate_is_accounted_for` holds the two together.
+    fn supports_accounts(&self) -> bool {
+        false
+    }
+
+    /// Whether a run's `key` is a transcript path under `sessions_dir` (so a
+    /// read must be contained there) rather than an id the parser looks up
+    /// itself. Default: a path — three of the four keep JSONL on disk.
+    fn run_key_is_path(&self) -> bool {
+        true
+    }
 
     /// Command prefix for a dispatch. Default: the bare binary (its TUI).
     /// Adapters override when the CLI needs a subcommand to accept a prompt.
@@ -373,7 +438,7 @@ pub trait Delegate: Sync {
     /// Every run this delegate has left on disk, as cheap (key, mtime)
     /// candidates. Discovery never parses — the board sorts and pages
     /// candidates from all delegates first, then parses only one page.
-    fn discover_runs(&self, home: &str) -> Vec<RunCandidate>;
+    fn discover_runs(&self, env: &dyn Env) -> Vec<RunCandidate>;
 
     /// The candidates that could belong to `workspace_root`, narrowed as cheaply
     /// as this CLI's storage layout allows. Discovery owns this because only the
@@ -386,27 +451,27 @@ pub trait Delegate: Sync {
     ///
     /// The default probes each transcript's head for its `cwd`, which is where
     /// all three JSONL delegates record it.
-    fn discover_runs_for_workspace(&self, home: &str, workspace_root: &str) -> Vec<RunCandidate> {
-        retain_candidates_in_workspace(self.discover_runs(home), workspace_root)
+    fn discover_runs_for_workspace(&self, env: &dyn Env, workspace_root: &str) -> Vec<RunCandidate> {
+        retain_candidates_in_workspace(self.discover_runs(env), workspace_root)
     }
 
     /// A parser for this delegate's runs. One is created per page, not per
     /// candidate, so adapters can hold resources that are expensive to open
     /// (OpenCode's SQLite connection, Codex's title index) across the page.
-    fn run_parser(&self, home: &str) -> Box<dyn RunParser>;
+    fn run_parser(&self, env: &dyn Env) -> Box<dyn RunParser>;
 
     /// A stamp of every input to `run_parser` *other than the transcript itself*
     /// — `0` when there is none. The run memo keys a remembered parse on the
     /// transcript's mtime and length plus this, so a sidecar that changes on its
     /// own (Codex's title index) still invalidates it.
-    fn parse_inputs_stamp(&self, _home: &str) -> u64 {
+    fn parse_inputs_stamp(&self, _env: &dyn Env) -> u64 {
         0
     }
 
     /// The run's conversation for the Mission Control detail pane. `key` is
     /// the same value `discover_runs` produced — a transcript path or a
     /// session id, depending on the CLI.
-    fn read_run(&self, home: &str, key: &str) -> Result<Vec<RunMessage>, String>;
+    fn read_run(&self, env: &dyn Env, key: &str) -> Result<Vec<RunMessage>, String>;
 
     // ── Authentication & install (subscription status) ───────────────────
     //
@@ -482,7 +547,7 @@ pub trait Delegate: Sync {
     /// Klide's loopback hook server (see `status.rs`). Called before every
     /// PTY dispatch; must be idempotent. Returns whether anything was
     /// written. Default: the CLI has no hook mechanism — do nothing.
-    fn ensure_status_hooks(&self, _home: &str) -> Result<bool, String> {
+    fn ensure_status_hooks(&self, _env: &dyn Env) -> Result<bool, String> {
         Ok(false)
     }
 }
@@ -522,23 +587,47 @@ pub fn lookup(provider: &str) -> Option<&'static dyn Delegate> {
     ALL.into_iter().find(|d| d.id() == provider)
 }
 
+/// The facts about one Delegate a surface shows without spawning it. The
+/// frontend keeps a pinned copy in `src/delegates.ts` (a type union and the
+/// module-level label maps cannot wait on IPC); `frontend_catalog_matches_all`
+/// reads that file and fails the build when the copy drifts from the adapters.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegateFacts {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub binary: &'static str,
+    pub supports_accounts: bool,
+}
+
+pub fn catalog() -> Vec<DelegateFacts> {
+    ALL.iter()
+        .map(|d| DelegateFacts {
+            id: d.id(),
+            label: d.label(),
+            binary: d.binary(),
+            supports_accounts: d.supports_accounts(),
+        })
+        .collect()
+}
+
 /// One page of recent runs across every delegate, newest first. Stat-and-sort
 /// is cheap; only the requested page (offset..offset+limit) is parsed, so big
 /// histories stay fast and the UI can lazily page in older runs.
-pub fn list_runs(home: &str, limit: usize, offset: usize) -> Vec<AgentRun> {
-    list_runs_matching(home, limit, offset, None)
+pub fn list_runs(env: &dyn Env, limit: usize, offset: usize) -> Vec<AgentRun> {
+    list_runs_matching(env, limit, offset, None)
 }
 
 /// One page of recent runs constrained to a workspace. Unlike frontend
 /// filtering after `list_runs`, this pages AFTER matching, so a busy different
 /// project cannot push older current-workspace runs out of the first page.
 pub fn list_runs_for_workspace(
-    home: &str,
+    env: &dyn Env,
     limit: usize,
     offset: usize,
     workspace_root: &str,
 ) -> Vec<AgentRun> {
-    list_runs_matching(home, limit, offset, Some(workspace_root))
+    list_runs_matching(env, limit, offset, Some(workspace_root))
 }
 
 pub(crate) fn normalize_path(path: &str) -> String {
@@ -571,17 +660,17 @@ fn run_matches_workspace(run: &AgentRun, workspace_root: &str) -> bool {
 static PARSED_RUNS: crate::file_memo::FileMemo<Option<AgentRun>> = crate::file_memo::FileMemo::new();
 
 fn list_runs_matching(
-    home: &str,
+    env: &dyn Env,
     limit: usize,
     offset: usize,
     workspace_root: Option<&str>,
 ) -> Vec<AgentRun> {
-    let stamps: Vec<u64> = ALL.iter().map(|d| d.parse_inputs_stamp(home)).collect();
+    let stamps: Vec<u64> = ALL.iter().map(|d| d.parse_inputs_stamp(env)).collect();
     let mut candidates: Vec<(usize, RunCandidate)> = Vec::new();
     for (i, delegate) in ALL.iter().enumerate() {
         let found = match workspace_root {
-            Some(root) => delegate.discover_runs_for_workspace(home, root),
-            None => delegate.discover_runs(home),
+            Some(root) => delegate.discover_runs_for_workspace(env, root),
+            None => delegate.discover_runs(env),
         };
         for c in found {
             candidates.push((i, c));
@@ -596,7 +685,7 @@ fn list_runs_matching(
     for (i, c) in candidates {
         let Some(run) = PARSED_RUNS.get_or_compute(std::path::Path::new(&c.key), stamps[i], |_| {
             parsers[i]
-                .get_or_insert_with(|| ALL[i].run_parser(home))
+                .get_or_insert_with(|| ALL[i].run_parser(env))
                 .parse(&c.key)
         }) else {
             continue;
@@ -792,7 +881,7 @@ mod tests {
                 "codex login --with-access-token",
             ]
         );
-        assert_eq!(OpenCode.login_commands(), vec!["opencode"]);
+        assert_eq!(OpenCode.login_commands(), vec!["opencode auth login"]);
         // omp has no login command — keys ride the shell environment; the
         // "login option" is launching the TUI itself (OpenCode's posture).
         assert_eq!(Omp.login_commands(), vec!["omp"]);
@@ -818,28 +907,44 @@ mod tests {
     }
 
     #[test]
-    fn frontend_delegate_ids_match_all() {
-        // The frontend keeps its own copy of the delegate id set in
-        // src/delegates.ts (a TypeScript union type can't be produced from a
-        // runtime call into Rust). This test is the seam that makes the two
-        // lists fail the build if they ever drift apart.
+    fn frontend_catalog_matches_all() {
+        // The frontend keeps its own copy of the delegate facts in
+        // src/delegates.ts (a TypeScript union type and the module-level
+        // label maps can't be produced from a runtime call into Rust). This
+        // test is the seam that makes the two fail the build if they drift:
+        // id, label, binary and the accounts flag, in registry order.
         let ts = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/delegates.ts"),
         )
         .expect("read src/delegates.ts");
-        let start = ts
-            .find("DELEGATE_IDS")
-            .expect("DELEGATE_IDS in delegates.ts");
-        let open = ts[start..].find('[').expect("opening [") + start;
-        let close = ts[open..].find(']').expect("closing ]") + open;
-        // Split the array literal on quotes; the quoted contents land on the
-        // odd indices ("", "claude-code", ", ", "codex", …).
-        let mut frontend: Vec<&str> = ts[open + 1..close].split('"').skip(1).step_by(2).collect();
-        frontend.sort_unstable();
-        let mut backend: Vec<&str> = ALL.iter().map(|d| d.id()).collect();
-        backend.sort_unstable();
+        let start = ts.find("DELEGATES = [").expect("DELEGATES in delegates.ts");
+        let close = ts[start..].find("] as const").expect("closing ] as const") + start;
+        let quoted = |chunk: &str, key: &str| -> String {
+            let at = chunk
+                .find(&format!("{key}:"))
+                .unwrap_or_else(|| panic!("{key} in {chunk}"));
+            let rest = &chunk[at + key.len() + 1..];
+            let q1 = rest.find('"').expect("opening quote") + 1;
+            let q2 = rest[q1..].find('"').expect("closing quote") + q1;
+            rest[q1..q2].to_string()
+        };
+        let frontend: Vec<DelegateFacts> = ts[start..close]
+            .split('{')
+            .skip(1)
+            .map(|chunk| {
+                let chunk = chunk.split('}').next().unwrap();
+                let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+                DelegateFacts {
+                    id: leak(quoted(chunk, "id")),
+                    label: leak(quoted(chunk, "label")),
+                    binary: leak(quoted(chunk, "binary")),
+                    supports_accounts: chunk.contains("supportsAccounts: true"),
+                }
+            })
+            .collect();
         assert_eq!(
-            backend, frontend,
+            catalog(),
+            frontend,
             "delegate::ALL and src/delegates.ts disagree — update both"
         );
     }
@@ -871,12 +976,12 @@ mod tests {
         )
         .unwrap();
 
-        let home_str = home.to_str().unwrap();
-        let page = list_runs(home_str, 2, 0);
+        let env = home::test_env(&home);
+        let page = list_runs(&env, 2, 0);
         assert_eq!(page.len(), 2);
         assert_eq!(page[0].source, "claude-code");
         assert_eq!(page[1].id, "oss-new");
-        let rest = list_runs(home_str, 10, 2);
+        let rest = list_runs(&env, 10, 2);
         assert_eq!(rest.len(), 1);
         assert_eq!(rest[0].id, "oss-old");
     }
@@ -893,11 +998,11 @@ mod tests {
             r#"{"type":"user","ts":1,"message":{"content":"claude run"}}"#,
         )
         .unwrap();
-        let home_str = home.to_str().unwrap();
+        let env = home::test_env(&home);
 
-        let first = list_runs(home_str, 10, 0);
+        let first = list_runs(&env, 10, 0);
         assert_eq!(first.len(), 1);
-        let again = list_runs(home_str, 10, 0);
+        let again = list_runs(&env, 10, 0);
         assert_eq!(again.len(), 1);
         assert_eq!(
             PARSED_RUNS.computes_for(&log),
@@ -910,7 +1015,7 @@ mod tests {
         let mut text = std::fs::read_to_string(&log).unwrap();
         text.push_str("\n{\"type\":\"assistant\",\"ts\":2,\"message\":{\"content\":\"done\"}}");
         std::fs::write(&log, text).unwrap();
-        let grown = list_runs(home_str, 10, 0);
+        let grown = list_runs(&env, 10, 0);
         assert_eq!(PARSED_RUNS.computes_for(&log), 2, "a changed transcript is parsed again");
         assert!(grown[0].message_count > first[0].message_count);
     }
@@ -956,14 +1061,14 @@ mod tests {
             .unwrap();
         }
 
-        let home_str = home.to_str().unwrap();
-        let global_first_page = list_runs(home_str, 20, 0);
+        let env = home::test_env(&home);
+        let global_first_page = list_runs(&env, 20, 0);
         assert!(
             global_first_page.iter().all(|r| r.source != "claude-code"),
             "the old global-first page would miss the KIDE Claude run"
         );
 
-        let scoped = list_runs_for_workspace(home_str, 20, 0, workspace.to_str().unwrap());
+        let scoped = list_runs_for_workspace(&env, 20, 0, workspace.to_str().unwrap());
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].id, "c-scoped");
         assert_eq!(scoped[0].source, "claude-code");
@@ -1001,10 +1106,10 @@ mod tests {
             .unwrap();
         }
 
-        let home_str = home.to_str().unwrap();
-        assert_eq!(ClaudeCode.discover_runs(home_str).len(), 51);
+        let env = home::test_env(&home);
+        assert_eq!(ClaudeCode.discover_runs(&env).len(), 51);
         let narrowed =
-            ClaudeCode.discover_runs_for_workspace(home_str, workspace.to_str().unwrap());
+            ClaudeCode.discover_runs_for_workspace(&env, workspace.to_str().unwrap());
         assert_eq!(
             narrowed.len(),
             1,
@@ -1037,7 +1142,7 @@ mod tests {
         )
         .unwrap();
 
-        let kept = ClaudeCode.discover_runs_for_workspace(home.to_str().unwrap(), "/tmp/anything");
+        let kept = ClaudeCode.discover_runs_for_workspace(&home::test_env(&home), "/tmp/anything");
         assert_eq!(kept.len(), 2, "unknown cwd must not exclude a candidate");
 
         let _ = std::fs::remove_dir_all(&home);
@@ -1063,7 +1168,7 @@ mod tests {
         .unwrap();
 
         let mut ids: Vec<String> = OpenCode
-            .discover_runs_for_workspace(home.to_str().unwrap(), "/tmp/ws")
+            .discover_runs_for_workspace(&home::test_env(&home), "/tmp/ws")
             .into_iter()
             .map(|c| c.key)
             .collect();
@@ -1094,7 +1199,7 @@ mod tests {
             .unwrap();
         }
 
-        let scoped = list_runs_for_workspace(home.to_str().unwrap(), 20, 0, "/tmp/never-matches");
+        let scoped = list_runs_for_workspace(&home::test_env(&home), 20, 0, "/tmp/never-matches");
         assert!(scoped.is_empty());
 
         let _ = std::fs::remove_dir_all(&home);

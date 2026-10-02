@@ -31,6 +31,8 @@ getrandom = "0.3"
 sha2 = "0.10"
 reqwest = { version = "0.13.3", features = ["json", "blocking"] }
 tauri-plugin-dialog = "2.7.1"
+# `klide://` links (deep_link.rs). Rust-only: no JS half, so no capability.
+tauri-plugin-deep-link = "2"
 portable-pty = "0.9.0"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = "0.7"

@@ -2,11 +2,13 @@
 //!
 //! Same binary as the app (the `klide ptyd` pattern: nothing extra to bundle,
 //! sign, or version-skew). Claude Code, Codex and OpenCode each start it as a
-//! stdio child, speak MCP JSON-RPC to it, and see messaging tools whose names
-//! match the Harness's native ones — `agent_list`, `agent_send`, `agent_wait`,
-//! `agent_read_result`, `agent_publish_result` — so one skill text about
-//! peers holds for a Kit Run and a Claude Code session alike.
-//! `mission_orchestrate` also exposes the approved Mission supervisor.
+//! stdio child, speak MCP JSON-RPC to it, and see the Harness's five native
+//! coordination Tools by the same names and texts — `agent_list`,
+//! `agent_send`, `agent_wait`, `agent_cancel`, `agent_read_result`, listed
+//! from `coordination::ops::tools()` exactly as the Harness registry is —
+//! plus `agent_publish_result`, so one skill text about peers holds for a
+//! Kit Run and a Claude Code session alike. `mission_orchestrate` also
+//! exposes the approved Mission supervisor.
 //!
 //! This process owns nothing. Every tool call becomes one POST to the
 //! coordination bridge in the app (coordination_bridge.rs); the bridge binds
@@ -100,74 +102,28 @@ impl Bridge for HttpBridge {
     }
 }
 
-/// The tool catalogue, as MCP `tools/list` wants it. Descriptions are the
-/// Harness ones (agent/tools.rs) minus the Harness-only wording.
+/// The tool catalogue, as MCP `tools/list` wants it: the Mission tool, the
+/// five coordination operations exactly as the Harness registry has them
+/// (`coordination::ops::tools()` is the one source for both), and
+/// `agent_publish_result`, which only a Delegate needs — a Harness Run
+/// publishes its result at settle.
 pub fn tool_list() -> Value {
-    json!([
-        crate::missions::orchestration::tool(),
-        {
-            "name": "agent_list",
-            "description": "List the other agents working on this project right now — Klide Harness Runs and Delegate CLI sessions alike — with their Run id, state, whether they are live, and a label. Use the runId with agent_send.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "agent_send",
-            "outputSchema": serde_json::from_str::<Value>(include_str!("../../schemas/klide-coordination-send-receipt.schema.json"))
-                .expect("bundled send receipt schema is valid JSON"),
-            "description": "Send a durable message to another agent by Run id. The recipient's operator reviews it before the agent reads it; delivery happens at the recipient's next safe moment. Set waitForReply to block for the answer. deliveryState reports the sent message; replyStatus reports whether this call received a reply or timed out. A timeout does not cancel the message.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "toRunId": { "type": "string", "description": "Exact target Run id from agent_list." },
-                    "body": { "type": "string", "description": "The message." },
-                    "kind": { "type": "string", "enum": ["instruction", "question", "answer", "progress", "handoff"], "description": "Defaults to instruction, or answer when replyTo is set." },
-                    "replyTo": { "type": "string", "description": "Envelope id being answered. A reply is kind answer, one per message; you must be its original recipient and send back to its original sender." },
-                    "correlationId": { "type": "string", "description": "Optional id grouping a multi-message exchange." },
-                    "idempotencyKey": { "type": "string", "description": "Optional retry key." },
-                    "waitForReply": { "type": "boolean", "description": "Wait for a reply to this exact message before returning." },
-                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "description": "Wait ceiling when waitForReply is true. Default 30." }
-                },
-                "required": ["toRunId", "body"],
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "agent_wait",
-            "description": "Wait for messages other agents sent to you (only ones your operator has approved). Optionally narrow to one sender or one reply. Returns after the first delivery or the timeout.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "fromRunId": { "type": "string", "description": "Only wait for this sender." },
-                    "replyTo": { "type": "string", "description": "Only wait for a reply to this envelope id." },
-                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 120, "description": "Default 30." }
-                },
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "agent_read_result",
-            "description": "Read the structured result another agent published, or learn that it has not published one yet.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "runId": { "type": "string", "description": "Target Run id from agent_list." } },
-                "required": ["runId"],
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "agent_publish_result",
-            "description": "Publish your own structured result for the agents coordinating with you: a status and a short summary of what you did. Call it once when your task is finished.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "status": { "type": "string", "enum": ["succeeded", "partial", "failed", "cancelled"] },
-                    "summary": { "type": "string", "description": "What was done, what was left, where to look." }
-                },
-                "required": ["status", "summary"],
-                "additionalProperties": false
-            }
+    let mut tools = vec![crate::missions::orchestration::tool()];
+    tools.extend(crate::coordination::ops::tools());
+    tools.push(json!({
+        "name": "agent_publish_result",
+        "description": "Publish your own structured result for the agents coordinating with you: a status and a short summary of what you did. Call it once when your task is finished.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": { "type": "string", "enum": ["succeeded", "partial", "failed", "cancelled"] },
+                "summary": { "type": "string", "description": "What was done, what was left, where to look." }
+            },
+            "required": ["status", "summary"],
+            "additionalProperties": false
         }
-    ])
+    }));
+    Value::Array(tools)
 }
 
 fn str_arg(args: &Value, key: &str) -> Option<String> {
@@ -178,8 +134,10 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Map one `tools/call` onto the bridge vocabulary. Unknown names and missing
-/// required fields are the caller's error (an MCP tool error, not a crash).
+/// Map one `tools/call` onto the bridge vocabulary. An unknown name is the
+/// caller's error (an MCP tool error, not a crash); a missing required field
+/// of a coordination operation travels as empty so the core refuses it with
+/// the same sentence a Harness Run gets.
 pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, String> {
     let timeout = args.get("timeoutSeconds").and_then(Value::as_u64);
     match name {
@@ -188,8 +146,8 @@ pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, Str
         }),
         "agent_list" => Ok(BridgeRequest::List),
         "agent_send" => Ok(BridgeRequest::Send {
-            to_run_id: str_arg(args, "toRunId").ok_or("agent_send requires toRunId.")?,
-            body: str_arg(args, "body").ok_or("agent_send requires body.")?,
+            to_run_id: str_arg(args, "toRunId").unwrap_or_default(),
+            body: str_arg(args, "body").unwrap_or_default(),
             kind: str_arg(args, "kind"),
             reply_to: str_arg(args, "replyTo"),
             correlation_id: str_arg(args, "correlationId"),
@@ -205,8 +163,12 @@ pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, Str
             reply_to: str_arg(args, "replyTo"),
             timeout_seconds: timeout,
         }),
+        "agent_cancel" => Ok(BridgeRequest::Cancel {
+            run_id: str_arg(args, "runId").unwrap_or_default(),
+            reason: str_arg(args, "reason"),
+        }),
         "agent_read_result" => Ok(BridgeRequest::ReadResult {
-            run_id: str_arg(args, "runId").ok_or("agent_read_result requires runId.")?,
+            run_id: str_arg(args, "runId").unwrap_or_default(),
         }),
         "agent_publish_result" => Ok(BridgeRequest::PublishResult {
             status: str_arg(args, "status").ok_or("agent_publish_result requires status.")?,
@@ -482,8 +444,18 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["mission_orchestrate", "agent_list", "agent_send", "agent_wait", "agent_read_result", "agent_publish_result"]
+            ["mission_orchestrate", "agent_list", "agent_send", "agent_wait", "agent_cancel", "agent_read_result", "agent_publish_result"]
         );
+    }
+
+    /// Every name the core knows maps onto the wire (the schema equality
+    /// itself is pinned in agent/tools.rs, next to the registry).
+    #[test]
+    fn every_coordination_operation_has_a_bridge_request() {
+        for name in crate::coordination::ops::TOOL_NAMES {
+            let args = json!({ "toRunId": "x", "body": "y", "runId": "x" });
+            assert!(bridge_request_for(name, &args).is_ok(), "{name} has no bridge request");
+        }
     }
 
     #[test]
@@ -537,7 +509,7 @@ mod tests {
     fn bad_arguments_and_bridge_refusals_are_tool_errors_not_rpc_errors() {
         let bridge = FakeBridge::replying(json!({}));
         let reply = handle_message(
-            &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"agent_send","arguments":{"body":"x"}}}),
+            &json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"agent_shout","arguments":{"body":"x"}}}),
             &bridge,
         )
         .unwrap();
@@ -545,8 +517,24 @@ mod tests {
         assert!(reply["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("toRunId"));
+            .contains("Unknown tool"));
         assert!(bridge.calls.lock().unwrap().is_empty(), "nothing reached the bridge");
+        // A missing required field is not this child's call to refuse: it
+        // travels empty and the core answers with the one sentence both doors
+        // use ("agent_send requires non-empty toRunId and body.").
+        assert_eq!(
+            bridge_request_for("agent_send", &json!({"body":"x"})).unwrap(),
+            BridgeRequest::Send {
+                to_run_id: String::new(),
+                body: "x".into(),
+                kind: None,
+                reply_to: None,
+                correlation_id: None,
+                idempotency_key: None,
+                wait_for_reply: false,
+                timeout_seconds: None,
+            }
+        );
 
         struct Refusing;
         impl Bridge for Refusing {
@@ -682,7 +670,7 @@ mod chain {
         // What a CLI asks before it will call anything.
         let listed =
             handle_message(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &bridge).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 7);
 
         // agent_list sees the Harness peer under its thread title, and itself.
         let reply = handle_message(
@@ -964,6 +952,7 @@ mod chain {
                     orchestrate: None,
                     on_change: Box::new(|_, _| {}),
                     is_live: Box::new(|_| false),
+                    cancel: None,
                     // What pty.rs reads back from the session's spawn record.
                     resolve_session: Box::new(move |session_id| {
                         (session_id == "convo-1:claude-code").then(|| BridgeSession {

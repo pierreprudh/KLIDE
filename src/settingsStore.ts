@@ -13,6 +13,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { normalizeThemeId, type ThemeId } from "./theme";
+import { providerDefaultModel } from "./agent/providerCatalog";
 
 export type HarnessSettings = {
   chatPrompt?: string;
@@ -353,8 +354,9 @@ export const SETTINGS = {
   } as SettingDef<boolean>,
   aiModel: {
     key: "klide-ai-model",
-    // Legacy fallback chain: the pre-rename Ollama-only key, then the stock default.
-    fallback: () => readRaw("klide-ollama-model") || "llama3.1:8b",
+    // Legacy fallback chain: the pre-rename Ollama-only key, then the Ollama
+    // row's default model from the Rust registry.
+    fallback: () => readRaw("klide-ollama-model") || providerDefaultModel("ollama") || "",
     search: {
       label: "AI model",
       section: "ai",

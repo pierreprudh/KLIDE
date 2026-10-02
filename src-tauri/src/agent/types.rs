@@ -245,9 +245,9 @@ pub struct AgentRunSummary {
     /// see `write_summary` for the lazy-enrich behaviour).
     #[serde(default)]
     pub files_touched: u32,
-    /// Estimated run cost in USD, computed from `model` + token totals via
-    /// `crate::pricing::cost_for_run`. `None` for local / subscription /
-    /// passthrough / unknown models.
+    /// Estimated run cost in USD, computed from the Provider's price class ×
+    /// token totals (`model_capabilities::cost_for_run`). `None` for local /
+    /// subscription / passthrough / unknown models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
     /// One-line summary of the run's most recent assistant turn — "what it

@@ -33,28 +33,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const CODEX: &str = "codex";
-pub const CLAUDE: &str = "claude-code";
-pub const OPENCODE: &str = "opencode";
+use crate::delegate::{self, Delegate, ProcessEnv};
 
-/// Delegates with no account store, and why.
-///
-/// Klide only ever snapshots credentials a CLI has already written down, so a
-/// delegate that keeps none has nothing to capture and correctly gets no entry
-/// in [`provider`]. That makes the registry shorter than `delegate::ALL`, which
-/// reads like an oversight — a 2026-07-27 architecture review flagged exactly
-/// this, reporting `omp` as "silently absent from the account seam". It isn't:
-/// omp resolves provider keys from the shell environment (see its `check_auth`),
-/// so there is no file and no keychain item that switching could swap.
-///
-/// Stating it here, next to the registry, is what makes the asymmetry legible.
-/// `every_delegate_is_accounted_for` then turns it into a decision a fifth CLI
-/// cannot skip: either it gets a provider, or it gets a reason.
-/// Read only by `every_delegate_is_accounted_for`; it exists so the decision has
-/// a home, not to be branched on at runtime.
-#[allow(dead_code)]
-const NO_ACCOUNT_STORE: [(&str, &str); 1] =
-    [("omp", "resolves provider keys from the shell environment")];
+// Which delegates have an account store is the adapter's fact
+// (`Delegate::supports_accounts`): Klide only ever snapshots credentials a
+// CLI has already written down, so a delegate that keeps none — omp resolves
+// provider keys from the shell environment — says so on its own impl, and
+// `every_delegate_is_accounted_for` holds that flag and this registry
+// together. There is no second id list here; each backend names its adapter.
 
 /// macOS Keychain service Claude Code stores its OAuth tokens under.
 const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -73,9 +59,10 @@ fn index_path(provider: &str) -> Option<PathBuf> {
     store_dir(provider).map(|d| d.join("accounts.json"))
 }
 
-/// `~/.claude.json`.
+/// Claude Code's user-state file (`.claude.json`), wherever its adapter says
+/// it is — beside `~/.claude`, or inside `$CLAUDE_CONFIG_DIR`.
 fn claude_config_path() -> Option<PathBuf> {
-    crate::cli::home_dir_path().map(|h| h.join(".claude.json"))
+    delegate::ClaudeCode.user_state_file(&ProcessEnv)
 }
 
 // --- identity --------------------------------------------------------------
@@ -229,12 +216,27 @@ fn claude_identity(config: &serde_json::Value) -> AccountIdentity {
 /// behind this trait, so the generic save / list / activate flow below knows
 /// nothing CLI-specific. A new provider is one `impl` + one line in `provider()`.
 trait AccountProvider {
+    /// The Delegate this backend snapshots for. Its id, label, login command
+    /// and login files are all read from the adapter — nothing is restated.
+    fn delegate(&self) -> &'static dyn Delegate;
     /// Human label for messages.
-    fn label(&self) -> &'static str;
-    /// What to run to log in, for the "not logged in" hint.
-    fn login_cmd(&self) -> &'static str;
+    fn label(&self) -> &'static str {
+        self.delegate().label()
+    }
+    /// What to run to log in, for the "not logged in" hint: the adapter's
+    /// first login command.
+    fn login_cmd(&self) -> String {
+        self.delegate()
+            .login_commands()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| self.delegate().binary().to_string())
+    }
     /// Live source files (file-based providers); empty for keychain-based ones.
-    fn live_files(&self) -> Vec<PathBuf>;
+    /// The adapter's `auth_files`, resolved against the process environment.
+    fn live_files(&self) -> Vec<PathBuf> {
+        self.delegate().auth_files(&ProcessEnv)
+    }
     /// Read the live login's identity, or `None` when the CLI isn't logged in /
     /// the source is unreadable. Never touches the keychain.
     fn live_identity(&self) -> Option<AccountIdentity>;
@@ -255,16 +257,8 @@ struct OpenCodeProvider;
 struct ClaudeProvider;
 
 impl AccountProvider for CodexProvider {
-    fn label(&self) -> &'static str {
-        "Codex"
-    }
-    fn login_cmd(&self) -> &'static str {
-        "codex login"
-    }
-    fn live_files(&self) -> Vec<PathBuf> {
-        crate::cli::home_dir_path()
-            .map(|h| vec![h.join(".codex").join("auth.json")])
-            .unwrap_or_default()
+    fn delegate(&self) -> &'static dyn Delegate {
+        &delegate::Codex
     }
     fn live_identity(&self) -> Option<AccountIdentity> {
         let bytes = std::fs::read(self.live_files().first()?).ok()?;
@@ -288,19 +282,8 @@ impl AccountProvider for CodexProvider {
 }
 
 impl AccountProvider for OpenCodeProvider {
-    fn label(&self) -> &'static str {
-        "OpenCode"
-    }
-    fn login_cmd(&self) -> &'static str {
-        "opencode auth login"
-    }
-    fn live_files(&self) -> Vec<PathBuf> {
-        crate::cli::home_dir_path()
-            .map(|h| {
-                let base = h.join(".local").join("share").join("opencode");
-                vec![base.join("auth.json"), base.join("account.json")]
-            })
-            .unwrap_or_default()
+    fn delegate(&self) -> &'static dyn Delegate {
+        &delegate::OpenCode
     }
     fn live_identity(&self) -> Option<AccountIdentity> {
         // account.json (the second file) holds the identity.
@@ -325,15 +308,10 @@ impl AccountProvider for OpenCodeProvider {
 }
 
 impl AccountProvider for ClaudeProvider {
-    fn label(&self) -> &'static str {
-        "Claude Code"
+    fn delegate(&self) -> &'static dyn Delegate {
+        &delegate::ClaudeCode
     }
-    fn login_cmd(&self) -> &'static str {
-        "claude → /login"
-    }
-    fn live_files(&self) -> Vec<PathBuf> {
-        Vec::new() // keychain-based; no live files
-    }
+    // `live_files` is the adapter's empty list: keychain-based, no files.
     fn live_identity(&self) -> Option<AccountIdentity> {
         let bytes = std::fs::read(claude_config_path()?).ok()?;
         let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
@@ -356,15 +334,14 @@ impl AccountProvider for ClaudeProvider {
     }
 }
 
-/// Resolve a provider id to its backend. The one place provider ids are matched;
-/// every other path goes through the trait. Mirrors `delegate::lookup`.
-fn provider(id: &str) -> Option<Box<dyn AccountProvider>> {
-    match id {
-        CODEX => Some(Box::new(CodexProvider)),
-        CLAUDE => Some(Box::new(ClaudeProvider)),
-        OPENCODE => Some(Box::new(OpenCodeProvider)),
-        _ => None,
-    }
+/// Every backend — one per Delegate whose `supports_accounts` is true.
+const BACKENDS: [&dyn AccountProvider; 3] = [&CodexProvider, &ClaudeProvider, &OpenCodeProvider];
+
+/// Resolve a provider id to its backend. Ids are never matched here: each
+/// backend names its adapter, and the adapter's id is the key — so the
+/// account switcher and `delegate::lookup` cannot disagree on a spelling.
+fn provider(id: &str) -> Option<&'static dyn AccountProvider> {
+    BACKENDS.into_iter().find(|b| b.delegate().id() == id)
 }
 
 // --- index records ---------------------------------------------------------
@@ -534,7 +511,7 @@ pub fn save_current(provider_id: &str, name: &str) -> Result<Account, String> {
 
     let identity = p
         .live_identity()
-        .ok_or_else(|| not_logged_in_msg(p.as_ref()))?;
+        .ok_or_else(|| not_logged_in_msg(p))?;
     if !identity.is_recognised() {
         return Err(format!(
             "Couldn't recognise {}'s login shape — not saving, to avoid storing \
@@ -652,7 +629,7 @@ fn splice_claude_identity(
     snapshot: &serde_json::Value,
 ) -> Result<(), String> {
     let Some(obj) = config.as_object_mut() else {
-        return Err("~/.claude.json isn't a JSON object — not switching.".to_string());
+        return Err("Claude Code's state file isn't a JSON object — not switching.".to_string());
     };
     for key in ["oauthAccount", "userID"] {
         obj.insert(
@@ -690,9 +667,9 @@ fn capture_claude(
     // Snapshot the non-secret account block so a future activation can splice
     // it back into ~/.claude.json.
     let config_bytes =
-        std::fs::read(config_path).map_err(|e| format!("Could not read ~/.claude.json: {e}"))?;
+        std::fs::read(config_path).map_err(|e| format!("Could not read {}: {e}", config_path.display()))?;
     let config: serde_json::Value = serde_json::from_slice(&config_bytes)
-        .map_err(|e| format!("~/.claude.json isn't valid JSON: {e}"))?;
+        .map_err(|e| format!("Claude Code's state file isn't valid JSON: {e}"))?;
     let stem = slugify(name);
     let file = format!("{stem}.account.json");
     write_private(
@@ -782,12 +759,12 @@ fn restore_claude(
     .map_err(|e| format!("Account snapshot isn't valid JSON: {e}"))?;
 
     let cfg_bytes =
-        std::fs::read(cfg_path).map_err(|e| format!("Could not read ~/.claude.json: {e}"))?;
+        std::fs::read(cfg_path).map_err(|e| format!("Could not read {}: {e}", cfg_path.display()))?;
     // One-deep backup so a botched splice is recoverable.
     let backup = std::path::PathBuf::from(format!("{}.klide-bak", cfg_path.display()));
     let _ = std::fs::write(&backup, &cfg_bytes);
     let mut cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes)
-        .map_err(|e| format!("~/.claude.json isn't valid JSON: {e}"))?;
+        .map_err(|e| format!("Claude Code's state file isn't valid JSON: {e}"))?;
     splice_claude_identity(&mut cfg, &snap)?;
     let new_cfg = serde_json::to_vec_pretty(&cfg).map_err(|e| e.to_string())?;
 
@@ -1152,36 +1129,38 @@ mod tests {
         //
         // So every delegate must resolve to either a provider or a stated
         // reason. Adding a fifth CLI fails here until someone chooses.
+        // So every delegate's `supports_accounts` must match whether a backend
+        // exists for it. Adding a fifth CLI fails here until someone chooses.
         for delegate in crate::delegate::ALL {
             let id = delegate.id();
             let has_provider = provider(id).is_some();
-            let exemption = NO_ACCOUNT_STORE.iter().find(|(cli, _)| *cli == id);
-            match (has_provider, exemption) {
-                (true, None) | (false, Some(_)) => {}
-                (false, None) => panic!(
-                    "delegate {id:?} has no account provider and no entry in \
-NO_ACCOUNT_STORE — give it one, or record why it needs none"
+            match (has_provider, delegate.supports_accounts()) {
+                (true, true) | (false, false) => {}
+                (false, true) => panic!(
+                    "delegate {id:?} says supports_accounts but has no backend in \
+accounts::BACKENDS — add one, or set the flag to false with a reason"
                 ),
-                (true, Some((_, reason))) => panic!(
-                    "delegate {id:?} has an account provider but is also listed \
-in NO_ACCOUNT_STORE as {reason:?} — remove the exemption"
+                (true, false) => panic!(
+                    "delegate {id:?} has an account backend but its adapter says \
+supports_accounts() == false — the frontend would hide the switcher"
                 ),
             }
         }
+        assert!(provider("nope").is_none());
     }
 
     #[test]
-    fn the_account_registry_covers_every_credential_writing_delegate() {
-        // The three that do keep credentials, spelled out so a renamed id can't
-        // quietly drop a CLI out of the switcher.
-        for id in [CODEX, CLAUDE, OPENCODE] {
-            assert!(provider(id).is_some(), "no account provider for {id:?}");
-            assert!(
-                crate::delegate::lookup(id).is_some(),
-                "{id:?} is an account provider but not a delegate — the two \
-registries use the same ids"
-            );
+    fn a_backend_speaks_with_its_adapters_words() {
+        // Label and login hint come from the Delegate, never restated here.
+        for backend in BACKENDS {
+            let d = backend.delegate();
+            assert_eq!(backend.label(), d.label());
+            assert_eq!(Some(backend.login_cmd()), d.login_commands().into_iter().next());
+            assert_eq!(backend.live_files(), d.auth_files(&ProcessEnv));
         }
-        assert!(provider("nope").is_none());
+        // The disagreement that prompted this: OpenCode's hint said
+        // `opencode auth login` here while the adapter said `opencode`.
+        assert_eq!(provider("opencode").unwrap().login_cmd(), "opencode auth login");
+        assert_eq!(provider("codex").unwrap().login_cmd(), "codex login");
     }
 }
