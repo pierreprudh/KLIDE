@@ -575,6 +575,35 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn panic_recovery_finishes_writing_before_admitting_a_retry() {
+        let (dir, request, retry) = fixture("panic-retry");
+        let host = RunHost::new(dir.clone(), Arc::new(|_, _, _| {}));
+        let runs = dir.join("runs");
+        host.start_with(request.clone(), runs.clone(), StreamThenPanic).unwrap();
+        settled(&host).await;
+        // An idle host is permission to retry immediately. Its previous turn
+        // must have no pending stream flush or recovery write left behind.
+        let prior = read_events(&runs, "conversation").unwrap();
+        assert!(
+            matches!(prior.last(), Some(AgentEvent::RunError { error, .. }) if error.code == error_code::RUN_HOST_FAILED),
+            "admission was released before the panic's terminal event"
+        );
+        let from = host.start_with(request, runs.clone(), retry.clone()).unwrap();
+        assert_eq!(from, prior.len() as u64);
+        tokio::time::timeout(std::time::Duration::from_secs(5), retry.started.notified()).await.unwrap();
+        retry.finish.notify_one();
+        settled(&host).await;
+        let lines: Vec<serde_json::Value> = std::fs::read_to_string(transcript_path(&runs, "conversation"))
+            .unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        for (index, line) in lines.iter().enumerate() {
+            assert_eq!(line["seq"], index, "retry must not share a sequence with recovery");
+        }
+        assert_eq!(lines.last().unwrap()["event"]["type"], "run_result");
+        assert_eq!(lines.iter().filter(|line| line["event"]["type"] == "run_error").count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn invalid_or_non_subscription_runs_are_rejected_before_spawn() {
         let (dir, mut request, _) = fixture("validation");
