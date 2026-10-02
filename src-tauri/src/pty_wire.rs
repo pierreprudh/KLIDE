@@ -177,6 +177,9 @@ pub enum Response {
 pub enum Event {
     ChatOperation { operation: ChatOperation },
     Chat { run_id: String, seq: u64, event: crate::agent::types::AgentEvent },
+    /// A Run this host owns moved the Workspace's coordination journal; the
+    /// app relays it to its panels as the app's own supervisor would.
+    CoordinationChanged { workspace_root: String, seq: u64 },
     Chunk {
         session_id: String,
         data: String,

@@ -1,5 +1,12 @@
 //! Runs owned by ptyd rather than the GUI. The existing Harness remains the
 //! sole transcript writer, including while no window is connected.
+//!
+//! This is the daemon's adapter around `run_host`: admission, the handle,
+//! the spawn and the backstop are the app's code, called here with the
+//! daemon's map. What is the daemon's own: the coordination bridge it hosts,
+//! the Mission operations it queues for the app to execute, and the socket
+//! sink every event and journal move goes out on. The app judges the failure
+//! budget before it hands a Run over, so there is none here.
 use super::*;
 use crate::coordination_bridge::{BridgeHooks, BridgeSession, CoordinationBridgeState};
 use crate::pty_wire::ChatControl;
@@ -8,14 +15,18 @@ type OperationReply = tokio::sync::oneshot::Sender<Result<serde_json::Value, Str
 type OperationSink = Arc<dyn Fn(crate::pty_wire::ChatOperation) + Send + Sync>;
 
 type EventSink = Arc<dyn Fn(&str, u64, &AgentEvent) + Send + Sync>;
+/// `(workspace_root, journal seq)` — a coordination journal move made by a
+/// Run this host owns, for the app's panels to hear through the socket.
+type ChangeSink = Arc<dyn Fn(&str, u64) + Send + Sync>;
 
 pub(crate) struct RunHost {
-    state: AgentSupervisorState,
+    runs: Mutex<HashMap<String, AgentRunHandle>>,
     starts: Mutex<HashMap<String, u64>>,
     store: CoordinationStoreState,
     bridge: CoordinationBridgeState,
     data_dir: PathBuf,
     sink: EventSink,
+    change_sink: Mutex<Option<ChangeSink>>,
     operations: Mutex<HashMap<String, (crate::pty_wire::ChatOperation, OperationReply)>>,
     operation_sink: Mutex<Option<OperationSink>>,
 }
@@ -23,12 +34,13 @@ pub(crate) struct RunHost {
 impl RunHost {
     pub fn new(data_dir: PathBuf, sink: EventSink) -> Arc<Self> {
         Arc::new(Self {
-            state: AgentSupervisorState::default(),
+            runs: Mutex::new(HashMap::new()),
             starts: Mutex::new(HashMap::new()),
             store: CoordinationStoreState::default(),
             bridge: CoordinationBridgeState::default(),
             data_dir,
             sink,
+            change_sink: Mutex::new(None),
             operations: Mutex::new(HashMap::new()),
             operation_sink: Mutex::new(None),
         })
@@ -36,6 +48,17 @@ impl RunHost {
 
     pub fn set_operation_sink(&self, sink: OperationSink) {
         *self.operation_sink.lock().unwrap() = Some(sink);
+    }
+
+    pub fn set_change_sink(&self, sink: ChangeSink) {
+        *self.change_sink.lock().unwrap() = Some(sink);
+    }
+
+    fn announce_change(&self, root: &str, outcome: &CoordinationCommandOutcome) {
+        let Some(line) = &outcome.appended else { return };
+        if let Some(sink) = self.change_sink.lock().unwrap().as_ref() {
+            sink(root, line.seq);
+        }
     }
 
     pub fn operations(&self, id: &str) -> Vec<crate::pty_wire::ChatOperation> {
@@ -77,9 +100,10 @@ impl RunHost {
         rx
     }
 
+    /// Every Run this host holds a handle for, with its wire status. Active
+    /// or settling: the app applies the one "active" rule to what it reads.
     pub fn statuses(&self) -> HashMap<String, String> {
-        self.state
-            .runs
+        self.runs
             .lock()
             .unwrap()
             .iter()
@@ -88,7 +112,7 @@ impl RunHost {
     }
 
     pub fn status(&self, id: &str) -> (Option<String>, u64) {
-        let runs = self.state.runs.lock().unwrap();
+        let runs = self.runs.lock().unwrap();
         let status = runs.get(id).map(|h| run_status_wire(&h.status).to_string());
         let from = self.starts.lock().unwrap().get(id).copied().unwrap_or(0);
         (status, from)
@@ -96,33 +120,13 @@ impl RunHost {
 
     pub fn control(&self, id: &str, control: ChatControl) -> Result<bool, String> {
         let runs = self
-            .state
             .runs
             .lock()
-            .map_err(|_| "Agent state unavailable")?;
-        let h = runs
+            .map_err(|_| "Agent state is unavailable")?;
+        let handle = runs
             .get(id)
             .ok_or_else(|| format!("No known run with id {id}"))?;
-        let (sender, answer) = match control {
-            ChatControl::Stop => {
-                h.cancel.cancel();
-                return Ok(false);
-            }
-            ChatControl::CommandPolicy { auto_approve } => {
-                return permission::apply_command_policy(h, auto_approve)
-            }
-            ChatControl::Permission { decision } => (&h.pending_permission, decision.to_string()),
-            ChatControl::Diff { decision } => (&h.pending_diff, decision.to_string()),
-            ChatControl::Question { answer } => (&h.pending_question, answer),
-        };
-        sender
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or("No pending request for this run")?
-            .send(answer)
-            .map_err(|_| "Run stopped before the answer arrived")?;
-        Ok(true)
+        run_host::answer(handle, control)
     }
 
     pub fn start(
@@ -139,7 +143,7 @@ impl RunHost {
         runs_dir: PathBuf,
         caller: impl AgentProviderCaller,
     ) -> Result<u64, String> {
-        if !super::remote::eligible(&request) {
+        if !run_host::background_eligible(&request) {
             return Err("Only standalone subscription conversations can run in this host".into());
         }
         let id = request.run_id.clone().ok_or("Missing conversation id")?;
@@ -150,90 +154,30 @@ impl RunHost {
             &runs_dir,
             request.workspace_root.as_deref(),
         );
-        if let Some(reason) =
-            self.state
-                .failure_budget
-                .check(&id, &request.provider, &request.model, now_ms())
-        {
-            return Err(reason);
-        }
-        let cancel = CancellationToken::new();
-        let from;
-        {
-            let mut runs = self
-                .state
-                .runs
-                .lock()
-                .map_err(|_| "Agent state unavailable")?;
-            if runs.contains_key(&id) {
-                return Err(format!("A run is already active for this conversation ({id}). Wait for it to finish or stop it first."));
-            }
-            // Read under the admission lock: a previous turn cannot retire
-            // between counting its transcript and claiming this conversation.
-            from = if transcript_path(&runs_dir, &id).exists() {
-                read_events(&runs_dir, &id)?.len() as u64
-            } else {
-                0
-            };
-            self.starts.lock().unwrap().insert(id.clone(), from);
-            runs.insert(
-                id.clone(),
-                AgentRunHandle {
-                    status: AgentRunStatus::Running,
-                    cancel: cancel.clone(),
-                    coordination_workspace_root: request.workspace_root.clone(),
-                    coordination_is_terminal_run: false,
-                    pending_diff: Mutex::new(None),
-                    pending_question: Mutex::new(None),
-                    pending_permission: Mutex::new(None),
-                    trust: permission::TrustMemory::default(),
-                    subject: permission::GateSubject::from_request(&request),
-                },
-            );
-        }
+        let admitted = run_host::admit(&self.runs, &runs_dir, &id, &request, || Ok(()))?;
+        let from = admitted.from_seq();
+        self.starts.lock().unwrap().insert(id.clone(), from);
         self.ensure_bridge();
-        let host = self.clone();
-        tauri::async_runtime::spawn(async move {
-            // RunLease retires the handle on success, error, and panic. Dropping
-            // a UI/socket observer never drops this task or its cancellation token.
-            let result = tauri::async_runtime::spawn(run_agent_loop(
-                host.clone(),
-                runs_dir.clone(),
-                id.clone(),
-                request,
-                Channel::new(|_| Ok(())),
-                cancel,
-                caller,
-            ))
-            .await
-            .unwrap_or_else(|_| Err("Background run panicked".into()));
-            if let Err(message) = result {
-                let seq = read_events(&runs_dir, &id)
-                    .map(|events| events.len() as u64)
-                    .unwrap_or(0);
-                let event = AgentEvent::RunError {
-                    run_id: id.clone(),
-                    error: AgentError {
-                        code: "background_run_failed".into(),
-                        message,
-                        detail: None,
-                        retryable: true,
-                    },
-                    ts: now_ms(),
-                };
-                let _ = append_event(&runs_dir, &id, seq, &event);
-                host.broadcast(&id, seq, &event);
-            }
-            let mut runs = host.state.runs.lock().unwrap();
-            host.starts.lock().unwrap().remove(&id);
-            runs.remove(&id);
-        });
+        // RunLease retires the handle on success, error, and panic; the
+        // host's backstop reports a loop that left without settling. Dropping
+        // a UI/socket observer never drops this task or its cancellation token.
+        run_host::spawn_loop(
+            self.clone(),
+            runs_dir,
+            id,
+            request,
+            Channel::new(|_| Ok(())),
+            admitted,
+            caller,
+            |_| {},
+        );
         Ok(from)
     }
 
     fn ensure_bridge(self: &Arc<Self>) {
         let live = Arc::downgrade(self);
         let operations = live.clone();
+        let changes = live.clone();
         let endpoint = self.data_dir.join("chat-coordination-endpoint.json");
         if let Err(e) = self.bridge.ensure_server(
             &endpoint,
@@ -249,7 +193,11 @@ impl RunHost {
                     .blocking_recv()
                     .map_err(|_| "Mission request was cancelled".to_string())?
                 })),
-                on_change: Box::new(|_, _| {}),
+                on_change: Box::new(move |root, outcome| {
+                    if let Some(host) = changes.upgrade() {
+                        host.announce_change(root, outcome);
+                    }
+                }),
                 is_live: Box::new(move |id| live.upgrade().is_some_and(|h| h.is_live(id))),
                 cancel: None,
                 resolve_session: Box::new(|_| None),
@@ -312,25 +260,26 @@ impl RunHost {
 impl RunSupervisor for RunHost {
     fn set_status(&self, id: &str, status: AgentRunStatus) {
         let root = {
-            let mut runs = self.state.runs.lock().unwrap();
+            let mut runs = self.runs.lock().unwrap();
             let Some(h) = runs.get_mut(id) else { return };
             h.status = status;
             h.coordination_workspace_root.clone()
         };
         if let Some(root) = root {
+            // The same words the app writes for the same move.
             let _ = self.coordination_apply(
                 &root,
                 CoordinationCommand::SetRunState {
                     actor: CoordinationActor::Run { run_id: id.into() },
                     run_id: id.into(),
                     state: coordination_state_for_status(status, false),
-                    reason: Some(run_status_wire(&status).into()),
+                    reason: Some(coordination_reason_for_status(status)),
                 },
             );
         }
     }
     fn with_handle(&self, id: &str, f: &mut dyn FnMut(&AgentRunHandle)) -> bool {
-        let runs = self.state.runs.lock().unwrap();
+        let runs = self.runs.lock().unwrap();
         if let Some(h) = runs.get(id) {
             f(h);
             true
@@ -341,15 +290,27 @@ impl RunSupervisor for RunHost {
     fn persist_stream(&self) -> bool {
         true
     }
+    fn observer_support(&self) -> Result<(), String> {
+        Err("This conversation runs in the background host, which cannot start a new reply \
+             when a command exits. Start the command with background: true and read its \
+             output with read_command_output instead of notifyOnExit."
+            .into())
+    }
     fn broadcast(&self, id: &str, seq: u64, event: &AgentEvent) {
         (self.sink)(id, seq, event);
     }
+    /// The handle goes last, as `RunLease::release` says: a reattach landing
+    /// in between still finds the Run, and the loop's own backstop has
+    /// already written before the lease lets go.
     fn retire_run(&self, id: &str) {
         self.operations
             .lock()
             .unwrap()
             .retain(|_, (op, _)| op.run_id != id);
-        // The outer task releases admission after error/panic reporting too.
+        self.starts.lock().unwrap().remove(id);
+        if let Ok(mut runs) = self.runs.lock() {
+            runs.remove(id);
+        }
     }
     fn orchestrate(
         &self,
@@ -359,23 +320,18 @@ impl RunSupervisor for RunHost {
     ) -> tokio::sync::oneshot::Receiver<Result<serde_json::Value, String>> {
         self.queue_operation(root, actor, request)
     }
-    fn note_terminal(&self, id: &str, provider: &str, model: &str, failed: bool) {
-        if failed {
-            self.state
-                .failure_budget
-                .record_failure(id, provider, model, now_ms());
-        } else {
-            self.state.failure_budget.record_success(id);
-        }
-    }
     fn coordination_apply(
         &self,
         root: &str,
         command: CoordinationCommand,
     ) -> Result<CoordinationCommandOutcome, String> {
-        off_the_worker(|| {
+        let outcome = off_the_worker(|| {
             crate::coordination::apply_coordination_command(&self.store, root, command)
-        })
+        })?;
+        // Tell the app's panels the journal moved, the way the app's own
+        // supervisor does — through the socket, since this host has no window.
+        self.announce_change(root, &outcome);
+        Ok(outcome)
     }
     fn coordination_snapshot(&self, root: &str) -> Result<CoordinationSnapshot, String> {
         off_the_worker(|| crate::coordination::read_snapshot(&self.store, root))
@@ -545,6 +501,106 @@ mod tests {
         assert!(replay.iter().any(
             |e| matches!(e, AgentEvent::RunError { error, .. } if error.code == error_code::ABORTED)
         ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A "model" that streams a chunk and then panics — the loop's worst way
+    /// out, with a stream-log flush still pending on its timer.
+    #[derive(Clone)]
+    struct StreamThenPanic;
+    impl AgentProviderCaller for StreamThenPanic {
+        fn call<'a>(
+            &'a self,
+            req: ProviderTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<AiChatResponse, String>> + Send + 'a>> {
+            Box::pin(async move {
+                req.stream
+                    .send(StreamChunk {
+                        content: "half an answer".into(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+                panic!("provider adapter bug")
+            })
+        }
+    }
+
+    /// The host's backstop used to take its seq from a fresh transcript count
+    /// while the loop's stream log could still flush on the old counter, and
+    /// the daemon released admission in a place of its own. Now one counter
+    /// serves every writer of the Run and the lease releases the handle.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panicking_loop_ends_on_one_terminal_error_with_contiguous_seqs() {
+        let (dir, request, _) = fixture("panic");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let host = RunHost::new(
+            dir.clone(),
+            Arc::new(move |_, seq, event| {
+                let _ = tx.send((seq, event.clone()));
+            }),
+        );
+        let runs = dir.join("runs");
+        host.start_with(request, runs.clone(), StreamThenPanic).unwrap();
+        settled(&host).await;
+        // The handle is released by the lease during unwinding; the host's
+        // backstop lands after the stream log's window has passed.
+        tokio::time::sleep(stream_log::WINDOW * 4).await;
+        let lines: Vec<serde_json::Value> =
+            std::fs::read_to_string(transcript_path(&runs, "conversation"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        for (index, line) in lines.iter().enumerate() {
+            assert_eq!(line["seq"], index, "every line carries its own index once");
+        }
+        let terminal: Vec<&serde_json::Value> = lines
+            .iter()
+            .filter(|line| line["event"]["type"] == "run_error")
+            .collect();
+        assert_eq!(terminal.len(), 1, "exactly one terminal event: {lines:?}");
+        assert_eq!(terminal[0]["event"]["error"]["code"], error_code::RUN_HOST_FAILED);
+        assert_eq!(
+            lines.last().map(|l| l["event"]["type"].as_str()),
+            Some(Some("run_error")),
+            "the Transcript ends on the terminal line, after the streamed tail"
+        );
+        let broadcast: Vec<u64> = rx.try_iter().map(|(seq, _)| seq).collect();
+        assert!(broadcast.contains(&(lines.len() as u64 - 1)), "the backstop was broadcast");
+        assert!(host.statuses().is_empty(), "the lease released the handle");
+        assert_eq!(
+            read_summary(&runs, "conversation").unwrap().status,
+            "error"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn panic_recovery_finishes_writing_before_admitting_a_retry() {
+        let (dir, request, retry) = fixture("panic-retry");
+        let host = RunHost::new(dir.clone(), Arc::new(|_, _, _| {}));
+        let runs = dir.join("runs");
+        host.start_with(request.clone(), runs.clone(), StreamThenPanic).unwrap();
+        settled(&host).await;
+        // An idle host is permission to retry immediately. Its previous turn
+        // must have no pending stream flush or recovery write left behind.
+        let prior = read_events(&runs, "conversation").unwrap();
+        assert!(
+            matches!(prior.last(), Some(AgentEvent::RunError { error, .. }) if error.code == error_code::RUN_HOST_FAILED),
+            "admission was released before the panic's terminal event"
+        );
+        let from = host.start_with(request, runs.clone(), retry.clone()).unwrap();
+        assert_eq!(from, prior.len() as u64);
+        tokio::time::timeout(std::time::Duration::from_secs(5), retry.started.notified()).await.unwrap();
+        retry.finish.notify_one();
+        settled(&host).await;
+        let lines: Vec<serde_json::Value> = std::fs::read_to_string(transcript_path(&runs, "conversation"))
+            .unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        for (index, line) in lines.iter().enumerate() {
+            assert_eq!(line["seq"], index, "retry must not share a sequence with recovery");
+        }
+        assert_eq!(lines.last().unwrap()["event"]["type"], "run_result");
+        assert_eq!(lines.iter().filter(|line| line["event"]["type"] == "run_error").count(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

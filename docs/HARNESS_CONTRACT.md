@@ -315,6 +315,15 @@ The Harness emits Agent events for:
 The Transcript is append-only JSONL. Mission Control and follow-up turns should
 derive from these events rather than guessing from UI state.
 
+Every event carries a `seq`, one monotonic index per Run. The Harness loop's
+`emit`, its stream log (daemon-hosted turns) and the host's backstop — the one
+`RunError` written for a loop that left without settling (`run_host_failed`)
+— share the same counter, seeded when the Run was admitted, so no two lines of
+one Run carry the same index. `agent_compact_context` is the only writer
+outside a live Run, and it is refused while the Run is active. Every
+`AgentError.code` comes from `error_code::ALL`; a drift test reads the emit
+sites and fails on a literal outside it.
+
 Project Memory recall uses the same evidence path. `memory_search` and
 `memory_read` emit ordinary Tool start/finish events stamped with capability
 `read_project_memory`; result metadata carries the entry schema, match fields,

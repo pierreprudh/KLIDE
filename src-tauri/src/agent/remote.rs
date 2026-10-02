@@ -1,17 +1,12 @@
-//! GUI-side proxy for durable subscription conversations. Socket disconnects
-//! detach observers; only an explicit Stop cancels the daemon's run.
+//! GUI-side proxy for durable subscription conversations — the `run_host`
+//! door's ptyd adapter. Socket disconnects detach observers; only an explicit
+//! Stop cancels the daemon's run. Which Run goes here is `run_host`'s call
+//! (`placement`), not this module's.
 use super::*;
 use crate::pty_wire::{ChatControl, Request, Response};
 use std::io::BufRead;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-
-pub(super) fn eligible(request: &StartRunRequest) -> bool {
-    crate::providers::is_subscription_provider(&request.provider)
-        && request.parent_id.is_none()
-        && request.mission_id.is_none()
-        && request.mission_task_id.is_none()
-}
 
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
@@ -148,19 +143,10 @@ pub(super) async fn start(
     channel: Channel<AgentEvent>,
 ) -> Result<StartRunResponse, String> {
     let id = request.run_id.clone().ok_or("Missing conversation id")?;
-    if app
-        .state::<AgentSupervisorState>()
-        .runs
-        .lock()
-        .unwrap()
-        .contains_key(&id)
-    {
-        return Err(format!("A run is already active for this conversation ({id}). Wait for it to finish or stop it first."));
-    }
     crate::blocking::run(move || {
         let base = data_dir(&app)?;
         if owner(&base, &id)?.is_some() {
-            return Err(format!("A run is already active for this conversation ({id}). Wait for it to finish or stop it first."));
+            return Err(run_host::busy(&id));
         }
         let dir = crate::pty_client::chat_host_dir(&base)?;
         crate::pty_client::ensure_chat_daemon(&dir)?;
@@ -255,6 +241,11 @@ fn ensure_watch(
                 let _ = channel.send(event);
             }
         };
+        // A durable terminal event is the Run's outcome; the app's failure
+        // budget learns it here, as `settle_run` tells it about a local Run.
+        let settled = |event: &AgentEvent| {
+            run_host::record_remote_outcome(&app, &runs_dir, &id, event);
+        };
         loop {
             if let Ok(Response::ChatOperations {
                 operations: pending,
@@ -272,6 +263,9 @@ fn ensure_watch(
                         event,
                         AgentEvent::RunResult { .. } | AgentEvent::RunError { .. }
                     );
+                    if terminal {
+                        settled(&event);
+                    }
                     deliver(event, seq as u64);
                     next = seq as u64 + 1;
                 }
@@ -292,6 +286,9 @@ fn ensure_watch(
                         dispatch_operation(&app, &dir, operation.clone(), &operations);
                     }
                 }
+                if let Ok(crate::pty_wire::Event::CoordinationChanged { workspace_root, seq }) = &event {
+                    crate::coordination::announce_coordination_change(&app, workspace_root, *seq);
+                }
                 if let Ok(crate::pty_wire::Event::Chat { run_id, seq, event }) = event {
                     if run_id != id || seq < next {
                         continue;
@@ -300,6 +297,9 @@ fn ensure_watch(
                         event,
                         AgentEvent::RunResult { .. } | AgentEvent::RunError { .. }
                     );
+                    if terminal {
+                        settled(&event);
+                    }
                     deliver(event, seq);
                     next = seq + 1;
                     if terminal {
@@ -321,13 +321,20 @@ fn ensure_watch(
                                 event,
                                 AgentEvent::RunResult { .. } | AgentEvent::RunError { .. }
                             );
+                            if terminal {
+                                settled(&event);
+                            }
                             deliver(event, seq as u64);
+                            next = seq as u64 + 1;
                         }
                     }
                     if !terminal {
-                        deliver(AgentEvent::RunError { run_id: id.clone(), error: AgentError {
-                            code: "background_disconnected".into(), message: "Lost connection to the background run. Reopen this conversation to check its state.".into(), detail: None, retryable: false,
-                        }, ts: now_ms() }, next);
+                        // Not the Run's outcome and never on disk — the daemon
+                        // may still be running it. Delivered one past the last
+                        // durable index, so it collides with nothing a
+                        // snapshot could hold; a reopen reads the transcript
+                        // and shows whatever the Run actually did.
+                        deliver(disconnected(&id), next);
                     }
                     break;
                 }
@@ -339,6 +346,22 @@ fn ensure_watch(
         }
     });
     Ok(())
+}
+
+/// The synthetic terminal event for a lost socket: the panel must not stay
+/// busy forever, and the transcript must not gain a line the daemon did not
+/// write.
+fn disconnected(id: &str) -> AgentEvent {
+    AgentEvent::RunError {
+        run_id: id.to_string(),
+        error: AgentError {
+            code: error_code::RUN_HOST_DISCONNECTED.into(),
+            message: "Lost connection to the background run. Reopen this conversation to check its state.".into(),
+            detail: None,
+            retryable: false,
+        },
+        ts: now_ms(),
+    }
 }
 
 #[cfg(test)]
