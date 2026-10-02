@@ -179,6 +179,7 @@ pub(super) fn spawn_loop(
                 let (sup, runs_dir, id, on_event, sequence) = &backstop;
                 let message = "run panicked".to_string();
                 settle_backstop(sup.as_ref(), runs_dir, id, sequence, on_event, &message);
+                sup.retire_run(id);
                 Err(message)
             }
         };

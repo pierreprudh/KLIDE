@@ -790,11 +790,15 @@ struct RunLease {
     /// Set when this Run bound a headless Delegate session at the bridge.
     delegate_provider: Option<String>,
     settled: bool,
+    /// A normal error writes the terminal event before Drop. A panic leaves
+    /// this false so the outer recovery task can write that event while the
+    /// admission handle is still held.
+    backstopped: bool,
 }
 
 impl RunLease {
     fn new(sup: Arc<dyn RunSupervisor>, runs_dir: PathBuf, id: String) -> Self {
-        Self { sup, runs_dir, id, delegate_provider: None, settled: false }
+        Self { sup, runs_dir, id, delegate_provider: None, settled: false, backstopped: false }
     }
 
     fn hold_delegate_session(&mut self, provider: &str) {
@@ -819,6 +823,11 @@ impl RunLease {
 impl Drop for RunLease {
     fn drop(&mut self) {
         if self.settled {
+            return;
+        }
+        if !self.backstopped {
+            // A panic is recovered by `spawn_loop`; keep admission held until
+            // that task appends the terminal event and retires the handle.
             return;
         }
         // The loop left without settling. Say so where a reattach looks —
@@ -1873,6 +1882,7 @@ async fn hosted_loop(
     .await;
     if let Err(message) = &result {
         run_host::settle_backstop(supervisor.as_ref(), &runs_dir, &id, &sequence, &on_event, message);
+        lease.backstopped = true;
     }
     result
 }
