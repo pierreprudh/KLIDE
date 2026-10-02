@@ -329,8 +329,11 @@ Three fixes landed (`6c28a74`, `2e49d0a`, `adbcbf4`):
 - [ ] Approvals are granted upfront for a turn rather than asked per call. The
   per-call answer is Claude Code's `can_use_tool` control protocol (the "VS Code
   extension design" idea in `Ideas.md` #8), not a widening of this flag.
-- [ ] A mode change made mid-conversation (Chat → Goal) lives in the system
-  message, which a resumed session never receives.
+- [x] A mode change made mid-conversation (Chat → Goal) reaches a resumed
+  session (2026-10-02): the runner fingerprints the system block per session
+  and, when it changed, says it again ahead of the message. Not through
+  `--append-system-prompt`: Claude Code snapshots its system prompt on a
+  session's first request and ignores the flag on `--resume`.
 
 ## Parking Lot
 
