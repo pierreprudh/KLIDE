@@ -14,7 +14,7 @@
 
 mod chat;
 mod chat_server;
-mod chat_stream;
+pub(crate) mod chat_stream;
 pub(crate) use chat_stream::summarize_call;
 mod cli_commands;
 mod claude_code;

@@ -263,7 +263,7 @@ impl AgentProviderCaller for RealProviderCaller {
 /// into `AgentSupervisorState`. `TauriSupervisor` implements it over the live
 /// state in production; `FakeSupervisor` (tests) implements it over a plain map
 /// — so the whole run loop can be driven headlessly, off the Tauri app.
-trait RunSupervisor: Send + Sync {
+pub(crate) trait RunSupervisor: Send + Sync {
     /// Best-effort: set a run's status. No-op if the lock/run is unavailable.
     fn set_status(&self, run_id: &str, status: AgentRunStatus);
     /// Run `f` against a run's handle under the supervisor lock. Returns false
@@ -4693,15 +4693,15 @@ mod provider_caller_tests {
 /// loop-level tests), and the "frontend" halves of the pause ceremonies
 /// (`answer_permission` / `answer_question`).
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use super::*;
     use std::collections::{HashMap, VecDeque};
 
     /// A supervisor backed by a plain map — no Tauri app. This is the second
     /// adapter that makes the seam real: the loop's run-scoped helpers can be
     /// exercised headlessly against it.
-    pub(super) struct FakeSupervisor {
-        pub(super) runs: Mutex<HashMap<String, AgentRunHandle>>,
+    pub(crate) struct FakeSupervisor {
+        pub(crate) runs: Mutex<HashMap<String, AgentRunHandle>>,
         coordination: CoordinationStoreState,
         /// Every child this supervisor was asked to start, in order. The fake
         /// answers each with a canned report, so a handler test can assert on
@@ -4725,7 +4725,7 @@ mod test_support {
             sup
         }
 
-        pub(super) fn with_run(id: &str) -> Self {
+        pub(crate) fn with_run(id: &str) -> Self {
             let mut runs = HashMap::new();
             runs.insert(id.to_string(), make_handle());
             Self {

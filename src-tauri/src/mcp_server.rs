@@ -253,6 +253,29 @@ pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, Str
     }
 }
 
+/// The permission prompt's result, in the one shape Claude Code accepts:
+/// exactly one text block whose text is the decision JSON, and nothing
+/// beside it — no structured content, no `isError`. (The CLI rejects the
+/// richer shape `tool_result` builds: "Expected a single text block param".)
+/// A bridge refusal or an unreachable Klide is still an answer: a deny that
+/// says why, so the model is told rather than left with a broken tool.
+fn permission_result(response: Result<BridgeResponse, String>) -> Value {
+    let text = match response {
+        Ok(BridgeResponse { ok: true, value: Some(value), .. }) => value
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| json!({ "behavior": "deny", "message": "Klide returned no decision." }).to_string()),
+        Ok(BridgeResponse { error, .. }) => json!({
+            "behavior": "deny",
+            "message": error.unwrap_or_else(|| "The coordination bridge refused the call.".to_string()),
+        })
+        .to_string(),
+        Err(error) => json!({ "behavior": "deny", "message": error }).to_string(),
+    };
+    json!({ "content": [{ "type": "text", "text": text }] })
+}
+
 /// An MCP tool result: the bridge's `text` field as the visible content, the
 /// whole value as structured content, `isError` when the bridge refused.
 fn tool_result(response: Result<BridgeResponse, String>) -> Value {
@@ -335,6 +358,7 @@ pub fn handle_message(message: &Value, bridge: &dyn Bridge) -> Option<Value> {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let result = match bridge_request_for(name, &args) {
+                Ok(request @ BridgeRequest::Permission { .. }) => permission_result(bridge.call(&request)),
                 Ok(request) => tool_result(bridge.call(&request)),
                 Err(error) => tool_error(error),
             };
@@ -561,7 +585,13 @@ mod tests {
         assert_eq!(content[0]["type"], "text");
         let decision: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(decision["behavior"], "allow");
-        assert_eq!(reply["result"]["isError"], false);
+        // Nothing beside the one block: the CLI rejects the richer shape.
+        assert_eq!(reply["result"].as_object().unwrap().len(), 1, "{reply}");
+        // A bridge refusal is a deny the model can read, not a broken tool.
+        let refused = permission_result(Ok(BridgeResponse { ok: false, value: None, error: Some("no session".into()) }));
+        let decision: Value = serde_json::from_str(refused["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(decision["behavior"], "deny");
+        assert_eq!(decision["message"], "no session");
         // A prompt waits for a person, not for the two-minute coordination wait.
         assert_eq!(call_timeout(&BridgeRequest::Permission { tool_name: "Bash".into(), input: json!({}), tool_use_id: None }).as_secs(), PERMISSION_WAIT_SECONDS);
         assert_eq!(call_timeout(&BridgeRequest::List).as_secs(), crate::coordination_bridge::MAX_WAIT_SECONDS + 15);
@@ -678,6 +708,12 @@ mod chain {
     /// One Workspace, one Harness peer already working, one Delegate session
     /// bound at a live bridge: the state the app is in the moment a CLI starts.
     fn chain(label: &str) -> Chain {
+        chain_with(label, BridgeHooks::silent())
+    }
+
+    /// The same chain, with the bridge's hooks chosen by the test — the
+    /// permission relay, say, bound to a fake supervisor.
+    fn chain_with(label: &str, hooks: BridgeHooks) -> Chain {
         let dir = std::env::temp_dir().join(format!(
             "klide-chain-{label}-{}-{}",
             std::process::id(),
@@ -721,7 +757,7 @@ mod chain {
         .unwrap();
         let endpoint = dir.join("coordination-endpoint.json");
         bridge
-            .ensure_server(&endpoint, store.clone(), BridgeHooks::silent())
+            .ensure_server(&endpoint, store.clone(), hooks)
             .expect("the loopback bridge starts");
         let secret = dir.join("convo-1-claude-code.secret");
         crate::durable::write_atomic_private(&secret, SECRET.as_bytes()).unwrap();
@@ -998,6 +1034,150 @@ mod chain {
             CoordinationDeliveryState::Queued,
             "and it waits for the receiving operator"
         );
+    }
+
+    /// The relay, through the real CLI: Claude Code is told to run a command
+    /// its own rules do not pre-approve, asks Klide through
+    /// `--permission-prompt-tool`, the bridge raises the card on the bound Run
+    /// (a fake supervisor here, as the loop would have installed it), the
+    /// "operator" answers allow-once, and the command's output comes back in
+    /// the CLI's stream. Opt-in like its sibling above:
+    ///
+    /// ```text
+    /// cargo build && cargo test --lib -- --ignored a_real_claude_code_prompt
+    /// ```
+    #[test]
+    #[ignore = "spends money: runs a real `claude -p` turn that asks for permission"]
+    fn a_real_claude_code_prompt_is_answered_on_the_harness_card() {
+        use crate::agent::permission_relay::{self, OutOfBandPort};
+        use crate::agent::test_support::FakeSupervisor;
+        use crate::agent::types::AgentEvent;
+        use crate::delegate::chat_stream::StreamItem;
+        use crate::delegate::{ChatSpec, McpServerSpec};
+        use std::io::Write;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        // The Run the bridge binds the session to, with the loop's port on it.
+        let sup = Arc::new(FakeSupervisor::with_run("convo-1"));
+        let (events_tx, events) = std::sync::mpsc::channel::<AgentEvent>();
+        let runs_dir = std::env::temp_dir().join(format!("klide-relay-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&runs_dir);
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let on_event = tauri::ipc::Channel::new(move |msg: tauri::ipc::InvokeResponseBody| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = msg {
+                if let Ok(event) = serde_json::from_str::<AgentEvent>(&json) {
+                    let _ = events_tx.send(event);
+                }
+            }
+            Ok(())
+        });
+        let mut port = Some(OutOfBandPort { sequence: Arc::new(Mutex::new(0)), on_event, runs_dir: runs_dir.clone() });
+        *sup.runs.lock().unwrap().get("convo-1").unwrap().out_of_band.lock().unwrap() = port.take();
+
+        let relay_sup = sup.clone();
+        let c = chain_with(
+            "relay",
+            BridgeHooks {
+                permission: Some(Box::new(move |session, ask| {
+                    permission_relay::answer(&*relay_sup, &session.run_id, &session.workspace_root, ask)
+                })),
+                ..BridgeHooks::silent()
+            },
+        );
+
+        // The operator: answers every card allow-once, counting them.
+        let answered = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let operator = {
+            let (sup, answered, stop) = (sup.clone(), answered.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if let Some(h) = sup.runs.lock().unwrap().get("convo-1") {
+                        if let Some(tx) = h.pending_permission.lock().unwrap().take() {
+                            let _ = tx.send(r#"{"behavior":"allow","scope":"once"}"#.to_string());
+                            answered.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            })
+        };
+
+        let exe = std::env::current_exe().unwrap();
+        let server_bin = exe.parent().unwrap().parent().unwrap().join("klide");
+        assert!(server_bin.exists(), "run `cargo build` first: {} is missing", server_bin.display());
+        let Ok(claude) = crate::cli::resolve_command("claude") else {
+            panic!("this test needs the `claude` CLI on the login-shell PATH");
+        };
+        let adapter = crate::delegate::lookup("claude-code").unwrap();
+        let wiring = adapter
+            .mcp_wiring(&McpServerSpec {
+                command: server_bin.to_string_lossy().to_string(),
+                args: vec!["mcp".to_string(), "coordination".to_string()],
+                endpoint_path: c.endpoint.to_string_lossy().to_string(),
+                session_id: "convo-1:claude-code".to_string(),
+                secret_path: c.secret.to_string_lossy().to_string(),
+                config_dir: c.root.clone(),
+                file_stem: "convo-1-claude-code".to_string(),
+            })
+            .unwrap();
+        for (path, content) in &wiring.files {
+            std::fs::write(path, content).unwrap();
+        }
+        let spec = ChatSpec { effort: None, model: "sonnet", resume: None, mcp: Some(&wiring), allowed_commands: &[] };
+        let args = adapter.chat_stream_args(&c.root, &spec).unwrap();
+        assert!(args.contains(&"--permission-prompt-tool".to_string()));
+        let mut child = std::process::Command::new(&claude)
+            .current_dir(&c.root)
+            .args(&args)
+            .args(&wiring.args)
+            .envs(wiring.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .envs(adapter.chat_stream_env(&spec))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                b"Use the Bash tool exactly once to run this command: python3 -c \"print('relay-ok')\" \
+                  Call no other tool and ask nothing first. Then reply DONE.",
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        loop {
+            match child.try_wait().unwrap() {
+                Some(_) => break,
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    panic!("the claude turn did not finish within 180s");
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(500)),
+            }
+        }
+        let out = child.wait_with_output().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        operator.join().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // The whole stream, for reading after a failure.
+        let _ = std::fs::write(runs_dir.join("claude-stdout.jsonl"), out.stdout.as_slice());
+        eprintln!("claude stream saved at {}", runs_dir.join("claude-stdout.jsonl").display());
+
+        // The card went up on the Run and was answered.
+        assert!(answered.load(Ordering::Relaxed) >= 1, "no permission prompt reached Klide.\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        let requested = events.try_iter().filter(|e| matches!(e, AgentEvent::PermissionRequested { .. })).count();
+        assert!(requested >= 1, "the relay wrote no PermissionRequested");
+        // And the CLI ran the command: its own stream carries the output.
+        let ran = stdout.lines().flat_map(|line| adapter.parse_stream_line(line)).any(|item| {
+            matches!(item, StreamItem::ToolResult { ok: true, content, .. } if content.contains("relay-ok"))
+        });
+        assert!(ran, "the command never ran after the answer.\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        let _ = std::fs::remove_dir_all(&runs_dir);
     }
 
     #[test]
