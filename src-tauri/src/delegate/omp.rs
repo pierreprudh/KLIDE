@@ -2,8 +2,10 @@ use super::runs::{
     cap_messages, clean_title, extract_user_text, mtime_ms, project_name, tool_file_path,
     transcript_status, AgentRun, RunMessage, RunToolCall, TranscriptState,
 };
+use super::chat_stream::{result_text, StreamItem};
 use super::cli_commands::{CliCommands, SlashProbe};
-use super::{shell_quote, Delegate, Env, RunCandidate, RunParser};
+use super::{shell_quote, ChatSpec, Delegate, Env, RunCandidate, RunParser};
+use serde_json::Value;
 use std::collections::HashSet;
 
 /// Oh My Pi (`omp`) — a terminal coding agent with IDE-grade tooling (LSP,
@@ -79,6 +81,106 @@ impl Delegate for Omp {
         }
         args.extend(["--auto-approve".into(), "--mode".into(), "text".into()]);
         Ok(args)
+    }
+
+    /// `--mode json` reports the turn as one event object per line (the same
+    /// stream its `rpc` mode speaks): the `session` it opened, each message's
+    /// deltas, and every tool execution with its result. `--resume=<id>`
+    /// continues a saved session — written as one token because the flag's
+    /// value is optional (bare `--resume` opens a picker), so a separate
+    /// argument could be read as the prompt.
+    fn chat_stream_args(&self, _cwd: &str, spec: &ChatSpec) -> Option<Vec<String>> {
+        let mut args: Vec<String> = vec!["-p".into()];
+        if !spec.model.is_empty() {
+            args.extend(["--model".into(), spec.model.into()]);
+        }
+        args.extend(["--auto-approve".into(), "--mode".into(), "json".into()]);
+        if let Some(session) = spec.resume.map(str::trim).filter(|s| !s.is_empty()) {
+            args.push(format!("--resume={session}"));
+        }
+        Some(args)
+    }
+
+    /// `omp -p --resume=<id>` continues the named session.
+    fn resumes_sessions(&self) -> bool {
+        true
+    }
+
+    /// omp's dialect is pi-mono's agent stream: a `session` line names the
+    /// session; text arrives as `message_update` events carrying a
+    /// `text_delta`, then once more whole in the assistant's `message_end`
+    /// (which the runner ignores after deltas); a tool runs between
+    /// `tool_execution_start` and `tool_execution_end`, the latter carrying
+    /// the result and `isError`. An assistant message that stopped on an
+    /// error names it in `errorMessage`.
+    fn parse_stream_line(&self, line: &str) -> Vec<StreamItem> {
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return Vec::new();
+        };
+        let text_of = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("").to_string();
+        match value.get("type").and_then(Value::as_str) {
+            Some("session") => value
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| vec![StreamItem::Session(id.to_string())])
+                .unwrap_or_default(),
+            Some("message_update") => {
+                let event = value.get("assistantMessageEvent");
+                if event.and_then(|e| e.get("type")).and_then(Value::as_str) != Some("text_delta") {
+                    return Vec::new();
+                }
+                let delta = text_of(event.and_then(|e| e.get("delta")));
+                if delta.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![StreamItem::TextDelta(delta)]
+                }
+            }
+            Some("message_end") => {
+                let Some(message) = value.get("message") else { return Vec::new() };
+                if message.get("role").and_then(Value::as_str) != Some("assistant") {
+                    return Vec::new();
+                }
+                let mut items: Vec<StreamItem> = message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                            .map(|b| text_of(b.get("text")))
+                            .filter(|t| !t.trim().is_empty())
+                            .map(StreamItem::Text)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if message.get("stopReason").and_then(Value::as_str) == Some("error") {
+                    let error = text_of(message.get("errorMessage"));
+                    items.push(StreamItem::Error(if error.is_empty() {
+                        "Oh My Pi reported an error".to_string()
+                    } else {
+                        error
+                    }));
+                }
+                items
+            }
+            Some("tool_execution_start") => vec![StreamItem::ToolCall {
+                id: text_of(value.get("toolCallId")),
+                name: value.get("toolName").and_then(Value::as_str).unwrap_or("tool").to_string(),
+                input: value.get("args").cloned().unwrap_or(Value::Null),
+            }],
+            Some("tool_execution_end") => vec![StreamItem::ToolResult {
+                id: text_of(value.get("toolCallId")),
+                ok: !value.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                content: result_text(value.get("result").and_then(|r| r.get("content").or(Some(r)))),
+            }],
+            Some("agent_end") => vec![StreamItem::Finished { cost_usd: None, turns: None }],
+            _ => Vec::new(),
+        }
     }
 
     /// omp's RPC mode answers `get_available_commands` with every command
@@ -443,6 +545,71 @@ fn message_text(message: &serde_json::Value) -> Option<(String, Vec<RunToolCall>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Captured from a real `omp -p --mode json` turn (omp 15.13.3), trimmed of
+    // the repeated `partial` message bodies. The delta shape is pi-ai's
+    // `AssistantMessageEvent` (`types.d.ts`).
+    const SESSION: &str = r#"{"type":"session","version":3,"id":"01a0fd2f-6316-7000-841d-c50e96321b5e","timestamp":"2026-10-02T15:15:36.342Z","cwd":"/ws"}"#;
+    const DELTA: &str = r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hel","partial":{"role":"assistant","content":[{"type":"text","text":"Hel"}]}}}"#;
+    const TOOL_DELTA: &str = r#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"{\"command\":\"echo hi\"}","partial":{"role":"assistant","content":[]}}}"#;
+    const ASSISTANT_END: &str = r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Hello"}],"api":"openai-responses","provider":"ollama","model":"m","stopReason":"stop"}}"#;
+    const ASSISTANT_FAILED: &str = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"401 Unauthorized"}}"#;
+    const TOOL_START: &str = r#"{"type":"tool_execution_start","toolCallId":"call_ptrtfe72|fc_109156_0","toolName":"bash","args":{"command":"echo hello-probe"}}"#;
+    const TOOL_END: &str = r#"{"type":"tool_execution_end","toolCallId":"call_ptrtfe72|fc_109156_0","toolName":"bash","result":{"content":[{"type":"text","text":"hello-probe\n"}],"details":{}},"isError":false}"#;
+    const TOOL_FAILED: &str = r#"{"type":"tool_execution_end","toolCallId":"c2","toolName":"run_command","result":{"content":[{"type":"text","text":"Tool run_command not found"}],"details":{}},"isError":true}"#;
+
+    #[test]
+    fn stream_args_ask_for_json_and_resume_in_one_token() {
+        let cold = ChatSpec { model: "sonnet", effort: None, resume: None, mcp: None, allowed_commands: &[] };
+        assert_eq!(Omp.chat_stream_args("/ws", &cold).unwrap(), ["-p", "--model", "sonnet", "--auto-approve", "--mode", "json"]);
+        let warm = ChatSpec { model: "", effort: None, resume: Some("01a0fd2f"), mcp: None, allowed_commands: &[] };
+        let args = Omp.chat_stream_args("/ws", &warm).unwrap();
+        // A bare `--resume` opens a picker, so the id must not be a separate argument.
+        assert_eq!(args.last().map(String::as_str), Some("--resume=01a0fd2f"));
+        assert!(Omp.resumes_sessions());
+    }
+
+    #[test]
+    fn session_deltas_and_whole_text_are_read() {
+        assert_eq!(Omp.parse_stream_line(SESSION), vec![StreamItem::Session("01a0fd2f-6316-7000-841d-c50e96321b5e".into())]);
+        assert_eq!(Omp.parse_stream_line(DELTA), vec![StreamItem::TextDelta("Hel".into())]);
+        // Tool-call argument deltas are not prose.
+        assert!(Omp.parse_stream_line(TOOL_DELTA).is_empty());
+        // Thinking blocks stay out; the runner drops this Text after deltas.
+        assert_eq!(Omp.parse_stream_line(ASSISTANT_END), vec![StreamItem::Text("Hello".into())]);
+        assert_eq!(Omp.parse_stream_line(ASSISTANT_FAILED), vec![StreamItem::Error("401 Unauthorized".into())]);
+    }
+
+    #[test]
+    fn a_tool_execution_is_a_call_then_a_result() {
+        assert_eq!(
+            Omp.parse_stream_line(TOOL_START),
+            vec![StreamItem::ToolCall { id: "call_ptrtfe72|fc_109156_0".into(), name: "bash".into(), input: serde_json::json!({"command": "echo hello-probe"}) }]
+        );
+        assert_eq!(
+            Omp.parse_stream_line(TOOL_END),
+            vec![StreamItem::ToolResult { id: "call_ptrtfe72|fc_109156_0".into(), ok: true, content: "hello-probe\n".into() }]
+        );
+        assert_eq!(
+            Omp.parse_stream_line(TOOL_FAILED),
+            vec![StreamItem::ToolResult { id: "c2".into(), ok: false, content: "Tool run_command not found".into() }]
+        );
+    }
+
+    #[test]
+    fn lines_omp_owns_but_klide_has_no_row_for_yield_nothing() {
+        for line in [
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"turn_start"}"#,
+            r#"{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            r#"{"type":"message_end","message":{"role":"toolResult","toolCallId":"c","content":[]}}"#,
+            "not json",
+            "",
+        ] {
+            assert!(Omp.parse_stream_line(line).is_empty(), "{line}");
+        }
+        assert_eq!(Omp.parse_stream_line(r#"{"type":"agent_end","messages":[]}"#), vec![StreamItem::Finished { cost_usd: None, turns: None }]);
+    }
 
     fn temp_home(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("klide-delegate-test-omp-{name}"));

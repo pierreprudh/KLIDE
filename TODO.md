@@ -322,8 +322,10 @@ Three fixes landed (`6c28a74`, `2e49d0a`, `adbcbf4`):
   `--allowedTools` fix cannot be triggered. The closer is to surface a *blocked
   delegate command* as an approval card writing to the same store this already
   reads. Small, and it is what makes that commit reachable.
-- [ ] Codex and omp still have no `parse_stream_line`, so Focus shows their
-  prose with no tool rows. Claude Code and OpenCode have one.
+- [x] Codex and omp have a `parse_stream_line` (2026-10-02): `codex exec
+  --json` and `omp --mode json`, each resuming its own session, so Focus shows
+  their tool rows like Claude Code's and OpenCode's. Fixtures are from the real
+  CLIs; a live in-app pass with a funded Codex account is still owed.
 - [ ] Approvals are granted upfront for a turn rather than asked per call. The
   per-call answer is Claude Code's `can_use_tool` control protocol (the "VS Code
   extension design" idea in `Ideas.md` #8), not a widening of this flag.
