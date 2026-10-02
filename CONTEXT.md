@@ -226,6 +226,20 @@ between fresh, restored, resumed, and branched Conversations; it is not itself
 a Run, because one Conversation session may be idle between Runs.
 _Avoid_: chat state, thread state, panel globals
 
+**Run controller**:
+The AI panel's one owner of the turn queue, the live Run attachment and the
+gate table for a Conversation session (`src/components/ai/runController.ts`).
+A sent turn queues and drains one at a time behind whatever Run is already in
+the thread; a Run is followed through its channel or, after a remount, the
+reattach broadcast; and everything a Run parks on — a diff, a permission, a
+question — sits in one table, so leaving the conversation for any reason
+(new chat, another thread, a deletion, an unmount, a Stop) takes one recipe
+and clears all of them. It is a plain module with no React in it: AiPanel
+renders the view it publishes and hands back the answers to its cards. It
+does not build a turn's request or decide what follows a turn — the panel
+supplies those as functions the controller calls at the moment it acts.
+_Avoid_: queue refs, panel globals, run loop (that is the Harness)
+
 **Project Memory**:
 Reviewed, Workspace-scoped knowledge that survives Runs: decisions,
 conventions, facts, failures, patterns, and handoffs. One entry is a versioned
