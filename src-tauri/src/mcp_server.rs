@@ -75,12 +75,29 @@ impl HttpBridge {
     }
 }
 
+/// How long one call may wait. A coordination wait is bounded by the bridge
+/// (two minutes, plus headroom); a permission prompt waits for a person, who
+/// may be away from the desk, so it gets the hour Claude Code is told to allow
+/// (`MCP_TOOL_TIMEOUT`, set on the CLI's wiring).
+pub(crate) fn call_timeout(request: &BridgeRequest) -> std::time::Duration {
+    match request {
+        BridgeRequest::Permission { .. } => std::time::Duration::from_secs(PERMISSION_WAIT_SECONDS),
+        _ => std::time::Duration::from_secs(crate::coordination_bridge::MAX_WAIT_SECONDS + 15),
+    }
+}
+
+/// One hour: the longest a relayed permission prompt is held open.
+pub const PERMISSION_WAIT_SECONDS: u64 = 60 * 60;
+
 impl Bridge for HttpBridge {
     fn call(&self, request: &BridgeRequest) -> Result<BridgeResponse, String> {
         // Resolved per call and never cached: Klide may have restarted since
         // the last one and be listening on a different port with a new token.
         let endpoint = read_endpoint(&self.endpoint_path)?;
-        let mut post = self.client.post(bridge_url(&endpoint, &self.session_id));
+        let mut post = self
+            .client
+            .post(bridge_url(&endpoint, &self.session_id))
+            .timeout(call_timeout(request));
         // Read per call too. A missing file still calls: the bridge's refusal
         // says what to do, which is more use to the model than a dead server.
         if let Some(secret) = self
@@ -105,6 +122,21 @@ impl Bridge for HttpBridge {
 pub fn tool_list() -> Value {
     json!([
         crate::missions::orchestration::tool(),
+        {
+            "name": crate::agent::permission_relay::TOOL,
+            "description": "Klide answers this CLI's permission prompts. Claude Code calls it through --permission-prompt-tool for every action its own rules did not already allow; the operator sees the same card Klide shows for its own shell commands and answers once, for this run, or for this project. Not for the model to call.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tool_name": { "type": "string", "description": "The tool awaiting permission (Bash, WebFetch, …)." },
+                    "input": { "type": "object", "description": "That tool's input as the model proposed it." },
+                    "tool_use_id": { "type": "string" },
+                    "permission_suggestions": { "type": "array", "items": {} }
+                },
+                "required": ["tool_name", "input"],
+                "additionalProperties": true
+            }
+        },
         {
             "name": "agent_list",
             "description": "List the other agents working on this project right now — Klide Harness Runs and Delegate CLI sessions alike — with their Run id, state, whether they are live, and a label. Use the runId with agent_send.",
@@ -187,6 +219,11 @@ pub fn bridge_request_for(name: &str, args: &Value) -> Result<BridgeRequest, Str
             request: serde_json::from_value(args.clone()).map_err(|e| format!("Invalid Mission request: {e}"))?,
         }),
         "agent_list" => Ok(BridgeRequest::List),
+        "permission" => Ok(BridgeRequest::Permission {
+            tool_name: str_arg(args, "tool_name").ok_or("permission requires tool_name.")?,
+            input: args.get("input").cloned().unwrap_or(Value::Object(Default::default())),
+            tool_use_id: str_arg(args, "tool_use_id"),
+        }),
         "agent_send" => Ok(BridgeRequest::Send {
             to_run_id: str_arg(args, "toRunId").ok_or("agent_send requires toRunId.")?,
             body: str_arg(args, "body").ok_or("agent_send requires body.")?,
@@ -480,9 +517,12 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
+        // `permission` is the one tool here the model is not meant to call:
+        // it is Claude Code's permission-prompt wire, listed because the CLI
+        // looks the prompt tool up on tools/list like any other.
         assert_eq!(
             names,
-            ["mission_orchestrate", "agent_list", "agent_send", "agent_wait", "agent_read_result", "agent_publish_result"]
+            ["mission_orchestrate", "permission", "agent_list", "agent_send", "agent_wait", "agent_read_result", "agent_publish_result"]
         );
     }
 
@@ -499,6 +539,32 @@ mod tests {
         assert!(bridge_request_for("mission_orchestrate", &json!({"action":"dispatch","missionId":"m1","taskId":"t1","workspaceRoot":"/other"})).is_err());
         let schema = &tool_list()[0]["outputSchema"];
         assert_eq!(schema["title"], "Klide Mission orchestration receipt");
+    }
+
+    #[test]
+    fn claude_codes_permission_prompt_is_one_bridge_request_answered_as_text() {
+        // The CLI's `--permission-prompt-tool` wire: tool_name + input in, one
+        // text block holding the decision JSON out.
+        assert!(tool_list().as_array().unwrap().iter().any(|t| t["name"] == crate::agent::permission_relay::TOOL));
+        let bridge = FakeBridge::replying(json!({ "text": "{\"behavior\":\"allow\",\"updatedInput\":{\"command\":\"gh pr list\"}}" }));
+        let reply = handle_message(
+            &json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"permission","arguments":{"tool_name":"Bash","input":{"command":"gh pr list"},"tool_use_id":"toolu_1","permission_suggestions":[]}}}),
+            &bridge,
+        )
+        .unwrap();
+        assert_eq!(
+            bridge.calls.lock().unwrap()[0],
+            BridgeRequest::Permission { tool_name: "Bash".into(), input: json!({"command":"gh pr list"}), tool_use_id: Some("toolu_1".into()) }
+        );
+        let content = &reply["result"]["content"];
+        assert_eq!(content.as_array().unwrap().len(), 1);
+        assert_eq!(content[0]["type"], "text");
+        let decision: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(decision["behavior"], "allow");
+        assert_eq!(reply["result"]["isError"], false);
+        // A prompt waits for a person, not for the two-minute coordination wait.
+        assert_eq!(call_timeout(&BridgeRequest::Permission { tool_name: "Bash".into(), input: json!({}), tool_use_id: None }).as_secs(), PERMISSION_WAIT_SECONDS);
+        assert_eq!(call_timeout(&BridgeRequest::List).as_secs(), crate::coordination_bridge::MAX_WAIT_SECONDS + 15);
     }
 
     #[test]
@@ -682,7 +748,7 @@ mod chain {
         // What a CLI asks before it will call anything.
         let listed =
             handle_message(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &bridge).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 7);
 
         // agent_list sees the Harness peer under its thread title, and itself.
         let reply = handle_message(
@@ -962,6 +1028,7 @@ mod chain {
                 restarted_workspace.store.clone(),
                 BridgeHooks {
                     orchestrate: None,
+                    permission: None,
                     on_change: Box::new(|_, _| {}),
                     is_live: Box::new(|_| false),
                     // What pty.rs reads back from the session's spawn record.

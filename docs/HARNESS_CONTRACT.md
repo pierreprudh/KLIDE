@@ -156,6 +156,21 @@ request carries the rung. A Mission attempt or a child Run has no conversation
 rung to follow: `agent_set_command_policy` refuses it, and it keeps what its
 request said at start.
 
+A Delegate's own prompt can reach the same card. A headless Claude Code turn
+(a Focus conversation on that provider) runs with `--permission-prompt-tool`
+naming the `permission` tool on Klide's embedded MCP server; every action the
+CLI's own rules did not already allow becomes a call to that tool, which the
+bridge binds to the conversation's Run and raises as a `PermissionRequested`
+on it — the same card, the same `agent_resolve_permission`, the same scopes.
+`project` writes `.klide/command-allowlist.json`, which the next headless turn
+also carries as `--allowedTools`. The answer is relayed; the CLI then runs the
+call itself under its own sandbox, and the call stays an `ObservedToolCall`.
+The relay reads the Run's state the Harness gate would: the full-auto policy
+answers a command without a card (recorded `via: "full_auto"`), a command
+approved for the run or rejected this run is answered without asking again, and
+a project rule matches even when the flag could not carry it. Only a shell
+command (`Bash`) has the project scope; any other prompt is a plain question.
+
 A worker dispatch has its own gate and its own rule. Without a `worker`,
 `spawn_subagent` may name only read-only roles and the child runs on the
 parent's provider under the parent's tool rules; an editing role with no worker

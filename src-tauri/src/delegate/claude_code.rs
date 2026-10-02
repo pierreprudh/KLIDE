@@ -203,6 +203,16 @@ impl Delegate for ClaudeCode {
         // over the approvals the project already granted in Klide, which is
         // narrower than the alternative of dropping the permission mode.
         args.extend(allowed_tools_args(spec.allowed_commands, spec.mcp.is_some()));
+        // Everything those approvals do not cover used to be refused outright,
+        // because `-p` has nobody to ask. With Klide's server wired in, Claude
+        // Code asks *it*: the prompt lands on the operator's card through the
+        // bridge (`agent/permission_relay.rs`) and the answer comes back per call.
+        if spec.mcp.is_some() {
+            args.extend([
+                "--permission-prompt-tool".to_string(),
+                format!("mcp__klide__{}", crate::agent::permission_relay::TOOL),
+            ]);
+        }
         Some(args)
     }
 
@@ -210,6 +220,20 @@ impl Delegate for ClaudeCode {
     /// the newest message.
     fn resumes_sessions(&self) -> bool {
         true
+    }
+
+    /// A relayed permission prompt waits for a person. Claude Code's per-call
+    /// MCP timeout is a hard wall-clock limit, so the headless turn is told to
+    /// wait as long as the bridge holds the prompt open. Headless only: the
+    /// TUI answers its own prompts and keeps its own timeout.
+    fn chat_stream_env(&self, spec: &ChatSpec) -> Vec<(String, String)> {
+        if spec.mcp.is_none() {
+            return Vec::new();
+        }
+        vec![(
+            "MCP_TOOL_TIMEOUT".to_string(),
+            (crate::mcp_server::PERMISSION_WAIT_SECONDS * 1000).to_string(),
+        )]
     }
 
     /// `init` lists `slash_commands`, and `claude -p "/cost"` answers the
@@ -1209,6 +1233,29 @@ mod tests {
         // No server wired, no MCP grant.
         let args = ClaudeCode.chat_stream_args("/tmp/ws", &spec("", None, &[])).unwrap();
         assert!(!args.contains(&"mcp__klide".to_string()));
+    }
+
+    #[test]
+    fn with_klide_wired_in_claude_code_asks_klide_for_permission() {
+        // Nobody can answer a `-p` prompt in a terminal; with the server wired
+        // in, the prompt is routed to Klide's `permission` tool — and the CLI is
+        // told to wait for a person on that call, not its default MCP timeout.
+        let wiring = McpWiring::default();
+        let spec_mcp = ChatSpec { effort: None, model: "", resume: None, mcp: Some(&wiring), allowed_commands: &[] };
+        let args = ClaudeCode.chat_stream_args("/tmp/ws", &spec_mcp).unwrap();
+        let at = args.iter().position(|a| a == "--permission-prompt-tool").expect("flag");
+        assert_eq!(args[at + 1], "mcp__klide__permission");
+        // Without the server there is no tool to name.
+        let args = ClaudeCode.chat_stream_args("/tmp/ws", &spec("", None, &[])).unwrap();
+        assert!(!args.contains(&"--permission-prompt-tool".to_string()));
+        // The wait lives on the headless invocation's env, never on the
+        // wiring a PTY launch inherits.
+        assert_eq!(ClaudeCode.chat_stream_env(&spec_mcp), [("MCP_TOOL_TIMEOUT".to_string(), "3600000".to_string())]);
+        assert!(ClaudeCode.chat_stream_env(&spec("", None, &[])).is_empty());
+        let wiring = ClaudeCode
+            .mcp_wiring(&McpServerSpec { command: "klide".into(), args: vec![], endpoint_path: "/tmp/ep.json".into(), session_id: "c:claude-code".into(), secret_path: "/tmp/s.secret".into(), config_dir: "/tmp".into(), file_stem: "s".into() })
+            .unwrap();
+        assert!(wiring.env.is_empty());
     }
 
     #[test]

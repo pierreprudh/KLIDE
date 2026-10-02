@@ -316,19 +316,21 @@ Three fixes landed (`6c28a74`, `2e49d0a`, `adbcbf4`):
   so a headless turn may run what the user already approved. Verified: `gh pr
   list` was refused before, runs after.
 
-- [ ] **Parked gap** — nothing on the delegate path writes the command
-  allowlist; only an inline approval during a Klide Harness run does. A project
-  that has only ever used delegates therefore has an empty allowlist, and the
-  `--allowedTools` fix cannot be triggered. The closer is to surface a *blocked
-  delegate command* as an approval card writing to the same store this already
-  reads. Small, and it is what makes that commit reachable.
+- [x] A delegate command now writes the command allowlist (2026-10-02, Claude
+  Code): its permission prompt is relayed to the same card the Harness shows,
+  and "for this project" writes the store the next turn reads. Still parked for
+  Codex: a `declined` command is visible as a failed row but raises no card,
+  because Codex has no prompt hook in `exec` — that one needs the post-hoc
+  "allow and continue" card.
 - [x] Codex and omp have a `parse_stream_line` (2026-10-02): `codex exec
   --json` and `omp --mode json`, each resuming its own session, so Focus shows
   their tool rows like Claude Code's and OpenCode's. Fixtures are from the real
   CLIs; a live in-app pass with a funded Codex account is still owed.
-- [ ] Approvals are granted upfront for a turn rather than asked per call. The
-  per-call answer is Claude Code's `can_use_tool` control protocol (the "VS Code
-  extension design" idea in `Ideas.md` #8), not a widening of this flag.
+- [x] Approvals are asked per call for Claude Code (2026-10-02): the headless
+  turn names `mcp__klide__permission` as its `--permission-prompt-tool`, the
+  bridge binds the prompt to the Run, and the operator answers on the Harness
+  card (`agent/permission_relay.rs`). Codex and OpenCode stay upfront
+  (`--auto` / `workspace-write`); a live in-app pass is owed.
 - [x] A mode change made mid-conversation (Chat → Goal) reaches a resumed
   session (2026-10-02): the runner fingerprints the system block per session
   and, when it changed, says it again ahead of the message. Not through

@@ -15,6 +15,7 @@
 mod chat;
 mod chat_server;
 mod chat_stream;
+pub(crate) use chat_stream::summarize_call;
 mod cli_commands;
 mod claude_code;
 mod codex;
@@ -429,8 +430,16 @@ pub trait Delegate: Sync {
                 command.args(&mcp.args);
                 command.envs(mcp.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             }
+            command.envs(self.chat_stream_env(spec));
             command
         }))
+    }
+
+    /// Environment a *headless* structured turn needs and a PTY launch must
+    /// not inherit — the per-call MCP timeout that lets a relayed permission
+    /// prompt wait for a person, say. Empty by default.
+    fn chat_stream_env(&self, _spec: &ChatSpec) -> Vec<(String, String)> {
+        Vec::new()
     }
 
     // ── Run listing (Mission Control) ────────────────────────────────────
