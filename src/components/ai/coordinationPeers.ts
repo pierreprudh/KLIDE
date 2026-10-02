@@ -25,6 +25,10 @@ import { createListenerScope } from "../../tauriEvents";
 import type { Conversation, Msg } from "./types";
 import { CONVERSATIONS_CHANGED_EVENT, loadConversations } from "./storedConversations";
 
+/** The five native coordination Tools a Harness transcript can carry. Mirrors
+ *  `TOOL_NAMES` in src-tauri/src/coordination/ops.rs, the one schema source
+ *  for both doors; `agent_publish_result` is MCP-only and never appears in a
+ *  Harness transcript. */
 export const COORDINATION_TOOL_NAMES = new Set([
   "agent_list",
   "agent_send",
@@ -181,7 +185,12 @@ export function latestCoordinationPeer(msgs: Msg[]): string | null {
 /** Messages addressed to this Run that it has not yet taken in: awaiting the
  *  user's review, accepted for the next turn, or delivered during a turn that
  *  has not finished. Acknowledged ones are in the transcript as a received
- *  row; declined ones are over. Oldest first. */
+ *  row; declined ones are over. Oldest first.
+ *
+ *  Deliberately wider than the Rust `inbox_for` (what the model is handed:
+ *  accepted | delivered): this is the panel's view, and it also shows the
+ *  queued mail `awaiting_review_for` returns, because the review card lives
+ *  here. It is the union of those two Rust filters, not a third rule. */
 export function pendingInboxFor(snapshot: CoordinationSnapshot, selfId: string): CoordinationEnvelopeSnapshot[] {
   return snapshot.envelopes
     .filter((entry) =>

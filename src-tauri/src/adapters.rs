@@ -337,6 +337,13 @@ impl StreamingProvider for OllamaAdapter {
     }
 }
 
+/// The flat working window `working_num_ctx` starts from. Below this we don't
+/// bother shrinking — the saving isn't worth the reloads/truncation. The
+/// renderer predicts the same number before a turn has reported one
+/// (`WORKING_WINDOW_DEFAULT` in src/components/ai/contextWindow.ts);
+/// `frontend_working_window_default_matches` keeps the two equal.
+pub(crate) const WORKING_DEFAULT: usize = 32_768;
+
 /// A comfortable, flat working window for num_ctx.
 ///
 /// Background: Ollama allocates the KV cache at model-load time, sized to
@@ -358,9 +365,6 @@ fn working_num_ctx(
     tools: Option<&Vec<serde_json::Value>>,
     ceiling: usize,
 ) -> usize {
-    // A flat default big enough for real coding conversations. Below this we
-    // don't bother shrinking — the saving isn't worth the reloads/truncation.
-    const WORKING_DEFAULT: usize = 32_768;
     // ~4 chars per token is the usual rough estimate. Count BOTH the messages
     // and the tool schemas — the schemas are sent separately from `messages`
     // but still occupy the prompt. Omitting them under-sizes the window, Ollama
@@ -1361,6 +1365,32 @@ mod tests {
     //! fixture strings recorded from real provider responses, so we don't
     //! need network access to lock the behaviour in.
     use super::*;
+
+    #[test]
+    fn frontend_working_window_default_matches() {
+        // The renderer predicts the working window before a turn reports one;
+        // the number it predicts with is this constant. Same seam as
+        // `routing::tests::frontend_auto_sentinel_matches`.
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../src/components/ai/contextWindow.ts"),
+        )
+        .expect("read src/components/ai/contextWindow.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const WORKING_WINDOW_DEFAULT ="))
+            .expect("WORKING_WINDOW_DEFAULT in contextWindow.ts");
+        let value: usize = line
+            .split('=')
+            .nth(1)
+            .expect("a value")
+            .trim()
+            .trim_end_matches(';')
+            .replace('_', "")
+            .parse()
+            .expect("a numeric literal");
+        assert_eq!(value, WORKING_DEFAULT, "WORKING_WINDOW_DEFAULT drifted: ts={line}");
+    }
 
     #[test]
     fn anthropic_forwards_a_user_image_as_a_base64_block() {

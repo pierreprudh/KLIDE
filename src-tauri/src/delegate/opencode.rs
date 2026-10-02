@@ -4,7 +4,7 @@ use super::runs::{
 };
 use super::cli_commands::{CliCommands, SlashProbe};
 use super::chat_stream::{result_text, StreamItem};
-use super::{shell_quote, AgentRun, ChatSpec, Delegate, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
+use super::{shell_quote, AgentRun, ChatSpec, Delegate, Env, McpServerSpec, McpWiring, RunCandidate, RunMessage, RunParser};
 use std::collections::{HashMap, HashSet};
 
 /// OpenCode — the SST CLI. The quirkiest of the three:
@@ -38,10 +38,60 @@ impl Delegate for OpenCode {
         "opencode"
     }
 
+    fn label(&self) -> &'static str {
+        "OpenCode"
+    }
+
+    /// `$XDG_CONFIG_HOME/opencode`, or `~/.config/opencode`.
+    fn config_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        super::home::xdg(env, "XDG_CONFIG_HOME", ".config", "opencode")
+    }
+
+    /// `$XDG_DATA_HOME/opencode`, or `~/.local/share/opencode` — and, when
+    /// that does not exist yet, the `~/Library/Application Support/opencode`
+    /// an older macOS install left behind. One answer for the session DB
+    /// and the login files alike: the run board and the account switcher
+    /// used to resolve this separately and could look at different installs.
+    fn data_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        let xdg = super::home::xdg(env, "XDG_DATA_HOME", ".local/share", "opencode")?;
+        if env.var("XDG_DATA_HOME").is_some() || xdg.exists() {
+            return Some(xdg);
+        }
+        let Some(home) = super::home_dir(env) else { return Some(xdg) };
+        let apple = home.join("Library/Application Support/opencode");
+        Some(if apple.exists() { apple } else { xdg })
+    }
+
+    /// `opencode.json` — the user's MCP servers, read by connector discovery.
+    fn config_file(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("opencode.json"))
+    }
+
+    /// `auth.json` (provider credentials) then `account.json` (the active
+    /// opencode-go account and its label).
+    fn auth_files(&self, env: &dyn Env) -> Vec<std::path::PathBuf> {
+        self.data_home(env)
+            .map(|d| vec![d.join("auth.json"), d.join("account.json")])
+            .unwrap_or_default()
+    }
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    /// Keys are session ids looked up in the DB, not files.
+    fn run_key_is_path(&self) -> bool {
+        false
+    }
+
     /// OpenCode loads JS plugins — Klide drops a status plugin into
     /// `~/.config/opencode/plugin/` (see status.rs).
-    fn ensure_status_hooks(&self, home: &str) -> Result<bool, String> {
-        super::status::install_opencode_hooks(home)
+    fn ensure_status_hooks(&self, env: &dyn Env) -> Result<bool, String> {
+        let plugins = self
+            .config_home(env)
+            .ok_or_else(|| "Could not resolve home directory".to_string())?
+            .join("plugin");
+        super::status::install_opencode_hooks(&plugins)
     }
 
     fn spawn_prefix(&self, has_task: bool, resuming: bool) -> String {
@@ -194,6 +244,7 @@ impl Delegate for OpenCode {
         };
         let part = value.get("part");
         match value.get("type").and_then(|v| v.as_str()) {
+            Some("error") => vec![StreamItem::Error(opencode_error(value.get("error")))],
             Some("text") => {
                 let Some(part) = part else { return Vec::new() };
                 let text = part.get("text").and_then(|v| v.as_str()).unwrap_or_default();
@@ -304,17 +355,18 @@ impl Delegate for OpenCode {
         None
     }
 
-    /// OpenCode has no Klide-facing login command — auth is configured inside
-    /// the TUI itself. Launching it is the only "login" action we can offer.
+    /// `opencode auth login` stores a provider credential in `auth.json`;
+    /// the TUI's own `/connect` writes the same file.
     fn login_commands(&self) -> Vec<String> {
-        vec!["opencode".to_string()]
+        vec!["opencode auth login".to_string()]
     }
 
+    /// OpenCode has no status command, so this reads the same `auth.json`
+    /// the account switcher snapshots: a saved credential means logged in.
+    /// Keys from the shell environment still work without one — the detail
+    /// says so rather than calling that state broken.
     fn check_auth(&self, _command_path: &str) -> Result<(bool, String), String> {
-        Ok((
-            true,
-            "OpenCode CLI is installed; authentication is handled by OpenCode.".to_string(),
-        ))
+        Ok(auth_state(&self.auth_files(&super::ProcessEnv)))
     }
 
     fn install_paths(&self, home: &str) -> Vec<String> {
@@ -338,9 +390,9 @@ impl Delegate for OpenCode {
     /// `time_updated` (not the DB file's mtime — they diverge while the WAL
     /// is being flushed). The key holds the session id, not a file path; the
     /// parser reads it back as an id and looks the row up in the DB.
-    fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
+    fn discover_runs(&self, env: &dyn Env) -> Vec<RunCandidate> {
         let mut out = Vec::new();
-        if let Some(conn) = connect(home) {
+        if let Some(conn) = self.connect(env) {
             if let Ok(mut stmt) = conn.prepare("SELECT id, time_updated FROM session") {
                 if let Ok(rows) = stmt.query_map([], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -361,10 +413,10 @@ impl Delegate for OpenCode {
     /// clause rather than a per-candidate probe. The trailing-slash tolerance
     /// matches `normalize_path`; sessions with a NULL directory are kept, since
     /// the contract says an unknown workspace must not exclude a candidate.
-    fn discover_runs_for_workspace(&self, home: &str, workspace_root: &str) -> Vec<RunCandidate> {
+    fn discover_runs_for_workspace(&self, env: &dyn Env, workspace_root: &str) -> Vec<RunCandidate> {
         let want = crate::delegate::normalize_path(workspace_root);
         let mut out = Vec::new();
-        if let Some(conn) = connect(home) {
+        if let Some(conn) = self.connect(env) {
             if let Ok(mut stmt) = conn.prepare(
                 "SELECT id, time_updated FROM session \
                  WHERE directory IS NULL OR rtrim(directory, '/') = ?1",
@@ -386,15 +438,16 @@ impl Delegate for OpenCode {
 
     /// The connection is opened once per page — opening the SQLite file for
     /// every candidate would dominate the page time.
-    fn run_parser(&self, home: &str) -> Box<dyn RunParser> {
+    fn run_parser(&self, env: &dyn Env) -> Box<dyn RunParser> {
         Box::new(OpenCodeRunParser {
-            conn: connect(home),
+            conn: self.connect(env),
         })
     }
 
-    fn read_run(&self, home: &str, key: &str) -> Result<Vec<RunMessage>, String> {
-        let conn =
-            connect(home).ok_or_else(|| "OpenCode session database is unavailable".to_string())?;
+    fn read_run(&self, env: &dyn Env, key: &str) -> Result<Vec<RunMessage>, String> {
+        let conn = self
+            .connect(env)
+            .ok_or_else(|| "OpenCode session database is unavailable".to_string())?;
 
         let mut msg_stmt = conn
             .prepare(
@@ -460,20 +513,46 @@ impl Delegate for OpenCode {
     }
 }
 
-// On macOS opencode 1.15 stores its DB at ~/.local/share/opencode/opencode.db
-// (XDG-style). Older installs on Apple use ~/Library/Application Support.
-// We try the XDG path first, then fall back to the Apple path so both work.
-fn db_path(home: &str) -> Option<std::path::PathBuf> {
-    let candidates = [
-        std::path::Path::new(home).join(".local/share/opencode/opencode.db"),
-        std::path::Path::new(home).join("Library/Application Support/opencode/opencode.db"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+impl OpenCode {
+    /// `opencode.db` in the data dir (see `data_home` for the macOS fallback).
+    fn db_path(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.data_home(env)
+            .map(|d| d.join("opencode.db"))
+            .filter(|p| p.exists())
+    }
+
+    fn connect(&self, env: &dyn Env) -> Option<rusqlite::Connection> {
+        let path = self.db_path(env)?;
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+    }
 }
 
-fn connect(home: &str) -> Option<rusqlite::Connection> {
-    let path = db_path(home)?;
-    rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+/// Logged in when `auth.json` (the first auth file) names at least one
+/// provider credential. Pure over the paths so a fixture can stand in for
+/// a real login.
+fn auth_state(auth_files: &[std::path::PathBuf]) -> (bool, String) {
+    let Some(auth) = auth_files.first() else {
+        return (false, "Could not resolve OpenCode's data directory.".to_string());
+    };
+    let providers = std::fs::read(auth)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|v| v.as_object().map(|o| o.len()))
+        .unwrap_or(0);
+    if providers > 0 {
+        (
+            true,
+            format!(
+                "Logged in — {providers} provider credential{} saved by OpenCode.",
+                if providers == 1 { "" } else { "s" }
+            ),
+        )
+    } else {
+        (
+            false,
+            "No saved login yet; keys from your shell environment still work.".to_string(),
+        )
+    }
 }
 
 // The `model` column on `session` is JSON: {"id":"minimax-m3","providerID":"opencode-go"}.
@@ -572,13 +651,23 @@ impl super::chat_server::ChatServer for OpenCodeServer {
             return Vec::new();
         }
         // Everything else must belong to this turn's session.
-        if self.session.is_none() || str_at(&props, "sessionID") != self.session {
+        let event_session = str_at(&props, "sessionID")
+            .or_else(|| props.get("info").and_then(|info| str_at(info, "sessionID")))
+            .or_else(|| props.get("part").and_then(|part| str_at(part, "sessionID")));
+        if self.session.is_none() || event_session != self.session {
             return Vec::new();
         }
         match kind {
+            "session.error" => {
+                self.settled = true;
+                vec![StreamItem::Error(opencode_error(props.get("error")))]
+            }
             "message.updated" => {
                 let info = props.get("info").cloned().unwrap_or_default();
                 if str_at(&info, "role").as_deref() == Some("assistant") {
+                    if let Some(error) = info.get("error").filter(|e| !e.is_null()) {
+                        return vec![StreamItem::Error(opencode_error(Some(error)))];
+                    }
                     if let Some(id) = str_at(&info, "id") {
                         self.assistant_messages.insert(id);
                     }
@@ -648,6 +737,14 @@ impl super::chat_server::ChatServer for OpenCodeServer {
     fn settled(&self) -> bool {
         self.settled
     }
+}
+
+fn opencode_error(error: Option<&serde_json::Value>) -> String {
+    error.and_then(|e| e.pointer("/data/message").or_else(|| e.get("message")).or(Some(e)))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("OpenCode reported a provider error without details")
+        .to_string()
 }
 
 struct OpenCodeRunParser {
@@ -775,7 +872,7 @@ fn parse_run(conn: &rusqlite::Connection, session_id: &str) -> Option<AgentRun> 
     })()
     .unwrap_or(0);
 
-    let cost_usd = crate::pricing::cost_for_run(
+    let cost_usd = crate::pricing::list_price_cost(
         model_raw.as_deref().unwrap_or(""),
         input_tokens,
         output_tokens,
@@ -1104,7 +1201,7 @@ mod tests {
     fn discovers_sessions_with_their_own_timestamps() {
         let home = temp_home("discover");
         seed_db(&home);
-        let found = OpenCode.discover_runs(home.to_str().unwrap());
+        let found = OpenCode.discover_runs(&crate::delegate::home::test_env(&home));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].key, "oss-1");
         assert_eq!(found[0].mtime_ms, 2000);
@@ -1114,7 +1211,7 @@ mod tests {
     fn parses_a_session_row() {
         let home = temp_home("parse");
         seed_db(&home);
-        let parser = OpenCode.run_parser(home.to_str().unwrap());
+        let parser = OpenCode.run_parser(&crate::delegate::home::test_env(&home));
         let run = parser.parse("oss-1").unwrap();
         assert_eq!(run.source, "opencode");
         assert_eq!(run.title, "Fix the bug");
@@ -1148,7 +1245,7 @@ mod tests {
             .as_millis() as i64;
         conn.execute("UPDATE session SET time_updated = ?1 WHERE id = 'oss-1'", [now])
             .unwrap();
-        let parser = OpenCode.run_parser(home.to_str().unwrap());
+        let parser = OpenCode.run_parser(&crate::delegate::home::test_env(&home));
         assert_eq!(parser.parse("oss-1").unwrap().status, "running");
     }
 
@@ -1164,7 +1261,7 @@ mod tests {
         )
         .unwrap();
 
-        let parser = OpenCode.run_parser(home.to_str().unwrap());
+        let parser = OpenCode.run_parser(&crate::delegate::home::test_env(&home));
         assert_eq!(
             parser.parse("oss-1").unwrap().status,
             "done",
@@ -1176,7 +1273,7 @@ mod tests {
     fn read_run_assembles_parts_per_message() {
         let home = temp_home("read");
         seed_db(&home);
-        let msgs = OpenCode.read_run(home.to_str().unwrap(), "oss-1").unwrap();
+        let msgs = OpenCode.read_run(&crate::delegate::home::test_env(&home), "oss-1").unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].text, "please fix");
         assert_eq!(msgs[1].text, "done");
@@ -1220,7 +1317,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let parser = OpenCode.run_parser(home.to_str().unwrap());
+        let parser = OpenCode.run_parser(&crate::delegate::home::test_env(&home));
         let run = parser.parse("oss-1").unwrap();
         assert_eq!(run.files_touched, 2, "dedupe + skip grep");
     }
@@ -1228,10 +1325,10 @@ mod tests {
     #[test]
     fn missing_db_yields_no_candidates_and_no_parse() {
         let home = temp_home("missing");
-        assert!(OpenCode.discover_runs(home.to_str().unwrap()).is_empty());
-        let parser = OpenCode.run_parser(home.to_str().unwrap());
+        assert!(OpenCode.discover_runs(&crate::delegate::home::test_env(&home)).is_empty());
+        let parser = OpenCode.run_parser(&crate::delegate::home::test_env(&home));
         assert!(parser.parse("oss-1").is_none());
-        assert!(OpenCode.read_run(home.to_str().unwrap(), "oss-1").is_err());
+        assert!(OpenCode.read_run(&crate::delegate::home::test_env(&home), "oss-1").is_err());
     }
 
     // The shapes below are trimmed from a real `opencode serve` /event stream
@@ -1290,5 +1387,17 @@ mod tests {
         assert_eq!(got, vec![StreamItem::TextPart { id: "p".into(), text: "again".into() }]);
         assert_eq!(server.listening_url("opencode server listening on http://127.0.0.1:4096"), Some("http://127.0.0.1:4096".into()));
         assert_eq!(server.listening_url("listening on http://0.0.0.0:4096"), None);
+    }
+
+    #[test]
+    fn provider_errors_survive_stdout_and_server_streams() {
+        use super::super::chat_server::ChatServer;
+        let error = serde_json::json!({"name":"APIError","data":{"message":"This Go model requires Global regions.","isRetryable":false}});
+        let expected = vec![StreamItem::Error("This Go model requires Global regions.".into())];
+        assert_eq!(OpenCode.parse_stream_line(&serde_json::json!({"type":"error","error":error}).to_string()), expected);
+        let mut server = OpenCodeServer::new(Some("ses_A"));
+        assert!(server.feed(&serde_json::json!({"type":"session.error","properties":{"sessionID":"ses_other","error":error}}).to_string()).is_empty());
+        assert_eq!(server.feed(&serde_json::json!({"type":"session.error","properties":{"sessionID":"ses_A","error":error}}).to_string()), expected);
+        assert_eq!(server.feed(&serde_json::json!({"type":"message.updated","properties":{"info":{"sessionID":"ses_A","id":"m","role":"assistant","error":error}}}).to_string()), expected);
     }
 }

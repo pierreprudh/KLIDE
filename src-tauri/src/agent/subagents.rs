@@ -164,7 +164,7 @@ impl Worker {
         match self {
             Worker::Delegate(d) => crate::providers::lookup(d.id())
                 .and_then(|p| p.subscription)
-                .map(|s| s.label.to_string())
+                .map(|s| s.label().to_string())
                 .unwrap_or_else(|| d.id().to_string()),
             Worker::Api(p) => api_provider_label(p.id).to_string(),
         }

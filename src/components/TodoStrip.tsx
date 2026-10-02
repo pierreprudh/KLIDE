@@ -201,7 +201,7 @@ function GoalLine({ goal, size }: { goal: string; size: number }) {
 // a thin arc sweeping around that number, a finished step closes to a check.
 // Numbers instead of hollow circles — type over shape, and "3" already tells
 // you where in the plan you are.
-const MARK = 14;
+const MARK = 16;
 // The header ends in two 18px icon boxes (collapse, hide). Rows end in the same
 // width so their chevron sits under the header's, and the figures on every row
 // stop at the same x as the header count — one right edge for the whole strip.
@@ -231,9 +231,66 @@ export type TodoStripSlot = "card" | "mark" | "none";
  *  left while the island is up (AiPanel), so the two never overlap. */
 export const ISLAND_WIDTH = 320;
 
+// Where a figure's ink actually sits. A line box centres the font's ascent +
+// descent, not the digit, and every mono face puts its figures somewhere
+// different inside that box — so the mark measures the glyph on a canvas once
+// per (font, text) and places the baseline where the ink's centre lands on
+// the ring's centre. Offsets are in em; re-measured once the webfont lands.
+type FigureInk = { dx: number; dy: number };
+const INK_ZERO: FigureInk = { dx: 0, dy: 0 };
+const inkMemo = new Map<string, FigureInk>();
+let inkCanvas: CanvasRenderingContext2D | null | undefined;
+function measureFigureInk(text: string): FigureInk {
+  if (typeof document === "undefined") return INK_ZERO;
+  const family = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
+  const key = `${family}|${text}`;
+  const hit = inkMemo.get(key);
+  if (hit) return hit;
+  if (inkCanvas === undefined) inkCanvas = document.createElement("canvas").getContext?.("2d") ?? null;
+  if (!inkCanvas) return INK_ZERO;
+  const ctx = inkCanvas;
+  const SIZE = 100;
+  ctx.font = `400 ${SIZE}px ${family}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  const m = ctx.measureText(text);
+  if (m.actualBoundingBoxAscent === undefined) return INK_ZERO;
+  const ink: FigureInk = {
+    // ink centre relative to the advance centre, rightwards
+    dx: (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2 / SIZE,
+    // ink centre above the baseline
+    dy: (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 / SIZE,
+  };
+  inkMemo.set(key, ink);
+  return ink;
+}
+function useFigureInk(text: string): FigureInk {
+  const [ink, setInk] = useState(() => measureFigureInk(text));
+  useEffect(() => {
+    let live = true;
+    setInk(measureFigureInk(text));
+    // The first measure may have hit the fallback face; measure again once
+    // the bundled font is in.
+    document.fonts?.ready.then(() => {
+      if (!live) return;
+      inkMemo.clear();
+      setInk(measureFigureInk(text));
+    });
+    return () => {
+      live = false;
+    };
+  }, [text]);
+  return ink;
+}
+
 export function StepMark({ index, state }: { index: number; state: "todo" | "active" | "done" }) {
-  const r = (MARK - 1.5) / 2;
-  const c = 2 * Math.PI * r;
+  // A whole-pixel radius keeps the 1px track on the pixel grid: 7 at 16px puts
+  // the hairline on 6.5–7.5, one crisp ring at 1x and a clean pair at 2x.
+  const r = MARK / 2 - 1;
+  const active = state === "active";
+  const ring = (cls: string) => (
+    <circle className={cls} cx={MARK / 2} cy={MARK / 2} r={r} fill="none" pathLength={100} strokeLinecap="round" />
+  );
   return (
     <span
       className="klide-todo-mark"
@@ -248,42 +305,50 @@ export function StepMark({ index, state }: { index: number; state: "todo" | "act
         boxSizing: "border-box",
         // opaque so the thread breaks cleanly at each node
         background: state === "done" ? "var(--accent)" : "var(--bg-elevated)",
-        color: state === "done" ? "var(--bg-elevated)" : state === "active" ? "var(--fg-strong)" : "var(--fg-dim)",
-        fontFamily: "var(--font-mono)",
-        fontSize: 9,
-        fontWeight: 600,
-        lineHeight: 1,
-        fontVariantNumeric: "tabular-nums",
+        color: state === "done" ? "var(--bg-elevated)" : active ? "var(--fg-strong)" : "var(--fg-dim)",
       }}
     >
       {state !== "done" && (
-        <svg width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "absolute", inset: 0 }}>
-          <circle
-            cx={MARK / 2}
-            cy={MARK / 2}
-            r={r}
-            fill="none"
-            stroke={state === "active" ? "var(--border)" : "color-mix(in srgb, var(--fg-dim) 45%, transparent)"}
-            strokeWidth={state === "active" ? 1.5 : 1}
-          />
+        // The track. On the working step it fades almost out (todoStrip.css)
+        // so the arc is the only stroke with weight — a track and an arc of
+        // equal weight is a gauge, and this isn't measuring anything.
+        <svg className="klide-todo-track" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "absolute", inset: 0 }}>
+          <circle cx={MARK / 2} cy={MARK / 2} r={r} fill="none" strokeWidth={1} />
         </svg>
       )}
-      {state === "active" && (
+      {active && (
+        // A comet, not a bean: a faint tail under a short bright head, both
+        // hairline, breathing as they turn. Dash lengths are percentages of
+        // the path (pathLength=100) so the stylesheet owns the motion.
         <svg className="klide-todo-ring" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden>
-          <circle
-            cx={MARK / 2}
-            cy={MARK / 2}
-            r={r}
-            fill="none"
-            stroke="var(--accent)"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeDasharray={`${c * 0.3} ${c * 0.7}`}
-          />
+          {ring("klide-todo-ring-tail")}
+          {ring("klide-todo-ring-head")}
         </svg>
       )}
-      {state === "done" ? <CheckIcon /> : <span style={{ position: "relative" }}>{index + 1}</span>}
+      {state === "done" ? <CheckIcon /> : <Figure n={index + 1} />}
     </span>
+  );
+}
+
+const FIGURE_SIZE = 10;
+function Figure({ n }: { n: number }) {
+  const text = String(n);
+  const ink = useFigureInk(text);
+  return (
+    <svg className="klide-todo-figure" width={MARK} height={MARK} viewBox={`0 0 ${MARK} ${MARK}`} aria-hidden style={{ position: "relative" }}>
+      <text
+        x={MARK / 2 - ink.dx * FIGURE_SIZE}
+        y={MARK / 2 + ink.dy * FIGURE_SIZE}
+        textAnchor="middle"
+        fill="currentColor"
+        fontFamily="var(--font-mono)"
+        fontSize={FIGURE_SIZE}
+        fontWeight={400}
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        {text}
+      </text>
+    </svg>
   );
 }
 
@@ -418,7 +483,7 @@ function TodoRow({
           padding: 0,
         }}
       >
-        <span style={{ display: "grid", marginTop: roomy ? 8 : 0 }}>
+        <span style={{ display: "grid", marginTop: roomy ? 7 : 0 }}>
           <StepMark index={index} state={state} />
         </span>
         <span

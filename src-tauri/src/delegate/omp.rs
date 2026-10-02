@@ -3,7 +3,7 @@ use super::runs::{
     transcript_status, AgentRun, RunMessage, RunToolCall, TranscriptState,
 };
 use super::cli_commands::{CliCommands, SlashProbe};
-use super::{shell_quote, Delegate, RunCandidate, RunParser};
+use super::{shell_quote, Delegate, Env, RunCandidate, RunParser};
 use std::collections::HashSet;
 
 /// Oh My Pi (`omp`) — a terminal coding agent with IDE-grade tooling (LSP,
@@ -23,6 +23,31 @@ impl Delegate for Omp {
 
     fn binary(&self) -> &'static str {
         "omp"
+    }
+
+    fn label(&self) -> &'static str {
+        "Oh My Pi"
+    }
+
+    /// `~/.omp` — omp publishes no override variable Klide knows of.
+    fn config_home(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        super::home_dir(env).map(|h| h.join(".omp"))
+    }
+
+    fn sessions_dir(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("agent").join("sessions"))
+    }
+
+    /// `agent/models.db` — the providers omp could actually reach.
+    fn models_cache(&self, env: &dyn Env) -> Option<std::path::PathBuf> {
+        self.config_home(env).map(|d| d.join("agent").join("models.db"))
+    }
+
+    /// omp resolves provider keys from the shell environment: there is no
+    /// file and no keychain item that switching could swap, so the account
+    /// switcher has nothing to offer here (see accounts.rs).
+    fn supports_accounts(&self) -> bool {
+        false
     }
 
     fn model_arg(&self, model: &str) -> String {
@@ -97,9 +122,11 @@ impl Delegate for Omp {
         Some("@oh-my-pi/pi-coding-agent")
     }
 
-    fn discover_runs(&self, home: &str) -> Vec<RunCandidate> {
+    fn discover_runs(&self, env: &dyn Env) -> Vec<RunCandidate> {
         let mut out = Vec::new();
-        let root = std::path::Path::new(home).join(".omp/agent/sessions");
+        let Some(root) = self.sessions_dir(env) else {
+            return out;
+        };
         if let Ok(projects) = std::fs::read_dir(&root) {
             for proj in projects.flatten() {
                 if !proj.path().is_dir() {
@@ -121,11 +148,11 @@ impl Delegate for Omp {
         out
     }
 
-    fn run_parser(&self, _home: &str) -> Box<dyn RunParser> {
+    fn run_parser(&self, _env: &dyn Env) -> Box<dyn RunParser> {
         Box::new(OmpRunParser)
     }
 
-    fn read_run(&self, _home: &str, key: &str) -> Result<Vec<RunMessage>, String> {
+    fn read_run(&self, _env: &dyn Env, key: &str) -> Result<Vec<RunMessage>, String> {
         let content = std::fs::read_to_string(key).map_err(|e| e.to_string())?;
         let mut msgs: Vec<RunMessage> = Vec::new();
         for line in content.lines() {
@@ -302,7 +329,7 @@ fn parse_run(path: &std::path::Path) -> Option<AgentRun> {
     let cost_usd = if cost_sum > 0.0 {
         Some(cost_sum)
     } else {
-        crate::pricing::cost_for_run(model.as_deref().unwrap_or(""), input_tokens, output_tokens)
+        crate::pricing::list_price_cost(model.as_deref().unwrap_or(""), input_tokens, output_tokens)
     };
     Some(AgentRun {
         status: transcript_status(updated_ms, transcript_state),
@@ -522,7 +549,7 @@ mod tests {
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(proj.join("a.jsonl"), FIXTURE).unwrap();
         std::fs::write(proj.join("session.json"), "x").unwrap();
-        let found = Omp.discover_runs(home.to_str().unwrap());
+        let found = Omp.discover_runs(&crate::delegate::home::test_env(&home));
         assert_eq!(found.len(), 1);
         assert!(found[0].key.ends_with("a.jsonl"));
     }
@@ -532,7 +559,7 @@ mod tests {
         let home = temp_home("read");
         let p = home.join("s.jsonl");
         std::fs::write(&p, FIXTURE).unwrap();
-        let msgs = Omp.read_run("", p.to_str().unwrap()).unwrap();
+        let msgs = Omp.read_run(&crate::delegate::ProcessEnv, p.to_str().unwrap()).unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[0].text, "fix the login bug");

@@ -22,6 +22,15 @@
 //! - `subscription` — the CLI delegate spec, if any. Carries the
 //!   per-CLI command builder and model cache as function pointers, since
 //!   each CLI has its own argument shape.
+//!
+//! The row is the whole provider. Everything the renderer needs to *show* a
+//! provider — its label, its group, its default model and presets, the env
+//! var its key may come from, the brand key its logo hangs on, the run-loop
+//! quirks (`ProviderCaps`) — is a field here too, and it reaches TypeScript
+//! over one seam: `catalog()` is what `ai_list_providers` returns, and the
+//! `provider_catalog_mirror_is_current` test writes the same rows into
+//! `src/agent/providerCatalog.generated.ts` so the picker has them at first
+//! paint without a round trip. TS reads that mirror; it never restates a fact.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -88,7 +97,77 @@ pub enum KeySource {
     Hosted {
         env: Option<&'static str>,
         env_legacy: Option<&'static str>,
+        /// The shape of a key from this provider, shown in the empty key
+        /// field ("sk-ant-..."). A hint, never validated.
+        placeholder: &'static str,
     },
+}
+
+/// Which picker group a provider belongs to. Published to the renderer as a
+/// lowercase word; the picker groups rows by it and never re-derives it from
+/// the key source or the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderGroup {
+    /// Runs on this machine — a server Klide manages (Ollama, MLX) or one the
+    /// user runs (LM Studio). No key.
+    Local,
+    /// A hosted API behind a key.
+    Hosted,
+    /// A CLI agent on the user's subscription, driven behind the Delegate seam.
+    Subscription,
+}
+
+/// Which balance endpoint a hosted provider exposes, if any. `models.rs`
+/// matches on this — exhaustively, so a new source is a compile error there,
+/// not a silent `Ok(None)`. Published as the boolean `hasCredits`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditsSource {
+    None,
+    /// `GET /api/v1/credits` → `{ data: { total_credits, total_usage } }`.
+    OpenRouter,
+    /// `GET /user/balance` → `{ balance_infos: [{ total_balance, .. }] }`.
+    DeepSeek,
+}
+
+/// The handful of provider quirks the run loop's behaviour depends on, on the
+/// row so the loop asks about a capability instead of comparing provider
+/// names inline. Add a quirk here rather than threading another
+/// `provider == "..."` branch through the loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCaps {
+    /// Replay continuation history as structured tool messages (assistant
+    /// `tool_calls` + `role:"tool"`). Ollama's native `/api/chat` is the lone
+    /// exception: the structured shape makes those models imitate fake tool
+    /// text, so it gets the text-fold workaround instead. Every OpenAI-wire
+    /// provider (including Ollama over `/v1`) gets the faithful structured replay.
+    pub structured_replay: bool,
+    /// Keep Chat-mode context minimal — skip injecting the project TODO list,
+    /// and let the renderer send its bare chat prompt. Small local backends
+    /// (MLX, Ollama) made a bare "hello" feel broken when handed project
+    /// metadata, so their chat turns stay tiny.
+    pub minimal_chat_context: bool,
+    /// MLX prefix caches can reuse history only up to the first changed token.
+    /// Keep old TODO snapshots stable and append changes for this provider.
+    pub append_todo_updates: bool,
+}
+
+impl ProviderCaps {
+    /// Hosted-API posture: faithful structured replay, full chat context.
+    /// What a custom (`custom:*`) endpoint gets, since every one of those is
+    /// OpenAI-wire, and what an unknown id falls back to.
+    pub const HOSTED: ProviderCaps = ProviderCaps {
+        structured_replay: true,
+        minimal_chat_context: false,
+        append_todo_updates: false,
+    };
+
+    /// The quirks for a provider id: the row's `caps`, or `HOSTED` for an id
+    /// the registry doesn't hold (custom endpoints, stale ids).
+    pub fn for_provider(provider: &str) -> Self {
+        lookup(provider).map(|entry| entry.caps).unwrap_or(Self::HOSTED)
+    }
 }
 
 /// How a provider's models are listed. Mirrors the 4 cases the old
@@ -114,16 +193,28 @@ pub enum ModelsHandler {
 /// (`src/delegate/`), one adapter per CLI.
 #[derive(Clone, Copy)]
 pub struct SubscriptionSpec {
-    /// Binary name as resolved by `resolve_command` (PATH + common
-    /// install locations).
-    pub cmd: &'static str,
-    /// Human-readable label for run output ("Claude Code", "Codex").
-    pub label: &'static str,
+    /// The Delegate adapter this row is the model-side of. Its binary and
+    /// label are read from here rather than restated, so a CLI's name has
+    /// one spelling.
+    pub delegate: &'static dyn crate::delegate::Delegate,
     /// Static fallback list when the CLI's cache file is absent.
     pub default_models: &'static [&'static str],
     /// Read the CLI's on-disk model cache. Returns None if the file
     /// isn't there yet.
     pub cached_models: fn() -> Option<Vec<String>>,
+}
+
+impl SubscriptionSpec {
+    /// Binary name as resolved by `resolve_command` (PATH + common
+    /// install locations).
+    pub fn cmd(&self) -> &'static str {
+        self.delegate.binary()
+    }
+
+    /// Human-readable label for run output ("Claude Code", "Codex").
+    pub fn label(&self) -> &'static str {
+        self.delegate.label()
+    }
 }
 
 /// One row of the registry. The whole provider lives here.
@@ -132,10 +223,36 @@ pub struct ProviderEntry {
     /// The provider id used in Tauri commands and the frontend's
     /// `ProviderId`. Must be unique within `PROVIDERS`.
     pub id: &'static str,
+    /// The name the picker shows ("MLX (Apple Silicon)", "xAI Grok").
+    pub label: &'static str,
+    /// The name for a dense row — a board cell, a subtitle — when `label` is
+    /// deliberately fuller. `None` means `label` serves both.
+    pub short_label: Option<&'static str>,
+    pub group: ProviderGroup,
     pub wire: WireFormat,
     pub key: KeySource,
     pub models: ModelsHandler,
     pub subscription: Option<SubscriptionSpec>,
+    /// The model Klide reaches for first on this provider. `None` on a
+    /// subscription row: the CLI's own default wins (`delegate::CLI_DEFAULT_MODEL`).
+    pub default_model: Option<&'static str>,
+    /// Models offered in the picker before they are installed or listed —
+    /// MLX's curated list, Klide's own Ollama fine-tune. Empty for most.
+    pub presets: &'static [&'static str],
+    /// A stable key the renderer maps to a logo + colour (`src/components/ai/
+    /// icons.tsx` owns the drawing). Usually the id; two providers may share
+    /// one brand.
+    pub brand: &'static str,
+    /// Whether the provider exposes a prepaid balance Klide can read.
+    pub credits: CreditsSource,
+    /// A localhost server Klide itself starts, stops and reaps
+    /// (`local_servers.rs`). LM Studio is local but not this.
+    pub is_local_server: bool,
+    /// Whether a request may size its own context window (`num_ctx`). Only
+    /// Ollama; a hosted API's window is a property of the model.
+    pub has_num_ctx: bool,
+    /// The run-loop quirks. See `ProviderCaps`.
+    pub caps: ProviderCaps,
     /// The provider's fixed context window, when every model it serves shares
     /// one (Claude Code = 200k, Codex = 272k, MLX = 128k). `None` when the
     /// window is model-dependent or discovered at runtime (hosted APIs,
@@ -144,20 +261,44 @@ pub struct ProviderEntry {
     pub context_window: Option<usize>,
 }
 
+/// The default `ProviderCaps` for a hosted or user-run endpoint. Rows spell
+/// the local exceptions out.
+const HOSTED_CAPS: ProviderCaps = ProviderCaps::HOSTED;
+const NO_PRESETS: &[&str] = &[];
+
 /// The registry. One row per provider. Order is "local first, then hosted
 /// API, then subscription CLIs" — purely cosmetic, `lookup` scans.
 pub const PROVIDERS: &[ProviderEntry] = &[
     // ── Local: no key, no subscription ──────────────────────────────────
     ProviderEntry {
         id: "ollama",
+        label: "Ollama",
+        short_label: None,
+        group: ProviderGroup::Local,
         wire: WireFormat::Ollama,
         key: KeySource::Local,
         models: ModelsHandler::OllamaTags,
         subscription: None,
+        default_model: Some(OLLAMA_DEFAULT_MODEL),
+        presets: OLLAMA_MODEL_PRESETS,
+        brand: "ollama",
+        credits: CreditsSource::None,
+        is_local_server: true,
+        has_num_ctx: true,
+        caps: ProviderCaps {
+            // Native `/api/chat` imitates fake tool text under a structured
+            // replay — the one text-fold provider.
+            structured_replay: false,
+            minimal_chat_context: true,
+            append_todo_updates: false,
+        },
         context_window: None,
     },
     ProviderEntry {
         id: "mlx",
+        label: "MLX (Apple Silicon)",
+        short_label: Some("MLX"),
+        group: ProviderGroup::Local,
         // MLX speaks the OpenAI wire (mlx_lm.server exposes
         // /v1/chat/completions). Modern mlx_lm.server parses tool calls for
         // models with a tool template (Qwen3, Llama-3.1) and returns proper
@@ -178,6 +319,18 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         // an explicit configured value instead of polling the server.
         models: ModelsHandler::StaticPresets(MLX_MODEL_PRESETS),
         subscription: None,
+        default_model: Some(MLX_DEFAULT_MODEL),
+        presets: MLX_MODEL_PRESETS,
+        brand: "mlx",
+        credits: CreditsSource::None,
+        is_local_server: true,
+        has_num_ctx: false,
+        caps: ProviderCaps {
+            structured_replay: true,
+            minimal_chat_context: true,
+            // Prefix caches reuse history up to the first changed token.
+            append_todo_updates: true,
+        },
         context_window: Some(128_000),
     },
     // LM Studio is a one-row affair now. Previously it would have meant
@@ -186,6 +339,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
     // is inherited.
     ProviderEntry {
         id: "lmstudio",
+        label: "LM Studio",
+        short_label: None,
+        group: ProviderGroup::Local,
         wire: WireFormat::OpenAi(OpenAiConfig {
             chat_url: "http://127.0.0.1:1234/v1/chat/completions",
             models_url: "http://127.0.0.1:1234/v1/models",
@@ -200,22 +356,43 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Local,
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        default_model: Some("local-model"),
+        presets: NO_PRESETS,
+        brand: "lmstudio",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     // ── Hosted APIs: key required ──────────────────────────────────────
     ProviderEntry {
         id: "anthropic",
+        label: "Anthropic",
+        short_label: None,
+        group: ProviderGroup::Hosted,
         wire: WireFormat::Anthropic,
         key: KeySource::Hosted {
             env: Some("ANTHROPIC_API_KEY"),
             env_legacy: None,
+            placeholder: "sk-ant-...",
         },
         models: ModelsHandler::AnthropicModels,
         subscription: None,
+        default_model: Some("claude-sonnet-4-6"),
+        presets: NO_PRESETS,
+        brand: "anthropic",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     ProviderEntry {
         id: "openai",
+        label: "OpenAI",
+        short_label: None,
+        group: ProviderGroup::Hosted,
         wire: WireFormat::OpenAi(OpenAiConfig {
             chat_url: "https://api.openai.com/v1/chat/completions",
             models_url: "https://api.openai.com/v1/models",
@@ -228,13 +405,24 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Hosted {
             env: Some("OPENAI_API_KEY"),
             env_legacy: None,
+            placeholder: "sk-...",
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        default_model: Some("gpt-4.1"),
+        presets: NO_PRESETS,
+        brand: "openai",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     ProviderEntry {
         id: "mistral",
+        label: "Mistral",
+        short_label: None,
+        group: ProviderGroup::Hosted,
         // Mistral rides the OpenAI wire — was implicit before (it was
         // just "the openai-compatible fallback"). Now it's the explicit
         // wire format on this row, and a comment so the next reader
@@ -254,13 +442,24 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Hosted {
             env: Some("MISTRAL_API_KEY"),
             env_legacy: None,
+            placeholder: "...",
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        default_model: Some("mistral-large-latest"),
+        presets: NO_PRESETS,
+        brand: "mistral",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     ProviderEntry {
         id: "xai",
+        label: "xAI Grok",
+        short_label: Some("xAI"),
+        group: ProviderGroup::Hosted,
         wire: WireFormat::OpenAi(OpenAiConfig {
             chat_url: "https://api.x.ai/v1/chat/completions",
             models_url: "https://api.x.ai/v1/models",
@@ -274,13 +473,24 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             env: Some("XAI_API_KEY"),
             // Legacy alias — older setups used GROK_API_KEY.
             env_legacy: Some("GROK_API_KEY"),
+            placeholder: "xai-...",
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        default_model: Some("grok-4"),
+        presets: NO_PRESETS,
+        brand: "xai",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     ProviderEntry {
         id: "deepseek",
+        label: "DeepSeek",
+        short_label: None,
+        group: ProviderGroup::Hosted,
         // DeepSeek's platform is OpenAI-wire (`/v1/chat/completions`, function
         // calling, `stream_options.include_usage`). `deepseek-reasoner` streams
         // its chain-of-thought in `reasoning_content`, which the shared OpenAI
@@ -299,13 +509,24 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Hosted {
             env: Some("DEEPSEEK_API_KEY"),
             env_legacy: None,
+            placeholder: "sk-...",
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        default_model: Some("deepseek-chat"),
+        presets: NO_PRESETS,
+        brand: "deepseek",
+        credits: CreditsSource::DeepSeek,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     ProviderEntry {
         id: "openrouter",
+        label: "OpenRouter",
+        short_label: None,
+        group: ProviderGroup::Hosted,
         wire: WireFormat::OpenAi(OpenAiConfig {
             chat_url: "https://openrouter.ai/api/v1/chat/completions",
             models_url: "https://openrouter.ai/api/v1/models",
@@ -322,9 +543,17 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         key: KeySource::Hosted {
             env: Some("OPENROUTER_API_KEY"),
             env_legacy: None,
+            placeholder: "sk-or-...",
         },
         models: ModelsHandler::OpenAiModels,
         subscription: None,
+        default_model: Some("openai/gpt-4o"),
+        presets: NO_PRESETS,
+        brand: "openrouter",
+        credits: CreditsSource::OpenRouter,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     // ── Subscription CLIs: PTY / stdio delegates ──────────────────────
@@ -334,41 +563,68 @@ pub const PROVIDERS: &[ProviderEntry] = &[
     // only field that matters for these rows.
     ProviderEntry {
         id: "claude-code",
+        label: "Claude Code",
+        short_label: None,
+        group: ProviderGroup::Subscription,
         wire: WireFormat::Ollama, // placeholder, never reached
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "claude",
-            label: "Claude Code",
+            delegate: &crate::delegate::ClaudeCode,
             default_models: &["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
             cached_models: crate::models::claude_cached_models,
         }),
+        default_model: None,
+        presets: NO_PRESETS,
+        brand: "claude-code",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: Some(200_000),
     },
     ProviderEntry {
         id: "codex",
+        label: "Codex",
+        short_label: None,
+        group: ProviderGroup::Subscription,
         wire: WireFormat::Ollama, // placeholder, never reached
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "codex",
-            label: "Codex",
+            delegate: &crate::delegate::Codex,
             default_models: &["gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini"],
             cached_models: crate::models::codex_cached_models,
         }),
+        default_model: None,
+        presets: NO_PRESETS,
+        brand: "codex",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: Some(272_000),
     },
     ProviderEntry {
         id: "opencode",
+        label: "OpenCode",
+        short_label: None,
+        group: ProviderGroup::Subscription,
         wire: WireFormat::Ollama, // placeholder, never reached
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "opencode",
-            label: "OpenCode",
+            delegate: &crate::delegate::OpenCode,
             default_models: &["opencode"],
             cached_models: crate::models::opencode_cached_models,
         }),
+        default_model: None,
+        presets: NO_PRESETS,
+        brand: "opencode",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
     // Oh My Pi routes to 40+ providers itself; keys come from the user's
@@ -378,12 +634,14 @@ pub const PROVIDERS: &[ProviderEntry] = &[
     // and "openai/gpt-5.2" alike.
     ProviderEntry {
         id: "omp",
+        label: "Oh My Pi",
+        short_label: None,
+        group: ProviderGroup::Subscription,
         wire: WireFormat::Ollama, // placeholder, never reached
         key: KeySource::Local,
         models: ModelsHandler::Subscription,
         subscription: Some(SubscriptionSpec {
-            cmd: "omp",
-            label: "Oh My Pi",
+            delegate: &crate::delegate::Omp,
             default_models: &[
                 "claude-sonnet-4-6",
                 "claude-opus-4-6",
@@ -392,6 +650,13 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             ],
             cached_models: crate::models::omp_cached_models,
         }),
+        default_model: None,
+        presets: NO_PRESETS,
+        brand: "omp",
+        credits: CreditsSource::None,
+        is_local_server: false,
+        has_num_ctx: false,
+        caps: HOSTED_CAPS,
         context_window: None,
     },
 ];
@@ -412,6 +677,120 @@ pub fn is_subscription(id: &str) -> bool {
         .unwrap_or(false)
 }
 
+// ── The published catalog ──────────────────────────────────────────────
+//
+// One row of `PROVIDERS` as the renderer reads it. Plain data: no function
+// pointers, no URLs the renderer has no business dialing, no key material.
+// `ai_list_providers` returns `Vec<ProviderRow>`, and the mirror test writes
+// the same JSON into `src/agent/providerCatalog.generated.ts` so TypeScript
+// has the rows synchronously at first paint. Add a field here when the
+// renderer needs a new fact; never restate one over there.
+
+/// The wire a row speaks, as a word. `delegate` for subscription CLIs, whose
+/// `wire` field is a placeholder the dispatcher never reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WireName {
+    Ollama,
+    Anthropic,
+    OpenAi,
+    Delegate,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRow {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub short_label: Option<&'static str>,
+    pub group: ProviderGroup,
+    pub wire: WireName,
+    /// The env var a hosted key may come from; `None` for local/subscription.
+    pub key_env: Option<&'static str>,
+    pub key_env_legacy: Option<&'static str>,
+    pub key_placeholder: Option<&'static str>,
+    pub default_model: Option<&'static str>,
+    pub presets: &'static [&'static str],
+    pub brand: &'static str,
+    pub has_credits: bool,
+    pub is_local_server: bool,
+    pub has_num_ctx: bool,
+    pub caps: ProviderCaps,
+    pub context_window: Option<usize>,
+}
+
+impl ProviderRow {
+    pub fn from_entry(entry: &ProviderEntry) -> Self {
+        let (key_env, key_env_legacy, key_placeholder) = match entry.key {
+            KeySource::Hosted {
+                env,
+                env_legacy,
+                placeholder,
+            } => (env, env_legacy, Some(placeholder)),
+            KeySource::Local => (None, None, None),
+        };
+        let wire = if entry.subscription.is_some() {
+            WireName::Delegate
+        } else {
+            match entry.wire {
+                WireFormat::Ollama => WireName::Ollama,
+                WireFormat::Anthropic => WireName::Anthropic,
+                WireFormat::OpenAi(_) => WireName::OpenAi,
+            }
+        };
+        ProviderRow {
+            id: entry.id,
+            label: entry.subscription.map(|spec| spec.label()).unwrap_or(entry.label),
+            short_label: entry.short_label,
+            group: entry.group,
+            wire,
+            key_env,
+            key_env_legacy,
+            key_placeholder,
+            default_model: entry.default_model,
+            presets: entry.presets,
+            brand: entry.brand,
+            has_credits: entry.credits != CreditsSource::None,
+            is_local_server: entry.is_local_server,
+            has_num_ctx: entry.has_num_ctx,
+            caps: entry.caps,
+            context_window: entry.context_window,
+        }
+    }
+}
+
+/// Every registry row, in registry order, as the renderer reads it.
+pub fn catalog() -> Vec<ProviderRow> {
+    PROVIDERS.iter().map(ProviderRow::from_entry).collect()
+}
+
+/// The one seam through which the registry reaches the renderer. A pure
+/// table read — sync is fine (see `SYNC_COMMANDS` in lib.rs).
+#[tauri::command]
+pub(crate) fn ai_list_providers() -> Vec<ProviderRow> {
+    catalog()
+}
+
+/// The TypeScript mirror of `catalog()`, byte for byte what
+/// `provider_catalog_mirror_is_current` expects on disk. A `.ts` rather than
+/// a `.json` so the rows are `as const`: the renderer's `ProviderId` union is
+/// then *derived* from the ids here instead of hand-kept beside them.
+#[cfg(test)]
+pub(crate) fn catalog_mirror_source() -> String {
+    let json = serde_json::to_string_pretty(&catalog()).expect("catalog serializes");
+    format!(
+        "// GENERATED by `providers::catalog_mirror_source` in src-tauri/src/providers.rs.\n\
+         // Do not edit: change the registry row and run\n\
+         //   KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_is_current\n\
+         // The `provider_catalog_mirror_is_current` test fails the build when\n\
+         // this file and the Rust registry disagree.\n\
+         //\n\
+         // Each row is one `ProviderEntry`, exactly as `ai_list_providers` returns\n\
+         // it. See src/agent/providerCatalog.ts for the typed accessors.\n\
+         export const PROVIDER_ROWS = {json} as const;\n"
+    )
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderKeyStatus {
@@ -425,7 +804,7 @@ pub struct ProviderKeyStatus {
 /// the env-var name otherwise. Used by `env_fallback` below.
 fn env_fallback_names(entry: &ProviderEntry) -> (Option<&'static str>, Option<&'static str>) {
     match entry.key {
-        KeySource::Hosted { env, env_legacy } => (env, env_legacy),
+        KeySource::Hosted { env, env_legacy, .. } => (env, env_legacy),
         KeySource::Local => (None, None),
     }
 }
@@ -913,8 +1292,9 @@ pub fn clear_keychain_key(provider: &str) -> Result<(), String> {
 // root stays thin Tauri glue and the routing is a testable plan.
 
 pub(crate) const OLLAMA_URL: &str = "http://localhost:11434";
-/// The Ollama model Klide reaches for first (mirrors the frontend catalog's
-/// `defaultModel` for `ollama`). Auto routing leads the local tier with it.
+/// The Ollama model Klide reaches for first — the `ollama` row's
+/// `default_model`, so the renderer reads it from the catalog. Auto routing
+/// leads the local tier with it.
 pub(crate) const OLLAMA_DEFAULT_MODEL: &str = "llama3.1:8b";
 pub(crate) const MLX_DEFAULT_MODEL: &str = "mlx-community/Llama-3.1-8B-Instruct-4bit";
 pub(crate) const MLX_MODEL_PRESETS: &[&str] = &[
@@ -924,6 +1304,11 @@ pub(crate) const MLX_MODEL_PRESETS: &[&str] = &[
     "mlx-community/gemma-4-E4B-it-qat-4bit",
     "mlx-community/gemma-4-12B-it-qat-4bit",
 ];
+/// Curated Ollama models offered in the picker even before they're pulled.
+/// `pierreprudh/klide-8b` is Klide's own LoRA fine-tune (trained on agent
+/// traces to run this harness's tool/edit contract). Pull it with
+/// `ollama pull pierreprudh/klide-8b` — https://ollama.com/pierreprudh/klide-8b
+pub(crate) const OLLAMA_MODEL_PRESETS: &[&str] = &["pierreprudh/klide-8b"];
 
 // Real token accounting reported by the provider (Ollama eval counts,
 // OpenAI/Anthropic usage blocks). All fields optional — adapters fill what
@@ -1125,7 +1510,9 @@ pub(crate) enum DispatchPlan {
     /// A delegate CLI on a subscription; never reaches the wire match.
     SubscriptionCli { provider_id: &'static str, label: &'static str },
     Ollama,
-    Anthropic,
+    /// The row's id rides the plan so the key is read for *that* row, never
+    /// for a literal the dispatcher happens to spell the same way.
+    Anthropic { provider_id: &'static str },
     OpenAiWire { provider_id: &'static str, cfg: OpenAiConfig },
 }
 
@@ -1147,12 +1534,14 @@ pub(crate) fn plan_dispatch(provider: &str) -> Result<DispatchPlan, String> {
     if let Some(spec) = entry.subscription {
         return Ok(DispatchPlan::SubscriptionCli {
             provider_id: entry.id,
-            label: spec.label,
+            label: spec.label(),
         });
     }
     Ok(match entry.wire {
         WireFormat::Ollama => DispatchPlan::Ollama,
-        WireFormat::Anthropic => DispatchPlan::Anthropic,
+        WireFormat::Anthropic => DispatchPlan::Anthropic {
+            provider_id: entry.id,
+        },
         WireFormat::OpenAi(cfg) => DispatchPlan::OpenAiWire {
             provider_id: entry.id,
             cfg,
@@ -1234,8 +1623,8 @@ pub(crate) async fn dispatch(
             )
             .await
         }
-        DispatchPlan::Anthropic => {
-            let key = provider_key_in("anthropic", key_scope.as_deref())?
+        DispatchPlan::Anthropic { provider_id } => {
+            let key = provider_key_in(provider_id, key_scope.as_deref())?
                 .ok_or_else(|| "Missing API key".to_string())?;
             crate::adapters::anthropic_chat(
                 key,
@@ -1308,7 +1697,9 @@ mod tests {
         ));
         assert!(matches!(
             plan_dispatch("anthropic").unwrap(),
-            DispatchPlan::Anthropic
+            DispatchPlan::Anthropic {
+                provider_id: "anthropic"
+            }
         ));
         match plan_dispatch("openrouter").unwrap() {
             DispatchPlan::OpenAiWire { provider_id, cfg } => {
@@ -1333,28 +1724,119 @@ mod tests {
         assert!(err.contains("not wired"), "got: {err}");
     }
 
+    // ── The published catalog ──
+
+    fn mirror_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/agent/providerCatalog.generated.ts")
+    }
+
     #[test]
-    fn lookup_finds_every_provider_we_advertise() {
-        // Mirrors the frontend's ProviderId union. If you add a row
-        // to PROVIDERS, add it here too — this test fails closed.
-        let known = [
-            "ollama",
-            "mlx",
-            "lmstudio",
-            "anthropic",
-            "openai",
-            "mistral",
-            "xai",
-            "deepseek",
-            "openrouter",
-            "claude-code",
-            "codex",
-            "opencode",
-            "omp",
-        ];
-        for id in known {
-            assert!(lookup(id).is_some(), "missing registry row for {id}");
+    fn provider_catalog_mirror_is_current() {
+        // The renderer reads `src/agent/providerCatalog.generated.ts`, not
+        // Rust, at first paint — so that file must be exactly what
+        // `ai_list_providers` returns. Same seam as
+        // `delegate::tests::frontend_delegate_ids_match_all`, but the whole
+        // row rather than the id list: a changed label, default model, env
+        // var or quirk fails here until the mirror is regenerated. This
+        // replaces the hand-written id list that used to "mirror the
+        // frontend's ProviderId union" without ever reading it.
+        let expected = catalog_mirror_source();
+        let path = mirror_path();
+        if std::env::var_os("KLIDE_WRITE_MIRROR").is_some() {
+            std::fs::write(&path, &expected).expect("write the catalog mirror");
+            return;
         }
+        let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            on_disk == expected,
+            "src/agent/providerCatalog.generated.ts is stale — the Rust registry changed. \
+Regenerate it with:\n  KLIDE_WRITE_MIRROR=1 cargo test provider_catalog_mirror_is_current"
+        );
+    }
+
+    #[test]
+    fn every_row_is_a_whole_provider() {
+        // The renderer never restates a provider fact, so every row has to
+        // carry the ones it shows: a label, a brand key, a group — and a
+        // hosted row the env var and placeholder its key field needs.
+        for entry in PROVIDERS {
+            assert!(!entry.label.trim().is_empty(), "{}: empty label", entry.id);
+            assert!(!entry.brand.trim().is_empty(), "{}: empty brand", entry.id);
+            if let Some(short) = entry.short_label {
+                assert!(!short.trim().is_empty(), "{}: empty short label", entry.id);
+                assert_ne!(short, entry.label, "{}: short label equals label — drop it", entry.id);
+            }
+            match entry.group {
+                ProviderGroup::Hosted => {
+                    let KeySource::Hosted { env, placeholder, .. } = entry.key else {
+                        panic!("{}: hosted row without a hosted key source", entry.id);
+                    };
+                    assert!(env.is_some(), "{}: hosted row without a key env var", entry.id);
+                    assert!(!placeholder.is_empty(), "{}: hosted row without a key placeholder", entry.id);
+                    assert!(entry.default_model.is_some(), "{}: hosted row without a default model", entry.id);
+                    assert!(entry.subscription.is_none(), "{}", entry.id);
+                    assert!(!entry.is_local_server, "{}", entry.id);
+                }
+                ProviderGroup::Local => {
+                    assert!(matches!(entry.key, KeySource::Local), "{}: local row with a key", entry.id);
+                    assert!(entry.default_model.is_some(), "{}: local row without a default model", entry.id);
+                    assert!(entry.subscription.is_none(), "{}", entry.id);
+                    assert_eq!(entry.credits, CreditsSource::None, "{}", entry.id);
+                }
+                ProviderGroup::Subscription => {
+                    assert!(entry.subscription.is_some(), "{}: subscription row without a spec", entry.id);
+                    assert!(
+                        entry.default_model.is_none(),
+                        "{}: a CLI's own default wins (delegate::CLI_DEFAULT_MODEL)",
+                        entry.id
+                    );
+                    assert!(matches!(entry.key, KeySource::Local), "{}", entry.id);
+                }
+            }
+            // `num_ctx` is an Ollama request field; nothing else sizes its window.
+            assert_eq!(
+                entry.has_num_ctx,
+                matches!(entry.wire, WireFormat::Ollama) && entry.subscription.is_none(),
+                "{}",
+                entry.id
+            );
+        }
+    }
+
+    #[test]
+    fn published_row_carries_the_key_env_and_hides_the_rest() {
+        let rows = catalog();
+        assert_eq!(rows.len(), PROVIDERS.len());
+        let xai = rows.iter().find(|r| r.id == "xai").unwrap();
+        assert_eq!(xai.key_env, Some("XAI_API_KEY"));
+        assert_eq!(xai.key_env_legacy, Some("GROK_API_KEY"));
+        assert_eq!(xai.group, ProviderGroup::Hosted);
+        assert_eq!(xai.wire, WireName::OpenAi);
+        let ollama = rows.iter().find(|r| r.id == "ollama").unwrap();
+        assert_eq!(ollama.key_env, None);
+        assert_eq!(ollama.default_model, Some(OLLAMA_DEFAULT_MODEL));
+        assert_eq!(ollama.presets, OLLAMA_MODEL_PRESETS);
+        assert!(ollama.has_num_ctx && ollama.is_local_server);
+        let cc = rows.iter().find(|r| r.id == "claude-code").unwrap();
+        assert_eq!(cc.wire, WireName::Delegate, "a placeholder wire never leaks as Ollama");
+        assert!(rows
+            .iter()
+            .filter(|r| r.has_credits)
+            .map(|r| r.id)
+            .eq(["deepseek", "openrouter"]));
+        // No URL, function pointer or secret rides the published row.
+        let json = serde_json::to_string(&rows).unwrap();
+        assert!(!json.contains("http"), "chat URLs are the adapter's business");
+    }
+
+    #[test]
+    fn provider_caps_come_from_the_row() {
+        // The run loop asks the row, and a custom endpoint gets the hosted
+        // posture — that used to be a `match` on the id in run_core.
+        assert_eq!(ProviderCaps::for_provider("ollama"), lookup("ollama").unwrap().caps);
+        assert_eq!(ProviderCaps::for_provider("custom:my-box"), ProviderCaps::HOSTED);
+        assert_eq!(ProviderCaps::for_provider("auto"), ProviderCaps::HOSTED);
     }
 
     #[test]
@@ -1458,6 +1940,7 @@ mod tests {
                 KeySource::Hosted {
                     env: e,
                     env_legacy: l,
+                    ..
                 } => {
                     assert_eq!(e, env, "{id} env mismatch");
                     assert_eq!(l, env_legacy, "{id} env_legacy mismatch");
@@ -1469,12 +1952,19 @@ mod tests {
 
     #[test]
     fn subscription_predicate_matches_known_set() {
-        for id in ["claude-code", "codex", "opencode", "omp"] {
+        // Every Delegate has a subscription row, and that row points back
+        // at the same adapter — the registry never restates a CLI's facts.
+        for d in crate::delegate::ALL {
+            let id = d.id();
             assert!(is_subscription(id), "{id} should be subscription");
-            assert!(
-                lookup(id).unwrap().subscription.is_some(),
-                "{id} missing subscription spec"
-            );
+            let spec = lookup(id)
+                .unwrap()
+                .subscription
+                .unwrap_or_else(|| panic!("{id} missing subscription spec"));
+            assert_eq!(spec.delegate.id(), id, "{id}'s row names another adapter");
+            assert_eq!(spec.cmd(), d.binary());
+            assert_eq!(spec.label(), d.label());
+            assert_eq!(ProviderRow::from_entry(lookup(id).unwrap()).label, d.label());
         }
         for id in [
             "ollama",
