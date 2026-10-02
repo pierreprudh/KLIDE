@@ -1321,7 +1321,7 @@ mod blocking_door_tests {
         ("deep_link.rs", include_str!("deep_link.rs")),
         ("services_menu.rs", include_str!("services_menu.rs")),
         ("models.rs", include_str!("models.rs")),
-        ("coordination.rs", include_str!("coordination.rs")),
+        ("coordination/mod.rs", include_str!("coordination/mod.rs")),
         ("storage.rs", include_str!("storage.rs")),
         ("providers.rs", include_str!("providers.rs")),
         ("agent/mod.rs", include_str!("agent/mod.rs")),

@@ -10,6 +10,12 @@
 //! both of which live in the app process — an MCP child appending to the
 //! file directly would race the app and leave every panel blind to the write.
 //!
+//! The operations themselves are not defined here. `coordination::ops` is the
+//! one core per operation (list, send, wait, cancel, read_result) that this
+//! bridge and the Harness's `process_coordination_tool` both call; this file
+//! keeps the door's two jobs — bind the session to a Run and Workspace, and
+//! carry the wire — plus `agent_publish_result`, which only a Delegate needs.
+//!
 //! Identity is bound here, never trusted from the caller. An MCP child is
 //! started knowing two stable things: the path of this app's endpoint file and
 //! its own session id. It resolves the live port and token from that file on
@@ -37,25 +43,20 @@
 //! a foreign CLI. Waking an idle Delegate when mail arrives is a separate
 //! slice (a Stop hook that blocks with the inbox as reason).
 
+use crate::coordination::ops::{self, CoordinationHost};
 use crate::coordination::{
     self, CoordinationActor, CoordinationCommand, CoordinationCommandOutcome,
-    CoordinationDeliveryState, CoordinationEnvelope, CoordinationEnvelopeKind,
-    CoordinationEnvelopeSnapshot, CoordinationEvent, CoordinationResultStatus,
-    CoordinationRunRegistration, CoordinationRunState, CoordinationStoreState,
-    CoordinationWorkerKind,
+    CoordinationResultStatus, CoordinationRunRegistration, CoordinationRunState,
+    CoordinationSnapshot, CoordinationStoreState, CoordinationWorkerKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
-/// Hard ceiling on one blocking wait, matching the Harness Tool schema.
-pub const MAX_WAIT_SECONDS: u64 = 120;
-const DEFAULT_WAIT_SECONDS: u64 = 30;
-/// A waiting Delegate is woken by the journal itself when this process
-/// appends; this floor only bounds how late it sees another process's append.
-const WAIT_POLL: Duration = Duration::from_secs(2);
+/// Hard ceiling on one blocking wait — the core's, so the request thread
+/// budget below is sized to the same number the Tool schema promises.
+pub use crate::coordination::ops::MAX_WAIT_SECONDS;
 const MAX_BODY_BYTES: usize = 256 * 1024;
 /// Requests being served at once. Each may block in a two-minute wait, so the
 /// bound is on threads, not on work; past it the bridge answers 503.
@@ -124,15 +125,22 @@ fn secret_matches(presented: Option<&str>, session: &BridgeSession) -> bool {
 
 pub type SessionMap = Arc<Mutex<HashMap<String, BridgeSession>>>;
 
-/// Messaging and approved-Mission operations a Delegate may perform, mirroring the Harness Tools
-/// `agent_list` / `agent_send` / `agent_wait` / `agent_read_result` plus
-/// `agent_publish_result` (a Harness Run publishes its result automatically
-/// at settle; a Delegate has to say so). This is the wire between the MCP
-/// child and the bridge — never exposed beyond loopback.
+/// Messaging and approved-Mission operations a Delegate may perform: the
+/// five coordination operations the Harness has as native Tools
+/// (`agent_list` / `agent_send` / `agent_wait` / `agent_cancel` /
+/// `agent_read_result`) plus `agent_publish_result` (a Harness Run publishes
+/// its result automatically at settle; a Delegate has to say so). This is
+/// the wire between the MCP child and the bridge — never exposed beyond
+/// loopback. Each variant maps onto one `coordination::ops::Operation`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum BridgeRequest {
     List,
+    Cancel {
+        run_id: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
     Orchestrate { request: crate::missions::orchestration::Request },
     Send {
         to_run_id: String,
@@ -210,6 +218,10 @@ pub struct BridgeHooks {
     pub orchestrate: Option<OrchestrationHook>,
     pub on_change: Box<dyn Fn(&str, &CoordinationCommandOutcome) + Send + Sync>,
     pub is_live: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    /// Signal the live cancellation of a Run this process executes, after the
+    /// journal has recorded the request. `None` (or `false`) means nothing
+    /// local was attached; the durable request still stands.
+    pub cancel: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
     /// Called when a request names a session this process has not bound —
     /// after an app restart, that is every surviving Delegate. The app rebuilds
     /// the identity from the session's own spawn record on disk. `None` when
@@ -224,8 +236,39 @@ impl BridgeHooks {
             orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
+            cancel: None,
             resolve_session: Box::new(|_| None),
         }
+    }
+}
+
+/// The bridge as a coordination host: the journal store plus the app's
+/// hooks. Every write announces through `on_change`, exactly as the Harness
+/// host emits the Tauri event after its own writes.
+struct BridgeHost<'a> {
+    store: &'a CoordinationStoreState,
+    hooks: &'a BridgeHooks,
+}
+
+impl CoordinationHost for BridgeHost<'_> {
+    fn apply(
+        &self,
+        workspace_root: &str,
+        command: CoordinationCommand,
+    ) -> Result<CoordinationCommandOutcome, String> {
+        apply(self.store, self.hooks, workspace_root, command)
+    }
+
+    fn snapshot(&self, workspace_root: &str) -> Result<CoordinationSnapshot, String> {
+        coordination::read_snapshot(self.store, workspace_root)
+    }
+
+    fn is_live(&self, run_id: &str) -> bool {
+        (self.hooks.is_live)(run_id)
+    }
+
+    fn signal_cancel(&self, run_id: &str) -> bool {
+        self.hooks.cancel.as_ref().is_some_and(|cancel| cancel(run_id))
     }
 }
 
@@ -240,19 +283,6 @@ fn apply(
     Ok(outcome)
 }
 
-/// A reply is an answer: with `replyTo` set, an omitted kind means answer.
-fn parse_kind(kind: Option<&str>, is_reply: bool) -> Result<CoordinationEnvelopeKind, String> {
-    match kind.map(str::trim).filter(|k| !k.is_empty()) {
-        None if is_reply => Ok(CoordinationEnvelopeKind::Answer),
-        None | Some("instruction") => Ok(CoordinationEnvelopeKind::Instruction),
-        Some("question") => Ok(CoordinationEnvelopeKind::Question),
-        Some("answer") => Ok(CoordinationEnvelopeKind::Answer),
-        Some("progress") => Ok(CoordinationEnvelopeKind::Progress),
-        Some("handoff") => Ok(CoordinationEnvelopeKind::Handoff),
-        Some(other) => Err(format!("Unknown coordination message kind `{other}`.")),
-    }
-}
-
 fn parse_result_status(status: &str) -> Result<CoordinationResultStatus, String> {
     match status.trim() {
         "succeeded" => Ok(CoordinationResultStatus::Succeeded),
@@ -261,110 +291,6 @@ fn parse_result_status(status: &str) -> Result<CoordinationResultStatus, String>
         "cancelled" => Ok(CoordinationResultStatus::Cancelled),
         other => Err(format!("Unknown result status `{other}`.")),
     }
-}
-
-fn clamp_timeout(seconds: Option<u64>) -> Duration {
-    Duration::from_secs(seconds.unwrap_or(DEFAULT_WAIT_SECONDS).clamp(1, MAX_WAIT_SECONDS))
-}
-
-fn non_empty(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-/// The same fenced delivery the Harness hands its model, so a Delegate and a
-/// Harness Run read peers' words in one shape — preamble included.
-pub fn messages_text(inbox: &[CoordinationEnvelopeSnapshot]) -> Result<String, String> {
-    crate::agent::delivery::render_mail(inbox)
-}
-
-/// Block until a matching accepted envelope arrives for `run_id`, or the
-/// deadline passes. Matched mail is marked delivered and acknowledged in the
-/// same call: unlike the Harness, a Delegate has no later turn boundary at
-/// which Klide could confirm the model actually read it, so handing the text
-/// back over the wire *is* the read.
-fn wait_for_messages(
-    store: &CoordinationStoreState,
-    hooks: &BridgeHooks,
-    session: &BridgeSession,
-    from_run_id: Option<&str>,
-    reply_to: Option<&str>,
-    timeout: Duration,
-) -> Result<Option<Vec<CoordinationEnvelopeSnapshot>>, String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let snapshot = coordination::read_snapshot(store, &session.workspace_root)?;
-        let inbox = coordination::inbox_for(&snapshot, &session.run_id)?;
-        let matched: Vec<CoordinationEnvelopeSnapshot> = inbox
-            .into_iter()
-            .filter(|entry| coordination::envelope_answers_wait(entry, from_run_id, reply_to))
-            .collect();
-        if !matched.is_empty() {
-            for entry in &matched {
-                if entry.delivery_state == CoordinationDeliveryState::Accepted {
-                    apply(
-                        store,
-                        hooks,
-                        &session.workspace_root,
-                        CoordinationCommand::MarkEnvelopeDelivered {
-                            run_id: session.run_id.clone(),
-                            envelope_id: entry.envelope.id.clone(),
-                        },
-                    )?;
-                }
-                apply(
-                    store,
-                    hooks,
-                    &session.workspace_root,
-                    CoordinationCommand::AcknowledgeEnvelope {
-                        run_id: session.run_id.clone(),
-                        envelope_id: entry.envelope.id.clone(),
-                    },
-                )?;
-            }
-            return Ok(Some(matched));
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(None);
-        }
-        // Woken the moment this process appends; the floor catches an append
-        // from another Klide process, which wakes nobody here.
-        coordination::wait_for_change(
-            store,
-            &session.workspace_root,
-            snapshot.next_seq,
-            WAIT_POLL.min(deadline - now),
-        )?;
-    }
-}
-
-fn envelope_from_outcome(
-    outcome: &CoordinationCommandOutcome,
-    session: &BridgeSession,
-    target: &str,
-    idempotency_key: &Option<String>,
-) -> Option<CoordinationEnvelope> {
-    outcome
-        .appended
-        .as_ref()
-        .and_then(|line| match &line.event {
-            CoordinationEvent::EnvelopeQueued { envelope } => Some(envelope.clone()),
-            _ => None,
-        })
-        .or_else(|| {
-            outcome.snapshot.envelopes.iter().rev().find_map(|entry| {
-                let envelope = &entry.envelope;
-                (envelope.from
-                    == (CoordinationActor::Run {
-                        run_id: session.run_id.clone(),
-                    })
-                    && envelope.to_run_id == target
-                    && envelope.idempotency_key == *idempotency_key)
-                    .then(|| envelope.clone())
-            })
-        })
 }
 
 /// Run one bridge request as the bound session. Pure apart from the journal
@@ -381,6 +307,10 @@ pub fn execute(
     }
 }
 
+/// The Delegate door onto `coordination::ops`: bind the actor to the
+/// authenticated session, map the wire onto one operation, and hand the
+/// core's reply back with its text beside the value (the MCP child shows
+/// `text`, and returns the whole value as structured content).
 fn execute_inner(
     store: &CoordinationStoreState,
     hooks: &BridgeHooks,
@@ -389,156 +319,10 @@ fn execute_inner(
 ) -> Result<serde_json::Value, String> {
     let root = session.workspace_root.as_str();
     let me = session.run_id.as_str();
-    match request {
-        BridgeRequest::Orchestrate { request } => hooks.orchestrate.as_ref()
-            .ok_or("Mission orchestration is unavailable in this host.")?(session, request),
-        BridgeRequest::List => {
-            let snapshot = coordination::read_snapshot(store, root)?;
-            let visible = coordination::visible_runs_for(&snapshot, me)?;
-            let rows = visible
-                .into_iter()
-                .map(|run| {
-                    let run_id = run.registration.run_id.as_str();
-                    serde_json::json!({
-                        "runId": run_id,
-                        "relation": coordination::relation_label(&snapshot, me, run_id),
-                        "state": run.state,
-                        "live": (hooks.is_live)(run_id),
-                        "workerKind": run.registration.worker_kind,
-                        "label": run.registration.label,
-                        "missionId": run.registration.mission_id,
-                        "cancelRequested": run.cancel_request.is_some(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok(serde_json::json!({ "runs": rows }))
-        }
-        BridgeRequest::Send {
-            to_run_id,
-            body,
-            kind,
-            reply_to,
-            correlation_id,
-            idempotency_key,
-            wait_for_reply,
-            timeout_seconds,
-        } => {
-            let target = to_run_id.trim().to_string();
-            let body = body.trim().to_string();
-            if target.is_empty() || body.is_empty() {
-                return Err("agent_send requires non-empty toRunId and body.".into());
-            }
-            let kind = parse_kind(kind.as_deref(), non_empty(reply_to.clone()).is_some())?;
-            let idempotency_key = non_empty(idempotency_key);
-            let outcome = apply(
-                store,
-                hooks,
-                root,
-                CoordinationCommand::SendEnvelope {
-                    from: CoordinationActor::Run {
-                        run_id: me.to_string(),
-                    },
-                    to_run_id: target.clone(),
-                    kind,
-                    body,
-                    reply_to: non_empty(reply_to),
-                    correlation_id: non_empty(correlation_id),
-                    idempotency_key: idempotency_key.clone(),
-                    source_refs: vec![],
-                },
-            )?;
-            let envelope = envelope_from_outcome(&outcome, session, &target, &idempotency_key)
-                .ok_or_else(|| {
-                    "The message was recorded but its envelope could not be resolved.".to_string()
-                })?;
-            let (reply_status, replies, snapshot) = if wait_for_reply {
-                let waited = wait_for_messages(
-                    store,
-                    hooks,
-                    session,
-                    Some(&target),
-                    Some(&envelope.id),
-                    clamp_timeout(timeout_seconds),
-                )?;
-                // Waiting moved mail to delivered and acknowledged, so the
-                // receipt has to read the journal after it, not before.
-                let snapshot = coordination::read_snapshot(store, root)?;
-                match waited {
-                    Some(replies) => (
-                        coordination::CoordinationReplyStatus::Received,
-                        replies,
-                        snapshot,
-                    ),
-                    None => (
-                        coordination::CoordinationReplyStatus::TimedOut,
-                        vec![],
-                        snapshot,
-                    ),
-                }
-            } else {
-                // Nothing has touched the journal since the send, and `apply`
-                // already handed back the post-command snapshot — including on
-                // the idempotent retry that appended nothing, which is exactly
-                // the state this receipt reports.
-                (
-                    coordination::CoordinationReplyStatus::NotRequested,
-                    vec![],
-                    outcome.snapshot,
-                )
-            };
-            let receipt =
-                coordination::send_receipt(&snapshot, &envelope.id, reply_status, &replies)?;
-            serde_json::to_value(receipt)
-                .map_err(|error| format!("Unable to encode send receipt: {error}"))
-        }
-
-        BridgeRequest::Wait {
-            from_run_id,
-            reply_to,
-            timeout_seconds,
-        } => {
-            let from = non_empty(from_run_id);
-            let reply = non_empty(reply_to);
-            match wait_for_messages(
-                store,
-                hooks,
-                session,
-                from.as_deref(),
-                reply.as_deref(),
-                clamp_timeout(timeout_seconds),
-            )? {
-                Some(messages) => Ok(serde_json::json!({
-                    "messages": messages,
-                    "text": messages_text(&messages)?,
-                })),
-                None => Ok(serde_json::json!({
-                    "messages": [],
-                    "timedOut": true,
-                    "text": "No coordination message arrived within the wait window.",
-                })),
-            }
-        }
-        BridgeRequest::ReadResult { run_id } => {
-            let target = run_id.trim();
-            if target.is_empty() {
-                return Err("agent_read_result requires runId.".into());
-            }
-            let snapshot = coordination::read_snapshot(store, root)?;
-            match coordination::visible_result_for(&snapshot, me, target)? {
-                Some(result) => Ok(serde_json::json!({
-                    "ready": true,
-                    "result": result,
-                    "text": format!(
-                        "@{target} published a {:?} result:\n{}",
-                        result.status, result.summary
-                    )
-                    .to_lowercase(),
-                })),
-                None => Ok(serde_json::json!({
-                    "ready": false,
-                    "text": format!("@{target} has not published a result yet."),
-                })),
-            }
+    let operation = match request {
+        BridgeRequest::Orchestrate { request } => {
+            return hooks.orchestrate.as_ref()
+                .ok_or("Mission orchestration is unavailable in this host.")?(session, request);
         }
         BridgeRequest::PublishResult { status, summary } => {
             let summary = summary.trim().to_string();
@@ -558,11 +342,60 @@ fn execute_inner(
                     source_refs: vec![],
                 },
             )?;
-            Ok(serde_json::json!({
+            return Ok(serde_json::json!({
                 "published": outcome.appended.is_some(),
                 "text": "Result published for this Run.",
-            }))
+            }));
         }
+        BridgeRequest::List => ops::Operation::List,
+        BridgeRequest::Cancel { run_id, reason } => ops::Operation::Cancel { run_id, reason },
+        BridgeRequest::ReadResult { run_id } => ops::Operation::ReadResult { run_id },
+        BridgeRequest::Wait {
+            from_run_id,
+            reply_to,
+            timeout_seconds,
+        } => ops::Operation::Wait(ops::WaitRequest {
+            from_run_id,
+            reply_to,
+            timeout_seconds,
+        }),
+        BridgeRequest::Send {
+            to_run_id,
+            body,
+            kind,
+            reply_to,
+            correlation_id,
+            idempotency_key,
+            wait_for_reply,
+            timeout_seconds,
+        } => ops::Operation::Send(ops::SendRequest {
+            to_run_id,
+            body,
+            kind,
+            reply_to,
+            correlation_id,
+            idempotency_key,
+            wait_for_reply,
+            timeout_seconds,
+        }),
+    };
+    let host = BridgeHost { store, hooks };
+    let actor = ops::Actor {
+        run_id: me,
+        workspace_root: root,
+    };
+    // A request thread has no runtime and nothing to cancel it: it parks on
+    // the journal's condvar and is woken by the same announce the Harness's
+    // watch is.
+    let mut park = ops::NeverCancelled::new(store, root);
+    match ops::block_on(ops::perform(&host, actor, &operation, &mut park))? {
+        ops::Settled::Done(ops::OpReply { text, mut value }) => {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("text".to_string(), serde_json::Value::String(text));
+            }
+            Ok(value)
+        }
+        ops::Settled::Cancelled => Err("The wait was cancelled.".into()),
     }
 }
 
@@ -1138,6 +971,8 @@ fn set_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+    use crate::coordination::{CoordinationDeliveryState, CoordinationEnvelopeKind, CoordinationEvent};
 
     /// The secret every test session is minted with, unless a test says otherwise.
     const SECRET: &str = "secret-of-convo-1";
@@ -1376,6 +1211,7 @@ mod tests {
             orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|id| id == "run_kit"),
+            cancel: None,
             resolve_session: Box::new(|_| None),
         };
         let response = execute(&store, &hooks, &session, BridgeRequest::List);
@@ -1399,6 +1235,7 @@ mod tests {
             orchestrate: None,
             on_change: Box::new(move |_, _| *counter.lock().unwrap() += 1),
             is_live: Box::new(|_| false),
+            cancel: None,
             resolve_session: Box::new(|_| None),
         };
 
@@ -1587,7 +1424,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(20))
             .expect("the wait never returned");
         assert!(
-            accepted_at.elapsed() < WAIT_POLL,
+            accepted_at.elapsed() < ops::WAIT_FLOOR,
             "woke on the floor poll, not the append"
         );
         let value = waited.value.unwrap();
@@ -1719,6 +1556,7 @@ mod tests {
                     }
                 }),
                 is_live: Box::new(|_| true),
+                cancel: None,
                 resolve_session: Box::new(|_| None),
             };
             let result = execute(
@@ -1956,6 +1794,7 @@ mod tests {
             orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
+            cancel: None,
             resolve_session: Box::new(move |session_id| {
                 *counted.lock().unwrap() += 1;
                 (session_id == "convo-1:claude-code").then(|| BridgeSession {
@@ -2146,6 +1985,7 @@ mod tests {
             orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
+            cancel: None,
             resolve_session: Box::new(move |_| {
                 Some(BridgeSession {
                     run_id: "convo-1".to_string(),
@@ -2194,6 +2034,7 @@ mod tests {
             orchestrate: None,
             on_change: Box::new(|_, _| {}),
             is_live: Box::new(|_| false),
+            cancel: None,
             resolve_session: Box::new(move |_| {
                 Some(BridgeSession {
                     run_id: "attempt-7".to_string(),
